@@ -3691,15 +3691,79 @@ fn lower_dynamic_property_get_from_value(
     property: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
     let property = lower_expr(ctx, property);
     ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
         None,
-        fallback_expr_type(expr),
+        result_type,
         Op::DynamicPropGet.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns precise metadata for dynamic property reads when class slots are statically known.
+fn dynamic_property_get_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &Expr,
+    expr: &Expr,
+) -> PhpType {
+    if let ExprKind::StringLiteral(name) = &property.kind {
+        return property_get_result_type(ctx, object, name, Op::DynamicPropGet, expr);
+    }
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
+        return fallback_expr_type(expr);
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.classes.get(normalized) else {
+        return fallback_expr_type(expr);
+    };
+    let members = class_info
+        .properties
+        .iter()
+        .map(|(_, property_ty)| {
+            let property_ty = normalize_value_php_type(property_ty.clone());
+            if nullable {
+                nullable_result_type(property_ty)
+            } else {
+                property_ty
+            }
+        })
+        .collect::<Vec<_>>();
+    normalize_union_members(members).unwrap_or_else(|| fallback_expr_type(expr))
+}
+
+/// Flattens and deduplicates union candidates, with `Mixed` absorbing all members.
+fn normalize_union_members(members: Vec<PhpType>) -> Option<PhpType> {
+    let mut deduped = Vec::new();
+    for member in members {
+        match member {
+            PhpType::Union(inner) => {
+                for inner_member in inner {
+                    if inner_member == PhpType::Mixed {
+                        return Some(PhpType::Mixed);
+                    }
+                    if !deduped.iter().any(|existing| existing == &inner_member) {
+                        deduped.push(inner_member);
+                    }
+                }
+            }
+            PhpType::Mixed => return Some(PhpType::Mixed),
+            other => {
+                if !deduped.iter().any(|existing| existing == &other) {
+                    deduped.push(other);
+                }
+            }
+        }
+    }
+    match deduped.len() {
+        0 => None,
+        1 => deduped.pop(),
+        _ => Some(PhpType::Union(deduped)),
+    }
 }
 
 /// Lowers a static property read.
@@ -3750,6 +3814,14 @@ fn lower_method_call(
     expr: &Expr,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
+    if op == Op::MethodCall && value_is_definitely_null(ctx, object.value) {
+        let null_value = lower_null(ctx, expr);
+        terminate_method_call_on_null(ctx, method);
+        return null_value;
+    }
+    if op == Op::MethodCall && value_is_nullable(ctx, object.value) {
+        return lower_nullable_regular_method_call(ctx, object, method, args, expr);
+    }
     let result_type = method_call_result_type(ctx, object.value, method, op, expr);
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, method).cloned();
@@ -3763,6 +3835,54 @@ fn lower_method_call(
         op.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Lowers `?Object->method()` calls so null receivers fatal before argument evaluation.
+fn lower_nullable_regular_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
+    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let fatal_block = ctx.builder.create_named_block("method.null.fatal", Vec::new());
+    let call_block = ctx.builder.create_named_block("method.non_null.call", Vec::new());
+    let merge = ctx.builder.create_named_block("method.nullable.merge", Vec::new());
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![object.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: fatal_block,
+        then_args: Vec::new(),
+        else_target: call_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(fatal_block);
+    terminate_method_call_on_null(ctx, method);
+
+    ctx.builder.position_at_end(call_block);
+    let call = lower_method_call_with_receiver(ctx, object, method, args, Op::MethodCall, expr);
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Emits the PHP fatal terminator for an ordinary method call on null.
+fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
+    let message = format!("Fatal error: Call to a member function {}() on null\n", method);
+    let message = ctx.intern_string(&message);
+    ctx.builder.terminate(Terminator::Fatal { message });
 }
 
 /// Lowers a nullsafe method call with lazy argument evaluation for nullable receivers.

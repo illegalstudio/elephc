@@ -854,6 +854,9 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, &property);
     }
+    if let Some(class_name) = union_object_member_class(ctx, object)? {
+        return lower_union_object_prop_get(ctx, inst, object, &class_name, &property);
+    }
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return lower_mixed_prop_get(ctx, inst, object, &property);
     }
@@ -864,6 +867,37 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a declared-property read from a boxed union that may hold one known object class.
+fn lower_union_object_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+) -> Result<()> {
+    let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
+    let object_label = ctx.next_label("union_prop_object");
+    let done_label = ctx.next_label("union_prop_done");
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_mixed_unboxed_object(ctx, &object_label);
+    emit_dynamic_property_miss_result(ctx, inst);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&object_label);
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    move_mixed_unboxed_object_payload(ctx, base_reg);
+    if slot.is_declared {
+        emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
+    }
+    emit_property_load(ctx, &slot, base_reg)?;
+    if dynamic_property_result_needs_box(inst, &slot.php_type) {
+        emit_box_current_value_as_mixed(ctx.emitter, &slot.php_type.codegen_repr());
+    }
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 
@@ -890,6 +924,32 @@ fn lower_mixed_prop_get(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_property_get");
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
+}
+
+/// Branches when `__rt_mixed_unbox` returned an object payload tag.
+fn emit_branch_if_mixed_unboxed_object(ctx: &mut FunctionContext<'_>, object_label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the boxed union holds an object payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // read the declared property only for object payloads
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the boxed union holds an object payload
+            ctx.emitter.instruction(&format!("je {}", object_label));           // read the declared property only for object payloads
+        }
+    }
+}
+
+/// Moves the low payload produced by `__rt_mixed_unbox` into the object base register.
+fn move_mixed_unboxed_object_payload(ctx: &mut FunctionContext<'_>, base_reg: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov {}, x1", base_reg));          // use the unboxed object pointer as the declared-property base
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, rdi", base_reg));         // use the unboxed object pointer as the declared-property base
+        }
+    }
 }
 
 /// Lowers `$maybeObject->property`, warning when the receiver is PHP null.
@@ -1219,12 +1279,68 @@ pub(super) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let object = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
+    if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
+        return lower_nullable_prop_set(ctx, inst, object, value, &class_name, &property);
+    }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     emit_property_store(ctx, value, &slot, base_reg)
+}
+
+/// Lowers a property write on a nullable receiver, fataling after RHS evaluation when null.
+fn lower_nullable_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    value: ValueId,
+    class_name: &str,
+    property: &str,
+) -> Result<()> {
+    let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
+    let value_ty = ctx.value_php_type(value)?;
+    ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
+    let null_label = ctx.next_label("nullable_prop_set_null");
+    let done_label = ctx.next_label("nullable_prop_set_done");
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
+    emit_property_store(ctx, value, &slot, base_reg)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    emit_property_assign_on_null_fatal(ctx, property);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits PHP's fatal diagnostic for assigning a property on null.
+fn emit_property_assign_on_null_fatal(ctx: &mut FunctionContext<'_>, property: &str) {
+    let message = format!(
+        "Fatal error: Attempt to assign property \"{}\" on null\n",
+        property
+    );
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // write the property-assign-on-null fatal to stderr
+            ctx.emitter.adrp("x1", &message_label);
+            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the property-assign-on-null fatal byte length
+            ctx.emitter.syscall(4);
+            abi::emit_exit(ctx.emitter, 1);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov edi, 2");                              // write the property-assign-on-null fatal to Linux stderr
+            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
+            ctx.emitter.instruction(&format!("mov edx, {}", message_len));      // pass the property-assign-on-null fatal byte length
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the property-assign-on-null fatal before exiting
+            abi::emit_exit(ctx.emitter, 1);
+        }
+    }
 }
 
 /// Lowers named `instanceof` using runtime class/interface metadata.
@@ -1560,6 +1676,30 @@ pub(super) fn nullable_object_receiver_class(
     }
 }
 
+/// Returns the unique object class carried by a boxed union, ignoring null and scalar arms.
+fn union_object_member_class(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+) -> Result<Option<String>> {
+    let PhpType::Union(members) = raw_value_php_type(ctx, object)? else {
+        return Ok(None);
+    };
+    let mut class_name = None;
+    for member in members {
+        let PhpType::Object(candidate) = member else {
+            continue;
+        };
+        if class_name
+            .as_ref()
+            .is_some_and(|existing: &String| existing != &candidate)
+        {
+            return Ok(None);
+        }
+        class_name = Some(candidate);
+    }
+    Ok(class_name)
+}
+
 /// Unboxes a nullable object receiver and branches when it holds PHP null.
 pub(super) fn emit_nullable_receiver_object_payload(
     ctx: &mut FunctionContext<'_>,
@@ -1663,6 +1803,9 @@ fn ensure_property_value_supported(
     if can_box_value_for_mixed_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_store_boxed_value_for_mixed_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     if can_coerce_mixed_to_scalar_property(value_ty, &slot.php_type) {
         return Ok(());
     }
@@ -1679,6 +1822,12 @@ fn ensure_property_value_supported(
 /// Returns true when a concrete value can be boxed into Mixed-shaped property storage.
 fn can_box_value_for_mixed_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     slot_ty.codegen_repr() == PhpType::Mixed && value_ty.codegen_repr() != PhpType::Mixed
+}
+
+/// Returns true when a boxed Mixed/Union value already matches Mixed-shaped property storage.
+fn can_store_boxed_value_for_mixed_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(value_ty.codegen_repr(), PhpType::Mixed)
+        && matches!(slot_ty.codegen_repr(), PhpType::Mixed)
 }
 
 /// Returns true when a boxed Mixed value can be coerced before a scalar typed-property store.
@@ -1859,6 +2008,10 @@ fn load_property_store_value_to_result(
     if can_box_value_for_mixed_property(&value_ty, slot_ty) {
         let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
         emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
+        return Ok(());
+    }
+    if can_store_boxed_value_for_mixed_property(&value_ty, slot_ty) {
+        ctx.load_value_to_result(value)?;
         return Ok(());
     }
     if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
