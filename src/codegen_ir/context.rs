@@ -12,10 +12,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::codegen::{abi, emit_box_current_value_as_mixed};
+use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::ir::{BlockId, DataId, Function, LocalSlotId, Module, Ownership, ValueId};
+use crate::ir::{BlockId, DataId, Function, LocalSlotId, Module, Op, Ownership, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::frame::FrameLayout;
@@ -181,6 +181,11 @@ impl<'a> FunctionContext<'a> {
         self.promoted_ref_cells.insert(slot);
     }
 
+    /// Marks a local slot as storing its raw value again after an `unset()` unbind.
+    pub(super) fn unmark_promoted_ref_cell(&mut self, slot: LocalSlotId) {
+        self.promoted_ref_cells.remove(&slot);
+    }
+
     /// Returns true when a local slot has been promoted to a heap reference cell.
     pub(super) fn is_promoted_ref_cell(&self, slot: LocalSlotId) -> bool {
         self.promoted_ref_cells.contains(&slot)
@@ -254,6 +259,11 @@ impl<'a> FunctionContext<'a> {
         let pointer_reg = abi::symbol_scratch_reg(self.emitter);
         abi::load_at_offset(self.emitter, pointer_reg, offset);
         match ty.codegen_repr() {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(self.emitter);
+                abi::emit_load_from_address(self.emitter, ptr_reg, pointer_reg, 0);
+                abi::emit_load_from_address(self.emitter, len_reg, pointer_reg, 8);
+            }
             PhpType::Float => {
                 abi::emit_load_from_address(self.emitter, abi::float_result_reg(self.emitter), pointer_reg, 0);
             }
@@ -280,7 +290,11 @@ impl<'a> FunctionContext<'a> {
         let source_ty = self.load_value_to_result(value)?;
         let target_ty = self.local_php_type(slot)?;
         if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
-            emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            if self.value_can_own_mixed_box_source(value)? {
+                emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
+            } else {
+                emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            }
         }
         let offset = self.local_offset(slot)?;
         self.store_current_result_at_offset(&target_ty, offset);
@@ -293,12 +307,21 @@ impl<'a> FunctionContext<'a> {
         let target_ty = self.local_php_type(slot)?;
         reject_multiword_ref_cell_local(&target_ty, "store")?;
         if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
-            emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            if self.value_can_own_mixed_box_source(value)? {
+                emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
+            } else {
+                emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            }
         }
         let offset = self.local_offset(slot)?;
         let pointer_reg = abi::symbol_scratch_reg(self.emitter);
         abi::load_at_offset(self.emitter, pointer_reg, offset);
         match target_ty.codegen_repr() {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(self.emitter);
+                abi::emit_store_to_address(self.emitter, ptr_reg, pointer_reg, 0);
+                abi::emit_store_to_address(self.emitter, len_reg, pointer_reg, 8);
+            }
             PhpType::Float => {
                 abi::emit_store_to_address(self.emitter, abi::float_result_reg(self.emitter), pointer_reg, 0);
             }
@@ -328,6 +351,62 @@ impl<'a> FunctionContext<'a> {
                 abi::store_at_offset(self.emitter, abi::int_result_reg(self.emitter), offset);
             }
         }
+    }
+
+    /// Returns true when a value producer can leave an owned source consumed by Mixed boxing.
+    fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let inst = self
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        Ok(matches!(
+            inst.op,
+            Op::Acquire
+                | Op::StrPersist
+                | Op::IToStr
+                | Op::FToStr
+                | Op::BoolToStr
+                | Op::ResourceToStr
+                | Op::StrConcat
+                | Op::StrCharAt
+                | Op::StrInterpolate
+                | Op::ArrayNew
+                | Op::HashNew
+                | Op::ArrayCloneShallow
+                | Op::HashCloneShallow
+                | Op::ArrayUnion
+                | Op::HashUnion
+                | Op::ArrayHashUnion
+                | Op::HashArrayUnion
+                | Op::ArrayToHash
+                | Op::ObjectNew
+                | Op::DynamicObjectNew
+                | Op::ClosureNew
+                | Op::FirstClassCallableNew
+                | Op::CallableArrayNew
+                | Op::BufferNew
+                | Op::GeneratorNew
+                | Op::Call
+                | Op::FunctionVariantCall
+                | Op::BuiltinCall
+                | Op::RuntimeCall
+                | Op::ExternCall
+                | Op::MethodCall
+                | Op::NullsafeMethodCall
+                | Op::StaticMethodCall
+                | Op::ClosureCall
+                | Op::ExprCall
+                | Op::PipeCall
+                | Op::IteratorMethodCall
+                | Op::SplRuntimeCall
+                | Op::FiberRuntimeCall
+        ))
     }
 
     /// Interns a module data-pool string into the assembly data section.
@@ -413,12 +492,7 @@ impl<'a> FunctionContext<'a> {
 
 /// Rejects local ref-cell operations whose frame representation spans multiple words.
 fn reject_multiword_ref_cell_local(ty: &PhpType, action: &str) -> Result<()> {
-    if matches!(ty.codegen_repr(), PhpType::Str) {
-        return Err(CodegenIrError::unsupported(format!(
-            "by-reference string local {}",
-            action
-        )));
-    }
+    let _ = (ty, action);
     Ok(())
 }
 

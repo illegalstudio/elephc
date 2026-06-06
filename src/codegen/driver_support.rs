@@ -534,6 +534,17 @@ pub(crate) fn emit_release_pushed_refcounted_temp_after_array_push(
     }
 }
 
+/// Boxes an owned current result into Mixed and releases the original owner afterward.
+pub(crate) fn emit_box_current_owned_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
+    match ty {
+        PhpType::Str => emit_box_current_owned_string_as_mixed_for_container(emitter, ty),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            emit_box_current_owned_refcounted_as_mixed_for_container(emitter, ty);
+        }
+        _ => emit_box_current_value_as_mixed(emitter, ty),
+    }
+}
+
 /// Boxes an owned string from x1/x2 (AArch64) or rax/rdx (x86_64) into a Mixed cell
 /// while preserving and releasing the original string pointer/length after the Mixed
 /// helper copies the payload. The original string is released via `__rt_heap_free_safe`

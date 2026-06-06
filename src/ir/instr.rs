@@ -87,6 +87,7 @@ pub enum Immediate {
     Bool(bool),
     Data(DataId),
     LocalSlot(LocalSlotId),
+    LocalSlotPair { first: LocalSlotId, second: LocalSlotId },
     GlobalName(DataId),
     FunctionRef(FunctionId),
     BuiltinRef(BuiltinId),
@@ -163,8 +164,11 @@ pub enum Op {
     DataAddr,
     LoadLocal,
     StoreLocal,
+    UnsetLocal,
     LoadRefCell,
     StoreRefCell,
+    PromoteLocalRefCell,
+    ReleaseLocalRefCell,
     LoadGlobal,
     StoreGlobal,
     LoadStaticLocal,
@@ -258,6 +262,7 @@ pub enum Op {
     IterStart,
     IterCurrentKey,
     IterCurrentValue,
+    IterCurrentValueRef,
     IterNext,
     IterEnd,
     IteratorMethodCall,
@@ -355,8 +360,12 @@ impl Op {
             IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
-            StoreLocal | StoreRefCell | ListUnpack | CatchBind | FinallyEnter
+            StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | CatchBind | FinallyEnter
             | FinallyExit => E::WRITES_LOCAL,
+            PromoteLocalRefCell => {
+                E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
+            },
+            ReleaseLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
             LoadGlobal | LoadStaticProperty | ScopedConstantGet | ClassAttrNames
             | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
@@ -388,7 +397,7 @@ impl Op {
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
-            IterNext | IterEnd | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
+            IterCurrentValueRef | IterNext | IterEnd | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
@@ -443,8 +452,11 @@ impl Op {
             DataAddr => "data_addr",
             LoadLocal => "load_local",
             StoreLocal => "store_local",
+            UnsetLocal => "unset_local",
             LoadRefCell => "load_ref_cell",
             StoreRefCell => "store_ref_cell",
+            PromoteLocalRefCell => "promote_local_ref_cell",
+            ReleaseLocalRefCell => "release_local_ref_cell",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",
@@ -538,6 +550,7 @@ impl Op {
             IterStart => "iter_start",
             IterCurrentKey => "iter_current_key",
             IterCurrentValue => "iter_current_value",
+            IterCurrentValueRef => "iter_current_value_ref",
             IterNext => "iter_next",
             IterEnd => "iter_end",
             IteratorMethodCall => "iterator_method_call",

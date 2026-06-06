@@ -177,6 +177,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::LocalSlot(id) => {
             let _ = write!(out, " slot[{}]", id.as_raw());
         }
+        Immediate::LocalSlotPair { first, second } => {
+            let _ = write!(out, " slots[{},{}]", first.as_raw(), second.as_raw());
+        }
         Immediate::GlobalName(id) => {
             let value = data
                 .global_names

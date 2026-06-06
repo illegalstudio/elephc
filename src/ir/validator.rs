@@ -276,9 +276,12 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         | FunctionVariantMark | FunctionVariantDispatch => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
-        LoadLocal | StoreLocal | LoadRefCell | StoreRefCell | LoadStaticLocal
-        | StoreStaticLocal | InitStaticLocal => require_immediate(inst_id, inst, "local slot", |imm| {
+        LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
+        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
+        }),
+        PromoteLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
+            matches!(imm, Imm::LocalSlotPair { .. })
         }),
         ICmp | FCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
             matches!(imm, Imm::CmpPredicate(_))
@@ -371,6 +374,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty | ExternGlobalLoad => {
             check_count(inst_id, inst, 0, "0")
         }
+        UnsetLocal | PromoteLocalRefCell | ReleaseLocalRefCell => check_count(inst_id, inst, 0, "0"),
         StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty | ExternGlobalStore
         | StoreRefCell | Acquire | Release | Move | Borrow | EnsureOwned
         | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR
@@ -385,6 +389,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         HashLen | HashGet | HashSet | HashAppend | HashEnsureUnique | HashCloneShallow => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
+        IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
         ArrayKeyExists | OffsetExists => check_count_at_least(inst_id, inst, 1, "at least 1"),
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")

@@ -1679,7 +1679,7 @@ fn lower_unset_locals(
     let null = lower_null(ctx, expr);
     for arg in args {
         if let ExprKind::Variable(name) = &arg.kind {
-            ctx.store_local(name, null, PhpType::Void, Some(arg.span));
+            ctx.unset_local(name, null, Some(arg.span));
         }
     }
     Some(null)

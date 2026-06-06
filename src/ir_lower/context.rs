@@ -82,6 +82,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
+    ref_bound_locals: HashSet<String>,
+    ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     pub in_main: bool,
@@ -134,6 +136,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             current_class,
             loop_stack: Vec::new(),
             static_callable_locals: HashMap::new(),
+            ref_bound_locals: HashSet::new(),
+            ref_cell_owner_locals: HashMap::new(),
             return_type,
             return_php_type,
             in_main,
@@ -314,12 +318,41 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
+    /// Records that a local currently aliases by-reference storage.
+    pub(crate) fn mark_ref_bound_local(&mut self, name: &str) {
+        self.ref_bound_locals.insert(name.to_string());
+    }
+
+    /// Clears the by-reference alias marker for a local after `unset()`.
+    pub(crate) fn unmark_ref_bound_local(&mut self, name: &str) {
+        self.ref_bound_locals.remove(name);
+    }
+
+    /// Returns true when a local is currently modeled as a by-reference alias.
+    pub(crate) fn is_ref_bound_local(&self, name: &str) -> bool {
+        self.ref_bound_locals.contains(name)
+    }
+
     /// Declares a fresh hidden temporary slot and returns its synthetic name.
     pub(crate) fn declare_hidden_temp(&mut self, php_type: PhpType) -> String {
         let name = format!("__eir_tmp{}", self.hidden_temp_counter);
         self.hidden_temp_counter += 1;
         self.declare_local_with_kind(&name, php_type, LocalKind::HiddenTemp);
         name
+    }
+
+    /// Declares a hidden owner slot for a promoted local ref-cell pointer.
+    fn declare_ref_cell_owner(&mut self, variable: &str, php_type: PhpType) -> LocalSlotId {
+        let name = format!("__eir_ref_owner{}_{}", self.hidden_temp_counter, variable);
+        self.hidden_temp_counter += 1;
+        let slot = self.declare_local_with_kind(&name, php_type, LocalKind::RefCell);
+        self.ref_cell_owner_locals.insert(variable.to_string(), slot);
+        slot
+    }
+
+    /// Returns the hidden owner slot for a promoted local ref-cell, if any.
+    fn ref_cell_owner_slot(&self, variable: &str) -> Option<LocalSlotId> {
+        self.ref_cell_owner_locals.get(variable).copied()
     }
 
     /// Returns a deterministic EIR function name for the next closure literal in this body.
@@ -366,9 +399,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let ownership = Ownership::for_php_type(&php_type);
         let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
         let uses_global = self.uses_global_storage(name, kind);
-        let op = match (uses_global, kind) {
-            (true, _) => Op::LoadGlobal,
-            (false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
+        let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal;
+        let op = match (is_ref_bound, uses_global, kind) {
+            (true, _, _) => Op::LoadRefCell,
+            (false, true, _) => Op::LoadGlobal,
+            (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
             _ => Op::LoadLocal,
         };
         let immediate = if uses_global {
@@ -423,16 +458,86 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
             return value;
         }
-        let op = match previous_kind {
-            LocalKind::StaticLocal => Op::StoreStaticLocal,
+        let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && previous_kind == LocalKind::PhpLocal;
+        let op = match (is_ref_bound, previous_kind) {
+            (true, _) => Op::StoreRefCell,
+            (false, LocalKind::StaticLocal) => Op::StoreStaticLocal,
             _ => Op::StoreLocal,
         };
-        self.store_slot_with_op(slot, value, op, span);
-        self.set_local_type(name, php_type);
+        if is_ref_bound {
+            self.store_ref_cell_slot(slot, value, previous_type.clone(), span);
+        } else {
+            self.store_slot_with_op(slot, value, op, span);
+        }
+        if !is_ref_bound {
+            self.set_local_type(name, php_type);
+        }
         if release_source_after_store {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
         }
         value
+    }
+
+    /// Emits `unset($local)`, breaking by-reference aliases without writing through them.
+    pub(crate) fn unset_local(&mut self, name: &str, null: LoweredValue, span: Option<Span>) -> LoweredValue {
+        if !self.is_ref_bound_local(name) {
+            return self.store_local(name, null, PhpType::Void, span);
+        }
+        self.clear_static_callable_local(name);
+        let slot = self.declare_local(name, PhpType::Void);
+        self.release_ref_cell_owner(name, span);
+        self.emit_void(
+            Op::UnsetLocal,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::UnsetLocal.default_effects(),
+            span,
+        );
+        self.unmark_ref_bound_local(name);
+        self.set_local_type(name, PhpType::Void);
+        self.initialized_slots.insert(slot);
+        null
+    }
+
+    /// Promotes an initialized local into a fallback ref-cell for by-reference foreach.
+    pub(crate) fn promote_local_ref_cell(&mut self, name: &str, span: Option<Span>) {
+        let slot = self.declare_local(name, self.local_type(name));
+        let fallback_ty = self.builder.local_php_type(slot);
+        let owner_slot = self.declare_ref_cell_owner(name, fallback_ty.clone());
+        self.builder.emit_with_effects(
+            Op::PromoteLocalRefCell,
+            Vec::new(),
+            Some(Immediate::LocalSlotPair {
+                first: slot,
+                second: owner_slot,
+            }),
+            IrType::Void,
+            fallback_ty,
+            Ownership::NonHeap,
+            Op::PromoteLocalRefCell.default_effects(),
+            span,
+        );
+        self.mark_ref_bound_local(name);
+        self.initialized_slots.insert(slot);
+        self.initialized_slots.insert(owner_slot);
+    }
+
+    /// Releases a promoted fallback ref-cell owner if the variable still owns one.
+    pub(crate) fn release_ref_cell_owner(&mut self, name: &str, span: Option<Span>) {
+        let Some(owner_slot) = self.ref_cell_owner_slot(name) else {
+            return;
+        };
+        let owner_ty = self.builder.local_php_type(owner_slot);
+        self.builder.emit_with_effects(
+            Op::ReleaseLocalRefCell,
+            Vec::new(),
+            Some(Immediate::LocalSlot(owner_slot)),
+            IrType::Void,
+            owner_ty,
+            Ownership::NonHeap,
+            Op::ReleaseLocalRefCell.default_effects(),
+            span,
+        );
     }
 
     /// Returns whether a RHS producer definitely owns storage duplicated into a local slot.
@@ -557,6 +662,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             PhpType::Void,
             Ownership::NonHeap,
             op.default_effects(),
+            span,
+        );
+        self.initialized_slots.insert(slot);
+    }
+
+    /// Emits a ref-cell store that carries the alias target type for backend dereference.
+    fn store_ref_cell_slot(
+        &mut self,
+        slot: LocalSlotId,
+        value: LoweredValue,
+        alias_ty: PhpType,
+        span: Option<Span>,
+    ) {
+        self.builder.emit_with_effects(
+            Op::StoreRefCell,
+            vec![value.value],
+            Some(Immediate::LocalSlot(slot)),
+            IrType::Void,
+            alias_ty,
+            Ownership::NonHeap,
+            Op::StoreRefCell.default_effects(),
             span,
         );
         self.initialized_slots.insert(slot);

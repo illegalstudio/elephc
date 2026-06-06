@@ -90,7 +90,8 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
         StmtKind::ExprStmt(expr) => {
-            lower_expr(ctx, expr);
+            let value = lower_expr(ctx, expr);
+            release_expr_statement_result(ctx, value, expr.span);
         }
         StmtKind::NamespaceDecl { name: _ } => lower_noop(ctx, stmt.span),
         StmtKind::NamespaceBlock { name: _, body } => lower_block(ctx, body),
@@ -148,6 +149,75 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             value,
         } => lower_property_array_assign(ctx, object, property, index, value, stmt.span),
     }
+}
+
+/// Releases a discarded expression-statement result when it may own temporary storage.
+fn release_expr_statement_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) {
+    if !value.ir_type.is_refcounted_storage() {
+        return;
+    }
+    if !expr_statement_result_can_own_storage(ctx, value) {
+        return;
+    }
+    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+}
+
+/// Returns true when a discarded expression result is produced by an owning opcode.
+fn expr_statement_result_can_own_storage(
+    ctx: &LoweringContext<'_, '_>,
+    value: LoweredValue,
+) -> bool {
+    matches!(
+        ctx.builder.value_defining_op(value.value),
+        Some(
+            Op::IToStr
+                | Op::FToStr
+                | Op::BoolToStr
+                | Op::ResourceToStr
+                | Op::MixedBox
+                | Op::ArrayToMixed
+                | Op::HashToMixed
+                | Op::MixedCastString
+                | Op::StrConcat
+                | Op::StrPersist
+                | Op::StrCharAt
+                | Op::StrInterpolate
+                | Op::ArrayNew
+                | Op::HashNew
+                | Op::ArrayCloneShallow
+                | Op::HashCloneShallow
+                | Op::ArrayUnion
+                | Op::HashUnion
+                | Op::ArrayHashUnion
+                | Op::HashArrayUnion
+                | Op::ArrayToHash
+                | Op::ObjectNew
+                | Op::DynamicObjectNew
+                | Op::ClosureNew
+                | Op::FirstClassCallableNew
+                | Op::CallableArrayNew
+                | Op::BufferNew
+                | Op::GeneratorNew
+                | Op::Call
+                | Op::FunctionVariantCall
+                | Op::BuiltinCall
+                | Op::RuntimeCall
+                | Op::ExternCall
+                | Op::MethodCall
+                | Op::NullsafeMethodCall
+                | Op::StaticMethodCall
+                | Op::ClosureCall
+                | Op::ExprCall
+                | Op::PipeCall
+                | Op::IteratorMethodCall
+                | Op::SplRuntimeCall
+                | Op::FiberRuntimeCall
+        )
+    )
 }
 
 /// Lowers a sequence of statements until the current block terminates.
@@ -487,16 +557,17 @@ fn lower_foreach(
     array: &Expr,
     key_var: Option<&str>,
     value_var: &str,
-    _value_by_ref: bool,
+    value_by_ref: bool,
     body: &[Stmt],
 ) {
     let source = lower_expr(ctx, array);
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
     let value_needs_null_init = !ctx.local_slots.contains_key(value_var);
     let iterator = ctx.emit_value(
         Op::IterStart,
         vec![source.value],
-        None,
+        value_by_ref.then_some(Immediate::Bool(true)),
         PhpType::Iterable,
         Op::IterStart.default_effects(),
         Some(array.span),
@@ -504,7 +575,19 @@ fn lower_foreach(
     if let Some(key_var) = key_var {
         initialize_foreach_mixed_local_if_needed(ctx, key_var, key_needs_null_init, array.span);
     }
-    initialize_foreach_mixed_local_if_needed(ctx, value_var, value_needs_null_init, array.span);
+    if value_by_ref {
+        let value_ty = foreach_ref_value_type(&source_ty);
+        ctx.declare_local(value_var, value_ty.clone());
+        ctx.set_local_type(value_var, value_ty);
+        if !value_needs_null_init {
+            ctx.mark_local_initialized(value_var);
+            if !ctx.is_ref_bound_local(value_var) {
+                ctx.promote_local_ref_cell(value_var, Some(array.span));
+            }
+        }
+    } else {
+        initialize_foreach_mixed_local_if_needed(ctx, value_var, value_needs_null_init, array.span);
+    }
     let header = ctx.builder.create_named_block("foreach.next", Vec::new());
     let body_block = ctx.builder.create_named_block("foreach.body", Vec::new());
     let exit = ctx.builder.create_named_block("foreach.exit", Vec::new());
@@ -540,21 +623,44 @@ fn lower_foreach(
         );
         ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
     }
-    let value = ctx.emit_value(
-        Op::IterCurrentValue,
-        vec![iterator.value],
-        None,
-        PhpType::Mixed,
-        Op::IterCurrentValue.default_effects(),
-        Some(array.span),
-    );
-    ctx.store_local(value_var, value, PhpType::Mixed, Some(array.span));
+    if value_by_ref {
+        let slot = ctx.declare_local(value_var, foreach_ref_value_type(&source_ty));
+        ctx.release_ref_cell_owner(value_var, Some(array.span));
+        ctx.emit_void(
+            Op::IterCurrentValueRef,
+            vec![iterator.value],
+            Some(Immediate::LocalSlot(slot)),
+            Op::IterCurrentValueRef.default_effects(),
+            Some(array.span),
+        );
+        ctx.mark_ref_bound_local(value_var);
+        ctx.mark_local_initialized(value_var);
+    } else {
+        let value = ctx.emit_value(
+            Op::IterCurrentValue,
+            vec![iterator.value],
+            None,
+            PhpType::Mixed,
+            Op::IterCurrentValue.default_effects(),
+            Some(array.span),
+        );
+        ctx.store_local(value_var, value, PhpType::Mixed, Some(array.span));
+    }
     ctx.loop_stack.push(LoopFrame { break_block: exit, continue_block: header });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
+}
+
+/// Returns the local value type used when a foreach binds the value by reference.
+fn foreach_ref_value_type(source_ty: &PhpType) -> PhpType {
+    match source_ty.codegen_repr() {
+        PhpType::Array(elem) => *elem,
+        PhpType::AssocArray { value, .. } => *value,
+        _ => PhpType::Mixed,
+    }
 }
 
 /// Initializes a fresh foreach loop variable to boxed null before the first iteration.

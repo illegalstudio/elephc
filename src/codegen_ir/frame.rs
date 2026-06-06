@@ -96,6 +96,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     }
     store_argc_local_if_present(ctx);
     zero_initialize_main_cleanup_locals(ctx);
+    zero_initialize_ref_cell_owner_locals(ctx);
 }
 
 /// Emits a direct-callable user function prologue and stores incoming params.
@@ -138,6 +139,7 @@ pub(super) fn emit_function_prologue_with_label(
         }
     }
     zero_initialize_function_cleanup_locals(ctx);
+    zero_initialize_ref_cell_owner_locals(ctx);
     Ok(())
 }
 
@@ -178,6 +180,7 @@ fn zero_initialize_main_cleanup_locals(ctx: &mut FunctionContext<'_>) {
 
 /// Releases owned main locals that still hold refcounted storage at process exit.
 fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    emit_ref_cell_owner_epilogue_cleanup(ctx);
     for (name, _, ty, offset) in main_cleanup_locals(ctx) {
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
         match ty {
@@ -202,6 +205,7 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
         .locals
         .iter()
         .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter(|local| !promoted_ref_cell_local_slots(ctx.function).contains(&local.id))
         .filter(|local| {
             local
                 .name
@@ -226,11 +230,90 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
     locals
 }
 
+/// Zero-initializes hidden ref-cell owner slots before any fallback promotion can run.
+fn zero_initialize_ref_cell_owner_locals(ctx: &mut FunctionContext<'_>) {
+    for (_, _, _, offset) in ref_cell_owner_locals(ctx) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
+}
+
+/// Releases hidden ref-cell owner slots that still hold fallback cells at exit.
+fn emit_ref_cell_owner_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    let owners = ref_cell_owner_locals(ctx);
+    emit_ref_cell_owner_epilogue_cleanup_for(ctx, owners);
+}
+
+/// Releases a precomputed set of hidden ref-cell owner slots.
+fn emit_ref_cell_owner_epilogue_cleanup_for(
+    ctx: &mut FunctionContext<'_>,
+    owners: Vec<(String, LocalSlotId, PhpType, usize)>,
+) {
+    for (name, _, ty, offset) in owners {
+        ctx.emitter.comment(&format!("epilogue cleanup ref-cell owner ${}", name));
+        emit_ref_cell_owner_cleanup(ctx, offset, &ty);
+    }
+}
+
+/// Releases the owner slot's ref-cell pointer when it is non-null, then clears the owner.
+fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
+    let done = ctx.next_label("ref_cell_owner_cleanup_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset_scratch(ctx.emitter, "x9", offset, "x11");
+            ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip released or never-created fallback ref-cells
+            abi::emit_release_local_ref_cell(ctx.emitter, "x9", ty);
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset_scratch(ctx.emitter, "r11", offset, "r10");
+            ctx.emitter.instruction("test r11, r11");                           // check whether this owner still holds a fallback ref-cell
+            ctx.emitter.instruction(&format!("je {}", done));                   // skip released or never-created fallback ref-cells
+            abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
+    }
+    ctx.emitter.label(&done);
+}
+
+/// Returns hidden owner locals that track promoted fallback ref-cells.
+fn ref_cell_owner_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, PhpType, usize)> {
+    let mut locals = ctx
+        .function
+        .locals
+        .iter()
+        .filter(|local| local.kind == LocalKind::RefCell)
+        .filter_map(|local| {
+            let offset = ctx.local_offset(local.id).ok()?;
+            let name = local
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("slot{}", local.id.as_raw()));
+            Some((name, local.id, local.php_type.codegen_repr(), offset))
+        })
+        .collect::<Vec<_>>();
+    locals.sort_by_key(|(_, _, _, offset)| *offset);
+    locals
+}
+
 /// Returns true when a local slot is written by an explicit EIR `StoreLocal`.
 fn local_slot_has_store(function: &Function, slot: LocalSlotId) -> bool {
     function.instructions.iter().any(|inst| {
         inst.op == Op::StoreLocal && matches!(inst.immediate, Some(Immediate::LocalSlot(candidate)) if candidate == slot)
     })
+}
+
+/// Returns PHP-visible locals whose slot is rewritten to a fallback ref-cell pointer.
+fn promoted_ref_cell_local_slots(function: &Function) -> HashSet<LocalSlotId> {
+    function
+        .instructions
+        .iter()
+        .filter_map(|inst| match inst.immediate {
+            Some(Immediate::LocalSlotPair { first, .. }) if inst.op == Op::PromoteLocalRefCell => {
+                Some(first)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Releases a string local when its length proves it owns heap-backed storage.
@@ -294,7 +377,8 @@ fn zero_initialize_function_cleanup_locals(ctx: &mut FunctionContext<'_>) {
 /// Releases owned function locals that do not directly provide the return value.
 fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     let cleanup_locals = function_cleanup_locals(ctx);
-    if cleanup_locals.is_empty() {
+    let ref_cell_owners = ref_cell_owner_locals(ctx);
+    if cleanup_locals.is_empty() && ref_cell_owners.is_empty() {
         return;
     }
     let return_ty = ctx.function.return_php_type.codegen_repr();
@@ -302,6 +386,7 @@ fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     if preserves_return {
         push_return_value(ctx, &return_ty);
     }
+    emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners);
     for (name, _, ty, offset) in cleanup_locals {
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
         match ty {
@@ -330,6 +415,7 @@ fn function_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotI
         .locals
         .iter()
         .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter(|local| !promoted_ref_cell_local_slots(ctx.function).contains(&local.id))
         .filter(|local| {
             local
                 .name

@@ -68,6 +68,11 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstClassName => strings::lower_const_class_name(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
+        Op::UnsetLocal => lower_unset_local(ctx, &inst),
+        Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
+        Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
+        Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
+        Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),
@@ -125,6 +130,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IterNext => iterators::lower_iter_next(ctx, &inst),
         Op::IterCurrentKey => iterators::lower_iter_current_key(ctx, &inst),
         Op::IterCurrentValue => iterators::lower_iter_current_value(ctx, &inst),
+        Op::IterCurrentValueRef => iterators::lower_iter_current_value_ref(ctx, &inst),
         Op::IterEnd => iterators::lower_iter_end(ctx, &inst),
         Op::PtrCast => pointers::lower_ptr_cast(ctx, &inst),
         Op::BufferNew => buffers::lower_buffer_new(ctx, &inst),
@@ -269,7 +275,7 @@ fn emit_runtime_closure_descriptor_with_captures(
     for (idx, ((_, capture_ty, by_ref), operand)) in captures.iter().zip(operands.iter()).enumerate() {
         if *by_ref {
             let slot = local_slot_for_loaded_value(ctx, *operand)?;
-            promote_local_slot_for_ref_capture(ctx, slot, capture_ty)?;
+            promote_local_slot_for_ref_capture(ctx, slot, None, capture_ty)?;
             materialize_local_ref_arg_address(ctx, *operand)?;
             callable_descriptor::emit_store_current_result_to_runtime_capture(
                 ctx.emitter,
@@ -300,6 +306,7 @@ fn emit_runtime_closure_descriptor_with_captures(
 fn promote_local_slot_for_ref_capture(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
+    owner_slot: Option<LocalSlotId>,
     capture_ty: &PhpType,
 ) -> Result<()> {
     if local_slot_stores_ref_cell_pointer(ctx, slot) {
@@ -317,9 +324,59 @@ fn promote_local_slot_for_ref_capture(
     ctx.emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(ctx.emitter))); // keep the promoted closure capture cell while restoring its value
     pop_result_value(ctx, &local_ty);
     store_current_result_to_ref_cell(ctx, cell_reg, &local_ty);
-    abi::store_at_offset(ctx.emitter, cell_reg, offset);
+    release_replaced_promoted_local_value(ctx, &local_ty, offset, cell_reg);
+    abi::store_at_offset_scratch(ctx.emitter, cell_reg, offset, abi::tertiary_scratch_reg(ctx.emitter));
+    if let Some(owner_slot) = owner_slot {
+        let owner_offset = ctx.local_offset(owner_slot)?;
+        abi::store_at_offset_scratch(ctx.emitter, cell_reg, owner_offset, abi::tertiary_scratch_reg(ctx.emitter));
+    }
     ctx.mark_promoted_ref_cell(slot);
     Ok(())
+}
+
+/// Releases the old local owner after its retained value has been copied into a ref-cell.
+fn release_replaced_promoted_local_value(
+    ctx: &mut FunctionContext<'_>,
+    local_ty: &PhpType,
+    offset: usize,
+    cell_reg: &str,
+) {
+    let local_ty = local_ty.codegen_repr();
+    if !matches!(local_ty, PhpType::Str | PhpType::Callable) && !local_ty.is_refcounted() {
+        return;
+    }
+    abi::emit_push_reg(ctx.emitter, cell_reg);
+    match local_ty {
+        PhpType::Str => {
+            abi::load_at_offset_scratch(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                offset,
+                abi::secondary_scratch_reg(ctx.emitter),
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        }
+        PhpType::Callable => {
+            abi::load_at_offset_scratch(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                offset,
+                abi::secondary_scratch_reg(ctx.emitter),
+            );
+            callable_descriptor::emit_release_current_descriptor(ctx.emitter);
+        }
+        ty if ty.is_refcounted() => {
+            abi::load_at_offset_scratch(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                offset,
+                abi::secondary_scratch_reg(ctx.emitter),
+            );
+            abi::emit_decref_if_refcounted(ctx.emitter, &ty);
+        }
+        _ => {}
+    }
+    abi::emit_pop_reg(ctx.emitter, cell_reg);
 }
 
 /// Retains or persists a value before it is moved into a promoted ref-cell.
@@ -1792,6 +1849,7 @@ struct RefArgWriteback {
     param_index: usize,
     source_value: ValueId,
     source_slot: LocalSlotId,
+    source_is_ref_cell: bool,
     source_ty: PhpType,
     cell_offset: usize,
 }
@@ -2427,10 +2485,12 @@ fn plan_ref_arg_writebacks(
             continue;
         }
         reject_unsupported_mixed_ref_writeback_source(&source_ty)?;
+        let source = local_ref_arg_source(ctx, *value)?;
         writebacks.push(RefArgWriteback {
             param_index,
             source_value: *value,
-            source_slot: local_slot_for_loaded_value(ctx, *value)?,
+            source_slot: source.slot,
+            source_is_ref_cell: source.is_ref_cell,
             source_ty,
             cell_offset: 0,
         });
@@ -2522,7 +2582,7 @@ fn store_current_scalar_result_to_ref_source(
     ctx: &mut FunctionContext<'_>,
     writeback: &RefArgWriteback,
 ) -> Result<()> {
-    if local_slot_stores_ref_cell_pointer(ctx, writeback.source_slot) {
+    if writeback.source_is_ref_cell || local_slot_stores_ref_cell_pointer(ctx, writeback.source_slot) {
         let offset = ctx.local_offset(writeback.source_slot)?;
         let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::load_at_offset(ctx.emitter, pointer_reg, offset);
@@ -2539,9 +2599,10 @@ fn materialize_local_ref_arg_address(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
 ) -> Result<()> {
-    let slot = local_slot_for_loaded_value(ctx, value)?;
+    let source = local_ref_arg_source(ctx, value)?;
+    let slot = source.slot;
     let offset = ctx.local_offset(slot)?;
-    if local_slot_stores_ref_cell_pointer(ctx, slot) {
+    if source.is_ref_cell || local_slot_stores_ref_cell_pointer(ctx, slot) {
         abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
     } else {
         abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
@@ -2549,11 +2610,17 @@ fn materialize_local_ref_arg_address(
     Ok(())
 }
 
-/// Resolves an EIR value back to a `load_local` source slot for by-reference calls.
-fn local_slot_for_loaded_value(
+/// Describes a local operand used as a by-reference call argument.
+struct LocalRefArgSource {
+    slot: LocalSlotId,
+    is_ref_cell: bool,
+}
+
+/// Resolves an EIR value back to a local slot and whether it already stores a ref-cell pointer.
+fn local_ref_arg_source(
     ctx: &FunctionContext<'_>,
     value: ValueId,
-) -> Result<LocalSlotId> {
+) -> Result<LocalRefArgSource> {
     let Some(value_ref) = ctx.function.value(value) else {
         return Err(CodegenIrError::missing_entry("value", value.as_raw()));
     };
@@ -2566,18 +2633,30 @@ fn local_slot_for_loaded_value(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::LoadLocal {
-        return Err(CodegenIrError::unsupported(format!(
-            "by-reference method call argument from opcode {}",
-            inst_ref.op.name()
-        )));
-    }
+    let is_ref_cell = match inst_ref.op {
+        Op::LoadLocal => false,
+        Op::LoadRefCell => true,
+        _ => {
+            return Err(CodegenIrError::unsupported(format!(
+                "by-reference method call argument from opcode {}",
+                inst_ref.op.name()
+            )))
+        }
+    };
     let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
         return Err(CodegenIrError::invalid_module(
-            "by-reference load_local argument has no local slot",
+            "by-reference load argument has no local slot",
         ));
     };
-    Ok(slot)
+    Ok(LocalRefArgSource { slot, is_ref_cell })
+}
+
+/// Resolves an EIR value back to a `load_local` source slot for by-reference calls.
+fn local_slot_for_loaded_value(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<LocalSlotId> {
+    local_ref_arg_source(ctx, value).map(|source| source.slot)
 }
 
 /// Returns true when a local slot stores a ref-cell pointer instead of a raw value.
@@ -2675,17 +2754,44 @@ fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
     ctx.store_result_value(result)
 }
 
+/// Lowers an explicit local ref-cell load into the result register and SSA slot.
+fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let result = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module("load_ref_cell missing result value")
+    })?;
+    let result_ty = ctx.value_php_type(result)?;
+    let source_ty = load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    ctx.store_result_value(result)
+}
+
 /// Loads the value pointed to by an incoming by-reference local parameter.
 fn load_ref_param_local_to_result(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
 ) -> Result<PhpType> {
     let ty = ctx.local_php_type(slot)?;
+    load_ref_cell_local_to_result_as(ctx, slot, &ty)
+}
+
+/// Loads the value pointed to by a local ref-cell slot using the supplied alias type.
+fn load_ref_cell_local_to_result_as(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    ty: &PhpType,
+) -> Result<PhpType> {
+    let ty = ty.codegen_repr();
     reject_multiword_ref_param_local(&ty, "load")?;
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
-    match ty.codegen_repr() {
+    match ty {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_from_address(ctx.emitter, ptr_reg, pointer_reg, 0);
+            abi::emit_load_from_address(ctx.emitter, len_reg, pointer_reg, 8);
+        }
         PhpType::Float => {
             abi::emit_load_from_address(ctx.emitter, abi::float_result_reg(ctx.emitter), pointer_reg, 0);
         }
@@ -2784,22 +2890,100 @@ fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     }
 }
 
+/// Lowers an explicit local ref-cell store through the pointer held in the slot.
+fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let value = expect_operand(inst, 0)?;
+    store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type)
+}
+
+/// Promotes an existing raw local slot into a heap ref-cell pointer.
+fn lower_promote_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let (slot, owner_slot) = expect_local_slot_pair(inst)?;
+    promote_local_slot_for_ref_capture(ctx, slot, Some(owner_slot), &inst.result_php_type)
+}
+
+/// Releases an owned local ref-cell tracked by a hidden owner slot.
+fn lower_release_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let owner_slot = expect_local_slot(inst)?;
+    release_local_ref_cell_owner(ctx, owner_slot, &inst.result_php_type)
+}
+
+/// Releases the owned ref-cell pointer in an owner slot and clears that owner.
+fn release_local_ref_cell_owner(
+    ctx: &mut FunctionContext<'_>,
+    owner_slot: LocalSlotId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let owner_offset = ctx.local_offset(owner_slot)?;
+    let done = ctx.next_label("release_ref_cell_owner_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset_scratch(ctx.emitter, "x9", owner_offset, "x11");
+            ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip release when this variable no longer owns a fallback ref-cell
+            abi::emit_release_local_ref_cell(ctx.emitter, "x9", value_ty);
+            abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset_scratch(ctx.emitter, "r11", owner_offset, "r10");
+            ctx.emitter.instruction("test r11, r11");                           // check whether this variable owns a fallback ref-cell
+            ctx.emitter.instruction(&format!("je {}", done));                   // skip release when the fallback owner is already clear
+            abi::emit_release_local_ref_cell(ctx.emitter, "r11", value_ty);
+            abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Lowers `unset($local)` by breaking any promoted alias and writing PHP null locally.
+fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let offset = ctx.local_offset(slot)?;
+    ctx.unmark_promoted_ref_cell(slot);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    if matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Str) {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset - 8);
+    }
+    Ok(())
+}
+
 /// Stores an SSA value through the pointer held by an incoming by-reference local parameter.
 fn store_value_to_ref_param_local(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     value: ValueId,
 ) -> Result<()> {
-    let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = ctx.local_php_type(slot)?;
+    store_value_to_ref_cell_as(ctx, slot, value, &target_ty)
+}
+
+/// Stores an SSA value through a local ref-cell pointer using the supplied alias type.
+fn store_value_to_ref_cell_as(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    value: ValueId,
+    target_ty: &PhpType,
+) -> Result<()> {
+    let source_ty = ctx.load_value_to_result(value)?;
+    let target_ty = target_ty.codegen_repr();
     reject_multiword_ref_param_local(&target_ty, "store")?;
-    if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
-        emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
-    }
+    coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
-    match target_ty.codegen_repr() {
+    match target_ty {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_store_to_address(ctx.emitter, ptr_reg, pointer_reg, 0);
+            abi::emit_store_to_address(ctx.emitter, len_reg, pointer_reg, 8);
+        }
         PhpType::Float => {
             abi::emit_store_to_address(ctx.emitter, abi::float_result_reg(ctx.emitter), pointer_reg, 0);
         }
@@ -2810,14 +2994,49 @@ fn store_value_to_ref_param_local(
     Ok(())
 }
 
+/// Converts the current result registers to the target shape needed by a ref-cell store.
+fn coerce_ref_cell_store_value(
+    ctx: &mut FunctionContext<'_>,
+    source_ty: &PhpType,
+    target_ty: &PhpType,
+) -> Result<()> {
+    let source_ty = source_ty.codegen_repr();
+    let target_ty = target_ty.codegen_repr();
+    if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+        emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+        return Ok(());
+    }
+    if source_ty == PhpType::Mixed {
+        match target_ty {
+            PhpType::Int => {
+                move_int_result_to_first_arg(ctx);
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+                return Ok(());
+            }
+            PhpType::Bool => {
+                move_int_result_to_first_arg(ctx);
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+                return Ok(());
+            }
+            PhpType::Float => {
+                move_int_result_to_first_arg(ctx);
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+                return Ok(());
+            }
+            PhpType::Str => {
+                move_int_result_to_first_arg(ctx);
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Rejects by-reference parameter locals whose frame representation spans multiple words.
 fn reject_multiword_ref_param_local(ty: &PhpType, action: &str) -> Result<()> {
-    if matches!(ty.codegen_repr(), PhpType::Str) {
-        return Err(CodegenIrError::unsupported(format!(
-            "by-reference string parameter local {}",
-            action
-        )));
-    }
+    let _ = (ty, action);
     Ok(())
 }
 
@@ -3107,6 +3326,17 @@ fn expect_local_slot(inst: &Instruction) -> Result<LocalSlotId> {
         Some(Immediate::LocalSlot(slot)) => Ok(slot),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing local slot immediate",
+            inst.op.name()
+        ))),
+    }
+}
+
+/// Returns the local-slot pair immediate attached to a paired local instruction.
+fn expect_local_slot_pair(inst: &Instruction) -> Result<(LocalSlotId, LocalSlotId)> {
+    match inst.immediate {
+        Some(Immediate::LocalSlotPair { first, second }) => Ok((first, second)),
+        _ => Err(CodegenIrError::invalid_module(format!(
+            "{} missing local slot pair immediate",
             inst.op.name()
         ))),
     }

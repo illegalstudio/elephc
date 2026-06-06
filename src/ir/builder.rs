@@ -101,6 +101,11 @@ impl<'f> Builder<'f> {
         local.php_type = storage_type;
     }
 
+    /// Returns the current frame storage PHP type for a local slot.
+    pub fn local_php_type(&self, slot: LocalSlotId) -> PhpType {
+        self.func.locals[slot.as_raw() as usize].php_type.clone()
+    }
+
     /// Returns the storage type for a value already emitted in this function.
     pub fn value_type(&self, value: ValueId) -> IrType {
         self.func.values[value.as_raw() as usize].ir_type
