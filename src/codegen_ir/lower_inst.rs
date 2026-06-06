@@ -12,7 +12,7 @@
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, runtime};
 use crate::codegen::context::{TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET};
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
+use crate::ir::{BlockId, CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, Ownership, ValueId};
 use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key, static_method_symbol,
 };
@@ -295,6 +295,9 @@ fn lower_runtime_void_call(ctx: &mut FunctionContext<'_>, label: &str) -> Result
 /// Materializes a first-class callable value as a static descriptor pointer when possible.
 fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let target = callable_target_data(ctx, inst)?.to_string();
+    if emit_instance_method_first_class_callable(ctx, inst, &target)? {
+        return store_if_result(ctx, inst);
+    }
     if let Some((entry_label, kind, invocation)) = first_class_callable_descriptor(ctx, &target) {
         callable_descriptor::emit_load_descriptor_address_with_meta(
             ctx.emitter,
@@ -312,6 +315,129 @@ fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst: &Instruct
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     }
     store_if_result(ctx, inst)
+}
+
+/// Emits a runtime descriptor for receiver-bound `object::method` first-class callables.
+fn emit_instance_method_first_class_callable(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: &str,
+) -> Result<bool> {
+    let Some((receiver_label, method_name)) = target.rsplit_once("::") else {
+        return Ok(false);
+    };
+    if receiver_label.trim_start_matches('\\') != "object" {
+        return Ok(false);
+    }
+    let receiver = inst.operands.first().copied().ok_or_else(|| {
+        CodegenIrError::invalid_module(format!(
+            "instance first-class callable '{}' has no receiver operand",
+            target
+        ))
+    })?;
+    let receiver_ty = ctx.value_php_type(receiver)?;
+    let PhpType::Object(class_name) = receiver_ty.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "instance first-class callable '{}' with receiver PHP type {:?}",
+            target,
+            receiver_ty
+        )));
+    };
+    let normalized_class = class_name.trim_start_matches('\\').to_string();
+    let method_key = php_symbol_key(method_name);
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(normalized_class.as_str())
+        .ok_or_else(|| CodegenIrError::unsupported(format!(
+            "instance first-class callable '{}' with unknown receiver class '{}'",
+            target,
+            normalized_class
+        )))?;
+    let sig = class_info
+        .methods
+        .get(&method_key)
+        .ok_or_else(|| CodegenIrError::unsupported(format!(
+            "instance first-class callable '{}' with unknown method",
+            target
+        )))?
+        .clone();
+    let impl_class = class_info
+        .method_impl_classes
+        .get(&method_key)
+        .cloned()
+        .unwrap_or_else(|| normalized_class.clone());
+    if !class_method_body_exists(ctx, &impl_class, &method_key) {
+        return Err(CodegenIrError::unsupported(format!(
+            "instance first-class callable '{}' without emitted method body",
+            target
+        )));
+    }
+    let receiver_ty = PhpType::Object(normalized_class.clone());
+    let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
+    let descriptor_label = callable_descriptor::static_descriptor_with_meta(
+        ctx.data,
+        &method_symbol(&impl_class, &method_key),
+        Some(target),
+        callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
+        Some(&sig),
+        &captures,
+        &[],
+        callable_descriptor::CallableDescriptorInvocation::method(
+            callable_descriptor::CallableDescriptorShape::InstanceMethod,
+            Some(normalized_class),
+            method_name,
+        ),
+    );
+    emit_runtime_descriptor_with_receiver_capture(ctx, &descriptor_label, receiver, &receiver_ty)?;
+    Ok(true)
+}
+
+/// Returns true when the EIR module contains the concrete instance-method body.
+fn class_method_body_exists(ctx: &FunctionContext<'_>, class_name: &str, method_key: &str) -> bool {
+    ctx.module.class_methods.iter().any(|function| {
+        !function.flags.is_static
+            && function
+                .name
+                .rsplit_once("::")
+                .is_some_and(|(class, method)| class == class_name && php_symbol_key(method) == method_key)
+    })
+}
+
+/// Allocates a runtime descriptor and stores the receiver in capture slot zero.
+fn emit_runtime_descriptor_with_receiver_capture(
+    ctx: &mut FunctionContext<'_>,
+    descriptor_label: &str,
+    receiver: ValueId,
+    receiver_ty: &PhpType,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
+    ctx.load_value_to_result(receiver)?;
+    if ctx.value_ownership(receiver)? != Ownership::Owned {
+        abi::emit_incref_if_refcounted(ctx.emitter, receiver_ty);
+    }
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter.instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime callable descriptor while copying its static header
+    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+        ctx.emitter,
+        descriptor_reg,
+        descriptor_label,
+    );
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    callable_descriptor::emit_store_current_result_to_runtime_capture(
+        ctx.emitter,
+        descriptor_reg,
+        0,
+        receiver_ty,
+    );
+    if descriptor_reg != result_reg {
+        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the receiver-bound callable descriptor
+    }
+    Ok(())
 }
 
 /// Returns static descriptor metadata for compile-time callable targets supported by EIR.

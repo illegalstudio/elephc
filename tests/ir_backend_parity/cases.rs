@@ -851,6 +851,39 @@ echo $mapped[1];
     );
 }
 
+/// Verifies stored instance-method reduce and walk callbacks keep legacy receiver capture.
+#[test]
+fn parity_stored_instance_method_reduce_and_walk_callbacks() {
+    assert_backend_parity(
+        "stored_instance_method_reduce_and_walk_callbacks",
+        r#"<?php
+class StoredReduceWalkBox {
+    public int $base = 0;
+
+    public function add(int $carry, int $item): int {
+        return $carry + $this->base + $item;
+    }
+
+    public function show(int $item): void {
+        echo $this->base + $item;
+        echo ":";
+    }
+}
+
+$box = new StoredReduceWalkBox();
+$box->base = 10;
+$reduce = $box->add(...);
+$walk = $box->show(...);
+$box = new StoredReduceWalkBox();
+$box->base = 100;
+echo array_reduce([1, 2], $reduce, 0);
+echo "|";
+array_walk([1, 2], $walk);
+"#,
+        &[],
+    );
+}
+
 /// Verifies reflection attribute owner metadata matches the legacy backend.
 #[test]
 fn parity_reflection_owner_attributes() {

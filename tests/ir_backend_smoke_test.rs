@@ -3017,6 +3017,39 @@ echo $mapped[1];
     );
 }
 
+/// Verifies stored instance-method callbacks keep their receiver in reduce and walk runtimes.
+#[test]
+fn ir_backend_handles_stored_instance_method_reduce_and_walk_callbacks() {
+    let source = r#"<?php
+class StoredReduceWalkBox {
+    public int $base = 0;
+
+    public function add(int $carry, int $item): int {
+        return $carry + $this->base + $item;
+    }
+
+    public function show(int $item): void {
+        echo $this->base + $item;
+        echo ":";
+    }
+}
+
+$box = new StoredReduceWalkBox();
+$box->base = 10;
+$reduce = $box->add(...);
+$walk = $box->show(...);
+$box = new StoredReduceWalkBox();
+$box->base = 100;
+echo array_reduce([1, 2], $reduce, 0);
+echo "|";
+array_walk([1, 2], $walk);
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("stored_instance_method_reduce_and_walk_callbacks", source),
+        "23|11:12:"
+    );
+}
+
 /// Verifies fixed-class object construction calls `__construct` through the EIR method ABI.
 #[test]
 fn ir_backend_calls_simple_constructor() {
