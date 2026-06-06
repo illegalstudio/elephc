@@ -950,6 +950,28 @@ echo $fn(value: "Ada");
     );
 }
 
+/// Verifies stored instance-method by-reference params match legacy output.
+#[test]
+fn parity_stored_instance_method_by_ref_params() {
+    assert_backend_parity(
+        "stored_instance_method_by_ref_params",
+        r#"<?php
+class StoredByRefBox {
+    public function bump(&$value): void {
+        $value = $value + 2;
+    }
+}
+
+$box = new StoredByRefBox();
+$fn = $box->bump(...);
+$value = 5;
+$fn($value);
+echo $value;
+"#,
+        &[],
+    );
+}
+
 /// Verifies instance-method first-class callable `call_user_func*` output matches legacy.
 #[test]
 fn parity_instance_method_call_user_func_callbacks() {

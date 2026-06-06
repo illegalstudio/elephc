@@ -18,7 +18,7 @@ use crate::types::{FunctionSig, PhpType};
 use super::super::super::context::FunctionContext;
 use super::super::{
     class_method_already_emitted, direct_call_stack_pad_bytes,
-    materialize_method_call_args_with_receiver_reg, store_call_result,
+    materialize_method_call_args_with_receiver_reg_and_refs, store_call_result,
 };
 use crate::codegen_ir::{CodegenIrError, Result};
 
@@ -28,6 +28,7 @@ struct InstanceMethodExprCallTarget {
     receiver: ValueId,
     receiver_ty: PhpType,
     param_types: Vec<PhpType>,
+    ref_params: Vec<bool>,
     return_ty: PhpType,
 }
 
@@ -73,12 +74,13 @@ fn lower_instance_method_callable_call(
 
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     ctx.load_value_to_reg(target.receiver, receiver_reg)?;
-    let overflow_bytes = materialize_method_call_args_with_receiver_reg(
+    let overflow_bytes = materialize_method_call_args_with_receiver_reg_and_refs(
         ctx,
         receiver_reg,
         &target.receiver_ty,
         &operands,
         &target.param_types,
+        &target.ref_params,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -172,11 +174,15 @@ fn instance_method_expr_call_target(
     let mut param_types = Vec::with_capacity(sig.params.len() + 1);
     param_types.push(receiver_ty.clone());
     param_types.extend(sig.params.iter().map(|(_, ty)| ty.codegen_repr()));
+    let mut ref_params = Vec::with_capacity(sig.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(sig.ref_params.iter().copied());
     Ok(InstanceMethodExprCallTarget {
         entry_label: method_symbol(impl_class, &method_key),
         receiver,
         receiver_ty,
         param_types,
+        ref_params,
         return_ty: sig.return_type.clone(),
     })
 }
@@ -190,13 +196,6 @@ fn require_instance_expr_call_signature(
     if sig.variadic.is_some() {
         return Err(CodegenIrError::unsupported(format!(
             "{} receiver-bound callable '{}' with variadic method signature",
-            owner,
-            target
-        )));
-    }
-    if sig.ref_params.iter().any(|is_ref| *is_ref) {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} receiver-bound callable '{}' with by-reference method params",
             owner,
             target
         )));

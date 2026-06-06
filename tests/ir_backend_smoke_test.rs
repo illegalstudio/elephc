@@ -3121,6 +3121,28 @@ echo $fn(value: "Ada");
     );
 }
 
+/// Verifies stored instance-method descriptor calls preserve by-reference params.
+#[test]
+fn ir_backend_handles_stored_instance_method_by_ref_params() {
+    let source = r#"<?php
+class StoredByRefBox {
+    public function bump(&$value): void {
+        $value = $value + 2;
+    }
+}
+
+$box = new StoredByRefBox();
+$fn = $box->bump(...);
+$value = 5;
+$fn($value);
+echo $value;
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("stored_instance_method_by_ref_params", source),
+        "7"
+    );
+}
+
 /// Verifies instance-method first-class callables work with `call_user_func*`.
 #[test]
 fn ir_backend_handles_instance_method_call_user_func_callbacks() {

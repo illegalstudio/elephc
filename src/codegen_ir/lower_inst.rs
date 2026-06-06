@@ -12,7 +12,10 @@
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, runtime};
 use crate::codegen::context::{TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET};
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, Ownership, ValueId};
+use crate::ir::{
+    BlockId, CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, Ownership, ValueDef,
+    ValueId,
+};
 use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key, static_method_symbol,
 };
@@ -1677,6 +1680,26 @@ fn materialize_method_call_args_with_receiver_reg(
     operands: &[ValueId],
     param_types: &[PhpType],
 ) -> Result<usize> {
+    let ref_params = vec![false; param_types.len()];
+    materialize_method_call_args_with_receiver_reg_and_refs(
+        ctx,
+        receiver_reg,
+        receiver_ty,
+        operands,
+        param_types,
+        &ref_params,
+    )
+}
+
+/// Loads method call arguments with by-reference parameter support for local operands.
+fn materialize_method_call_args_with_receiver_reg_and_refs(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    receiver_ty: &PhpType,
+    operands: &[ValueId],
+    param_types: &[PhpType],
+    ref_params: &[bool],
+) -> Result<usize> {
     if operands.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
             "method call materialization received {} operands for {} params",
@@ -1684,17 +1707,89 @@ fn materialize_method_call_args_with_receiver_reg(
             param_types.len()
         )));
     }
+    if ref_params.len() != param_types.len() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "method call materialization received {} ref flags for {} params",
+            ref_params.len(),
+            param_types.len()
+        )));
+    }
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, param_types, 0);
     move_reg_to_int_result(ctx, receiver_reg);
     abi::emit_push_result_value(ctx.emitter, receiver_ty);
-    for (value, param_ty) in operands.iter().skip(1).zip(param_types.iter().skip(1)) {
-        ctx.load_value_to_result(*value)?;
-        let source_ty = ctx.raw_value_php_type(*value)?;
-        let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
-        abi::emit_push_result_value(ctx.emitter, &push_ty);
+    for (index, (value, param_ty)) in operands
+        .iter()
+        .skip(1)
+        .zip(param_types.iter().skip(1))
+        .enumerate()
+    {
+        let param_index = index + 1;
+        if ref_params[param_index] {
+            materialize_local_ref_arg_address(ctx, *value)?;
+            abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
+        } else {
+            ctx.load_value_to_result(*value)?;
+            let source_ty = ctx.raw_value_php_type(*value)?;
+            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            abi::emit_push_result_value(ctx.emitter, &push_ty);
+        }
     }
     Ok(abi::materialize_outgoing_args(ctx.emitter, &assignments))
+}
+
+/// Loads a local variable's address for a by-reference method-call argument.
+fn materialize_local_ref_arg_address(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let slot = local_slot_for_loaded_value(ctx, value)?;
+    let offset = ctx.local_offset(slot)?;
+    if local_slot_is_by_ref_param(ctx, slot) {
+        abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    } else {
+        abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    }
+    Ok(())
+}
+
+/// Resolves an EIR value back to a `load_local` source slot for by-reference calls.
+fn local_slot_for_loaded_value(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<LocalSlotId> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::unsupported(
+            "by-reference method call argument from non-local value",
+        ));
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::LoadLocal {
+        return Err(CodegenIrError::unsupported(format!(
+            "by-reference method call argument from opcode {}",
+            inst_ref.op.name()
+        )));
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "by-reference load_local argument has no local slot",
+        ));
+    };
+    Ok(slot)
+}
+
+/// Returns whether a local slot stores an incoming by-reference pointer.
+fn local_slot_is_by_ref_param(ctx: &FunctionContext<'_>, slot: LocalSlotId) -> bool {
+    ctx.function
+        .params
+        .get(slot.as_raw() as usize)
+        .is_some_and(|param| param.by_ref)
 }
 
 /// Moves a scratch integer register into the canonical integer result register.
@@ -1777,10 +1872,35 @@ fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
     let result = inst.result.ok_or_else(|| {
         CodegenIrError::invalid_module("load_local missing result value")
     })?;
-    let source_ty = ctx.load_local_to_result(slot)?;
+    let source_ty = if local_slot_is_by_ref_param(ctx, slot) {
+        load_ref_param_local_to_result(ctx, slot)?
+    } else {
+        ctx.load_local_to_result(slot)?
+    };
     let result_ty = ctx.value_php_type(result)?;
     coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
     ctx.store_result_value(result)
+}
+
+/// Loads the value pointed to by an incoming by-reference local parameter.
+fn load_ref_param_local_to_result(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<PhpType> {
+    let ty = ctx.local_php_type(slot)?;
+    reject_multiword_ref_param_local(&ty, "load")?;
+    let offset = ctx.local_offset(slot)?;
+    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, pointer_reg, offset);
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            abi::emit_load_from_address(ctx.emitter, abi::float_result_reg(ctx.emitter), pointer_reg, 0);
+        }
+        _ => {
+            abi::emit_load_from_address(ctx.emitter, abi::int_result_reg(ctx.emitter), pointer_reg, 0);
+        }
+    }
+    Ok(ty)
 }
 
 /// Converts a loaded local slot value to the SSA result representation requested by EIR.
@@ -1855,7 +1975,48 @@ fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> b
 fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    ctx.store_value_to_local(slot, value)
+    if local_slot_is_by_ref_param(ctx, slot) {
+        store_value_to_ref_param_local(ctx, slot, value)
+    } else {
+        ctx.store_value_to_local(slot, value)
+    }
+}
+
+/// Stores an SSA value through the pointer held by an incoming by-reference local parameter.
+fn store_value_to_ref_param_local(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    value: ValueId,
+) -> Result<()> {
+    let source_ty = ctx.load_value_to_result(value)?;
+    let target_ty = ctx.local_php_type(slot)?;
+    reject_multiword_ref_param_local(&target_ty, "store")?;
+    if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+        emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+    }
+    let offset = ctx.local_offset(slot)?;
+    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, pointer_reg, offset);
+    match target_ty.codegen_repr() {
+        PhpType::Float => {
+            abi::emit_store_to_address(ctx.emitter, abi::float_result_reg(ctx.emitter), pointer_reg, 0);
+        }
+        _ => {
+            abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), pointer_reg, 0);
+        }
+    }
+    Ok(())
+}
+
+/// Rejects by-reference parameter locals whose frame representation spans multiple words.
+fn reject_multiword_ref_param_local(ty: &PhpType, action: &str) -> Result<()> {
+    if matches!(ty.codegen_repr(), PhpType::Str) {
+        return Err(CodegenIrError::unsupported(format!(
+            "by-reference string parameter local {}",
+            action
+        )));
+    }
+    Ok(())
 }
 
 /// Lowers a global storage load into the result register and SSA destination slot.
