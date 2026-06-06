@@ -17,14 +17,27 @@ use crate::codegen::{
 };
 use crate::codegen::platform::Arch;
 use crate::ir::{Instruction, ValueId};
-use crate::names::function_symbol;
-use crate::types::PhpType;
+use crate::names::{function_symbol, method_symbol, php_symbol_key};
+use crate::parser::ast::Visibility;
+use crate::types::{FunctionSig, PhpType};
 
 use super::super::context::FunctionContext;
-use super::{direct_call_stack_pad_bytes, expect_operand, materialize_direct_call_args};
+use super::{
+    class_method_already_emitted, direct_call_stack_pad_bytes, emit_ref_arg_writebacks,
+    expect_operand, materialize_direct_call_args, materialize_method_call_args_with_receiver_reg_and_refs,
+    store_call_result,
+};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 mod instance_expr;
+
+const MIXED_METHOD_TAG_OFFSET: usize = 0;
+const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
+const MIXED_RECEIVER_TAG_OFFSET: usize = 32;
+const MIXED_RECEIVER_PAYLOAD_OFFSET: usize = 48;
+const MIXED_SELECTOR_BYTES: usize = 64;
+const MIXED_TAG_STRING: i64 = 1;
+const MIXED_TAG_OBJECT: i64 = 6;
 
 /// Resolved user function candidate for a runtime string callable.
 struct RuntimeStringFunctionTarget {
@@ -33,11 +46,24 @@ struct RuntimeStringFunctionTarget {
     return_ty: PhpType,
 }
 
+/// Resolved public instance-method candidate for a runtime callable array.
+struct RuntimeArrayInstanceMethodTarget {
+    class_name: String,
+    class_id: u64,
+    method_key: String,
+    method_name: String,
+    impl_class: String,
+    sig: FunctionSig,
+}
+
 /// Lowers `$callable(...)` calls when the callable is a runtime string function name.
 pub(super) fn lower_closure_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let callable = expect_operand(inst, 0)?;
     match ctx.value_php_type(callable)?.codegen_repr() {
         PhpType::Str => lower_runtime_string_call(ctx, inst, callable, "closure_call"),
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            lower_runtime_mixed_callable_array_call(ctx, inst, callable, "closure_call")
+        }
         PhpType::Callable => instance_expr::lower_instance_method_closure_call(ctx, inst, callable)
             .or_else(|_| lower_descriptor_invoker_call(ctx, inst, callable, "closure_call")),
         other => Err(CodegenIrError::unsupported(format!(
@@ -52,12 +78,317 @@ pub(super) fn lower_expr_call(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let callable = expect_operand(inst, 0)?;
     match ctx.value_php_type(callable)?.codegen_repr() {
         PhpType::Str => lower_runtime_string_call(ctx, inst, callable, "expr_call"),
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            lower_runtime_mixed_callable_array_call(ctx, inst, callable, "expr_call")
+        }
         PhpType::Callable => instance_expr::lower_instance_method_expr_call(ctx, inst, callable)
             .or_else(|_| lower_descriptor_invoker_call(ctx, inst, callable, "expr_call")),
         other => Err(CodegenIrError::unsupported(format!(
             "expr_call for callable PHP type {:?}",
             other
         ))),
+    }
+}
+
+/// Lowers runtime `[$object, $method]` callable arrays through public method cases.
+fn lower_runtime_mixed_callable_array_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callable: ValueId,
+    op_name: &str,
+) -> Result<()> {
+    let args = inst.operands.iter().skip(1).copied().collect::<Vec<_>>();
+    let targets = runtime_array_instance_method_targets(ctx, args.len());
+    if targets.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for runtime callable array with {} positional args",
+            op_name,
+            args.len()
+        )));
+    }
+
+    emit_mixed_callable_array_selector_slots(ctx, callable)?;
+    let done_label = ctx.next_label(&format!("{}_callable_array_done", op_name));
+    let miss_label = ctx.next_label(&format!("{}_callable_array_missing", op_name));
+    for target in &targets {
+        let next_label = ctx.next_label("callable_array_instance_next");
+        emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
+        emit_runtime_array_instance_method_call(ctx, inst, &args, target)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    ctx.emitter.label(&miss_label);
+    emit_runtime_callable_array_no_match_abort(ctx);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
+    Ok(())
+}
+
+/// Collects public instance-method targets that can receive this positional shape.
+fn runtime_array_instance_method_targets(
+    ctx: &FunctionContext<'_>,
+    arg_count: usize,
+) -> Vec<RuntimeArrayInstanceMethodTarget> {
+    let mut targets = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by(|left, right| left.0.cmp(right.0));
+    for (class_name, class_info) in classes {
+        let mut methods = class_info.methods.iter().collect::<Vec<_>>();
+        methods.sort_by(|left, right| left.0.cmp(right.0));
+        for (method_name, sig) in methods {
+            if sig.params.len() != arg_count || sig.variadic.is_some() {
+                continue;
+            }
+            if !class_info
+                .method_visibilities
+                .get(method_name)
+                .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+            {
+                continue;
+            }
+            let method_key = php_symbol_key(method_name);
+            let impl_class = class_info
+                .method_impl_classes
+                .get(&method_key)
+                .cloned()
+                .unwrap_or_else(|| class_name.clone());
+            if !class_method_already_emitted(ctx, &impl_class, &method_key, false) {
+                continue;
+            }
+            targets.push(RuntimeArrayInstanceMethodTarget {
+                class_name: class_name.clone(),
+                class_id: class_info.class_id,
+                method_key,
+                method_name: method_name.clone(),
+                impl_class,
+                sig: sig.clone(),
+            });
+        }
+    }
+    targets
+}
+
+/// Saves the receiver and method slots from a boxed-Mixed callable array.
+fn emit_mixed_callable_array_selector_slots(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+) -> Result<()> {
+    ctx.emitter.comment("runtime callable-array mixed selector");
+    emit_unbox_mixed_callable_array_slot(ctx, callable, 0)?;
+    emit_push_mixed_unbox_payload(ctx);
+    emit_unbox_mixed_callable_array_slot(ctx, callable, 1)?;
+    emit_push_mixed_unbox_payload(ctx);
+    Ok(())
+}
+
+/// Loads and unboxes one boxed-Mixed slot from a callable array.
+fn emit_unbox_mixed_callable_array_slot(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    slot: usize,
+) -> Result<()> {
+    let array_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let offset = 24 + slot * 8;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(callable, array_reg)?;
+            ctx.emitter.instruction(&format!("ldr x0, [{}, #{}]", array_reg, offset)); // load the boxed callable-array selector slot
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(callable, array_reg)?;
+            ctx.emitter.instruction(&format!("mov rax, QWORD PTR [{} + {}]", array_reg, offset)); // load the boxed callable-array selector slot
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    Ok(())
+}
+
+/// Preserves the tag and payload returned by `__rt_mixed_unbox`.
+fn emit_push_mixed_unbox_payload(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_push_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rdi", "rdx");
+            abi::emit_push_reg(ctx.emitter, "rax");
+        }
+    }
+}
+
+/// Branches to `next_label` unless the saved selector matches this target.
+fn emit_branch_if_runtime_array_instance_mismatch(
+    ctx: &mut FunctionContext<'_>,
+    target: &RuntimeArrayInstanceMethodTarget,
+    next_label: &str,
+) {
+    emit_branch_if_stack_tag_mismatch(ctx, MIXED_RECEIVER_TAG_OFFSET, MIXED_TAG_OBJECT, next_label);
+    emit_branch_if_stack_tag_mismatch(ctx, MIXED_METHOD_TAG_OFFSET, MIXED_TAG_STRING, next_label);
+    emit_branch_if_receiver_class_id_mismatch(ctx, target.class_id, next_label);
+    emit_branch_if_stack_string_mismatch(
+        ctx,
+        MIXED_METHOD_PAYLOAD_OFFSET,
+        MIXED_METHOD_PAYLOAD_OFFSET + 8,
+        target.method_name.as_bytes(),
+        next_label,
+    );
+}
+
+/// Branches when a saved Mixed tag stack slot does not equal `expected_tag`.
+fn emit_branch_if_stack_tag_mismatch(
+    ctx: &mut FunctionContext<'_>,
+    tag_offset: usize,
+    expected_tag: i64,
+    next_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", tag_offset);
+            ctx.emitter.instruction(&format!("cmp x9, #{}", expected_tag));     // compare the callable-array selector runtime tag
+            ctx.emitter.instruction(&format!("b.ne {}", next_label));           // try the next callable-array target when the tag differs
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", tag_offset);
+            ctx.emitter.instruction(&format!("cmp r10, {}", expected_tag));     // compare the callable-array selector runtime tag
+            ctx.emitter.instruction(&format!("jne {}", next_label));            // try the next callable-array target when the tag differs
+        }
+    }
+}
+
+/// Branches when the saved receiver object's class id does not match the target.
+fn emit_branch_if_receiver_class_id_mismatch(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    next_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", MIXED_RECEIVER_PAYLOAD_OFFSET);
+            ctx.emitter.instruction(&format!("cbz x9, {}", next_label));        // reject null callable-array receivers before reading class id
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the callable-array receiver class id
+            abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
+            ctx.emitter.instruction("cmp x10, x11");                            // compare the receiver class id against this target
+            ctx.emitter.instruction(&format!("b.ne {}", next_label));           // try the next callable-array target when the class differs
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", MIXED_RECEIVER_PAYLOAD_OFFSET);
+            ctx.emitter.instruction("test r10, r10");                           // reject null callable-array receivers before reading class id
+            ctx.emitter.instruction(&format!("je {}", next_label));             // try the next callable-array target when the receiver is null
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the callable-array receiver class id
+            abi::emit_load_int_immediate(ctx.emitter, "r10", class_id as i64);
+            ctx.emitter.instruction("cmp r11, r10");                            // compare the receiver class id against this target
+            ctx.emitter.instruction(&format!("jne {}", next_label));            // try the next callable-array target when the class differs
+        }
+    }
+}
+
+/// Branches when a saved stack string does not match the expected PHP name.
+fn emit_branch_if_stack_string_mismatch(
+    ctx: &mut FunctionContext<'_>,
+    ptr_offset: usize,
+    len_offset: usize,
+    expected: &[u8],
+    next_label: &str,
+) {
+    let matched_label = ctx.next_label("callable_array_string_match");
+    emit_stack_string_compare_branch(ctx, ptr_offset, len_offset, expected, &matched_label);
+    abi::emit_jump(ctx.emitter, next_label);
+    ctx.emitter.label(&matched_label);
+}
+
+/// Compares a saved stack string with `expected` and branches on equality.
+fn emit_stack_string_compare_branch(
+    ctx: &mut FunctionContext<'_>,
+    ptr_offset: usize,
+    len_offset: usize,
+    expected: &[u8],
+    matched_label: &str,
+) {
+    let (expected_label, expected_len) = ctx.data.add_string(expected);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", ptr_offset);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", len_offset);
+            abi::emit_symbol_address(ctx.emitter, "x3", &expected_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", expected_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter.instruction("cmp x0, #0");                              // check whether the runtime method string matched
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // select this callable-array target when names match
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", ptr_offset);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", len_offset);
+            abi::emit_symbol_address(ctx.emitter, "rdx", &expected_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", expected_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter.instruction("test rax, rax");                           // check whether the runtime method string matched
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // select this callable-array target when names match
+        }
+    }
+}
+
+/// Calls one matched runtime instance-method target through the normal EIR ABI.
+fn emit_runtime_array_instance_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    args: &[ValueId],
+    target: &RuntimeArrayInstanceMethodTarget,
+) -> Result<()> {
+    let receiver_ty = PhpType::Object(target.class_name.clone());
+    let mut param_types = Vec::with_capacity(target.sig.params.len() + 1);
+    param_types.push(receiver_ty.clone());
+    param_types.extend(target.sig.params.iter().map(|(_, ty)| ty.codegen_repr()));
+    let mut ref_params = Vec::with_capacity(target.sig.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(target.sig.ref_params.iter().copied());
+    let mut operands = Vec::with_capacity(args.len() + 1);
+    operands.push(expect_operand(inst, 0)?);
+    operands.extend(args.iter().copied());
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, receiver_reg, MIXED_RECEIVER_PAYLOAD_OFFSET);
+    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+        ctx,
+        receiver_reg,
+        &receiver_ty,
+        &operands,
+        &param_types,
+        &ref_params,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    store_call_result(ctx, inst, &target.sig.return_type)?;
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Emits the fatal path for runtime callable arrays without a matching method.
+fn emit_runtime_callable_array_no_match_abort(ctx: &mut FunctionContext<'_>) {
+    let (message_label, message_len) = ctx
+        .data
+        .add_string(b"Fatal error: callable array did not resolve to an invokable target\n");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // write the callable-array failure diagnostic to stderr
+            ctx.emitter.adrp("x1", &message_label);
+            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the callable-array diagnostic byte length
+            ctx.emitter.syscall(4);
+            abi::emit_exit(ctx.emitter, 1);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov edi, 2");                              // write the callable-array failure diagnostic to stderr
+            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
+            ctx.emitter.instruction(&format!("mov edx, {}", message_len));      // pass the callable-array diagnostic byte length
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the fatal diagnostic before terminating
+            abi::emit_exit(ctx.emitter, 1);
+        }
     }
 }
 
