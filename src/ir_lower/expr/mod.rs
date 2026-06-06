@@ -1966,17 +1966,14 @@ fn lower_static_settype(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    if php_symbol_key(name.trim_start_matches('\\')) != "settype"
-        || crate::types::call_args::has_named_args(args)
-        || args.iter().any(is_spread_arg)
-        || args.len() != 2
-    {
+    if php_symbol_key(name.trim_start_matches('\\')) != "settype" {
         return None;
     }
-    let ExprKind::Variable(local_name) = &args[0].kind else {
+    let (var_arg, type_arg) = static_settype_arg_exprs(ctx, name, args)?;
+    let ExprKind::Variable(local_name) = &var_arg.kind else {
         return None;
     };
-    let target_ty = static_settype_target_type(&args[1])?;
+    let target_ty = static_settype_target_type(&type_arg)?;
     let sig = call_signature(ctx, name, args);
     let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
     let data = ctx.intern_function_name(name);
@@ -1990,6 +1987,53 @@ fn lower_static_settype(
     );
     ctx.set_local_type(local_name, target_ty);
     Some(result)
+}
+
+/// Returns canonical `settype()` argument expressions for static local mutation lowering.
+fn static_settype_arg_exprs(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+) -> Option<(Expr, Expr)> {
+    if args.len() != 2 || args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if !crate::types::call_args::has_named_args(args) {
+        return Some((args[0].clone(), args[1].clone()));
+    }
+    let sig = call_signature(ctx, name, args)?;
+    let call_span = args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let regular_param_count = crate::types::call_args::regular_param_count(&sig);
+    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        &sig,
+        args,
+        call_span,
+        regular_param_count,
+        false,
+        true,
+        &assoc_spread_sources(ctx, args),
+    )
+    .ok()?;
+    if plan.has_spread_args() || plan.regular_args.len() != 2 {
+        return None;
+    }
+    let var_arg = planned_regular_arg_expr(&plan.regular_args[0])?.clone();
+    let type_arg = planned_regular_arg_expr(&plan.regular_args[1])?.clone();
+    Some((var_arg, type_arg))
+}
+
+/// Returns the source expression assigned to a planned regular parameter.
+fn planned_regular_arg_expr(
+    arg: &crate::types::call_args::PlannedRegularArg,
+) -> Option<&Expr> {
+    match arg {
+        crate::types::call_args::PlannedRegularArg::Source { expr, .. } => Some(expr),
+        crate::types::call_args::PlannedRegularArg::Default(_)
+        | crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => None,
+    }
 }
 
 /// Returns the PHP type named by a literal `settype()` second argument.

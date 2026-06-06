@@ -884,6 +884,11 @@ fn ir_backend_handles_scalar_builtins() {
             "<?php $a = 42; settype($a, 'string'); echo $a; echo ':'; $b = 3.7; settype($b, 'integer'); echo $b;",
             "42:3",
         ),
+        (
+            "settype_named_args",
+            "<?php $value = 42; settype(type: 'string', var: $value); echo gettype($value) . ':' . $value;",
+            "string:42",
+        ),
         ("floatval_int", "<?php echo floatval(2) + 0.5;", "2.5"),
         ("floatval_str", "<?php echo floatval(\"2.5x\");", "2.5"),
         ("boolval_false", "<?php echo boolval(\"0\");", ""),
