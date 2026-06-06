@@ -29,6 +29,7 @@ mod builtins;
 mod callables;
 mod comparisons;
 mod conversions;
+mod enums;
 mod externs;
 mod floats;
 mod hashes;
@@ -1182,6 +1183,9 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     if is_static_fiber_suspend_call(&receiver, method_name) {
         return lower_static_fiber_suspend(ctx, inst);
+    }
+    if let Some(()) = enums::try_lower_enum_static_method(ctx, receiver.as_str(), method_name, inst)? {
+        return Ok(());
     }
     let called_class_id = resolve_static_called_class_arg(ctx, receiver_label, &receiver)?;
     let receiver_info = ctx

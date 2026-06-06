@@ -2002,6 +2002,26 @@ echo Code::Ok->value;
     );
 }
 
+/// Verifies enum `cases()` returns retained singleton objects in declaration order.
+#[test]
+fn ir_backend_handles_enum_cases_static_method() {
+    let source = r#"<?php
+enum Suit {
+    case Hearts;
+    case Clubs;
+}
+$cases = Suit::cases();
+echo count($cases);
+echo ":";
+echo ($cases[0] === Suit::Hearts) ? "H" : "h";
+echo ($cases[1] === Suit::Clubs) ? "C" : "c";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("enum_cases_static_method", source),
+        "2:HC"
+    );
+}
+
 /// Verifies invalid dynamic `instanceof` targets use the runtime fatal path.
 #[test]
 fn ir_backend_fatals_on_invalid_dynamic_instanceof_target() {
