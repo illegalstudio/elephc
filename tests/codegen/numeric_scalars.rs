@@ -147,6 +147,25 @@ fn test_floor() {
     assert_eq!(out, "3");
 }
 
+/// Verifies single-arg math builtins coerce a boxed Mixed argument to a real float
+/// (H1): a heterogeneous array makes its elements Mixed, and the math builtin must
+/// unbox the cell rather than treat the cell pointer as an integer/float.
+#[test]
+fn test_math_builtins_coerce_mixed_arg() {
+    // $a[0] is a Mixed cell holding 2.7 (the array is heterogeneous → element type Mixed).
+    assert_eq!(compile_and_run(r#"<?php $a = [2.7, "s"]; echo floor($a[0]);"#), "2");
+    assert_eq!(compile_and_run(r#"<?php $a = [2.7, "s"]; echo ceil($a[0]);"#), "3");
+    assert_eq!(
+        compile_and_run(r#"<?php $a = [6.25, "s"]; echo (int) sqrt($a[0]);"#),
+        "2"
+    );
+    // sin(0.0) == 0.0; a Mixed 0.0 must unbox to the float, not the pointer.
+    assert_eq!(
+        compile_and_run(r#"<?php $a = [0.0, "s"]; echo (sin($a[0]) == 0.0) ? "ok" : "bad";"#),
+        "ok"
+    );
+}
+
 /// Verifies ceil() rounds a positive float (3.2) up to 4.
 #[test]
 fn test_ceil() {
