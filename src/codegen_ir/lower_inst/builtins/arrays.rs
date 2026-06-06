@@ -554,7 +554,7 @@ fn lower_indexed_array_sort(
     store_if_result(ctx, inst)
 }
 
-/// Calls the legacy user-sort helper with a static comparator and a null environment.
+/// Calls the legacy user-sort helper with a static comparator and optional late-static environment.
 fn lower_user_sort_static_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -564,20 +564,24 @@ fn lower_user_sort_static_callback(
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
     require_indexed_int_sort_array(ctx.value_php_type(array)?, name)?;
-    let callback_label =
-        static_callback_entry_label(ctx, callback, &format!("{} callback", name), Some(&[PhpType::Int, PhpType::Int]))?;
+    let callback_binding =
+        static_sort_callback_binding(ctx, callback, &format!("{} callback", name), Some(&[PhpType::Int, PhpType::Int]))?;
     let source_local = source_load_local_slot(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
+    let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_label);
+    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
-    abi::emit_load_int_immediate(ctx.emitter, env_arg_reg, 0);
+    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
     abi::emit_call_label(ctx.emitter, "__rt_usort");
+    if env_bytes != 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -790,6 +794,44 @@ fn static_callback_entry_label(
     )))
 }
 
+/// Callback label plus optional environment source for sort runtime helpers.
+struct StaticSortCallbackBinding {
+    label: String,
+    env_source: Option<StaticCallbackEnvSource>,
+}
+
+/// Returns a static callback binding for sort runtimes, including late-static env when needed.
+fn static_sort_callback_binding(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    owner: &str,
+    visible_arg_types: Option<&[PhpType]>,
+) -> Result<StaticSortCallbackBinding> {
+    let callback = static_callback_name_operand(ctx, value, owner)?;
+    if let Some(callee) = ctx.callable_function_by_name(&callback.name) {
+        return Ok(StaticSortCallbackBinding {
+            label: function_symbol(&callee.name),
+            env_source: None,
+        });
+    }
+    if callback.kind == StaticCallbackOperandKind::FirstClassCallable {
+        if let Some(target) = static_method_sort_callback_target(ctx, &callback.name, owner, visible_arg_types)? {
+            let visible_arg_types =
+                visible_arg_types.expect("static sort callback target requires known argument types");
+            let label = emit_static_method_callback_wrapper(ctx, &target, visible_arg_types);
+            return Ok(StaticSortCallbackBinding {
+                label,
+                env_source: target.env_source,
+            });
+        }
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "{} '{}' is not a user function or supported first-class static method",
+        owner,
+        callback.name
+    )))
+}
+
 /// Static callback operand metadata recovered from a literal-producing EIR instruction.
 struct StaticCallbackName {
     name: String,
@@ -850,7 +892,22 @@ fn static_callback_name_operand(
 /// Resolved static-method callback metadata for a small runtime helper wrapper.
 struct StaticMethodCallbackTarget {
     entry_label: String,
-    called_class_id: u64,
+    called_class: StaticCallbackCalledClass,
+    dynamic_slot: Option<usize>,
+    env_source: Option<StaticCallbackEnvSource>,
+}
+
+/// Source used by a callback wrapper to materialize the hidden called-class id.
+enum StaticCallbackCalledClass {
+    Immediate(u64),
+    Env,
+}
+
+/// Source used by the sort call site to build the callback environment.
+#[derive(Clone, Copy)]
+enum StaticCallbackEnvSource {
+    Local(LocalSlotId),
+    ThisObject(LocalSlotId),
 }
 
 /// Resolves a static `Class::method` callback target and verifies its visible ABI shape.
@@ -860,10 +917,34 @@ fn static_method_callback_target(
     owner: &str,
     visible_arg_types: Option<&[PhpType]>,
 ) -> Result<Option<StaticMethodCallbackTarget>> {
+    static_method_callback_target_inner(ctx, callback_name, owner, visible_arg_types, false)
+}
+
+/// Resolves a sort static-method callback, allowing `static::` with an environment.
+fn static_method_sort_callback_target(
+    ctx: &FunctionContext<'_>,
+    callback_name: &str,
+    owner: &str,
+    visible_arg_types: Option<&[PhpType]>,
+) -> Result<Option<StaticMethodCallbackTarget>> {
+    static_method_callback_target_inner(ctx, callback_name, owner, visible_arg_types, true)
+}
+
+/// Resolves static-method callback metadata and optionally supports late-static env dispatch.
+fn static_method_callback_target_inner(
+    ctx: &FunctionContext<'_>,
+    callback_name: &str,
+    owner: &str,
+    visible_arg_types: Option<&[PhpType]>,
+    allow_static_env: bool,
+) -> Result<Option<StaticMethodCallbackTarget>> {
     let Some((receiver, method)) = callback_name.rsplit_once("::") else {
         return Ok(None);
     };
     let receiver = receiver.trim_start_matches('\\');
+    if receiver == "static" && allow_static_env {
+        return static_late_bound_method_callback_target(ctx, method, owner, visible_arg_types);
+    }
     if matches!(receiver, "self" | "parent" | "static" | "object") {
         return Err(CodegenIrError::unsupported(format!(
             "{} with lexical or receiver-bound static method callback '{}'",
@@ -922,8 +1003,102 @@ fn static_method_callback_target(
     require_static_method_callback_param_types(owner, callback_name, sig, visible_arg_types)?;
     Ok(Some(StaticMethodCallbackTarget {
         entry_label: static_method_symbol(impl_class, &method_key),
-        called_class_id: receiver_info.class_id,
+        called_class: StaticCallbackCalledClass::Immediate(receiver_info.class_id),
+        dynamic_slot: None,
+        env_source: None,
     }))
+}
+
+/// Resolves a late-bound `static::method(...)` callback target for sort runtime wrappers.
+fn static_late_bound_method_callback_target(
+    ctx: &FunctionContext<'_>,
+    method: &str,
+    owner: &str,
+    visible_arg_types: Option<&[PhpType]>,
+) -> Result<Option<StaticMethodCallbackTarget>> {
+    let receiver = current_callback_class(ctx)?;
+    let callback_name = format!("static::{}", method);
+    let visible_arg_types = visible_arg_types.ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "{} '{}' with dynamic callback argument shape",
+            owner,
+            callback_name
+        ))
+    })?;
+    require_static_method_callback_arg_types(owner, &callback_name, visible_arg_types)?;
+    let receiver_info = ctx
+        .module
+        .class_infos
+        .get(receiver)
+        .ok_or_else(|| CodegenIrError::unsupported(format!(
+            "{} with unknown static callback receiver class '{}'",
+            owner,
+            receiver
+        )))?;
+    let method_key = php_symbol_key(method);
+    let impl_class = receiver_info
+        .static_method_impl_classes
+        .get(&method_key)
+        .map(String::as_str)
+        .unwrap_or(receiver);
+    let impl_info = ctx
+        .module
+        .class_infos
+        .get(impl_class)
+        .ok_or_else(|| CodegenIrError::unsupported(format!(
+            "{} with unknown static method implementation class '{}'",
+            owner,
+            impl_class
+        )))?;
+    let sig = impl_info.static_methods.get(&method_key).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "{} with unknown static method callback '{}'",
+            owner,
+            callback_name
+        ))
+    })?;
+    if sig.params.len() != visible_arg_types.len() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} '{}' with {} visible args for {} params",
+            owner,
+            callback_name,
+            visible_arg_types.len(),
+            sig.params.len()
+        )));
+    }
+    require_static_method_callback_param_types(owner, &callback_name, sig, visible_arg_types)?;
+    Ok(Some(StaticMethodCallbackTarget {
+        entry_label: static_method_symbol(impl_class, &method_key),
+        called_class: StaticCallbackCalledClass::Env,
+        dynamic_slot: receiver_info.static_vtable_slots.get(&method_key).copied(),
+        env_source: Some(static_callback_env_source(ctx)?),
+    }))
+}
+
+/// Returns the lexical class for the current EIR class method.
+fn current_callback_class<'a>(ctx: &'a FunctionContext<'_>) -> Result<&'a str> {
+    ctx.function
+        .name
+        .rsplit_once("::")
+        .map(|(class_name, _)| class_name)
+        .ok_or_else(|| CodegenIrError::unsupported(format!(
+            "static callback outside class method {}",
+            ctx.function.name
+        )))
+}
+
+/// Returns the current called-class id source available to a late-static callback.
+fn static_callback_env_source(ctx: &FunctionContext<'_>) -> Result<StaticCallbackEnvSource> {
+    if let Some(slot) = ctx.local_slot_by_name("__elephc_called_class_id") {
+        return Ok(StaticCallbackEnvSource::Local(slot));
+    }
+    if let Some(slot) = ctx.local_slot_by_name("this") {
+        return Ok(StaticCallbackEnvSource::ThisObject(slot));
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "static callback without called-class context in {}",
+        ctx.function.name
+    )))
 }
 
 /// Verifies the wrapper can forward the callback argument ABI without boxing or shuffling pairs.
@@ -1004,14 +1179,23 @@ fn emit_static_method_callback_wrapper_aarch64(
     target: &StaticMethodCallbackTarget,
     visible_arg_types: &[PhpType],
 ) {
+    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, visible_arg_types.len());
     ctx.emitter.instruction("sub sp, sp, #16");                                 // reserve wrapper spill space for the runtime callback return address
     ctx.emitter.instruction("str x30, [sp, #8]");                               // preserve the runtime helper return address across the static method call
+    match target.called_class {
+        StaticCallbackCalledClass::Immediate(class_id) => {
+            abi::emit_load_int_immediate(ctx.emitter, "x3", class_id as i64);
+        }
+        StaticCallbackCalledClass::Env => {
+            ctx.emitter.instruction(&format!("ldr x3, [{}]", env_reg));         // load the late-static called-class id from the callback environment
+        }
+    }
     if visible_arg_types.len() == 2 {
         ctx.emitter.instruction("mov x2, x1");                                  // shift the second callback argument after the hidden class id
     }
     ctx.emitter.instruction("mov x1, x0");                                      // shift the first callback argument after the hidden class id
-    abi::emit_load_int_immediate(ctx.emitter, "x0", target.called_class_id as i64);
-    abi::emit_call_label(ctx.emitter, &target.entry_label);
+    ctx.emitter.instruction("mov x0, x3");                                      // pass the called-class id as the hidden static method argument
+    emit_static_callback_dispatch(ctx, target);
     ctx.emitter.instruction("ldr x30, [sp, #8]");                               // restore the runtime helper return address after the static method call
     ctx.emitter.instruction("add sp, sp, #16");                                 // release the wrapper spill space before returning to the runtime helper
     ctx.emitter.instruction("ret");                                             // return the static method result to the runtime callback helper
@@ -1023,16 +1207,108 @@ fn emit_static_method_callback_wrapper_x86_64(
     target: &StaticMethodCallbackTarget,
     visible_arg_types: &[PhpType],
 ) {
+    let env_reg = abi::int_arg_reg_name(ctx.emitter.target, visible_arg_types.len());
     ctx.emitter.instruction("push rbp");                                        // preserve the runtime helper frame pointer for the nested static method call
     ctx.emitter.instruction("mov rbp, rsp");                                    // establish a wrapper frame while shifting callback arguments
+    match target.called_class {
+        StaticCallbackCalledClass::Immediate(class_id) => {
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", class_id as i64);
+        }
+        StaticCallbackCalledClass::Env => {
+            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [{}]", env_reg)); // load the late-static called-class id from the callback environment
+        }
+    }
     if visible_arg_types.len() == 2 {
         ctx.emitter.instruction("mov rdx, rsi");                                // shift the second callback argument after the hidden class id
     }
     ctx.emitter.instruction("mov rsi, rdi");                                    // shift the first callback argument after the hidden class id
-    abi::emit_load_int_immediate(ctx.emitter, "rdi", target.called_class_id as i64);
-    abi::emit_call_label(ctx.emitter, &target.entry_label);
+    ctx.emitter.instruction("mov rdi, rcx");                                    // pass the called-class id as the hidden static method argument
+    emit_static_callback_dispatch(ctx, target);
     ctx.emitter.instruction("pop rbp");                                         // restore the runtime helper frame pointer before returning
     ctx.emitter.instruction("ret");                                             // return the static method result to the runtime callback helper
+}
+
+/// Emits either a direct static-method callback call or a late-static vtable call.
+fn emit_static_callback_dispatch(ctx: &mut FunctionContext<'_>, target: &StaticMethodCallbackTarget) {
+    if let Some(slot) = target.dynamic_slot {
+        emit_static_callback_dynamic_call(ctx, slot);
+    } else {
+        abi::emit_call_label(ctx.emitter, &target.entry_label);
+    }
+}
+
+/// Emits an indirect static-vtable callback call for a late-bound `static::method()` wrapper.
+fn emit_static_callback_dynamic_call(ctx: &mut FunctionContext<'_>, slot: usize) {
+    let hidden_called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let class_id_scratch = abi::temp_int_reg(ctx.emitter.target);
+    let dispatch_scratch = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
+    abi::emit_symbol_address(ctx.emitter, dispatch_scratch, "_class_static_vtable_ptrs");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+        }
+    }
+    abi::emit_load_from_address(ctx.emitter, dispatch_scratch, dispatch_scratch, slot * 8);
+    abi::emit_call_reg(ctx.emitter, dispatch_scratch);
+}
+
+/// Reserves and fills the optional callback environment consumed by sort runtime helpers.
+fn reserve_static_callback_env(
+    ctx: &mut FunctionContext<'_>,
+    source: Option<StaticCallbackEnvSource>,
+) -> Result<usize> {
+    let Some(source) = source else {
+        return Ok(0);
+    };
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    match source {
+        StaticCallbackEnvSource::Local(slot) => {
+            let source_ty = ctx.load_local_to_result(slot)?;
+            if source_ty != PhpType::Int {
+                return Err(CodegenIrError::invalid_module(format!(
+                    "hidden called-class id local has PHP type {:?}",
+                    source_ty
+                )));
+            }
+        }
+        StaticCallbackEnvSource::ThisObject(slot) => {
+            let source_ty = ctx.load_local_to_result(slot)?;
+            if !matches!(source_ty.codegen_repr(), PhpType::Object(_)) {
+                return Err(CodegenIrError::invalid_module(format!(
+                    "this local has PHP type {:?} for forwarded called-class id",
+                    source_ty
+                )));
+            }
+            abi::emit_load_from_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                abi::int_result_reg(ctx.emitter),
+                0,
+            );
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp]");                            // store the late-static called-class id in the callback environment
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // store the late-static called-class id in the callback environment
+        }
+    }
+    Ok(16)
+}
+
+/// Loads the optional callback environment argument expected by sort runtime helpers.
+fn load_static_callback_env_arg(ctx: &mut FunctionContext<'_>, env_reg: &str, env_bytes: usize) {
+    if env_bytes == 0 {
+        abi::emit_load_int_immediate(ctx.emitter, env_reg, 0);
+    } else {
+        abi::emit_temporary_stack_address(ctx.emitter, env_reg, 0);
+    }
 }
 
 /// Returns the element type accepted by indexed-array value set-operation helpers.

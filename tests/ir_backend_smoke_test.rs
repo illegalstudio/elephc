@@ -2843,6 +2843,68 @@ echo ChildLateMap::reduce();
     );
 }
 
+/// Verifies late-bound `static::` callbacks adapt through sort runtime helper environments.
+#[test]
+fn ir_backend_handles_late_bound_static_sort_callbacks() {
+    let source = r#"<?php
+class BaseCallbacks {
+    public static function add(int $carry, int $value): int {
+        return $carry + $value + 10;
+    }
+
+    public static function show(int $value): void {
+        echo $value + 10;
+        echo ",";
+    }
+
+    public static function compare(int $left, int $right): int {
+        return $right - $left;
+    }
+
+    public static function run(): void {
+        echo array_reduce([1, 2], static::add(...), 0);
+        echo ":";
+        array_walk([1, 2], static::show(...));
+        echo ":";
+        $usorted = [1, 2, 3];
+        usort($usorted, static::compare(...));
+        foreach ($usorted as $value) { echo $value; }
+        echo ":";
+        $uksorted = [1, 2, 3];
+        uksort($uksorted, static::compare(...));
+        foreach ($uksorted as $value) { echo $value; }
+        echo ":";
+        $uasorted = [1, 2, 3];
+        uasort($uasorted, static::compare(...));
+        foreach ($uasorted as $value) { echo $value; }
+    }
+}
+
+class ChildCallbacks extends BaseCallbacks {
+    public static function add(int $carry, int $value): int {
+        return $carry + $value + 20;
+    }
+
+    public static function show(int $value): void {
+        echo $value + 20;
+        echo ",";
+    }
+
+    public static function compare(int $left, int $right): int {
+        return $left - $right;
+    }
+}
+
+BaseCallbacks::run();
+echo "|";
+ChildCallbacks::run();
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("late_bound_static_sort_callbacks", source),
+        "23:11,12,:321:321:321|43:21,22,:123:123:123"
+    );
+}
+
 /// Verifies fixed-class object construction calls `__construct` through the EIR method ABI.
 #[test]
 fn ir_backend_calls_simple_constructor() {
