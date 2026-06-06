@@ -2967,6 +2967,28 @@ array_walk([1, 2], $box->show(...));
     );
 }
 
+/// Verifies first-class instance-method callbacks preserve receivers in `array_map()`.
+#[test]
+fn ir_backend_handles_instance_method_array_map_callbacks() {
+    let source = r#"<?php
+class MapperBox {
+    public function add_offset(int $item): int {
+        return $item + 10;
+    }
+}
+
+$box = new MapperBox();
+$mapped = array_map($box->add_offset(...), [1, 2]);
+echo $mapped[0];
+echo ":";
+echo $mapped[1];
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("instance_method_array_map_callbacks", source),
+        "11:12"
+    );
+}
+
 /// Verifies fixed-class object construction calls `__construct` through the EIR method ABI.
 #[test]
 fn ir_backend_calls_simple_constructor() {

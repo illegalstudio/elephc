@@ -199,6 +199,32 @@ pub(super) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
+/// Lowers `array_map()` through the scalar callback runtime helper.
+pub(super) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_map", 2)?;
+    let callback = expect_operand(inst, 0)?;
+    let array = expect_operand(inst, 1)?;
+    let elem_ty = eight_byte_callback_array_element_type(ctx.value_php_type(array)?, "array_map")?;
+    let callback_binding =
+        static_sort_callback_binding(ctx, callback, "array_map callback", Some(&[elem_ty]))?;
+    let callback_elem_ty = array_map_callback_result_element_type(&callback_binding.return_ty)?;
+    let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
+    let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
+    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
+    ctx.load_value_to_reg(array, array_arg_reg)?;
+    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
+    abi::emit_call_label(ctx.emitter, "__rt_array_map");
+    if env_bytes != 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+    }
+    normalize_indexed_array_result(ctx, "array_map", &callback_elem_ty, &result_elem_ty)?;
+    box_array_result_for_mixed_builtin(ctx, inst, &result_elem_ty);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_reduce()` through the callback-driven runtime helper.
 pub(super) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_reduce", 3)?;
@@ -874,6 +900,58 @@ fn store_void_builtin_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     store_if_result(ctx, inst)
 }
 
+/// Returns the scalar slot type produced by the current `array_map()` runtime helper.
+fn array_map_callback_result_element_type(return_ty: &PhpType) -> Result<PhpType> {
+    let return_ty = return_ty.codegen_repr();
+    if matches!(return_ty, PhpType::Int | PhpType::Bool) {
+        Ok(return_ty)
+    } else {
+        Err(CodegenIrError::unsupported(format!(
+            "array_map callback return PHP type {:?}",
+            return_ty
+        )))
+    }
+}
+
+/// Returns the element type expected by the EIR `array_map()` result slot.
+fn array_map_result_element_type(inst: &Instruction, callback_elem_ty: &PhpType) -> Result<PhpType> {
+    match inst.result_php_type.codegen_repr() {
+        PhpType::Array(elem) => {
+            let result_elem_ty = elem.codegen_repr();
+            if &result_elem_ty == callback_elem_ty || result_elem_ty == PhpType::Mixed {
+                Ok(result_elem_ty)
+            } else {
+                Err(CodegenIrError::unsupported(format!(
+                    "array_map result element PHP type {:?} for callback result PHP type {:?}",
+                    result_elem_ty,
+                    callback_elem_ty
+                )))
+            }
+        }
+        PhpType::Mixed | PhpType::Union(_) => Ok(callback_elem_ty.clone()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_map result PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Boxes an indexed-array result when the EIR builtin result slot is Mixed-like.
+fn box_array_result_for_mixed_builtin(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    elem_ty: &PhpType,
+) {
+    if inst.result.is_some()
+        && matches!(
+            inst.result_php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(elem_ty.clone())));
+    }
+}
+
 /// Returns the entry label for a static string or first-class callback.
 fn static_callback_entry_label(
     ctx: &mut FunctionContext<'_>,
@@ -899,13 +977,14 @@ fn static_callback_entry_label(
     )))
 }
 
-/// Callback label plus optional environment source for sort runtime helpers.
+/// Callback label, return type, and optional environment source for callback runtime helpers.
 struct StaticSortCallbackBinding {
     label: String,
     env_source: Option<StaticCallbackEnvSource>,
+    return_ty: PhpType,
 }
 
-/// Returns a static callback binding for sort runtimes, including late-static env when needed.
+/// Returns a static callback binding for callback runtimes, including late-static env when needed.
 fn static_sort_callback_binding(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
@@ -917,6 +996,7 @@ fn static_sort_callback_binding(
         return Ok(StaticSortCallbackBinding {
             label: function_symbol(&callee.name),
             env_source: None,
+            return_ty: callee.return_php_type.codegen_repr(),
         });
     }
     if callback.kind == StaticCallbackOperandKind::FirstClassCallable {
@@ -927,6 +1007,7 @@ fn static_sort_callback_binding(
             return Ok(StaticSortCallbackBinding {
                 label,
                 env_source: Some(StaticCallbackEnvSource::Value(target.receiver)),
+                return_ty: target.return_ty,
             });
         }
         if let Some(target) = static_method_sort_callback_target(ctx, &callback.name, owner, visible_arg_types)? {
@@ -936,6 +1017,7 @@ fn static_sort_callback_binding(
             return Ok(StaticSortCallbackBinding {
                 label,
                 env_source: target.env_source,
+                return_ty: target.return_ty,
             });
         }
     }
@@ -1011,12 +1093,14 @@ struct StaticMethodCallbackTarget {
     called_class: StaticCallbackCalledClass,
     dynamic_slot: Option<usize>,
     env_source: Option<StaticCallbackEnvSource>,
+    return_ty: PhpType,
 }
 
 /// Resolved instance-method callback metadata for sort runtime wrappers.
 struct InstanceMethodCallbackTarget {
     entry_label: String,
     receiver: ValueId,
+    return_ty: PhpType,
 }
 
 /// Source used by a callback wrapper to materialize the hidden called-class id.
@@ -1129,6 +1213,7 @@ fn static_method_callback_target_inner(
         called_class: StaticCallbackCalledClass::Immediate(receiver_info.class_id),
         dynamic_slot: None,
         env_source: None,
+        return_ty: sig.return_type.codegen_repr(),
     }))
 }
 
@@ -1195,6 +1280,7 @@ fn static_late_bound_method_callback_target(
         called_class: StaticCallbackCalledClass::Env,
         dynamic_slot: receiver_info.static_vtable_slots.get(&method_key).copied(),
         env_source: Some(static_callback_env_source(ctx)?),
+        return_ty: sig.return_type.codegen_repr(),
     }))
 }
 
@@ -1304,6 +1390,7 @@ fn instance_method_sort_callback_target(
     Ok(Some(InstanceMethodCallbackTarget {
         entry_label: method_symbol(impl_class, &method_key),
         receiver,
+        return_ty: sig.return_type.codegen_repr(),
     }))
 }
 

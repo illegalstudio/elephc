@@ -801,6 +801,28 @@ array_walk([1, 2], $box->show(...));
     );
 }
 
+/// Verifies instance-method `array_map()` callbacks match legacy receiver dispatch.
+#[test]
+fn parity_instance_method_array_map_callbacks() {
+    assert_backend_parity(
+        "instance_method_array_map_callbacks",
+        r#"<?php
+class MapperBox {
+    public function add_offset(int $item): int {
+        return $item + 10;
+    }
+}
+
+$box = new MapperBox();
+$mapped = array_map($box->add_offset(...), [1, 2]);
+echo $mapped[0];
+echo ":";
+echo $mapped[1];
+"#,
+        &[],
+    );
+}
+
 /// Verifies reflection attribute owner metadata matches the legacy backend.
 #[test]
 fn parity_reflection_owner_attributes() {
