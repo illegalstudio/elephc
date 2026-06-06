@@ -381,14 +381,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
-    /// Emits a store to a PHP local slot and updates the local type fact.
-    pub(crate) fn store_local(&mut self, name: &str, value: LoweredValue, php_type: PhpType, span: Option<Span>) {
+    /// Emits a store to a PHP local slot, updates type facts, and returns the stored value.
+    pub(crate) fn store_local(&mut self, name: &str, value: LoweredValue, php_type: PhpType, span: Option<Span>) -> LoweredValue {
         self.clear_static_callable_local(name);
         let previous_slot = self.local_slots.get(name).copied();
         let previous_type = self.local_type(name);
         let previous_kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
         let uses_global = self.uses_global_storage(name, previous_kind);
         let slot = self.declare_local(name, php_type.clone());
+        let source = value;
+        let release_source_after_store = self.should_release_rhs_after_local_store(value);
         if !uses_global
             && previous_kind == LocalKind::PhpLocal
             && previous_slot.is_some_and(|slot| self.initialized_slots.contains(&slot))
@@ -405,7 +407,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if uses_global {
             self.store_global_name(name, slot, value, span);
             self.set_local_type(name, php_type);
-            return;
+            if release_source_after_store {
+                crate::ir_lower::ownership::release_if_owned(self, source, span);
+            }
+            return value;
         }
         let op = match previous_kind {
             LocalKind::StaticLocal => Op::StoreStaticLocal,
@@ -413,6 +418,50 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         };
         self.store_slot_with_op(slot, value, op, span);
         self.set_local_type(name, php_type);
+        if release_source_after_store {
+            crate::ir_lower::ownership::release_if_owned(self, source, span);
+        }
+        value
+    }
+
+    /// Returns whether a RHS producer definitely owns storage duplicated into a local slot.
+    fn should_release_rhs_after_local_store(&self, value: LoweredValue) -> bool {
+        if !value.ir_type.is_refcounted_storage() {
+            return false;
+        }
+        matches!(
+            self.builder.value_defining_op(value.value),
+            Some(
+                Op::IToStr
+                    | Op::FToStr
+                    | Op::BoolToStr
+                    | Op::ResourceToStr
+                    | Op::MixedBox
+                    | Op::ArrayToMixed
+                    | Op::HashToMixed
+                    | Op::MixedCastString
+                    | Op::StrConcat
+                    | Op::StrPersist
+                    | Op::StrCharAt
+                    | Op::StrInterpolate
+                    | Op::ArrayNew
+                    | Op::HashNew
+                    | Op::ArrayCloneShallow
+                    | Op::HashCloneShallow
+                    | Op::ArrayUnion
+                    | Op::HashUnion
+                    | Op::ArrayHashUnion
+                    | Op::HashArrayUnion
+                    | Op::ArrayToHash
+                    | Op::ObjectNew
+                    | Op::DynamicObjectNew
+                    | Op::ClosureNew
+                    | Op::FirstClassCallableNew
+                    | Op::CallableArrayNew
+                    | Op::BufferNew
+                    | Op::GeneratorNew
+            )
+        )
     }
 
     /// Returns true when straight-line callable binding metadata is safe for a local.

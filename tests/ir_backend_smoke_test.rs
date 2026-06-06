@@ -1378,6 +1378,21 @@ fn ir_backend_emits_heap_debug_report_when_requested() {
     assert!(stderr.contains("HEAP DEBUG: leak summary:"), "{stderr}");
 }
 
+/// Verifies main-scope owned locals are released before the EIR heap-debug report.
+#[test]
+fn ir_backend_heap_debug_cleans_main_refcounted_locals() {
+    let run = compile_ir_backend_and_run_with_compile_args(
+        "heap_debug_main_cleanup",
+        "<?php $items = [1, 2, 3]; echo \"ok\";",
+        &["--heap-debug"],
+        &[],
+    );
+    assert!(run.status.success(), "IR backend binary failed for heap_debug_main_cleanup");
+    assert_eq!(String::from_utf8(run.stdout).unwrap(), "ok");
+    let stderr = String::from_utf8(run.stderr).unwrap();
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+}
+
 /// Verifies diagnostic output builtins lowered by the EIR backend for concrete values.
 #[test]
 fn ir_backend_handles_debug_output_builtins() {

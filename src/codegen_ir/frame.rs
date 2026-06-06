@@ -15,8 +15,9 @@ use crate::codegen::abi;
 use crate::codegen::{emit_write_current_string_stderr, emit_write_literal_stderr};
 use crate::codegen::context::TRY_HANDLER_SLOT_SIZE;
 use crate::codegen::platform::Arch;
-use crate::ir::{Function, Immediate, LocalSlotId, Op};
+use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op};
 use crate::names::function_symbol;
+use crate::types::PhpType;
 
 use super::context::FunctionContext;
 use super::value_placement::{self, ValuePlacement};
@@ -91,6 +92,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
         abi::emit_enable_heap_debug_flag(ctx.emitter);
     }
     store_argc_local_if_present(ctx);
+    zero_initialize_main_cleanup_locals(ctx);
 }
 
 /// Emits a direct-callable user function prologue and stores incoming params.
@@ -133,6 +135,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
+    emit_main_local_epilogue_cleanup(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     if ctx.gc_stats {
         emit_gc_stats(ctx);
@@ -143,6 +146,121 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
+}
+
+/// Zero-initializes cleanup-tracked locals so skipped assignments stay safe at epilogue.
+fn zero_initialize_main_cleanup_locals(ctx: &mut FunctionContext<'_>) {
+    for (_, _, ty, offset) in main_cleanup_locals(ctx) {
+        match ty {
+            PhpType::Str => {
+                abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+                abi::emit_store_zero_to_local_slot(ctx.emitter, offset - 8);
+            }
+            _ => {
+                abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            }
+        }
+    }
+}
+
+/// Releases owned main locals that still hold refcounted storage at process exit.
+fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    for (name, _, ty, offset) in main_cleanup_locals(ctx) {
+        ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
+        match ty {
+            PhpType::Str => emit_main_string_cleanup(ctx, offset),
+            PhpType::Callable => emit_main_refcounted_cleanup(ctx, offset, &ty),
+            other if other.is_refcounted() => emit_main_refcounted_cleanup(ctx, offset, &other),
+            _ => {}
+        }
+    }
+}
+
+/// Returns main local slots that receive owned refcounted values through `StoreLocal`.
+fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, PhpType, usize)> {
+    let param_names = ctx
+        .function
+        .params
+        .iter()
+        .map(|param| param.name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut locals = ctx
+        .function
+        .locals
+        .iter()
+        .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter(|local| {
+            local
+                .name
+                .as_deref()
+                .is_none_or(|name| !param_names.contains(name))
+        })
+        .filter(|local| local_slot_has_store(ctx.function, local.id))
+        .filter_map(|local| {
+            let ty = local.php_type.codegen_repr();
+            if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
+                return None;
+            }
+            let offset = ctx.local_offset(local.id).ok()?;
+            let name = local
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("slot{}", local.id.as_raw()));
+            Some((name, local.id, ty, offset))
+        })
+        .collect::<Vec<_>>();
+    locals.sort_by_key(|(_, _, _, offset)| *offset);
+    locals
+}
+
+/// Returns true when a local slot is written by an explicit EIR `StoreLocal`.
+fn local_slot_has_store(function: &Function, slot: LocalSlotId) -> bool {
+    function.instructions.iter().any(|inst| {
+        inst.op == Op::StoreLocal && matches!(inst.immediate, Some(Immediate::LocalSlot(candidate)) if candidate == slot)
+    })
+}
+
+/// Releases a string local when its length proves it owns heap-backed storage.
+fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let done = ctx.next_label("main_string_cleanup_done");
+    abi::load_at_offset(ctx.emitter, ptr_reg, offset);
+    abi::load_at_offset(ctx.emitter, len_reg, offset - 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", len_reg, done));     // skip empty or uninitialized string locals
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the owned string pointer to the heap-free helper
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", len_reg, len_reg)); // check whether this string local has owned bytes
+            ctx.emitter.instruction(&format!("je {}", done));                   // skip empty or uninitialized string locals
+            if ptr_reg != result_reg {
+                ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the owned string pointer to the heap-free helper
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        }
+    }
+    ctx.emitter.label(&done);
+}
+
+/// Releases a refcounted local when the slot contains a non-null heap pointer.
+fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let done = ctx.next_label("main_refcounted_cleanup_done");
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, done));  // skip uninitialized refcounted locals
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the refcounted local is initialized
+            ctx.emitter.instruction(&format!("je {}", done));                   // skip uninitialized refcounted locals
+        }
+    }
+    abi::emit_decref_if_refcounted(ctx.emitter, ty);
+    ctx.emitter.label(&done);
 }
 
 /// Emits allocation/free totals to stderr using the shared runtime counters.

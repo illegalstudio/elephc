@@ -10,6 +10,18 @@
 
 use crate::ir::print_module;
 
+/// Verifies storing a freshly allocated array releases the temporary producer after the store.
+#[test]
+fn fresh_array_local_assignment_releases_source_after_store() {
+    let module = super::lower_source("<?php $a = [1];");
+    let text = print_module(&module);
+    let store = text.find("store_local").expect("expected local store in lowered IR");
+    let release = text.find("release").expect("expected release in lowered IR");
+    assert!(text.contains("acquire"), "expected acquire in {text}");
+    assert!(store < release, "expected release after store in {text}");
+    assert_eq!(text.matches("release").count(), 1, "expected one release in {text}");
+}
+
 /// Verifies overwriting a refcounted array local releases the previous value.
 #[test]
 fn overwriting_array_local_emits_release() {

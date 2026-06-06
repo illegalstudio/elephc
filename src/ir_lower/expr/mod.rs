@@ -870,10 +870,11 @@ fn lower_assignment_expr(
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
     let lowered = lower_expr(ctx, value);
+    let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
         let static_callable = static_callable_binding_for_expr(ctx, value);
         let php_type = ctx.builder.value_php_type(lowered.value);
-        ctx.store_local(name, lowered, php_type, Some(expr.span));
+        result = ctx.store_local(name, lowered, php_type, Some(expr.span));
         if let Some(target) = static_callable {
             ctx.bind_static_callable_local(name, target);
         }
@@ -881,7 +882,7 @@ fn lower_assignment_expr(
     if let Some(result_target) = result_target {
         return lower_expr(ctx, result_target);
     }
-    lowered
+    result
 }
 
 /// Lowers pre/post increment and decrement expressions.

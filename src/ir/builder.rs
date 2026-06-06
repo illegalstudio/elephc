@@ -111,6 +111,18 @@ impl<'f> Builder<'f> {
         self.func.values[value.as_raw() as usize].php_type.clone()
     }
 
+    /// Returns the opcode that produced an instruction-defined value, if available.
+    pub fn value_defining_op(&self, value: ValueId) -> Option<Op> {
+        let value = self.func.values.get(value.as_raw() as usize)?;
+        let ValueDef::Instruction { inst, .. } = value.def else {
+            return None;
+        };
+        self.func
+            .instructions
+            .get(inst.as_raw() as usize)
+            .map(|inst| inst.op)
+    }
+
     /// Returns the current insertion block when one is selected.
     pub fn insertion_block(&self) -> Option<BlockId> {
         self.current
