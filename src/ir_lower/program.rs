@@ -521,6 +521,41 @@ fn push_builtin_spl_metadata_methods(
 /// Returns methods needed even when user code does not call them directly.
 fn required_builtin_spl_metadata_methods(class_name: &str) -> &'static [&'static str] {
     match class_name {
+        "EmptyIterator" => &["current", "key", "next", "rewind", "valid"],
+        "ArrayIterator" => &[
+            "current",
+            "key",
+            "next",
+            "rewind",
+            "valid",
+            "seek",
+            "offsetExists",
+            "offsetGet",
+            "offsetSet",
+            "offsetUnset",
+            "count",
+        ],
+        "AppendIterator" => &[
+            "current",
+            "key",
+            "next",
+            "rewind",
+            "valid",
+            "getInnerIterator",
+        ],
+        "__ElephcAppendIteratorArrayIterator" => &[
+            "current",
+            "key",
+            "next",
+            "rewind",
+            "valid",
+            "seek",
+            "offsetExists",
+            "offsetGet",
+            "offsetSet",
+            "offsetUnset",
+            "count",
+        ],
         "SplFileInfo" => &["__toString"],
         "SplFileObject" => &[
             "current",
@@ -615,6 +650,67 @@ fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
                 | "ftruncate"
                 | "rewind"
                 | "__elephcspilltofile"
+        ),
+        "EmptyIterator" => matches!(
+            method_key,
+            "current" | "key" | "next" | "rewind" | "valid"
+        ),
+        "ArrayIterator" => matches!(
+            method_key,
+            "__construct"
+                | "current"
+                | "key"
+                | "next"
+                | "rewind"
+                | "valid"
+                | "seek"
+                | "count"
+                | "offsetexists"
+                | "offsetget"
+                | "offsetset"
+                | "offsetunset"
+                | "append"
+                | "getarraycopy"
+        ),
+        "AppendIterator" => matches!(
+            method_key,
+            "__construct"
+                | "append"
+                | "rewind"
+                | "valid"
+                | "current"
+                | "key"
+                | "next"
+                | "getinneriterator"
+                | "getiteratorindex"
+                | "getarrayiterator"
+                | "__elephcstoragecount"
+                | "__elephcstoragephysicalcount"
+                | "__elephcstorageisactive"
+                | "__elephcstorageappend"
+                | "__elephcstorageoffsetset"
+                | "__elephcstorageoffsetexists"
+                | "__elephcstorageoffsetget"
+                | "__elephcstorageoffsetunset"
+                | "__elephcstoragegetarraycopy"
+                | "__elephcstoragekey"
+                | "__elephcstoragecurrent"
+        ),
+        "__ElephcAppendIteratorArrayIterator" => matches!(
+            method_key,
+            "__construct"
+                | "count"
+                | "append"
+                | "offsetset"
+                | "offsetexists"
+                | "offsetget"
+                | "offsetunset"
+                | "getarraycopy"
+                | "rewind"
+                | "next"
+                | "valid"
+                | "key"
+                | "current"
         ),
         _ => false,
     }

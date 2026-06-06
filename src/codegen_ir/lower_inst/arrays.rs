@@ -327,6 +327,10 @@ fn lower_array_set_aarch64(
             ctx.load_string_value_to_regs(value, "x2", "x3")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_str");
         }
+        other if other.is_refcounted() => {
+            ctx.load_value_to_reg(value, "x2")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "array_set value PHP type {:?}",
@@ -396,6 +400,10 @@ fn lower_array_set_x86_64(
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "rdx", "rcx")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_str");
+        }
+        other if other.is_refcounted() => {
+            ctx.load_value_to_reg(value, "rdx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -763,6 +771,9 @@ fn require_supported_array_set_value(value_ty: PhpType, inst: &Instruction) -> R
         value_ty,
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Str
     ) {
+        return Ok(value_ty);
+    }
+    if value_ty.is_refcounted() {
         return Ok(value_ty);
     }
     Err(CodegenIrError::unsupported(format!(

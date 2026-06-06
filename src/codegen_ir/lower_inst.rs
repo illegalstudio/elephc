@@ -11,7 +11,7 @@
 
 use crate::codegen::{
     abi, callable_descriptor, emit_box_current_value_as_mixed,
-    emit_box_runtime_payload_as_mixed, runtime,
+    emit_box_runtime_payload_as_mixed, runtime, runtime_value_tag,
 };
 use crate::codegen::builtins::arrays::call_user_func_array::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen::context::{
@@ -1801,6 +1801,13 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     if is_throwable_standard_method_call(ctx, &class_name, &method_name) {
         return lower_throwable_standard_method(ctx, inst, object, &method_name);
     }
+    if ctx
+        .module
+        .interface_infos
+        .contains_key(class_name.trim_start_matches('\\'))
+    {
+        return lower_interface_method_call(ctx, inst, &class_name, &method_name);
+    }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
@@ -1816,6 +1823,54 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)?;
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Lowers an instance-method call through interface metadata.
+fn lower_interface_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    interface_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    let normalized = interface_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    let callee_sig = ctx
+        .module
+        .interface_infos
+        .get(normalized)
+        .and_then(|interface_info| interface_info.methods.get(&method_key))
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "interface method call to unknown method {}::{}",
+                normalized, method_name
+            ))
+        })?
+        .clone();
+    let expected_args = callee_sig.params.len() + 1;
+    if inst.operands.len() != expected_args {
+        return Err(CodegenIrError::unsupported(format!(
+            "interface method call to {}::{} with {} operands for {} ABI params",
+            normalized,
+            method_name,
+            inst.operands.len(),
+            expected_args
+        )));
+    }
+    let mut param_types = Vec::with_capacity(callee_sig.params.len() + 1);
+    param_types.push(PhpType::Object(normalized.to_string()));
+    param_types.extend(callee_sig.params.iter().map(|(_, ty)| ty.codegen_repr()));
+    let mut ref_params = Vec::with_capacity(callee_sig.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(callee_sig.ref_params.iter().copied());
+    let call_args =
+        materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    let return_ty = iterators::emit_interface_dispatch_call(ctx, normalized, &method_key, None)?;
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    store_call_result(ctx, inst, &return_ty)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -3055,8 +3110,36 @@ fn materialize_direct_call_arg_for_param(
             emit_box_current_value_as_mixed(ctx.emitter, source_ty);
             Ok(PhpType::Mixed)
         }
+        PhpType::Array(param_elem) if param_elem.codegen_repr() == PhpType::Mixed => {
+            if let PhpType::Array(source_elem) = source_ty.codegen_repr() {
+                let source_elem = source_elem.codegen_repr();
+                if source_elem != PhpType::Mixed {
+                    emit_loaded_indexed_array_to_mixed(ctx, &source_elem);
+                }
+                return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
+            }
+            Ok(PhpType::Array(param_elem))
+        }
         target_ty => Ok(target_ty),
     }
+}
+
+/// Converts the currently loaded indexed-array argument into boxed Mixed slots.
+fn emit_loaded_indexed_array_to_mixed(
+    ctx: &mut FunctionContext<'_>,
+    source_elem_ty: &PhpType,
+) {
+    let value_tag = runtime_value_tag(source_elem_ty) as i64;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x1", value_tag);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", value_tag);
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the loaded indexed-array argument to the Mixed conversion helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
 }
 
 /// Loads method call arguments with by-reference parameter support for local operands.

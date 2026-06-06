@@ -26,6 +26,9 @@ pub(super) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let array_ty = ctx.value_php_type(array)?;
     let result_elem_ty = result_array_element_type(&inst.result_php_type.codegen_repr())?;
     match array_ty.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            lower_dynamic_mixed_array_keys(ctx, inst, array, &result_elem_ty)
+        }
         PhpType::Array(_) => lower_indexed_array_keys(ctx, inst, array, &result_elem_ty),
         PhpType::AssocArray { key, .. } => {
             lower_assoc_array_keys(ctx, inst, array, &key.codegen_repr(), &result_elem_ty)
@@ -35,6 +38,48 @@ pub(super) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction
             other
         ))),
     }
+}
+
+/// Lowers `array_keys()` for a PHP `array<mixed>` value that may hold indexed or hash storage.
+fn lower_dynamic_mixed_array_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    result_elem_ty: &PhpType,
+) -> Result<()> {
+    require_supported_indexed_result_type(result_elem_ty)?;
+    require_supported_assoc_result_type(&PhpType::Mixed, result_elem_ty)?;
+    ctx.load_value_to_result(array)?;
+    let assoc_label = ctx.next_label("akeys_dynamic_assoc");
+    let done_label = ctx.next_label("akeys_dynamic_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // detect associative hash storage hidden behind PHP array<mixed>
+            ctx.emitter.instruction(&format!("b.eq {}", assoc_label));          // use insertion-order hash keys when the runtime payload is a hash
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            lower_indexed_array_keys_aarch64(ctx, result_elem_ty)?;
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the hash-key path after indexed key materialization
+            ctx.emitter.label(&assoc_label);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            lower_assoc_array_keys_aarch64(ctx, &PhpType::Mixed, result_elem_ty)?;
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // detect associative hash storage hidden behind PHP array<mixed>
+            ctx.emitter.instruction(&format!("je {}", assoc_label));            // use insertion-order hash keys when the runtime payload is a hash
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            lower_indexed_array_keys_x86_64(ctx, result_elem_ty)?;
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the hash-key path after indexed key materialization
+            ctx.emitter.label(&assoc_label);
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            lower_assoc_array_keys_x86_64(ctx, &PhpType::Mixed, result_elem_ty)?;
+        }
+    }
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers indexed-array `array_keys()` to a freshly allocated `[0, 1, ...]` array.

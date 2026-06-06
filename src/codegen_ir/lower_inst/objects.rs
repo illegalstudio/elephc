@@ -1836,6 +1836,9 @@ fn ensure_property_value_supported(
     if value_ty == &slot.php_type {
         return Ok(());
     }
+    if can_store_object_for_object_property(ctx, value_ty, &slot.php_type) {
+        return Ok(());
+    }
     if is_pointer_sized_property_type(&slot.php_type)
         && is_pointer_slot_null_sentinel(ctx, value, value_ty)?
     {
@@ -1861,6 +1864,122 @@ fn ensure_property_value_supported(
         slot.property,
         slot.php_type
     )))
+}
+
+/// Returns true when a concrete object value is assignable to an object-typed property.
+fn can_store_object_for_object_property(
+    ctx: &FunctionContext<'_>,
+    value_ty: &PhpType,
+    slot_ty: &PhpType,
+) -> bool {
+    let value_ty = value_ty.codegen_repr();
+    let slot_ty = slot_ty.codegen_repr();
+    let (PhpType::Object(value_name), PhpType::Object(slot_name)) = (&value_ty, &slot_ty) else {
+        return false;
+    };
+    object_type_is_a(ctx, value_name, slot_name)
+}
+
+/// Returns true when `source_name` is the same class/interface or inherits `target_name`.
+fn object_type_is_a(ctx: &FunctionContext<'_>, source_name: &str, target_name: &str) -> bool {
+    if same_php_type_name(source_name, target_name) {
+        return true;
+    }
+    if interface_info_by_name(ctx, target_name).is_some() {
+        return object_type_implements_interface(ctx, source_name, target_name);
+    }
+    class_extends_class(ctx, source_name, target_name)
+}
+
+/// Returns true when a class or interface source satisfies an interface target.
+fn object_type_implements_interface(
+    ctx: &FunctionContext<'_>,
+    source_name: &str,
+    target_interface: &str,
+) -> bool {
+    if interface_info_by_name(ctx, source_name).is_some() {
+        return interface_extends_interface(ctx, source_name, target_interface);
+    }
+    let mut current = Some(source_name.to_string());
+    while let Some(class_name) = current {
+        let Some(class_info) = class_info_by_name(ctx, &class_name) else {
+            return false;
+        };
+        if class_info
+            .interfaces
+            .iter()
+            .any(|interface_name| interface_extends_interface(ctx, interface_name, target_interface))
+        {
+            return true;
+        }
+        current = class_info.parent.clone();
+    }
+    false
+}
+
+/// Returns true when an interface is or extends the target interface.
+fn interface_extends_interface(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+    target_interface: &str,
+) -> bool {
+    if same_php_type_name(interface_name, target_interface) {
+        return true;
+    }
+    let Some(interface_info) = interface_info_by_name(ctx, interface_name) else {
+        return false;
+    };
+    interface_info
+        .parents
+        .iter()
+        .any(|parent| interface_extends_interface(ctx, parent, target_interface))
+}
+
+/// Returns true when a class is or extends the target class.
+fn class_extends_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    target_class: &str,
+) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        if same_php_type_name(&name, target_class) {
+            return true;
+        }
+        current = class_info_by_name(ctx, &name).and_then(|class_info| class_info.parent.clone());
+    }
+    false
+}
+
+/// Finds class metadata by PHP-case-insensitive name.
+fn class_info_by_name<'a>(
+    ctx: &'a FunctionContext<'_>,
+    class_name: &str,
+) -> Option<&'a ClassInfo> {
+    let wanted = php_symbol_key(class_name.trim_start_matches('\\'));
+    ctx.module
+        .class_infos
+        .iter()
+        .find(|(name, _)| php_symbol_key(name.trim_start_matches('\\')) == wanted)
+        .map(|(_, info)| info)
+}
+
+/// Finds interface metadata by PHP-case-insensitive name.
+fn interface_info_by_name<'a>(
+    ctx: &'a FunctionContext<'_>,
+    interface_name: &str,
+) -> Option<&'a InterfaceInfo> {
+    let wanted = php_symbol_key(interface_name.trim_start_matches('\\'));
+    ctx.module
+        .interface_infos
+        .iter()
+        .find(|(name, _)| php_symbol_key(name.trim_start_matches('\\')) == wanted)
+        .map(|(_, info)| info)
+}
+
+/// Compares class/interface names using PHP's case-insensitive symbol rules.
+fn same_php_type_name(left: &str, right: &str) -> bool {
+    php_symbol_key(left.trim_start_matches('\\')) == php_symbol_key(right.trim_start_matches('\\'))
 }
 
 /// Returns true when a concrete value can be boxed into Mixed-shaped property storage.

@@ -976,7 +976,7 @@ fn emit_generator_interface_fast_path(
 }
 
 /// Emits the interface table scan and calls the resolved method slot.
-fn emit_interface_dispatch_call(
+pub(super) fn emit_interface_dispatch_call(
     ctx: &mut FunctionContext<'_>,
     interface_name: &str,
     method_key: &str,

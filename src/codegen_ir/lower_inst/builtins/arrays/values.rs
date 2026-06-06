@@ -24,6 +24,9 @@ pub(super) fn lower_array_values(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let array = expect_operand(inst, 0)?;
     let array_ty = ctx.value_php_type(array)?;
     match array_ty.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            lower_dynamic_mixed_array_values(ctx, inst, array)
+        }
         PhpType::Array(_) => {
             ctx.load_value_to_result(array)?;
             abi::emit_incref_if_refcounted(ctx.emitter, &array_ty);
@@ -35,6 +38,46 @@ pub(super) fn lower_array_values(ctx: &mut FunctionContext<'_>, inst: &Instructi
             other
         ))),
     }
+}
+
+/// Lowers `array_values()` for a PHP `array<mixed>` value that may hold indexed or hash storage.
+fn lower_dynamic_mixed_array_values(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(array)?;
+    let assoc_label = ctx.next_label("avals_dynamic_assoc");
+    let done_label = ctx.next_label("avals_dynamic_done");
+    let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // detect associative hash storage hidden behind PHP array<mixed>
+            ctx.emitter.instruction(&format!("b.eq {}", assoc_label));          // copy hash values when the runtime payload is a hash
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_incref_if_refcounted(ctx.emitter, &mixed_array_ty);
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the hash-value copy after retaining an indexed array
+            ctx.emitter.label(&assoc_label);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            lower_assoc_array_values_aarch64(ctx, &PhpType::Mixed)?;
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // detect associative hash storage hidden behind PHP array<mixed>
+            ctx.emitter.instruction(&format!("je {}", assoc_label));            // copy hash values when the runtime payload is a hash
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_incref_if_refcounted(ctx.emitter, &mixed_array_ty);
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the hash-value copy after retaining an indexed array
+            ctx.emitter.label(&assoc_label);
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            lower_assoc_array_values_x86_64(ctx, &PhpType::Mixed)?;
+        }
+    }
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers associative-array `array_values()` by copying values into a new indexed array.
