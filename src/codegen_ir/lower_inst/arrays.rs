@@ -311,8 +311,16 @@ fn lower_array_set_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     ctx.load_value_to_reg(index, "x1")?;
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.load_value_to_reg(value, "x2")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
+        }
+        PhpType::Callable => {
+            ctx.load_value_to_reg(value, "x0")?;
+            abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
+            ctx.emitter.instruction("mov x2, x0");                              // pass an array-owned callable descriptor to the indexed-array setter
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(index, "x1")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
         PhpType::Str => {
@@ -373,8 +381,16 @@ fn lower_array_set_x86_64(
     ctx.load_value_to_reg(array, "rdi")?;
     ctx.load_value_to_reg(index, "rsi")?;
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.load_value_to_reg(value, "rdx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
+        }
+        PhpType::Callable => {
+            ctx.load_value_to_reg(value, "rax")?;
+            abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
+            ctx.emitter.instruction("mov rdx, rax");                            // pass an array-owned callable descriptor to the indexed-array setter
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(index, "rsi")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
         PhpType::Str => {
@@ -511,8 +527,16 @@ fn lower_array_push_aarch64(
         return lower_mixed_array_push_aarch64(ctx, array, value, &value_ty);
     }
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_reg(value, "x1")?;
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
+        PhpType::Callable => {
+            ctx.load_value_to_reg(value, "x0")?;
+            abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+            ctx.emitter.instruction("mov x1, x0");                              // pass an array-owned callable descriptor to the append helper
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
@@ -556,24 +580,35 @@ fn lower_array_push_x86_64(
     if array_push_value_needs_mixed_box(elem_ty, &value_ty) {
         return lower_mixed_array_push_x86_64(ctx, array, value, &value_ty);
     }
-    ctx.load_value_to_reg(array, "r11")?;
     match value_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        PhpType::Int | PhpType::Bool => {
+            ctx.load_value_to_reg(array, "r11")?;
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
         }
+        PhpType::Callable => {
+            ctx.load_value_to_reg(value, "rax")?;
+            abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+            ctx.emitter.instruction("mov rsi, rax");                            // pass an array-owned callable descriptor to the append helper
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
         PhpType::Float => {
+            ctx.load_value_to_reg(array, "r11")?;
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
         }
         PhpType::Str => {
+            ctx.load_value_to_reg(array, "r11")?;
             ctx.load_string_value_to_regs(value, "rsi", "rdx")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the string append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
         }
         other if other.is_refcounted() => {
+            ctx.load_value_to_reg(array, "r11")?;
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the refcounted append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
