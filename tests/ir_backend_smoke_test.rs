@@ -129,6 +129,18 @@ fn ir_backend_handles_scalar_equality() {
     }
 }
 
+/// Verifies loose scalar equality normalizes boxed Mixed operands before comparison.
+#[test]
+fn ir_backend_handles_mixed_loose_scalar_equality() {
+    assert_eq!(
+        compile_and_run_ir_backend(
+            "mixed_loose_scalar_equality",
+            "<?php function same(mixed $value) { echo $value == 0 ? \"Y\" : \"N\"; echo $value != 1 ? \"y\" : \"n\"; } same(0); echo \":\"; same(1);",
+        ),
+        "Yy:Nn"
+    );
+}
+
 /// Verifies print output and scalar switch dispatch through the EIR backend.
 #[test]
 fn ir_backend_handles_print_and_switch() {

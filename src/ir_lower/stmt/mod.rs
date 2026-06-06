@@ -12,7 +12,9 @@
 use crate::ir::{BlockId, Immediate, IrType, LocalKind, Op, Ownership, SwitchCase, Terminator};
 use crate::ir_lower::context::{LoopFrame, LoweredValue, LoweringContext};
 use crate::ir_lower::effects_lookup;
-use crate::ir_lower::expr::{lower_expr, static_callable_binding_for_expr};
+use crate::ir_lower::expr::{
+    lower_closure_for_assignment, lower_expr, static_callable_binding_for_expr,
+};
 use crate::parser::ast::{CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::span::Span;
 use crate::types::PhpType;
@@ -175,7 +177,8 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     let direct_closure = matches!(value.kind, ExprKind::Closure { .. });
     ctx.clear_pending_static_callable_result();
     let static_callable = static_callable_binding_for_expr(ctx, value);
-    let lowered = lower_expr(ctx, value);
+    let lowered = lower_closure_for_assignment(ctx, name, value)
+        .unwrap_or_else(|| lower_expr(ctx, value));
     let php_type = ctx.builder.value_php_type(lowered.value);
     ctx.store_local(name, lowered, php_type, Some(span));
     let callable_result = if direct_closure {

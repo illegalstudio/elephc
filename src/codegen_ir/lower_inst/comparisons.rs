@@ -186,7 +186,7 @@ pub(super) fn lower_loose_eq(
     let rhs_ty = ctx.value_php_type(rhs)?;
     if lhs_ty == PhpType::Str && rhs_ty == PhpType::Str {
         emit_string_eq_call(ctx, lhs, rhs, is_equal, "__rt_str_loose_eq")?;
-    } else if intish_or_null(&lhs_ty) && intish_or_null(&rhs_ty) {
+    } else if loose_intish_comparable(&lhs_ty, &rhs_ty) {
         let compare_truthiness = lhs_ty == PhpType::Bool || rhs_ty == PhpType::Bool;
         emit_intish_compare(ctx, lhs, rhs, is_equal, compare_truthiness)?;
     } else {
@@ -225,6 +225,15 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 /// Returns true for scalar values that can participate in the current loose integer path.
 fn intish_or_null(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never)
+}
+
+/// Returns true for the scalar loose-equality subset that can normalize through integer slots.
+fn loose_intish_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
+    if intish_or_null(lhs_ty) && intish_or_null(rhs_ty) {
+        return true;
+    }
+    matches!(lhs_ty, PhpType::Mixed) && intish_or_null(rhs_ty)
+        || matches!(rhs_ty, PhpType::Mixed) && intish_or_null(lhs_ty)
 }
 
 /// Emits the target compare instruction for integer-like spaceship operands.
@@ -386,6 +395,16 @@ fn load_intish_value(
                 emit_reg_nonzero_bool(ctx, reg);
             }
         }
+        PhpType::Mixed => {
+            ctx.load_value_to_result(value)?;
+            let helper = if truthy {
+                "__rt_mixed_cast_bool"
+            } else {
+                "__rt_mixed_cast_int"
+            };
+            abi::emit_call_label(ctx.emitter, helper);
+            move_int_result_to_reg(ctx, reg);
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "integer equality for PHP type {:?}",
@@ -394,6 +413,22 @@ fn load_intish_value(
         }
     }
     Ok(())
+}
+
+/// Moves the current integer result into the requested comparison register.
+fn move_int_result_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if reg == result_reg {
+        return;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov {}, {}", reg, result_reg));   // preserve the normalized mixed comparison operand
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, {}", reg, result_reg));   // preserve the normalized mixed comparison operand
+        }
+    }
 }
 
 /// Rewrites `reg` to 1 when nonzero and 0 otherwise.

@@ -177,13 +177,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
     }
 }
 
-/// Lowers a by-value closure capture marker.
-fn lower_closure_capture(_ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.immediate.is_some() {
-        return Err(CodegenIrError::unsupported(
-            "by-reference closure captures in the EIR backend",
-        ));
-    }
+/// Lowers a closure capture marker after call operands already recorded the captured value.
+fn lower_closure_capture(_ctx: &mut FunctionContext<'_>, _inst: &Instruction) -> Result<()> {
     Ok(())
 }
 

@@ -869,7 +869,13 @@ fn lower_assignment_expr(
     for stmt in prelude {
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
-    let lowered = lower_expr(ctx, value);
+    let assigned_name = match &target.kind {
+        ExprKind::Variable(name) => Some(name.as_str()),
+        _ => None,
+    };
+    let lowered = assigned_name
+        .and_then(|name| lower_closure_for_assignment(ctx, name, value))
+        .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
         let static_callable = static_callable_binding_for_expr(ctx, value);
@@ -1757,6 +1763,7 @@ fn lower_preg_replace_callback_closure(
         capture_refs,
         callback,
         &[PhpType::Array(Box::new(PhpType::Str))],
+        None,
     ))
 }
 
@@ -2785,7 +2792,7 @@ fn lower_ternary(
 ) -> LoweredValue {
     let cond = lower_expr(ctx, condition);
     let cond = ctx.truthy(cond, Some(condition.span));
-    let result_type = fallback_expr_type(expr);
+    let result_type = branch_merge_result_type(ctx, then_expr, else_expr, expr);
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
     let then_block = ctx.builder.create_named_block("ternary.then", Vec::new());
     let else_block = ctx.builder.create_named_block("ternary.else", Vec::new());
@@ -2846,7 +2853,53 @@ fn lower_closure(
     capture_refs: &[String],
     expr: &Expr,
 ) -> LoweredValue {
-    lower_closure_with_context(ctx, params, variadic, return_type, body, captures, capture_refs, expr, &[])
+    lower_closure_with_context(
+        ctx,
+        params,
+        variadic,
+        return_type,
+        body,
+        captures,
+        capture_refs,
+        expr,
+        &[],
+        None,
+    )
+}
+
+/// Lowers a closure assigned to a local and specializes self by-reference captures as callable.
+pub(crate) fn lower_closure_for_assignment(
+    ctx: &mut LoweringContext<'_, '_>,
+    assigned_name: &str,
+    value: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::Closure {
+        params,
+        variadic,
+        return_type,
+        body,
+        captures,
+        capture_refs,
+        ..
+    } = &value.kind
+    else {
+        return None;
+    };
+    if !capture_refs.iter().any(|capture| capture == assigned_name) {
+        return None;
+    }
+    Some(lower_closure_with_context(
+        ctx,
+        params,
+        variadic.as_deref(),
+        return_type.as_ref(),
+        body,
+        captures,
+        capture_refs,
+        value,
+        &[],
+        Some(assigned_name),
+    ))
 }
 
 /// Lowers a closure expression, applying contextual types to unannotated parameters.
@@ -2860,13 +2913,18 @@ fn lower_closure_with_context(
     capture_refs: &[String],
     expr: &Expr,
     contextual_arg_types: &[PhpType],
+    self_ref_callable_capture: Option<&str>,
 ) -> LoweredValue {
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
         let captured = ctx.load_local(capture, Some(expr.span));
-        let php_type = ctx.builder.value_php_type(captured.value);
+        let php_type = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
+            PhpType::Callable
+        } else {
+            ctx.builder.value_php_type(captured.value)
+        };
         let immediate = by_ref.then_some(Immediate::I64(1));
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
         captured_values.push(ClosureCapture { value: captured.value });
@@ -2874,7 +2932,16 @@ fn lower_closure_with_context(
     }
     let name = ctx.next_closure_name();
     let signature = if contextual_arg_types.is_empty() {
-        function::lower_closure_function(ctx, &name, params, variadic, return_type, body, &capture_params)
+        function::lower_closure_function(
+            ctx,
+            &name,
+            params,
+            variadic,
+            return_type,
+            body,
+            &capture_params,
+            self_ref_callable_capture,
+        )
     } else {
         function::lower_closure_function_with_context(
             ctx,
@@ -2885,6 +2952,7 @@ fn lower_closure_with_context(
             body,
             &capture_params,
             contextual_arg_types,
+            self_ref_callable_capture,
         )
     };
     let data = ctx.intern_string(&name);
@@ -3580,37 +3648,64 @@ fn lower_instanceof(
 
 /// Coerces a value to integer storage before integer-only operations.
 fn coerce_to_int(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
+    coerce_to_int_at_span(ctx, value, Some(expr.span))
+}
+
+/// Coerces a value to integer storage using an explicit source span.
+fn coerce_to_int_at_span(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
     match value.ir_type {
         IrType::I64 => value,
-        IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), Some(expr.span)),
-        IrType::Str => ctx.emit_value(Op::StrToI, vec![value.value], None, PhpType::Int, Op::StrToI.default_effects(), Some(expr.span)),
+        IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), span),
+        IrType::Str => ctx.emit_value(Op::StrToI, vec![value.value], None, PhpType::Int, Op::StrToI.default_effects(), span),
         _ => ctx.emit_value(
             Op::Cast,
             vec![value.value],
             Some(Immediate::CastTarget(IrType::I64)),
             PhpType::Int,
             Op::Cast.default_effects(),
-            Some(expr.span),
+            span,
         ),
     }
 }
 
 /// Coerces a value to float when the storage type allows a direct conversion.
 fn coerce_to_float(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
+    coerce_to_float_at_span(ctx, value, Some(expr.span))
+}
+
+/// Coerces a value to float storage using an explicit source span.
+fn coerce_to_float_at_span(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
     match value.ir_type {
         IrType::F64 => value,
-        IrType::I64 => ctx.emit_value(Op::IToF, vec![value.value], None, PhpType::Float, Op::IToF.default_effects(), Some(expr.span)),
-        _ => ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Float, Effects::all(), Some(expr.span)),
+        IrType::I64 => ctx.emit_value(Op::IToF, vec![value.value], None, PhpType::Float, Op::IToF.default_effects(), span),
+        _ => ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Float, Effects::all(), span),
     }
 }
 
 /// Coerces a value to string when possible.
 fn coerce_to_string(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
+    coerce_to_string_at_span(ctx, value, Some(expr.span))
+}
+
+/// Coerces a value to string storage using an explicit source span.
+fn coerce_to_string_at_span(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
     match value.ir_type {
         IrType::Str => value,
-        IrType::I64 => ctx.emit_value(Op::IToStr, vec![value.value], None, PhpType::Str, Op::IToStr.default_effects(), Some(expr.span)),
-        IrType::F64 => ctx.emit_value(Op::FToStr, vec![value.value], None, PhpType::Str, Op::FToStr.default_effects(), Some(expr.span)),
-        _ => ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Str, Effects::all(), Some(expr.span)),
+        IrType::I64 => ctx.emit_value(Op::IToStr, vec![value.value], None, PhpType::Str, Op::IToStr.default_effects(), span),
+        IrType::F64 => ctx.emit_value(Op::FToStr, vec![value.value], None, PhpType::Str, Op::FToStr.default_effects(), span),
+        _ => ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Str, Effects::all(), span),
     }
 }
 
@@ -3634,7 +3729,82 @@ fn store_value_into_temp(
     value: LoweredValue,
     span: crate::span::Span,
 ) {
+    let value = coerce_value_for_temp(ctx, value, &temp_type, span);
     ctx.store_local(temp_name, value, temp_type, Some(span));
+}
+
+/// Chooses a merge temp type from contextual branch materialization and fallback metadata.
+fn branch_merge_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    then_expr: &Expr,
+    else_expr: &Expr,
+    expr: &Expr,
+) -> PhpType {
+    let fallback_ty = fallback_expr_type(expr).codegen_repr();
+    let then_ty = materialized_expr_type_for_merge(ctx, then_expr).codegen_repr();
+    let else_ty = materialized_expr_type_for_merge(ctx, else_expr).codegen_repr();
+    let branch_ty = wider_type_for_merge(&then_ty, &else_ty);
+    wider_type_for_merge(&fallback_ty, &branch_ty)
+}
+
+/// Estimates the value type an expression will materialize during branch lowering.
+fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
+    match &expr.kind {
+        ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name).codegen_repr()),
+        ExprKind::ErrorSuppress(inner) => materialized_expr_type_for_merge(ctx, inner),
+        ExprKind::BinaryOp { left, op, right } if mixed_numeric_op(op).is_some() => {
+            let left_ty = materialized_expr_type_for_merge(ctx, left).codegen_repr();
+            let right_ty = materialized_expr_type_for_merge(ctx, right).codegen_repr();
+            if matches!(left_ty, PhpType::Mixed | PhpType::Union(_))
+                || matches!(right_ty, PhpType::Mixed | PhpType::Union(_))
+            {
+                PhpType::Mixed
+            } else {
+                fallback_expr_type(expr)
+            }
+        }
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => branch_merge_result_type(ctx, then_expr, else_expr, expr),
+        ExprKind::ShortTernary { value, default } => {
+            let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
+            let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+            wider_type_for_merge(&value_ty, &default_ty)
+        }
+        _ => fallback_expr_type(expr),
+    }
+}
+
+/// Coerces branch values to the hidden temp storage type before storing them.
+fn coerce_value_for_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    temp_type: &PhpType,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let target_ty = temp_type.codegen_repr();
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if source_ty == target_ty {
+        return value;
+    }
+    match target_ty {
+        PhpType::Mixed => ctx.emit_value(
+            Op::MixedBox,
+            vec![value.value],
+            None,
+            PhpType::Mixed,
+            Op::MixedBox.default_effects(),
+            Some(span),
+        ),
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
+            coerce_to_int_at_span(ctx, value, Some(span))
+        }
+        PhpType::Float => coerce_to_float_at_span(ctx, value, Some(span)),
+        PhpType::Str => coerce_to_string_at_span(ctx, value, Some(span)),
+        _ => value,
+    }
 }
 
 /// Emits a branch to a target block when the current block can still fall through.

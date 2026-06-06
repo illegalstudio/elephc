@@ -14,7 +14,8 @@ use crate::ir::{
     Terminator,
 };
 use crate::ir_lower::context::{
-    return_ir_type, type_expr_to_php_type, value_ir_type, LoweringContext,
+    return_ir_type, type_expr_to_php_type, value_ir_type, ClosureCapture, LoweringContext,
+    StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind, TypeExpr};
@@ -24,6 +25,14 @@ use crate::types::{CheckResult, FunctionSig, PackedClassInfo, PhpType, TypeEnv};
 type AstParams = [(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)];
 
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
+
+/// Compile-time callable binding to seed for a self-recursive closure capture.
+struct RecursiveClosureBinding {
+    local_name: String,
+    closure_name: String,
+    signature: FunctionSig,
+    capture_names: Vec<String>,
+}
 
 /// Lowers the top-level statement list as the synthetic `main` EIR function.
 pub(crate) fn lower_main(
@@ -52,6 +61,7 @@ pub(crate) fn lower_main(
         None,
         PhpType::Void,
         &[],
+        None,
         true,
         all_global_var_names,
     );
@@ -192,6 +202,7 @@ pub(crate) fn lower_user_function(
         None,
         signature.return_type.clone(),
         &signature.params,
+        None,
         false,
         std::collections::HashSet::new(),
     );
@@ -272,6 +283,7 @@ pub(crate) fn lower_class_method(
         Some(class_name.to_string()),
         signature.return_type.clone(),
         &body_params,
+        None,
         false,
         std::collections::HashSet::new(),
     );
@@ -288,9 +300,17 @@ pub(crate) fn lower_closure_function(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    self_ref_callable_capture: Option<&str>,
 ) -> FunctionSig {
     let signature = closure_signature_from_ast(params, variadic, return_type, body);
-    lower_closure_function_with_signature(parent, name, signature, body, captures)
+    lower_closure_function_with_signature(
+        parent,
+        name,
+        signature,
+        body,
+        captures,
+        self_ref_callable_capture,
+    )
 }
 
 /// Lowers one closure literal using contextual types for unannotated parameters.
@@ -303,6 +323,7 @@ pub(crate) fn lower_closure_function_with_context(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     contextual_arg_types: &[PhpType],
+    self_ref_callable_capture: Option<&str>,
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(params, variadic, return_type, body);
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
@@ -314,7 +335,14 @@ pub(crate) fn lower_closure_function_with_context(
             }
         }
     }
-    lower_closure_function_with_signature(parent, name, signature, body, captures)
+    lower_closure_function_with_signature(
+        parent,
+        name,
+        signature,
+        body,
+        captures,
+        self_ref_callable_capture,
+    )
 }
 
 /// Lowers one closure function from an already-built signature.
@@ -324,6 +352,7 @@ fn lower_closure_function_with_signature(
     signature: FunctionSig,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    self_ref_callable_capture: Option<&str>,
 ) -> FunctionSig {
     let mut function = Function::new(
         name.to_string(),
@@ -339,6 +368,16 @@ fn lower_closure_function_with_signature(
     function.source_signature = Some(source_signature(name, &signature));
     let env = env_with_closure_captures(&signature, captures);
     let lowered_params = params_with_closure_captures(&signature, captures);
+    let recursive_binding =
+        self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
+            local_name: local_name.to_string(),
+            closure_name: name.to_string(),
+            signature: signature.clone(),
+            capture_names: captures
+                .iter()
+                .map(|(capture_name, _, _)| capture_name.clone())
+                .collect(),
+        });
     let closures = lower_body_into_function(
         &mut function,
         parent.data,
@@ -356,6 +395,7 @@ fn lower_closure_function_with_signature(
         parent.current_class.clone(),
         signature.return_type.clone(),
         &lowered_params,
+        recursive_binding,
         false,
         collect_global_var_names(body),
     );
@@ -381,6 +421,7 @@ fn lower_body_into_function(
     current_class: Option<String>,
     return_php_type: PhpType,
     params: &[(String, PhpType)],
+    recursive_closure_binding: Option<RecursiveClosureBinding>,
     in_main: bool,
     all_global_var_names: std::collections::HashSet<String>,
 ) -> Vec<Function> {
@@ -412,11 +453,37 @@ fn lower_body_into_function(
         ctx.declare_local(name, php_type.clone());
         ctx.mark_local_initialized(name);
     }
+    seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
     for stmt in body {
         crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
     }
     terminate_open_block(&mut ctx);
     ctx.into_closures()
+}
+
+/// Seeds a self-recursive closure capture as a static callable local inside its body.
+fn seed_recursive_closure_binding(
+    ctx: &mut LoweringContext<'_, '_>,
+    binding: Option<RecursiveClosureBinding>,
+) {
+    let Some(binding) = binding else {
+        return;
+    };
+    let captures = binding
+        .capture_names
+        .iter()
+        .map(|capture_name| ClosureCapture {
+            value: ctx.load_local(capture_name, None).value,
+        })
+        .collect();
+    ctx.bind_static_callable_local(
+        &binding.local_name,
+        StaticCallableBinding::Closure {
+            name: binding.closure_name,
+            signature: binding.signature,
+            captures,
+        },
+    );
 }
 
 /// Appends lowered closure functions to the module with stable closure-table ids.
