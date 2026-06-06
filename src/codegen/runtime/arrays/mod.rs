@@ -43,6 +43,7 @@ mod array_merge;
 mod array_merge_into;
 mod array_merge_into_refcounted;
 mod array_merge_refcounted;
+mod array_merge_str;
 mod array_new;
 mod array_pad;
 mod array_pad_refcounted;
@@ -201,6 +202,8 @@ pub use array_merge_into::emit_array_merge_into;
 pub use array_merge_into_refcounted::emit_array_merge_into_refcounted;
 /// Emit refcounted merge-into helper.
 pub use array_merge_refcounted::emit_array_merge_refcounted;
+/// Emit string array merge helper (16-byte ptr+len element slots).
+pub use array_merge_str::emit_array_merge_str;
 /// Emit refcounted array merge helper.
 pub use array_new::emit_array_new;
 /// Emit new empty array helper.

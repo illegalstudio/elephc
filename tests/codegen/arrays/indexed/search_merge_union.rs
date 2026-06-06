@@ -130,3 +130,55 @@ echo count($result) . ":" . $result[0] . "," . $result[1];
     );
     assert_eq!(out, "2:first,second");
 }
+
+/// Regression: `array_merge` of STRING arrays must keep every element. String indexed
+/// arrays use 16-byte (ptr+len) slots, but `Str` is not `is_refcounted()`, so they were
+/// routed through the scalar 8-byte merge, corrupting every element past the first
+/// (`array_merge(["a","b"],["c"])` returned `["a","",""]`). A dedicated `__rt_array_merge_str`
+/// fixes it.
+#[test]
+fn test_array_merge_string_elements_keeps_all() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["a", "b"];
+$b = ["c", "d"];
+echo implode(",", array_merge($a, $b));
+"#,
+    );
+    assert_eq!(out, "a,b,c,d");
+}
+
+/// Regression: `array_merge([], $strings)` — a common `$r = []; $r = array_merge($r, ...)`
+/// pattern — must use the string merge even though the empty first array carries no
+/// element-type hint. The helper is chosen from either argument's element type.
+#[test]
+fn test_array_merge_empty_first_string_array() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", array_merge([], ["only", "two"]));
+"#,
+    );
+    assert_eq!(out, "only,two");
+}
+
+/// Regression: merging string arrays persists each element into the result, so the merged
+/// array owns its own copies and the heap stays clean once every array (sources and the
+/// owned merge result) is freed at scope end.
+#[test]
+fn test_array_merge_string_elements_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ["x", "yy"];
+$b = ["zzz"];
+$m = array_merge($a, $b);
+echo implode("|", $m);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "x|yy|zzz");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
