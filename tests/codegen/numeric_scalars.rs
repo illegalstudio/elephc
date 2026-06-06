@@ -285,6 +285,26 @@ fn test_floatval() {
     assert_eq!(out, "42");
 }
 
+/// Verifies floatval() parses a numeric string (H2): previously a string argument was
+/// treated as an integer register (garbage). Uses value comparisons to avoid float-format
+/// dependence, and covers PHP's lenient leading-numeric and non-numeric (0.0) semantics.
+#[test]
+fn test_floatval_string_and_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$ok = floatval("3.14") == 3.14
+   && floatval("3.14abc") == 3.14   // leading numeric prefix
+   && floatval("abc") == 0.0        // non-numeric -> 0.0
+   && floatval(true) == 1.0;        // bool -> float
+echo $ok ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+    // A Mixed cell holding a numeric string must unbox+parse, not treat the pointer as a number.
+    let m = compile_and_run(r#"<?php $a = ["2.5", 1]; echo (floatval($a[0]) == 2.5) ? "ok" : "bad";"#);
+    assert_eq!(m, "ok");
+}
+
 /// Verifies is_float() returns 1 for a float value (3.14).
 #[test]
 fn test_is_float_true() {
