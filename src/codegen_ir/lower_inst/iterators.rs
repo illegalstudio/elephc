@@ -31,6 +31,8 @@ const ITER_VALUE_TAG_OFFSET_DELTA: usize = 48;
 enum IteratorSourceKind {
     Indexed { elem: PhpType },
     Hash,
+    DynamicIterable,
+    DynamicMixed,
     Object {
         class_name: String,
         aggregate_class_name: Option<String>,
@@ -51,7 +53,15 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let offset = ctx.value_frame_offset(result)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(source, result_reg)?;
+    if matches!(source_kind, IteratorSourceKind::DynamicMixed) {
+        initialize_dynamic_mixed_iterator(ctx, offset)?;
+        return Ok(());
+    }
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    if matches!(source_kind, IteratorSourceKind::DynamicIterable) {
+        initialize_dynamic_iterable_iterator(ctx, offset)?;
+        return Ok(());
+    }
     if let IteratorSourceKind::Object {
         class_name,
         aggregate_class_name: None,
@@ -69,6 +79,8 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let initial_cursor = match &source_kind {
         IteratorSourceKind::Indexed { .. } => -1,
         IteratorSourceKind::Hash => 0,
+        IteratorSourceKind::DynamicIterable => 0,
+        IteratorSourceKind::DynamicMixed => 0,
         IteratorSourceKind::Object { .. } => 0,
         IteratorSourceKind::Interface { .. } => 0,
     };
@@ -113,6 +125,9 @@ pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset),
             Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset),
         },
+        IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
+            lower_dynamic_iter_next(ctx, offset)?;
+        }
         IteratorSourceKind::Object { class_name, .. } => {
             lower_object_iter_next(ctx, offset, &class_name)?;
         }
@@ -140,6 +155,9 @@ pub(super) fn lower_iter_current_key(
             Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
             Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
         },
+        IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
+            lower_dynamic_iter_current_key(ctx, inst, offset)?;
+        }
         IteratorSourceKind::Object { class_name, .. } => {
             let return_ty = emit_object_iterator_method_call(ctx, offset, &class_name, "key")?;
             box_iterator_method_result_if_needed(ctx, inst, &return_ty)?;
@@ -171,6 +189,9 @@ pub(super) fn lower_iter_current_value(
             Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
             Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
         },
+        IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
+            lower_dynamic_iter_current_value(ctx, inst, offset)?;
+        }
         IteratorSourceKind::Object { class_name, .. } => {
             let return_ty = emit_object_iterator_method_call(ctx, offset, &class_name, "current")?;
             box_iterator_method_result_if_needed(ctx, inst, &return_ty)?;
@@ -181,6 +202,274 @@ pub(super) fn lower_iter_current_value(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Initializes an `Iterable`-typed iterator by dispatching on the source heap kind.
+fn initialize_dynamic_iterable_iterator(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+) -> Result<()> {
+    let indexed_case = ctx.next_label("iter_start_dyn_indexed");
+    let hash_case = ctx.next_label("iter_start_dyn_hash");
+    let object_case = ctx.next_label("iter_start_dyn_object");
+    let done = ctx.next_label("iter_start_dyn_done");
+    branch_on_dynamic_source_heap_kind(ctx, offset, &indexed_case, &hash_case, &object_case);
+    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+
+    ctx.emitter.label(&indexed_case);
+    store_iterator_cursor(ctx, offset, -1);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_case);
+    store_iterator_cursor(ctx, offset, 0);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&object_case);
+    store_iterator_cursor(ctx, offset, 0);
+    resolve_dynamic_object_iterator_source(ctx, offset)?;
+    emit_interface_iterator_method_call(ctx, offset, "Iterator", "rewind")?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Initializes a `Mixed`-typed iterator by unboxing the source once into raw iterable state.
+fn initialize_dynamic_mixed_iterator(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+) -> Result<()> {
+    let indexed_case = ctx.next_label("iter_start_mixed_indexed");
+    let hash_case = ctx.next_label("iter_start_mixed_hash");
+    let object_case = ctx.next_label("iter_start_mixed_object");
+    let done = ctx.next_label("iter_start_mixed_done");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    branch_on_mixed_iterable_tag(ctx, &indexed_case, &hash_case, &object_case);
+    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+
+    ctx.emitter.label(&indexed_case);
+    store_mixed_payload_low_as_iterator_source(ctx, offset);
+    store_iterator_cursor(ctx, offset, -1);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_case);
+    store_mixed_payload_low_as_iterator_source(ctx, offset);
+    store_iterator_cursor(ctx, offset, 0);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&object_case);
+    store_mixed_payload_low_as_iterator_source(ctx, offset);
+    store_iterator_cursor(ctx, offset, 0);
+    resolve_dynamic_object_iterator_source(ctx, offset)?;
+    emit_interface_iterator_method_call(ctx, offset, "Iterator", "rewind")?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Lowers dynamic iterator advancement by dispatching to the concrete heap layout.
+fn lower_dynamic_iter_next(ctx: &mut FunctionContext<'_>, offset: usize) -> Result<()> {
+    let indexed_case = ctx.next_label("iter_next_dyn_indexed");
+    let hash_case = ctx.next_label("iter_next_dyn_hash");
+    let object_case = ctx.next_label("iter_next_dyn_object");
+    let done = ctx.next_label("iter_next_dyn_done");
+    branch_on_dynamic_source_heap_kind(ctx, offset, &indexed_case, &hash_case, &object_case);
+    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+
+    ctx.emitter.label(&indexed_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset),
+        Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset),
+    }
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset),
+        Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset),
+    }
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&object_case);
+    lower_interface_iter_next(ctx, offset, "Iterator")?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Lowers dynamic iterator key loading by dispatching to the concrete heap layout.
+fn lower_dynamic_iter_current_key(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    offset: usize,
+) -> Result<()> {
+    let indexed_case = ctx.next_label("iter_key_dyn_indexed");
+    let hash_case = ctx.next_label("iter_key_dyn_hash");
+    let object_case = ctx.next_label("iter_key_dyn_object");
+    let done = ctx.next_label("iter_key_dyn_done");
+    branch_on_dynamic_source_heap_kind(ctx, offset, &indexed_case, &hash_case, &object_case);
+    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+
+    ctx.emitter.label(&indexed_case);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
+        Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
+    }
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&object_case);
+    let return_ty = emit_interface_iterator_method_call(ctx, offset, "Iterator", "key")?;
+    box_iterator_method_result_if_needed(ctx, inst, &return_ty)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Lowers dynamic iterator value loading by dispatching to the concrete heap layout.
+fn lower_dynamic_iter_current_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    offset: usize,
+) -> Result<()> {
+    let indexed_case = ctx.next_label("iter_value_dyn_indexed");
+    let hash_case = ctx.next_label("iter_value_dyn_hash");
+    let object_case = ctx.next_label("iter_value_dyn_object");
+    let done = ctx.next_label("iter_value_dyn_done");
+    branch_on_dynamic_source_heap_kind(ctx, offset, &indexed_case, &hash_case, &object_case);
+    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+
+    ctx.emitter.label(&indexed_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => load_current_dynamic_indexed_value_as_mixed_aarch64(ctx, offset),
+        Arch::X86_64 => load_current_dynamic_indexed_value_as_mixed_x86_64(ctx, offset),
+    }
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
+        Arch::X86_64 => load_current_hash_value_as_mixed_x86_64(ctx, offset),
+    }
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&object_case);
+    let return_ty = emit_interface_iterator_method_call(ctx, offset, "Iterator", "current")?;
+    box_iterator_method_result_if_needed(ctx, inst, &return_ty)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Replaces a dynamic object iterator source with `IteratorAggregate::getIterator()` when available.
+fn resolve_dynamic_object_iterator_source(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+) -> Result<()> {
+    if !ctx.module.interface_infos.contains_key("IteratorAggregate") {
+        return Ok(());
+    }
+    let keep_original = ctx.next_label("iter_dynamic_keep_original_object");
+    emit_interface_iterator_method_call(ctx, offset, "IteratorAggregate", "getIterator")?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, keep_original)); // keep direct Iterator objects when IteratorAggregate dispatch misses
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // keep direct Iterator objects when IteratorAggregate dispatch misses
+            ctx.emitter.instruction(&format!("je {}", keep_original));          // skip source replacement when getIterator() was not resolved
+        }
+    }
+    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    ctx.emitter.label(&keep_original);
+    Ok(())
+}
+
+/// Branches on the heap kind of the raw iterable source stored in iterator state.
+fn branch_on_dynamic_source_heap_kind(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    indexed_case: &str,
+    hash_case: &str,
+    object_case: &str,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    branch_on_heap_kind_result(ctx, indexed_case, hash_case, object_case);
+}
+
+/// Branches to the concrete iterator path from a `__rt_heap_kind` result.
+fn branch_on_heap_kind_result(
+    ctx: &mut FunctionContext<'_>,
+    indexed_case: &str,
+    hash_case: &str,
+    object_case: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #2");                              // heap kind 2 identifies indexed arrays
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_case));         // dispatch to the indexed-array iterator path
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 identifies associative arrays
+            ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // dispatch to the associative-array iterator path
+            ctx.emitter.instruction("cmp x0, #4");                              // heap kind 4 identifies object payloads
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // dispatch to the object Iterator protocol path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 2");                              // heap kind 2 identifies indexed arrays
+            ctx.emitter.instruction(&format!("je {}", indexed_case));           // dispatch to the indexed-array iterator path
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 identifies associative arrays
+            ctx.emitter.instruction(&format!("je {}", hash_case));              // dispatch to the associative-array iterator path
+            ctx.emitter.instruction("cmp rax, 4");                              // heap kind 4 identifies object payloads
+            ctx.emitter.instruction(&format!("je {}", object_case));            // dispatch to the object Iterator protocol path
+        }
+    }
+}
+
+/// Branches to the concrete iterator path from a `__rt_mixed_unbox` tag result.
+fn branch_on_mixed_iterable_tag(
+    ctx: &mut FunctionContext<'_>,
+    indexed_case: &str,
+    hash_case: &str,
+    object_case: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // mixed tag 4 identifies indexed arrays
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_case));         // dispatch to the indexed-array iterator path
+            ctx.emitter.instruction("cmp x0, #5");                              // mixed tag 5 identifies associative arrays
+            ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // dispatch to the associative-array iterator path
+            ctx.emitter.instruction("cmp x0, #6");                              // mixed tag 6 identifies object payloads
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // dispatch to the object Iterator protocol path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // mixed tag 4 identifies indexed arrays
+            ctx.emitter.instruction(&format!("je {}", indexed_case));           // dispatch to the indexed-array iterator path
+            ctx.emitter.instruction("cmp rax, 5");                              // mixed tag 5 identifies associative arrays
+            ctx.emitter.instruction(&format!("je {}", hash_case));              // dispatch to the associative-array iterator path
+            ctx.emitter.instruction("cmp rax, 6");                              // mixed tag 6 identifies object payloads
+            ctx.emitter.instruction(&format!("je {}", object_case));            // dispatch to the object Iterator protocol path
+        }
+    }
+}
+
+/// Stores the low payload produced by `__rt_mixed_unbox` as the raw iterator source.
+fn store_mixed_payload_low_as_iterator_source(ctx: &mut FunctionContext<'_>, offset: usize) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::store_at_offset(ctx.emitter, "x1", offset - ITER_SOURCE_OFFSET_DELTA);
+        }
+        Arch::X86_64 => {
+            abi::store_at_offset(ctx.emitter, "rdi", offset - ITER_SOURCE_OFFSET_DELTA);
+        }
+    }
+}
+
+/// Stores an iterator cursor value into the stack-resident iterator state.
+fn store_iterator_cursor(ctx: &mut FunctionContext<'_>, offset: usize, cursor: i64) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, cursor);
+    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
 }
 
 /// Boxes a concrete iterator method result when the EIR result slot expects `Mixed`.
@@ -648,7 +937,7 @@ fn load_current_hash_value_as_mixed_aarch64(ctx: &mut FunctionContext<'_>, offse
     abi::load_at_offset(ctx.emitter, "x5", offset - ITER_VALUE_TAG_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "x3", offset - ITER_VALUE_LO_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "x4", offset - ITER_VALUE_HI_OFFSET_DELTA);
-    emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
+    box_hash_payload_as_mixed_aarch64(ctx);
 }
 
 /// Boxes the current x86_64 hash value payload saved by `IterNext` into `Mixed`.
@@ -656,7 +945,113 @@ fn load_current_hash_value_as_mixed_x86_64(ctx: &mut FunctionContext<'_>, offset
     abi::load_at_offset(ctx.emitter, "r9", offset - ITER_VALUE_TAG_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "rcx", offset - ITER_VALUE_LO_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "r8", offset - ITER_VALUE_HI_OFFSET_DELTA);
+    box_hash_payload_as_mixed_x86_64(ctx);
+}
+
+/// Boxes or retains an AArch64 hash payload as an owned `Mixed` value.
+fn box_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
+    let reuse_box = ctx.next_label("iter_hash_value_reuse_box");
+    let done = ctx.next_label("iter_hash_value_boxed");
+    ctx.emitter.instruction("cmp x5, #7");                                      // does the hash entry already store a boxed Mixed value?
+    ctx.emitter.instruction(&format!("b.eq {}", reuse_box));                    // retain existing Mixed boxes instead of nesting them
+    emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing-box retention path
+    ctx.emitter.label(&reuse_box);
+    ctx.emitter.instruction("mov x0, x3");                                      // pass the existing Mixed box to the retain helper
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.label(&done);
+}
+
+/// Boxes or retains an x86_64 hash payload as an owned `Mixed` value.
+fn box_hash_payload_as_mixed_x86_64(ctx: &mut FunctionContext<'_>) {
+    let reuse_box = ctx.next_label("iter_hash_value_reuse_box");
+    let done = ctx.next_label("iter_hash_value_boxed");
+    ctx.emitter.instruction("cmp r9, 7");                                       // does the hash entry already store a boxed Mixed value?
+    ctx.emitter.instruction(&format!("je {}", reuse_box));                      // retain existing Mixed boxes instead of nesting them
     emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing-box retention path
+    ctx.emitter.label(&reuse_box);
+    ctx.emitter.instruction("mov rax, rcx");                                    // pass the existing Mixed box to the retain helper
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.label(&done);
+}
+
+/// Loads a runtime-typed AArch64 indexed-array element and returns it as an owned `Mixed` box.
+fn load_current_dynamic_indexed_value_as_mixed_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+) {
+    let string_case = ctx.next_label("iter_dynamic_indexed_string");
+    let loaded = ctx.next_label("iter_dynamic_indexed_loaded");
+    let reuse_box = ctx.next_label("iter_dynamic_indexed_reuse_box");
+    let done = ctx.next_label("iter_dynamic_indexed_done");
+    abi::load_at_offset_scratch(ctx.emitter, "x11", offset - ITER_SOURCE_OFFSET_DELTA, "x9");
+    abi::load_at_offset(ctx.emitter, "x0", offset - ITER_CURSOR_OFFSET_DELTA);
+    ctx.emitter.instruction("ldr x5, [x11, #-8]");                              // load the packed indexed-array heap metadata
+    ctx.emitter.instruction("lsr x5, x5, #8");                                  // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and x5, x5, #0x7f");                               // isolate the indexed-array value_type tag
+    ctx.emitter.instruction("cmp x5, #1");                                      // does this indexed array store string slots?
+    ctx.emitter.instruction(&format!("b.eq {}", string_case));                  // branch to the 16-byte string-slot loader
+    ctx.emitter.instruction("add x11, x11, #24");                               // skip the indexed-array header to the 8-byte payload slots
+    ctx.emitter.instruction("ldr x3, [x11, x0, lsl #3]");                       // load the scalar or pointer payload from the selected indexed slot
+    ctx.emitter.instruction("mov x4, xzr");                                     // non-string indexed payloads have no high payload word
+    ctx.emitter.instruction(&format!("b {}", loaded));                          // continue with a normalized runtime payload triple
+
+    ctx.emitter.label(&string_case);
+    ctx.emitter.instruction("lsl x10, x0, #4");                                 // scale the index by the 16-byte string slot size
+    ctx.emitter.instruction("add x11, x11, x10");                               // move to the selected string slot
+    ctx.emitter.instruction("add x11, x11, #24");                               // skip the indexed-array header before loading the slot
+    ctx.emitter.instruction("ldr x3, [x11]");                                   // load the string pointer payload
+    ctx.emitter.instruction("ldr x4, [x11, #8]");                               // load the string length payload
+
+    ctx.emitter.label(&loaded);
+    ctx.emitter.instruction("cmp x5, #7");                                      // does the slot already hold a boxed Mixed value?
+    ctx.emitter.instruction(&format!("b.eq {}", reuse_box));                    // retain existing Mixed boxes instead of nesting them
+    emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing-box retention path
+    ctx.emitter.label(&reuse_box);
+    ctx.emitter.instruction("mov x0, x3");                                      // pass the existing Mixed box to the retain helper
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.label(&done);
+}
+
+/// Loads a runtime-typed x86_64 indexed-array element and returns it as an owned `Mixed` box.
+fn load_current_dynamic_indexed_value_as_mixed_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+) {
+    let string_case = ctx.next_label("iter_dynamic_indexed_string");
+    let loaded = ctx.next_label("iter_dynamic_indexed_loaded");
+    let reuse_box = ctx.next_label("iter_dynamic_indexed_reuse_box");
+    let done = ctx.next_label("iter_dynamic_indexed_done");
+    abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::load_at_offset(ctx.emitter, "r10", offset - ITER_CURSOR_OFFSET_DELTA);
+    ctx.emitter.instruction("mov r9, QWORD PTR [r11 - 8]");                     // load the packed indexed-array heap metadata
+    ctx.emitter.instruction("shr r9, 8");                                       // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and r9, 0x7f");                                    // isolate the indexed-array value_type tag
+    ctx.emitter.instruction("cmp r9, 1");                                       // does this indexed array store string slots?
+    ctx.emitter.instruction(&format!("je {}", string_case));                    // branch to the 16-byte string-slot loader
+    ctx.emitter.instruction("add r11, 24");                                     // skip the indexed-array header to the 8-byte payload slots
+    ctx.emitter.instruction("mov rcx, QWORD PTR [r11 + r10 * 8]");              // load the scalar or pointer payload from the selected indexed slot
+    ctx.emitter.instruction("xor r8, r8");                                      // non-string indexed payloads have no high payload word
+    ctx.emitter.instruction(&format!("jmp {}", loaded));                        // continue with a normalized runtime payload triple
+
+    ctx.emitter.label(&string_case);
+    ctx.emitter.instruction("shl r10, 4");                                      // scale the index by the 16-byte string slot size
+    ctx.emitter.instruction("add r11, r10");                                    // move to the selected string slot
+    ctx.emitter.instruction("add r11, 24");                                     // skip the indexed-array header before loading the slot
+    ctx.emitter.instruction("mov rcx, QWORD PTR [r11]");                        // load the string pointer payload
+    ctx.emitter.instruction("mov r8, QWORD PTR [r11 + 8]");                     // load the string length payload
+
+    ctx.emitter.label(&loaded);
+    ctx.emitter.instruction("cmp r9, 7");                                       // does the slot already hold a boxed Mixed value?
+    ctx.emitter.instruction(&format!("je {}", reuse_box));                      // retain existing Mixed boxes instead of nesting them
+    emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing-box retention path
+    ctx.emitter.label(&reuse_box);
+    ctx.emitter.instruction("mov rax, rcx");                                    // pass the existing Mixed box to the retain helper
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.label(&done);
 }
 
 /// Loads the current indexed-array element into AArch64 result registers.
@@ -811,6 +1206,8 @@ fn iterator_source_kind_from_type(
     match ty.codegen_repr() {
         PhpType::Array(elem) => Ok(IteratorSourceKind::Indexed { elem: elem.codegen_repr() }),
         PhpType::AssocArray { .. } => Ok(IteratorSourceKind::Hash),
+        PhpType::Iterable => Ok(IteratorSourceKind::DynamicIterable),
+        PhpType::Mixed | PhpType::Union(_) => Ok(IteratorSourceKind::DynamicMixed),
         PhpType::Object(class_name) => {
             let source = object_iterator_source(ctx, class_name.trim_start_matches('\\'));
             Ok(source)

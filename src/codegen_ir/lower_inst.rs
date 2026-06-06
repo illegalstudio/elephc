@@ -2660,6 +2660,11 @@ fn coerce_loaded_local_to_result_type(
             move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
             Ok(())
         }
+        (PhpType::Mixed, PhpType::Iterable) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+            Ok(())
+        }
         (PhpType::Mixed, PhpType::Void) => {
             abi::emit_load_int_immediate(
                 ctx.emitter,
