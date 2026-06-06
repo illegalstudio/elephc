@@ -17,7 +17,7 @@ use crate::ir_lower::context::{
     return_ir_type, type_expr_to_php_type, value_ir_type, LoweringContext,
 };
 use crate::ir_lower::effects_lookup;
-use crate::parser::ast::{ExprKind, Program, Stmt, TypeExpr};
+use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind, TypeExpr};
 use crate::types::{CheckResult, FunctionSig, PackedClassInfo, PhpType, TypeEnv};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
@@ -286,7 +286,7 @@ pub(crate) fn lower_closure_function(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
 ) -> FunctionSig {
-    let signature = signature_from_ast_with_variadic(params, return_type, variadic);
+    let signature = closure_signature_from_ast(params, variadic, return_type, body);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&signature.return_type),
@@ -531,6 +531,101 @@ fn params_with_closure_captures(
 /// Builds a fallback function signature from AST syntax when checker metadata is unavailable.
 fn signature_from_ast(params: &AstParams, return_type: Option<&TypeExpr>) -> FunctionSig {
     signature_from_ast_with_variadic(params, return_type, None)
+}
+
+/// Builds an EIR closure signature and infers fallthrough-only closures as `void`.
+fn closure_signature_from_ast(
+    params: &AstParams,
+    variadic: Option<&str>,
+    return_type: Option<&TypeExpr>,
+    body: &[Stmt],
+) -> FunctionSig {
+    let mut signature = signature_from_ast_with_variadic(params, return_type, variadic);
+    if return_type.is_none()
+        && !crate::types::checker::yield_validation::body_contains_yield(body)
+        && !body_contains_value_return(body)
+    {
+        signature.return_type = PhpType::Void;
+    }
+    signature
+}
+
+/// Returns true when a statement list contains a `return <expr>` for its own function body.
+fn body_contains_value_return(statements: &[Stmt]) -> bool {
+    statements.iter().any(stmt_contains_value_return)
+}
+
+/// Returns true when `stmt` can return a value from the currently lowered function body.
+fn stmt_contains_value_return(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Return(Some(_)) => true,
+        StmtKind::Return(None) => false,
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            body_contains_value_return(then_body)
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| body_contains_value_return(body))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body_contains_value_return(body))
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            body_contains_value_return(then_body)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body_contains_value_return(body))
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => body_contains_value_return(body),
+        StmtKind::For {
+            init,
+            update,
+            body,
+            ..
+        } => {
+            init.as_ref()
+                .is_some_and(|stmt| stmt_contains_value_return(stmt.as_ref()))
+                || update
+                    .as_ref()
+                    .is_some_and(|stmt| stmt_contains_value_return(stmt.as_ref()))
+                || body_contains_value_return(body)
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| body_contains_value_return(body))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| body_contains_value_return(body))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            body_contains_value_return(try_body)
+                || catches
+                    .iter()
+                    .any(|catch| body_contains_value_return(&catch.body))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| body_contains_value_return(body))
+        }
+        _ => false,
+    }
 }
 
 /// Builds a fallback function signature from AST syntax and optional variadic metadata.

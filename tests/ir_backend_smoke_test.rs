@@ -428,11 +428,25 @@ fn ir_backend_materializes_closure_descriptors() {
 /// Verifies closures assigned to locals can be called through a static EIR binding.
 #[test]
 fn ir_backend_calls_assigned_closure_literals() {
-    let source = "<?php $f = function(): void { echo \"inside\"; }; $f(); echo \"|done\";";
-    assert_eq!(
-        compile_and_run_ir_backend("assigned_closure_literal_call", source),
-        "inside|done"
-    );
+    for (name, source, expected) in [
+        (
+            "assigned_closure_literal_call",
+            "<?php $f = function(): void { echo \"inside\"; }; $f(); echo \"|done\";",
+            "inside|done",
+        ),
+        (
+            "assigned_untyped_closure_fallthrough",
+            "<?php $f = function() { echo \"inside\"; }; $f(); echo \"|done\";",
+            "inside|done",
+        ),
+        (
+            "assigned_untyped_closure_bare_return",
+            "<?php $f = function() { echo \"before\"; return; echo \"after\"; }; $f(); echo \"|done\";",
+            "before|done",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
 }
 
 /// Verifies assigned closure calls receive by-value captures as hidden EIR params.
