@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - `IterStart` values reserve a fixed stack state for source, cursor, and current hash payload.
-//! - Current values are boxed into `Mixed` because Phase 03 foreach lowering stores loop variables as mixed.
+//! - Current values are boxed into `Mixed` unless EIR preserves a concrete indexed-array element type.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed};
@@ -175,20 +175,21 @@ pub(super) fn lower_iter_current_key(
     store_if_result(ctx, inst)
 }
 
-/// Lowers the current iterator value and boxes it into the foreach `Mixed` result.
+/// Lowers the current iterator value into the EIR result representation.
 pub(super) fn lower_iter_current_value(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
     let offset = ctx.value_frame_offset(iterator)?;
+    let result_ty = iter_current_result_type(ctx, inst)?;
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { elem } => {
             match ctx.emitter.target.arch {
                 Arch::AArch64 => load_current_array_value_aarch64(ctx, offset, &elem)?,
                 Arch::X86_64 => load_current_array_value_x86_64(ctx, offset, &elem)?,
             }
-            emit_box_current_value_as_mixed(ctx.emitter, &elem);
+            box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
         }
         IteratorSourceKind::Hash => match ctx.emitter.target.arch {
             Arch::AArch64 => load_current_hash_value_as_mixed_aarch64(ctx, offset),
@@ -207,6 +208,34 @@ pub(super) fn lower_iter_current_value(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns the declared PHP result type for an `iter_current_value` instruction.
+fn iter_current_result_type(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<PhpType> {
+    let Some(result) = inst.result else {
+        return Ok(PhpType::Void);
+    };
+    Ok(ctx.value_php_type(result)?.codegen_repr())
+}
+
+/// Boxes an indexed iterator element only when the EIR result expects `Mixed`.
+fn box_current_indexed_value_if_needed(
+    ctx: &mut FunctionContext<'_>,
+    elem: &PhpType,
+    result_ty: &PhpType,
+) -> Result<()> {
+    match result_ty.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_box_current_value_as_mixed(ctx.emitter, elem);
+            Ok(())
+        }
+        result_ty if result_ty == elem.codegen_repr() => Ok(()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "indexed iterator value PHP type {:?} stored as {:?}",
+            elem,
+            other
+        ))),
+    }
 }
 
 /// Binds a local slot to the current iterator value address for by-reference foreach.

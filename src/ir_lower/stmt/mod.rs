@@ -790,7 +790,13 @@ fn lower_foreach(
             }
         }
     } else {
-        initialize_foreach_mixed_local_if_needed(ctx, value_var, value_needs_null_init, array.span);
+        let value_ty = foreach_value_type(&source_ty);
+        if value_ty == PhpType::Mixed {
+            initialize_foreach_mixed_local_if_needed(ctx, value_var, value_needs_null_init, array.span);
+        } else if value_needs_null_init {
+            ctx.declare_local(value_var, value_ty.clone());
+            ctx.set_local_type(value_var, value_ty);
+        }
     }
     let header = ctx.builder.create_named_block("foreach.next", Vec::new());
     let body_block = ctx.builder.create_named_block("foreach.body", Vec::new());
@@ -840,15 +846,16 @@ fn lower_foreach(
         ctx.mark_ref_bound_local(value_var);
         ctx.mark_local_initialized(value_var);
     } else {
+        let value_ty = foreach_value_type(&source_ty);
         let value = ctx.emit_value(
             Op::IterCurrentValue,
             vec![iterator.value],
             None,
-            PhpType::Mixed,
+            value_ty.clone(),
             Op::IterCurrentValue.default_effects(),
             Some(array.span),
         );
-        ctx.store_local(value_var, value, PhpType::Mixed, Some(array.span));
+        ctx.store_local(value_var, value, value_ty, Some(array.span));
     }
     ctx.loop_stack.push(LoopFrame { break_block: exit, continue_block: header });
     lower_block(ctx, body);
@@ -856,6 +863,14 @@ fn lower_foreach(
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
+}
+
+/// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
+fn foreach_value_type(source_ty: &PhpType) -> PhpType {
+    match source_ty.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Callable => PhpType::Callable,
+        _ => PhpType::Mixed,
+    }
 }
 
 /// Returns the local value type used when a foreach binds the value by reference.
