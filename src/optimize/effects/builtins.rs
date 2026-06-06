@@ -15,7 +15,9 @@
 /// constant expressions when all arguments are constant, and reorder freely relative to
 /// other statements. The list intentionally excludes builtins that read/write shared runtime
 /// state (`json_*`), produce observable side effects (output, filesystem, globals, heap
-/// mutation), or can throw/fatal (pointer helpers, etc.).
+/// mutation), or can throw/fatal. Builtins that are otherwise pure but can raise a PHP
+/// fatal on bad input (e.g. `str_repeat()` with a negative count) are classified separately
+/// by [`is_pure_but_may_throw_builtin`] so a bare-statement call is not dropped by DCE.
 ///
 /// # Arguments
 /// * `name` - Lowercase ASCII builtin function name (case-insensitive PHP builtins use
@@ -49,8 +51,6 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "get_resource_type"
             | "get_resource_id"
             | "abs"
-            | "min"
-            | "max"
             | "floor"
             | "ceil"
             | "round"
@@ -93,13 +93,9 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "ltrim"
             | "rtrim"
             | "chop"
-            | "str_repeat"
             | "strrev"
             | "grapheme_strrev"
-            | "str_pad"
-            | "explode"
             | "implode"
-            | "str_split"
             | "strcmp"
             | "strcasecmp"
             | "str_contains"
@@ -108,7 +104,6 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "ord"
             | "chr"
             | "nl2br"
-            | "wordwrap"
             | "addslashes"
             | "stripslashes"
             | "htmlspecialchars"
@@ -121,7 +116,6 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "md5"
             | "sha1"
             | "crc32"
-            | "hash"
             | "base64_encode"
             | "base64_decode"
             | "bin2hex"
@@ -140,22 +134,18 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "array_values"
             | "array_merge"
             | "array_slice"
-            | "array_combine"
             | "array_flip"
             | "array_reverse"
             | "array_unique"
             | "array_column"
             | "array_sum"
             | "array_product"
-            | "array_chunk"
             | "array_pad"
-            | "array_fill"
             | "array_fill_keys"
             | "array_diff"
             | "array_intersect"
             | "array_diff_key"
             | "array_intersect_key"
-            | "range"
     )
     // Note: json_encode / json_decode / json_validate / json_last_error /
     // json_last_error_msg are intentionally NOT listed here — they read
@@ -165,4 +155,45 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
     // Pointer memory helpers such as ptr_read16(), ptr_write16(),
     // ptr_read_string(), and ptr_write_string() are also intentionally absent:
     // raw memory reads/writes and null/length fatals must remain observable.
+}
+
+/// Returns `true` if the named PHP builtin has no side effects but can raise a
+/// PHP fatal (`ValueError`/`Error`) on bad arguments.
+///
+/// These builtins do not read or write globals, output, filesystem, or
+/// heap-observable state, but PHP 8 throws on invalid input — for example a
+/// negative `str_repeat()`/`array_fill()` count, an empty `explode()`
+/// separator, a non-positive `str_split()`/`array_chunk()` length, a zero
+/// `range()` step, `min([])`/`max([])` on an empty array, a non-empty
+/// `str_pad()` pad requirement, a zero `wordwrap()` width with cut, or an
+/// unknown `hash()` algorithm.
+///
+/// They are modeled as `may_throw` (but not side-effecting) so that:
+/// - a bare-statement call (`str_repeat($s, -1);`) is retained by dead-code
+///   elimination, because the fatal is observable at that statement; while
+/// - a genuinely unevaluated subexpression (the untaken branch of a ternary
+///   whose condition is known) can still be pruned, since PHP would not
+///   evaluate it either.
+///
+/// # Arguments
+/// * `name` - Lowercase ASCII builtin function name (callers normalize first).
+///
+/// # Returns
+/// `true` if the builtin is side-effect-free but may throw; `false` otherwise.
+pub(super) fn is_pure_but_may_throw_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "min"
+            | "max"
+            | "str_repeat"
+            | "str_pad"
+            | "explode"
+            | "str_split"
+            | "wordwrap"
+            | "hash"
+            | "array_combine"
+            | "array_chunk"
+            | "array_fill"
+            | "range"
+    )
 }
