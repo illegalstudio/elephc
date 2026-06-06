@@ -34,6 +34,10 @@ pub(super) fn lower_strict_eq(
         emit_mixed_strict_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
         return store_if_result(ctx, inst);
     }
+    if matches!((&lhs_ty, &rhs_ty), (PhpType::Object(_), PhpType::Object(_))) {
+        emit_pointer_compare(ctx, lhs, rhs, is_equal)?;
+        return store_if_result(ctx, inst);
+    }
     if lhs_ty != rhs_ty {
         emit_bool_literal(ctx, !is_equal);
         return store_if_result(ctx, inst);
@@ -57,6 +61,31 @@ pub(super) fn lower_strict_eq(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Emits a pointer identity comparison for object strict equality.
+fn emit_pointer_compare(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    rhs: ValueId,
+    is_equal: bool,
+) -> Result<()> {
+    let lhs_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let rhs_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(lhs, lhs_reg)?;
+    ctx.load_value_to_reg(rhs, rhs_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", lhs_reg, rhs_reg));  // compare object pointers for PHP strict identity
+            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize object identity as a boolean
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", lhs_reg, rhs_reg));  // compare object pointers for PHP strict identity
+            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize object identity in the low byte
+            ctx.emitter.instruction("movzx rax, al");                           // widen the object identity byte into the integer result register
+        }
+    }
+    Ok(())
 }
 
 /// Returns true for boxed runtime payloads that need mixed-aware comparison.

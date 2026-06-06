@@ -1955,6 +1955,23 @@ echo ($child instanceof $childName) ? "T" : "F";
     );
 }
 
+/// Verifies strict object comparison uses pointer identity.
+#[test]
+fn ir_backend_handles_object_strict_identity() {
+    let source = r#"<?php
+class Box {}
+$a = new Box();
+$b = $a;
+$c = new Box();
+echo ($a === $b) ? "S" : "s";
+echo ($a !== $c) ? "D" : "d";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("object_strict_identity", source),
+        "SD"
+    );
+}
+
 /// Verifies enum case scoped constants load initialized singleton objects.
 #[test]
 fn ir_backend_handles_enum_case_singletons() {
@@ -1965,10 +1982,12 @@ enum Color {
 }
 $case = Color::Red;
 echo ($case instanceof Color) ? "T" : "F";
+echo ($case === Color::Red) ? "I" : "i";
+echo ($case !== Color::Blue) ? "D" : "d";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("enum_case_singletons", unit_source),
-        "T"
+        "TID"
     );
 
     let backed_source = r#"<?php
