@@ -548,6 +548,9 @@ fn lower_runtime_void_call(ctx: &mut FunctionContext<'_>, label: &str) -> Result
 /// Materializes a first-class callable value as a static descriptor pointer when possible.
 fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let target = callable_target_data(ctx, inst)?.to_string();
+    if emit_static_late_bound_first_class_callable(ctx, &target)? {
+        return store_if_result(ctx, inst);
+    }
     if emit_instance_method_first_class_callable(ctx, inst, &target)? {
         return store_if_result(ctx, inst);
     }
@@ -572,6 +575,75 @@ fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst: &Instruct
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     }
     store_if_result(ctx, inst)
+}
+
+/// Emits a runtime descriptor for `static::method(...)` first-class callables.
+fn emit_static_late_bound_first_class_callable(
+    ctx: &mut FunctionContext<'_>,
+    target: &str,
+) -> Result<bool> {
+    let Some((receiver_label, method_name)) = target.rsplit_once("::") else {
+        return Ok(false);
+    };
+    if receiver_label.trim_start_matches('\\') != "static" {
+        return Ok(false);
+    }
+
+    let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
+    let called_class_id = resolve_static_called_class_arg(ctx, receiver_label, &receiver)?;
+    let receiver_info = ctx
+        .module
+        .class_infos
+        .get(receiver.as_str())
+        .ok_or_else(|| CodegenIrError::unsupported(format!(
+            "late-bound first-class callable '{}' on unknown class '{}'",
+            target,
+            receiver
+        )))?;
+    let method_key = php_symbol_key(method_name);
+    let impl_class = receiver_info
+        .static_method_impl_classes
+        .get(&method_key)
+        .cloned()
+        .unwrap_or_else(|| receiver.clone());
+    let dynamic_slot = receiver_info.static_vtable_slots.get(&method_key).copied();
+    let sig = ctx
+        .module
+        .class_infos
+        .get(impl_class.as_str())
+        .and_then(|class_info| class_info.static_methods.get(&method_key))
+        .ok_or_else(|| CodegenIrError::unsupported(format!(
+            "late-bound first-class callable '{}' with unknown implementation",
+            target
+        )))?
+        .clone();
+    let wrapper_sig = crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig(&sig);
+    let captures = vec![("called_class_id".to_string(), PhpType::Int, false)];
+    let entry_label = emit_static_late_bound_descriptor_entry_wrapper(
+        ctx,
+        impl_class.as_str(),
+        &method_key,
+        &wrapper_sig,
+        dynamic_slot,
+    )?;
+    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &wrapper_sig, &captures);
+    let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+        ctx.data,
+        &entry_label,
+        Some(target),
+        callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
+        Some(&wrapper_sig),
+        &captures,
+        &[],
+        callable_descriptor::CallableDescriptorInvocation::method(
+            callable_descriptor::CallableDescriptorShape::StaticMethod,
+            Some("static".to_string()),
+            method_key.clone(),
+        ),
+        Some(&invoker_label),
+    );
+    emit_runtime_descriptor_with_called_class_capture(ctx, &descriptor_label, &called_class_id)?;
+    Ok(true)
 }
 
 /// Emits a runtime descriptor for receiver-bound `object::method` first-class callables.
@@ -653,6 +725,31 @@ fn emit_instance_method_first_class_callable(
     Ok(true)
 }
 
+/// Emits an entry wrapper that receives visible args followed by a captured called-class id.
+fn emit_static_late_bound_descriptor_entry_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    impl_class: &str,
+    method_key: &str,
+    sig: &FunctionSig,
+    dynamic_slot: Option<usize>,
+) -> Result<String> {
+    let visible_arg_types = descriptor_visible_arg_types(sig);
+    require_static_late_bound_descriptor_wrapper_arg_types(ctx, method_key, &visible_arg_types)?;
+    let wrapper_label = ctx.next_label("static_late_bound_descriptor_entry");
+    let done_label = ctx.next_label("static_late_bound_descriptor_entry_done");
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&wrapper_label);
+    emit_static_late_bound_descriptor_entry_wrapper_body(
+        ctx,
+        impl_class,
+        method_key,
+        &visible_arg_types,
+        dynamic_slot,
+    );
+    ctx.emitter.label(&done_label);
+    Ok(wrapper_label)
+}
+
 /// Emits an entry wrapper that receives visible args followed by the captured receiver.
 fn emit_instance_method_descriptor_entry_wrapper(
     ctx: &mut FunctionContext<'_>,
@@ -704,6 +801,30 @@ fn require_instance_descriptor_wrapper_arg_types(
     )))
 }
 
+/// Verifies the late-bound static descriptor wrapper can forward this ABI shape.
+fn require_static_late_bound_descriptor_wrapper_arg_types(
+    ctx: &FunctionContext<'_>,
+    method_key: &str,
+    visible_arg_types: &[PhpType],
+) -> Result<()> {
+    let called_class_ty = PhpType::Int;
+    let incoming_types = descriptor_entry_incoming_types(visible_arg_types, &called_class_ty);
+    let actual_types = descriptor_entry_actual_types(visible_arg_types, &called_class_ty);
+    let incoming_assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &incoming_types, 0);
+    let actual_assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &actual_types, 0);
+    if incoming_assignments.iter().all(|assignment| assignment.in_register())
+        && actual_assignments.iter().all(|assignment| assignment.in_register())
+    {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "late-bound first-class static method {} descriptor wrapper stack-passed args",
+        method_key
+    )))
+}
+
 /// Emits a descriptor entry wrapper body by reordering visible args after the receiver.
 fn emit_instance_method_descriptor_entry_wrapper_body(
     ctx: &mut FunctionContext<'_>,
@@ -729,6 +850,40 @@ fn emit_instance_method_descriptor_entry_wrapper_body(
         load_descriptor_entry_actual_arg(ctx.emitter, ty, assignment, descriptor_entry_slot_offset(source_idx));
     }
     abi::emit_call_label(ctx.emitter, &method_symbol(class_name, method_key));
+    abi::emit_frame_restore(ctx.emitter, frame_size);
+    abi::emit_return(ctx.emitter);
+}
+
+/// Emits a static descriptor entry wrapper body by prepending the called-class id.
+fn emit_static_late_bound_descriptor_entry_wrapper_body(
+    ctx: &mut FunctionContext<'_>,
+    impl_class: &str,
+    method_key: &str,
+    visible_arg_types: &[PhpType],
+    dynamic_slot: Option<usize>,
+) {
+    let called_class_ty = PhpType::Int;
+    let incoming_types = descriptor_entry_incoming_types(visible_arg_types, &called_class_ty);
+    let actual_types = descriptor_entry_actual_types(visible_arg_types, &called_class_ty);
+    let incoming_assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &incoming_types, 0);
+    let actual_assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &actual_types, 0);
+    let frame_size = descriptor_entry_frame_size(incoming_types.len());
+
+    abi::emit_frame_prologue(ctx.emitter, frame_size);
+    for (idx, (ty, assignment)) in incoming_types.iter().zip(incoming_assignments.iter()).enumerate() {
+        store_descriptor_entry_incoming_arg(ctx.emitter, ty, assignment, descriptor_entry_slot_offset(idx));
+    }
+    for (idx, (ty, assignment)) in actual_types.iter().zip(actual_assignments.iter()).enumerate() {
+        let source_idx = if idx == 0 { visible_arg_types.len() } else { idx - 1 };
+        load_descriptor_entry_actual_arg(ctx.emitter, ty, assignment, descriptor_entry_slot_offset(source_idx));
+    }
+    if let Some(slot) = dynamic_slot {
+        emit_dynamic_static_method_call(ctx, slot);
+    } else {
+        abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, method_key));
+    }
     abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
 }
@@ -966,6 +1121,38 @@ fn emit_runtime_descriptor_with_receiver_capture(
     );
     if descriptor_reg != result_reg {
         ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the receiver-bound callable descriptor
+    }
+    Ok(())
+}
+
+/// Allocates a runtime descriptor and stores the called-class id in capture slot zero.
+fn emit_runtime_descriptor_with_called_class_capture(
+    ctx: &mut FunctionContext<'_>,
+    descriptor_label: &str,
+    called_class_id: &CalledClassIdArg,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
+    materialize_called_class_id(ctx, called_class_id)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter.instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime callable descriptor while copying its static header
+    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+        ctx.emitter,
+        descriptor_reg,
+        descriptor_label,
+    );
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    callable_descriptor::emit_store_current_result_to_runtime_capture(
+        ctx.emitter,
+        descriptor_reg,
+        0,
+        &PhpType::Int,
+    );
+    if descriptor_reg != result_reg {
+        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the called-class-bound callable descriptor
     }
     Ok(())
 }
