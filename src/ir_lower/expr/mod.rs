@@ -2453,6 +2453,9 @@ fn lower_named_args_with_signature(
         if let Some(operands) = lower_named_args_with_spread_plan(ctx, sig, &plan, &assoc_spread_sources) {
             return operands;
         }
+        if let Some(operands) = lower_dynamic_named_spread_variadic_args(ctx, sig, &plan) {
+            return operands;
+        }
         let normalized = plan.normalized_args();
         return lower_args(ctx, &normalized);
     }
@@ -2481,14 +2484,13 @@ fn lower_named_args_with_signature(
     operands
 }
 
-/// Lowers named/spread argument plans without re-evaluating dynamic spread expressions.
-fn lower_named_args_with_spread_plan(
+/// Lowers dynamic associative prefix spreads for variadic calls far enough to preserve duplicate fatals.
+fn lower_dynamic_named_spread_variadic_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     plan: &crate::types::call_args::CallArgPlan,
-    assoc_spread_sources: &[bool],
 ) -> Option<Vec<crate::ir::ValueId>> {
-    if sig.variadic.is_some() || assoc_spread_sources.iter().any(|is_assoc| *is_assoc) {
+    if sig.variadic.is_none() || !plan.prefix_has_dynamic_named_spread {
         return None;
     }
     let call_span = plan
@@ -2498,6 +2500,167 @@ fn lower_named_args_with_spread_plan(
         .unwrap_or_else(crate::span::Span::dummy);
     let first_named_pos = plan.first_named_pos?;
     let prefix_expr = plan.positional_prefix_expr(call_span)?;
+    let prefix = lower_expr(ctx, &prefix_expr);
+    if !matches!(ctx.builder.value_php_type(prefix.value).codegen_repr(), PhpType::AssocArray { .. }) {
+        return None;
+    }
+    let prefix_type = ctx.builder.value_php_type(prefix.value);
+    let prefix_temp_name = ctx.declare_hidden_temp(prefix_type.clone());
+    store_value_into_temp(ctx, &prefix_temp_name, prefix_type, prefix, prefix_expr.span);
+    let prefix_temp = Expr::new(ExprKind::Variable(prefix_temp_name), prefix_expr.span);
+
+    let mut source_values = vec![None; plan.source_args.len()];
+    for (source_index, source_arg) in plan.source_args.iter().enumerate().skip(first_named_pos) {
+        if matches!(source_arg.kind, ExprKind::Spread(_)) {
+            return None;
+        }
+        source_values[source_index] = Some(lower_call_source_arg(ctx, source_arg));
+    }
+    emit_dynamic_named_prefix_duplicate_guards(ctx, sig, plan, &prefix_temp, first_named_pos);
+
+    let mut operands = Vec::with_capacity(plan.regular_args.len() + 1);
+    for arg in &plan.regular_args {
+        match arg {
+            crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => {
+                operands.push(source_values.get(*source_index).copied().flatten()?);
+            }
+            crate::types::call_args::PlannedRegularArg::Default(default) => {
+                operands.push(lower_expr(ctx, default).value);
+            }
+            crate::types::call_args::PlannedRegularArg::SpreadElement {
+                prefix_element_idx,
+                param_name,
+                prefer_named_key,
+                default,
+                guaranteed_present,
+                spread_span,
+                ..
+            } => {
+                let expr = if let Some(default) = default {
+                    if *guaranteed_present {
+                        spread_element_expr_for_ir(
+                            &prefix_temp,
+                            *prefix_element_idx,
+                            param_name.as_deref(),
+                            *prefer_named_key,
+                            *spread_span,
+                        )
+                    } else {
+                        spread_element_or_default_expr_for_ir(
+                            &prefix_temp,
+                            *prefix_element_idx,
+                            param_name.as_deref(),
+                            *prefer_named_key,
+                            default.clone(),
+                            *spread_span,
+                        )
+                    }
+                } else {
+                    spread_element_expr_for_ir(
+                        &prefix_temp,
+                        *prefix_element_idx,
+                        param_name.as_deref(),
+                        *prefer_named_key,
+                        *spread_span,
+                    )
+                };
+                operands.push(lower_expr(ctx, &expr).value);
+            }
+        }
+    }
+    operands.push(lower_variadic_tail_array(ctx, sig, &[]).value);
+    Some(operands)
+}
+
+/// Emits duplicate checks for numeric prefix keys overwritten by later named parameters.
+fn emit_dynamic_named_prefix_duplicate_guards(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    prefix_temp: &Expr,
+    first_named_pos: usize,
+) {
+    for source in &plan.source_values {
+        if source.source_index() < first_named_pos {
+            continue;
+        }
+        let Some(param_idx) = source.param_idx() else {
+            continue;
+        };
+        let Some((param_name, _)) = sig.params.get(param_idx) else {
+            continue;
+        };
+        emit_dynamic_named_prefix_duplicate_guard(
+            ctx,
+            prefix_temp,
+            param_idx,
+            param_name,
+            source.expr().span,
+        );
+    }
+}
+
+/// Emits one duplicate guard for a numeric key in a dynamic associative prefix.
+fn emit_dynamic_named_prefix_duplicate_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    prefix_temp: &Expr,
+    param_idx: usize,
+    param_name: &str,
+    span: crate::span::Span,
+) {
+    let exists_expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("array_key_exists"),
+            args: vec![
+                Expr::new(ExprKind::IntLiteral(param_idx as i64), span),
+                prefix_temp.clone(),
+            ],
+        },
+        span,
+    );
+    let exists = lower_expr(ctx, &exists_expr);
+    let ok = ctx.builder.create_named_block("call.dynamic_named_prefix.ok", Vec::new());
+    let fatal = ctx.builder.create_named_block("call.dynamic_named_prefix.fatal", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: exists.value,
+        then_target: fatal,
+        then_args: Vec::new(),
+        else_target: ok,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(fatal);
+    let message = format!(
+        "Fatal error: Named parameter ${} overwrites previous argument\n",
+        param_name
+    );
+    let message = ctx.intern_string(&message);
+    ctx.builder.terminate(Terminator::Fatal { message });
+
+    ctx.builder.position_at_end(ok);
+}
+
+/// Lowers named/spread argument plans without re-evaluating dynamic spread expressions.
+fn lower_named_args_with_spread_plan(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    assoc_spread_sources: &[bool],
+) -> Option<Vec<crate::ir::ValueId>> {
+    if assoc_spread_sources.iter().any(|is_assoc| *is_assoc) {
+        return None;
+    }
+    let call_span = plan
+        .source_args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let first_named_pos = plan.first_named_pos?;
+    let prefix_expr = plan.positional_prefix_expr(call_span)?;
+    let static_variadic_prefix_len = static_indexed_variadic_prefix_len(&prefix_expr);
+    if sig.variadic.is_some() && static_variadic_prefix_len.is_none() {
+        return None;
+    }
     let prefix = lower_expr(ctx, &prefix_expr);
     let prefix_type = ctx.builder.value_php_type(prefix.value);
     let prefix_temp_name = ctx.declare_hidden_temp(prefix_type.clone());
@@ -2582,7 +2745,107 @@ fn lower_named_args_with_spread_plan(
             }
         }
     }
+    if sig.variadic.is_some() {
+        let regular_param_count = crate::types::call_args::regular_param_count(sig);
+        let tail = lower_named_spread_static_variadic_tail_hash(
+            ctx,
+            sig,
+            &prefix_temp,
+            static_variadic_prefix_len.unwrap_or(regular_param_count),
+            regular_param_count,
+            plan,
+            &source_values,
+            first_named_pos,
+            call_span,
+        );
+        operands.push(tail.value);
+    }
     Some(operands)
+}
+
+/// Returns a static prefix length only for indexed array literals without nested spreads.
+fn static_indexed_variadic_prefix_len(prefix_expr: &Expr) -> Option<usize> {
+    let ExprKind::ArrayLiteral(items) = &prefix_expr.kind else {
+        return None;
+    };
+    if items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) {
+        return None;
+    }
+    Some(items.len())
+}
+
+/// Builds a variadic tail hash from static spread overflow plus later named variadics.
+#[allow(clippy::too_many_arguments)]
+fn lower_named_spread_static_variadic_tail_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    prefix_temp: &Expr,
+    prefix_len: usize,
+    regular_param_count: usize,
+    plan: &crate::types::call_args::CallArgPlan,
+    source_values: &[Option<crate::ir::ValueId>],
+    first_named_pos: usize,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let value_ty = variadic_tail_value_type(sig);
+    let prefix_tail_len = prefix_len.saturating_sub(regular_param_count);
+    let named_tail_len = plan
+        .source_values
+        .iter()
+        .filter(|source| source.source_index() >= first_named_pos && source.param_idx().is_none())
+        .count();
+    let hash_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(value_ty.clone()),
+    };
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity((prefix_tail_len + named_tail_len) as u32)),
+        hash_ty,
+        Op::HashNew.default_effects(),
+        Some(span),
+    );
+    let array_ty = PhpType::Array(Box::new(value_ty.clone()));
+    let mut next_positional_key = 0usize;
+    for prefix_idx in regular_param_count..prefix_len {
+        let key = emit_i64_at_span(ctx, next_positional_key as i64, span);
+        next_positional_key += 1;
+        let expr = spread_element_expr_for_ir(prefix_temp, prefix_idx, None, false, span);
+        let value = lower_expr(ctx, &expr);
+        let value = coerce_variadic_tail_value(ctx, value, &array_ty, span);
+        ctx.emit_void(
+            Op::HashSet,
+            vec![hash.value, key.value, value.value],
+            None,
+            Op::HashSet.default_effects(),
+            Some(span),
+        );
+    }
+    for source in &plan.source_values {
+        if source.source_index() < first_named_pos || source.param_idx().is_some() {
+            continue;
+        }
+        let key = if let Some(key) = source.key() {
+            lower_string_literal(ctx, key, source.expr())
+        } else {
+            let key = emit_i64_at_span(ctx, next_positional_key as i64, source.expr().span);
+            next_positional_key += 1;
+            key
+        };
+        let value = source_values[source.source_index()]
+            .expect("named spread variadic source was not evaluated");
+        let value = lowered_value_from_id(ctx, value);
+        let value = coerce_variadic_tail_value(ctx, value, &array_ty, source.expr().span);
+        ctx.emit_void(
+            Op::HashSet,
+            vec![hash.value, key.value, value.value],
+            None,
+            Op::HashSet.default_effects(),
+            Some(source.expr().span),
+        );
+    }
+    hash
 }
 
 /// Emits named-after-spread min/max checks against the already materialized prefix temp.
