@@ -139,6 +139,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "floatval" => lower_floatval(ctx, inst),
         "boolval" => lower_boolval(ctx, inst),
         "empty" => lower_empty(ctx, inst),
+        "settype" => types::lower_settype(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
         "gettype" => lower_gettype(ctx, inst),
         "define" => lower_define(ctx, inst),

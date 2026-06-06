@@ -1035,6 +1035,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
             return value;
         }
     }
+    if let Some(value) = lower_static_settype(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_static_array_push(ctx, canonical, args, expr) {
         return value;
     }
@@ -1956,6 +1959,53 @@ fn lower_builtin_call_args(
     }
 }
 
+/// Lowers `settype($local, "type")` and updates subsequent local type facts.
+fn lower_static_settype(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "settype"
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+        || args.len() != 2
+    {
+        return None;
+    }
+    let ExprKind::Variable(local_name) = &args[0].kind else {
+        return None;
+    };
+    let target_ty = static_settype_target_type(&args[1])?;
+    let sig = call_signature(ctx, name, args);
+    let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
+    let data = ctx.intern_function_name(name);
+    let result = ctx.emit_value(
+        Op::BuiltinCall,
+        operands,
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        effects_lookup::builtin_effects(name),
+        Some(expr.span),
+    );
+    ctx.set_local_type(local_name, target_ty);
+    Some(result)
+}
+
+/// Returns the PHP type named by a literal `settype()` second argument.
+fn static_settype_target_type(arg: &Expr) -> Option<PhpType> {
+    let ExprKind::StringLiteral(name) = &arg.kind else {
+        return None;
+    };
+    match php_symbol_key(name).as_str() {
+        "int" | "integer" => Some(PhpType::Int),
+        "float" | "double" => Some(PhpType::Float),
+        "string" => Some(PhpType::Str),
+        "bool" | "boolean" => Some(PhpType::Bool),
+        _ => None,
+    }
+}
+
 /// Lowers static function callbacks for `preg_replace_callback()`.
 fn lower_preg_replace_callback_args(
     ctx: &mut LoweringContext<'_, '_>,
@@ -2864,8 +2914,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "fdatasync" | "fflush" | "flock" | "fsync" | "ftruncate" | "interface_exists" | "is_dir"
         | "is_executable" | "is_file" | "is_link" | "is_numeric" | "link" | "mkdir" | "rename"
         | "enum_exists" | "trait_exists" | "putenv" | "rmdir" | "is_readable"
-        | "is_subclass_of" | "is_writeable" | "is_writable" | "spl_autoload_register"
-        | "spl_autoload_unregister" | "symlink" | "touch" | "unlink" => {
+        | "is_subclass_of" | "is_writeable" | "is_writable" | "settype"
+        | "spl_autoload_register" | "spl_autoload_unregister" | "symlink" | "touch" | "unlink" => {
             Some(PhpType::Bool)
         }
         "basename" | "date" | "dirname" | "exec" | "fgets" | "get_class" | "get_parent_class"

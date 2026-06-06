@@ -1,6 +1,6 @@
 //! Purpose:
 //! Lowers PHP type/reflection builtins for the EIR backend.
-//! Handles class-name lookup against static metadata and runtime object class ids.
+//! Handles local retyping, class-name lookup against static metadata, and runtime object class ids.
 //!
 //! Called from:
 //! - `crate::codegen_ir::lower_inst::builtins::lower_builtin_call()`.
@@ -10,14 +10,295 @@
 //!   emitted for the legacy backend, preserving concrete subclasses.
 
 use crate::codegen::abi;
+use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::{expect_operand, store_if_result};
+use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+
+/// Lowers `settype($local, "type")` by mutating the resolved local slot and returning true.
+pub(super) fn lower_settype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "settype", 2)?;
+    let value = expect_operand(inst, 0)?;
+    let type_name = expect_operand(inst, 1)?;
+    let Some(target_ty) = settype_target_type(&const_string_operand(ctx, type_name)?) else {
+        emit_bool_result(ctx, true);
+        return store_if_result(ctx, inst);
+    };
+    let slot = super::super::local_slot_for_loaded_value(ctx, value)?;
+    emit_settype_conversion(ctx, value, &target_ty)?;
+    store_settype_local_result(ctx, slot, &target_ty)?;
+    emit_bool_result(ctx, true);
+    store_if_result(ctx, inst)
+}
+
+/// Returns the concrete PHP type requested by a supported `settype()` type name.
+fn settype_target_type(name: &str) -> Option<PhpType> {
+    match php_symbol_key(name).as_str() {
+        "int" | "integer" => Some(PhpType::Int),
+        "float" | "double" => Some(PhpType::Float),
+        "string" => Some(PhpType::Str),
+        "bool" | "boolean" => Some(PhpType::Bool),
+        _ => None,
+    }
+}
+
+/// Emits conversion from the current operand type into the requested `settype()` target type.
+fn emit_settype_conversion(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    target_ty: &PhpType,
+) -> Result<()> {
+    match target_ty.codegen_repr() {
+        PhpType::Int => emit_settype_int_conversion(ctx, value),
+        PhpType::Float => emit_settype_float_conversion(ctx, value),
+        PhpType::Str => emit_settype_string_conversion(ctx, value),
+        PhpType::Bool => emit_settype_bool_conversion(ctx, value),
+        other => Err(CodegenIrError::unsupported(format!(
+            "settype target PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Emits PHP integer conversion for a `settype(..., "int"|"integer")` mutation.
+fn emit_settype_int_conversion(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    match ctx.raw_value_php_type(value)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {
+            ctx.load_value_to_result(value)?;
+        }
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_float_result_to_int_result(ctx.emitter);
+        }
+        PhpType::Str => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            super::super::predicates::emit_array_truthiness(ctx, value)?;
+        }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_result(value)?;
+            emit_resource_display_id_to_int(ctx);
+        }
+        _ => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+    }
+    Ok(())
+}
+
+/// Emits PHP float conversion for a `settype(..., "float"|"double")` mutation.
+fn emit_settype_float_conversion(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    match ctx.raw_value_php_type(value)?.codegen_repr() {
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+        }
+        PhpType::Int | PhpType::Bool => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_int_result_to_float_result(ctx.emitter);
+        }
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            abi::emit_int_result_to_float_result(ctx.emitter);
+        }
+        PhpType::Str => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            super::super::predicates::emit_array_truthiness(ctx, value)?;
+            abi::emit_int_result_to_float_result(ctx.emitter);
+        }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_result(value)?;
+            emit_resource_display_id_to_int(ctx);
+            abi::emit_int_result_to_float_result(ctx.emitter);
+        }
+        _ => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            abi::emit_int_result_to_float_result(ctx.emitter);
+        }
+    }
+    Ok(())
+}
+
+/// Emits PHP string conversion for a `settype(..., "string")` mutation.
+fn emit_settype_string_conversion(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    match ctx.raw_value_php_type(value)?.codegen_repr() {
+        PhpType::Str => {
+            ctx.load_value_to_result(value)?;
+        }
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+        }
+        PhpType::Int => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+        }
+        PhpType::Bool => {
+            ctx.load_value_to_result(value)?;
+            emit_loaded_bool_to_string(ctx);
+        }
+        PhpType::Void | PhpType::Never => {
+            emit_string_result(ctx, b"");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            emit_string_result(ctx, b"Array");
+        }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_resource_to_string");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "settype string conversion from PHP type {:?}",
+                other
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Emits PHP boolean conversion for a `settype(..., "bool"|"boolean")` mutation.
+fn emit_settype_bool_conversion(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    match ctx.raw_value_php_type(value)?.codegen_repr() {
+        PhpType::Bool | PhpType::Int => {
+            ctx.load_value_to_result(value)?;
+            emit_int_result_nonzero_bool(ctx);
+        }
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            emit_float_result_nonzero_bool(ctx);
+        }
+        PhpType::Str => {
+            super::super::predicates::emit_string_truthiness(ctx, value)?;
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            super::super::predicates::emit_array_truthiness(ctx, value)?;
+        }
+        PhpType::Resource(_) => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        }
+        _ => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+    }
+    Ok(())
+}
+
+/// Stores the converted `settype()` payload into the local slot's storage representation.
+fn store_settype_local_result(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    target_ty: &PhpType,
+) -> Result<()> {
+    let storage_ty = ctx.local_php_type(slot)?.codegen_repr();
+    let target_ty = target_ty.codegen_repr();
+    if storage_ty == PhpType::Mixed && target_ty != PhpType::Mixed {
+        emit_box_current_value_as_mixed(ctx.emitter, &target_ty);
+        let offset = ctx.local_offset(slot)?;
+        abi::emit_store(ctx.emitter, &PhpType::Mixed, offset);
+        return Ok(());
+    }
+    let offset = ctx.local_offset(slot)?;
+    abi::emit_store(ctx.emitter, &target_ty, offset);
+    Ok(())
+}
+
+/// Converts the loaded boolean payload into PHP string result registers.
+fn emit_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) {
+    let false_label = ctx.next_label("settype_bool_string_false");
+    let done_label = ctx.next_label("settype_bool_string_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", false_label));       // false stringifies to an empty string
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the empty-string fallback after true conversion
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // test whether the boolean payload is false
+            ctx.emitter.instruction(&format!("je {}", false_label));            // false stringifies to an empty string
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the empty-string fallback after true conversion
+        }
+    }
+    ctx.emitter.label(&false_label);
+    emit_string_result(ctx, b"");
+    ctx.emitter.label(&done_label);
+}
+
+/// Converts the loaded integer result register into a canonical bool.
+fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // compare the scalar payload against zero for PHP truthiness
+            ctx.emitter.instruction("cset x0, ne");                             // normalize non-zero payloads to true
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // compare the scalar payload against zero for PHP truthiness
+            ctx.emitter.instruction("setne al");                                // normalize non-zero payloads to true
+            ctx.emitter.instruction("movzx rax, al");                           // widen the normalized boolean byte
+        }
+    }
+}
+
+/// Converts the loaded float result register into a canonical bool.
+fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fmov d1, #0.0");                           // materialize 0.0 for PHP float truthiness
+            ctx.emitter.instruction("fcmp d0, d1");                             // compare the float payload against zero
+            ctx.emitter.instruction("cset x0, ne");                             // normalize non-zero floats to true
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize 0.0 for PHP float truthiness
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the float payload against zero
+            ctx.emitter.instruction("setne al");                                // normalize non-zero floats to true
+            ctx.emitter.instruction("movzx rax, al");                           // widen the normalized boolean byte
+        }
+    }
+}
+
+/// Converts the loaded resource payload into PHP's one-based integer id.
+fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("add x0, x0, #1");                          // convert native resource payload to PHP's one-based display id
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("add rax, 1");                              // convert native resource payload to PHP's one-based display id
+        }
+    }
+}
 
 /// Lowers `get_class()` and `get_parent_class()` through static or dynamic class metadata.
 pub(super) fn lower_class_name_lookup(
