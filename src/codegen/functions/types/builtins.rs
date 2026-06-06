@@ -123,6 +123,14 @@ pub(super) fn infer_function_call_type(
             .first()
             .map(|arg| infer_local_type(arg, sig, ctx))
             .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int))),
+        // array_sum/array_product return a float for an indexed float[] (matching the
+        // codegen routing to the float runtime helper) and an int otherwise.
+        "array_sum" | "array_product" => {
+            match args.first().map(|arg| infer_local_type(arg, sig, ctx)) {
+                Some(PhpType::Array(elem)) if matches!(*elem, PhpType::Float) => PhpType::Float,
+                _ => PhpType::Int,
+            }
+        }
         "explode"
         | "str_split"
         | "file"

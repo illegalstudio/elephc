@@ -207,7 +207,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_reverse(emitter);
     arrays::emit_array_reverse_refcounted(emitter);
     arrays::emit_array_sum(emitter);
+    arrays::emit_array_sum_float(emitter);
     arrays::emit_array_product(emitter);
+    arrays::emit_array_product_float(emitter);
     arrays::emit_array_shift(emitter);
     arrays::emit_array_unshift(emitter);
     arrays::emit_array_merge(emitter);

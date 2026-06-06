@@ -48,6 +48,7 @@ mod array_new;
 mod array_pad;
 mod array_pad_refcounted;
 mod array_product;
+mod array_product_float;
 mod array_push_int;
 mod array_push_refcounted;
 mod array_push_str;
@@ -64,6 +65,7 @@ mod array_slice_refcounted;
 mod array_splice;
 mod array_splice_refcounted;
 mod array_sum;
+mod array_sum_float;
 mod array_to_mixed;
 mod array_union;
 mod array_unique;
@@ -213,6 +215,8 @@ pub use array_pad::emit_array_pad;
 pub use array_pad_refcounted::emit_array_pad_refcounted;
 /// Emit refcounted array pad helper.
 pub use array_product::emit_array_product;
+/// Emit float array product helper.
+pub use array_product_float::emit_array_product_float;
 /// Emit array product helper.
 pub use array_push_int::emit_array_push_int;
 /// Emit integer-optimized array push helper.
@@ -245,6 +249,8 @@ pub use array_splice::emit_array_splice;
 pub use array_splice_refcounted::emit_array_splice_refcounted;
 /// Emit refcounted array splice helper.
 pub use array_sum::emit_array_sum;
+/// Emit float array sum helper.
+pub use array_sum_float::emit_array_sum_float;
 /// Emit array sum helper.
 pub use array_to_mixed::emit_array_to_mixed;
 /// Emit array-to-Mixed conversion helper.
