@@ -2022,6 +2022,84 @@ echo ($cases[1] === Suit::Clubs) ? "C" : "c";
     );
 }
 
+/// Verifies backed enum `from()` and `tryFrom()` return canonical cases or boxed null.
+#[test]
+fn ir_backend_handles_enum_from_static_methods() {
+    let source = r#"<?php
+enum Color: int {
+    case Red = 1;
+    case Green = 2;
+}
+$case = Color::from(2);
+$missing = Color::tryFrom(99);
+$present = Color::tryFrom(1);
+echo ($case === Color::Green) ? "G" : "g";
+echo is_null($missing) ? "N" : "n";
+echo is_null($present) ? "p" : "P";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("enum_from_static_methods", source),
+        "GNP"
+    );
+}
+
+/// Verifies string-backed enum `from()` scans string backing values in the EIR backend.
+#[test]
+fn ir_backend_handles_string_enum_from_static_methods() {
+    let source = r#"<?php
+enum Status: string {
+    case Draft = "draft";
+    case Live = "live";
+}
+$case = Status::from("live");
+$missing = Status::tryFrom("none");
+echo ($case === Status::Live) ? "L" : "l";
+echo is_null($missing) ? "N" : "n";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("string_enum_from_static_methods", source),
+        "LN"
+    );
+}
+
+/// Verifies unmatched `Enum::from()` throws a catchable ValueError in the EIR backend.
+#[test]
+fn ir_backend_handles_enum_from_value_error() {
+    let source = r#"<?php
+enum Color: int {
+    case Red = 1;
+}
+try {
+    Color::from(99);
+} catch (ValueError $e) {
+    echo get_class($e), ":", $e->getMessage();
+}
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("enum_from_value_error", source),
+        "ValueError:99 is not a valid backing value for enum Color"
+    );
+}
+
+/// Verifies unmatched string-backed `Enum::from()` quotes the backing value in ValueError.
+#[test]
+fn ir_backend_handles_string_enum_from_value_error() {
+    let source = r#"<?php
+enum Status: string {
+    case Draft = "draft";
+}
+try {
+    Status::from("live");
+} catch (ValueError $e) {
+    echo get_class($e), ":", $e->getMessage();
+}
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("string_enum_from_value_error", source),
+        "ValueError:\"live\" is not a valid backing value for enum Status"
+    );
+}
+
 /// Verifies invalid dynamic `instanceof` targets use the runtime fatal path.
 #[test]
 fn ir_backend_fatals_on_invalid_dynamic_instanceof_target() {
