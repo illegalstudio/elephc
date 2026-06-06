@@ -166,6 +166,25 @@ fn test_math_builtins_coerce_mixed_arg() {
     );
 }
 
+/// Verifies multi-argument math builtins coerce boxed Mixed arguments on BOTH operands (H1
+/// part 2): heterogeneous-array elements are Mixed, and fmod/pow/hypot/fdiv/log must unbox
+/// each operand rather than treat the cell pointer as a number.
+#[test]
+fn test_multiarg_math_builtins_coerce_mixed_args() {
+    let out = compile_and_run(
+        r#"<?php
+$m = [7.5, 2.0, 3.0, 4.0, 8.0, "s"];
+$ok = fmod($m[0], $m[1]) == 1.5
+   && pow($m[1], $m[2]) == 8.0
+   && hypot($m[2], $m[3]) == 5.0
+   && fdiv($m[3], $m[1]) == 2.0
+   && log($m[4], $m[1]) == 3.0;
+echo $ok ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies ceil() rounds a positive float (3.2) up to 4.
 #[test]
 fn test_ceil() {
