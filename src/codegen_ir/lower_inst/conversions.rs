@@ -160,6 +160,11 @@ fn lower_cast_to_string(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             abi::emit_call_label(ctx.emitter, "__rt_resource_to_string");
             store_if_result(ctx, inst)
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            store_if_result(ctx, inst)
+        }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             lower_array_like_to_string(ctx, inst)
         }
