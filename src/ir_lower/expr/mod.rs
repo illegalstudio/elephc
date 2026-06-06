@@ -5485,11 +5485,36 @@ fn branch_merge_result_type(
     else_expr: &Expr,
     expr: &Expr,
 ) -> PhpType {
+    let then_ty = materialized_expr_type_for_merge(ctx, then_expr);
+    let else_ty = materialized_expr_type_for_merge(ctx, else_expr);
+    let branch_ty = nullable_aware_branch_merge_type(&then_ty, &else_ty);
+    if php_type_allows_null(&branch_ty) {
+        return branch_ty;
+    }
     let fallback_ty = fallback_expr_type(expr).codegen_repr();
-    let then_ty = materialized_expr_type_for_merge(ctx, then_expr).codegen_repr();
-    let else_ty = materialized_expr_type_for_merge(ctx, else_expr).codegen_repr();
-    let branch_ty = wider_type_for_merge(&then_ty, &else_ty);
-    wider_type_for_merge(&fallback_ty, &branch_ty)
+    wider_type_for_merge(&fallback_ty, &branch_ty.codegen_repr())
+}
+
+/// Chooses a ternary branch merge type without erasing PHP null branches.
+fn nullable_aware_branch_merge_type(left: &PhpType, right: &PhpType) -> PhpType {
+    if php_type_allows_null(left) || php_type_allows_null(right) {
+        let left_non_null = strip_void_from_union(left.clone());
+        let right_non_null = strip_void_from_union(right.clone());
+        return normalize_union_members(vec![PhpType::Void, left_non_null, right_non_null])
+            .unwrap_or(PhpType::Void);
+    }
+    wider_type_for_merge(&left.codegen_repr(), &right.codegen_repr())
+}
+
+/// Returns true when a PHP type can materialize PHP null at runtime.
+fn php_type_allows_null(php_type: &PhpType) -> bool {
+    match php_type {
+        PhpType::Void | PhpType::Never | PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Void | PhpType::Never | PhpType::Mixed)),
+        _ => false,
+    }
 }
 
 /// Estimates the value type an expression will materialize during branch lowering.
