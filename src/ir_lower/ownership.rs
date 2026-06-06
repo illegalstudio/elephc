@@ -22,12 +22,13 @@ pub(crate) fn acquire_if_refcounted(
     value: LoweredValue,
     span: Option<Span>,
 ) -> LoweredValue {
-    if value.ir_type.is_refcounted_storage() {
+    let php_type = ctx.builder.value_php_type(value.value);
+    if Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return ctx.emit_value(
             Op::Acquire,
             vec![value.value],
             None,
-            ctx.builder.value_php_type(value.value),
+            php_type,
             Op::Acquire.default_effects(),
             span,
         );
@@ -37,8 +38,9 @@ pub(crate) fn acquire_if_refcounted(
 
 /// Emits a release operation when the value can carry runtime lifetime state.
 pub(crate) fn release_if_owned(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Option<Span>) {
-    if value.ir_type.is_refcounted_storage()
-        && !matches!(ctx.builder.value_php_type(value.value), crate::types::PhpType::Void)
+    let php_type = ctx.builder.value_php_type(value.value);
+    if Ownership::php_type_needs_lifetime_tracking(&php_type)
+        && !matches!(php_type, crate::types::PhpType::Void)
     {
         ctx.emit_void(
             Op::Release,

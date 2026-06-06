@@ -466,6 +466,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let slot = self.declare_local(name, php_type.clone());
         let source = value;
         let release_source_after_store = self.value_is_owning_temporary(value);
+        let transfer_callable_source_to_store = release_source_after_store
+            && matches!(php_type.codegen_repr(), PhpType::Callable);
         if !uses_global
             && previous_kind == LocalKind::PhpLocal
             && previous_slot.is_some_and(|slot| self.initialized_slots.contains(&slot))
@@ -474,7 +476,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             let previous = self.load_local(name, span);
             crate::ir_lower::ownership::release_if_owned(self, previous, span);
         }
-        let value = if uses_global || previous_kind == LocalKind::PhpLocal {
+        let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
+            && !transfer_callable_source_to_store
+        {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
         } else {
             value
@@ -482,7 +486,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if uses_global {
             self.store_global_name(name, slot, value, span);
             self.set_local_type(name, php_type);
-            if release_source_after_store {
+            if release_source_after_store && !transfer_callable_source_to_store {
                 crate::ir_lower::ownership::release_if_owned(self, source, span);
             }
             return value;
@@ -501,7 +505,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !is_ref_bound {
             self.set_local_type(name, php_type);
         }
-        if release_source_after_store {
+        if release_source_after_store && !transfer_callable_source_to_store {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
         }
         value
@@ -604,7 +608,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Returns whether a value producer owns storage duplicated by a retaining consumer.
     pub(crate) fn value_is_owning_temporary(&self, value: LoweredValue) -> bool {
-        if !value.ir_type.is_refcounted_storage() {
+        let php_type = self.builder.value_php_type(value.value);
+        if !value.ir_type.is_refcounted_storage()
+            && !Ownership::php_type_needs_lifetime_tracking(&php_type)
+        {
             return false;
         }
         if self.value_is_owning_builtin_temporary(value.value) {

@@ -1344,17 +1344,28 @@ fn lower_static_call_user_func(
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "call_user_func" => {
             let callback_expr = args.first()?;
+            let callback_args = &args[1..];
+            let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
+            if call_user_func_should_use_descriptor(ctx, callback_expr, callback_args, signature.as_ref()) {
+                return lower_call_user_func_descriptor_invoke(
+                    ctx,
+                    callback_expr,
+                    callback_args,
+                    signature.as_ref(),
+                    expr,
+                );
+            }
             if let Some(callback) = instance_call_user_func_callback(ctx, callback_expr) {
                 return lower_instance_callable_call_user_func(
                     ctx,
                     callback_expr,
                     callback,
-                    &args[1..],
+                    callback_args,
                     expr,
                 );
             }
             let callback = static_call_user_func_callback(ctx, callback_expr)?;
-            lower_static_callable_call(ctx, callback, &args[1..], expr)
+            lower_static_callable_call(ctx, callback, callback_args, expr)
         }
         "call_user_func_array" => {
             let [callback_arg, arg_array] = args else {
@@ -1405,7 +1416,7 @@ fn lower_instance_callable_call_user_func(
     ))
 }
 
-/// Lowers dynamic `call_user_func()` callbacks through the same EIR path as `$callable(...)`.
+/// Lowers dynamic `call_user_func()` callbacks through descriptor invocation.
 fn lower_dynamic_call_user_func(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -1415,11 +1426,25 @@ fn lower_dynamic_call_user_func(
     if php_symbol_key(name.trim_start_matches('\\')) != "call_user_func" || args.is_empty() {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if matches!(args[0].kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)) {
+        return None;
+    }
+    let signature = callable_descriptor_signature_for_expr(ctx, &args[0]);
+    let callback = lower_expr(ctx, &args[0]);
+    if descriptor_callback_php_type_supported(&ctx.builder.value_php_type(callback.value).codegen_repr()) {
+        return lower_call_user_func_descriptor_invoke_from_value(
+            ctx,
+            callback,
+            &args[1..],
+            signature.as_ref(),
+            expr,
+        );
+    }
+    if crate::types::call_args::has_named_args(&args[1..]) || args[1..].iter().any(is_spread_arg) {
         return None;
     }
     let mut operands = Vec::with_capacity(args.len());
-    operands.push(lower_expr(ctx, &args[0]).value);
+    operands.push(callback.value);
     operands.extend(lower_args(ctx, &args[1..]));
     Some(ctx.emit_value(
         Op::ExprCall,
@@ -1482,9 +1507,25 @@ fn callable_descriptor_signature_for_expr(
             let right = callable_descriptor_signature_for_expr(ctx, default)?;
             compatible_descriptor_signature(left, &right)
         }
+        ExprKind::Variable(name) => ctx
+            .callable_param_signature(name)
+            .cloned()
+            .or_else(|| ctx.static_callable_local(name).and_then(|target| {
+                signature_for_static_callable_binding(ctx, target)
+            })),
         _ => static_callable_binding_for_expr(ctx, callback)
-            .and_then(|target| signature_for_static_callable_binding(ctx, target)),
+            .and_then(|target| signature_for_static_callable_binding(ctx, target))
+            .or_else(|| invokable_object_signature_for_expr(ctx, callback)),
     }
+}
+
+/// Returns the `__invoke` signature for an invokable object callback expression.
+fn invokable_object_signature_for_expr(
+    ctx: &LoweringContext<'_, '_>,
+    callback: &Expr,
+) -> Option<FunctionSig> {
+    let class_name = instance_callable_object_class(ctx, callback)?;
+    class_method_signature(ctx, &class_name, "__invoke").cloned()
 }
 
 /// Keeps a descriptor signature only when two runtime branches have the same callable ABI.
@@ -1537,7 +1578,7 @@ fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
         return None;
     };
     if items.iter().any(is_spread_arg) || !items.iter().enumerate().any(|(index, item)| {
-        invoker_ref_arg_variable(sig, index, item).is_some()
+        invoker_ref_arg_variable(ctx, sig, index, item).is_some()
     }) {
         return None;
     }
@@ -1553,7 +1594,7 @@ fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
         Some(arg_array.span),
     );
     for (index, item) in items.iter().enumerate() {
-        let value = if let Some(var_name) = invoker_ref_arg_variable(sig, index, item) {
+        let value = if let Some(var_name) = invoker_ref_arg_variable(ctx, sig, index, item) {
             lower_invoker_ref_arg_marker(ctx, var_name, item.span)
         } else {
             let value = lower_expr(ctx, item);
@@ -1571,19 +1612,277 @@ fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
     Some(array)
 }
 
+/// Returns true when `call_user_func()` must keep runtime descriptor semantics.
+fn call_user_func_should_use_descriptor(
+    ctx: &LoweringContext<'_, '_>,
+    callback: &Expr,
+    args: &[Expr],
+    sig: Option<&FunctionSig>,
+) -> bool {
+    let has_named_or_spread =
+        crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg);
+    if has_named_or_spread {
+        return true;
+    }
+    if call_user_func_has_incompatible_ref_marker_arg(ctx, args, sig) {
+        return false;
+    }
+    if sig.is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref)) {
+        return true;
+    }
+    match &callback.kind {
+        ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::Closure { .. }
+        | ExprKind::NewObject { .. }
+        | ExprKind::NewDynamicObject { .. }
+        | ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::FirstClassCallable(CallableTarget::Method { .. }) => true,
+        ExprKind::Variable(name) => {
+            if let Some(target) = ctx.static_callable_local(name) {
+                return matches!(
+                    target,
+                    StaticCallableBinding::Closure { .. }
+                        | StaticCallableBinding::StaticMethodDescriptor { .. }
+                        | StaticCallableBinding::InstanceMethod { .. }
+                );
+            }
+            matches!(
+                ctx.local_type(name).codegen_repr(),
+                PhpType::Callable | PhpType::Array(_) | PhpType::Object(_)
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when direct descriptor ref markers cannot represent an argument.
+fn call_user_func_has_incompatible_ref_marker_arg(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+    sig: Option<&FunctionSig>,
+) -> bool {
+    let Some(sig) = sig else {
+        return false;
+    };
+    args.iter().enumerate().any(|(index, arg)| {
+        if !sig.ref_params.get(index).copied().unwrap_or(false) {
+            return false;
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            return false;
+        };
+        !invoker_ref_arg_storage_compatible(ctx, sig, index, name)
+    })
+}
+
+/// Lowers `call_user_func()` into a descriptor invoke when the callback value is supported.
+fn lower_call_user_func_descriptor_invoke(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback_expr: &Expr,
+    args: &[Expr],
+    sig: Option<&FunctionSig>,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let callback = lower_expr(ctx, callback_expr);
+    if !descriptor_callback_php_type_supported(&ctx.builder.value_php_type(callback.value).codegen_repr()) {
+        return None;
+    }
+    lower_call_user_func_descriptor_invoke_from_value(ctx, callback, args, sig, expr)
+}
+
+/// Emits `CallableDescriptorInvoke` for an already evaluated `call_user_func()` callback.
+fn lower_call_user_func_descriptor_invoke_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: LoweredValue,
+    args: &[Expr],
+    sig: Option<&FunctionSig>,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let arg_container = lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span)?;
+    let result_type = sig
+        .map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
+        .unwrap_or(PhpType::Mixed);
+    Some(ctx.emit_value(
+        Op::CallableDescriptorInvoke,
+        vec![callback.value, arg_container.value],
+        None,
+        result_type,
+        Op::CallableDescriptorInvoke.default_effects(),
+        Some(expr.span),
+    ))
+}
+
+/// Returns true when the EIR backend has descriptor dispatch for this callback type.
+fn descriptor_callback_php_type_supported(php_type: &PhpType) -> bool {
+    matches!(
+        php_type,
+        PhpType::Str | PhpType::Callable | PhpType::Array(_) | PhpType::Object(_)
+    )
+}
+
+/// Builds the descriptor-invoker argument container for `call_user_func()`.
+fn lower_descriptor_invoker_arg_container_for_call_user_func(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+    sig: Option<&FunctionSig>,
+    span: Span,
+) -> Option<LoweredValue> {
+    if crate::types::call_args::has_named_args(args) {
+        if args.iter().any(is_spread_arg) {
+            return None;
+        }
+        return Some(lower_named_descriptor_invoker_arg_container(ctx, args, sig, span));
+    }
+    Some(lower_indexed_descriptor_invoker_arg_array(ctx, args, sig, span))
+}
+
+/// Builds an indexed `array<mixed>` argument container, expanding positional spreads.
+fn lower_indexed_descriptor_invoker_arg_array(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+    sig: Option<&FunctionSig>,
+    span: Span,
+) -> LoweredValue {
+    let elem_ty = PhpType::Mixed;
+    let array_ty = PhpType::Array(Box::new(elem_ty.clone()));
+    let array = ctx.emit_value(
+        Op::ArrayNew,
+        Vec::new(),
+        Some(Immediate::Capacity(args.len() as u32)),
+        array_ty.clone(),
+        Op::ArrayNew.default_effects(),
+        Some(span),
+    );
+    let mut positional_index = 0usize;
+    for arg in args {
+        if let ExprKind::Spread(inner) = &arg.kind {
+            let source = lower_expr(ctx, inner);
+            lower_indexed_array_spread_into_array(ctx, array, source, Some(&elem_ty), arg.span);
+            continue;
+        }
+        let value = if let Some(var_name) = invoker_ref_arg_variable(ctx, sig, positional_index, arg) {
+            lower_invoker_ref_arg_marker(ctx, var_name, arg.span)
+        } else {
+            let value = lower_expr(ctx, arg);
+            coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
+        };
+        ctx.emit_void(
+            Op::ArrayPush,
+            vec![array.value, value.value],
+            None,
+            Op::ArrayPush.default_effects(),
+            Some(arg.span),
+        );
+        release_value_after_retaining_insert(ctx, Some(&elem_ty), value, arg.span);
+        positional_index += 1;
+    }
+    array
+}
+
+/// Builds a boxed hash argument container for named `call_user_func()` args.
+fn lower_named_descriptor_invoker_arg_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+    sig: Option<&FunctionSig>,
+    span: Span,
+) -> LoweredValue {
+    let hash_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(args.len() as u32)),
+        hash_ty,
+        Op::HashNew.default_effects(),
+        Some(span),
+    );
+    let mut next_positional_key = 0i64;
+    for arg in args {
+        match &arg.kind {
+            ExprKind::NamedArg { name, value } => {
+                let key = lower_string_literal(ctx, name, arg);
+                let param_index = sig.and_then(|sig| {
+                    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+                    crate::types::call_args::named_param_index(sig, regular_param_count, name)
+                });
+                let value = if let Some(index) = param_index {
+                    invoker_ref_arg_variable(ctx, sig, index, value)
+                        .map(|var_name| lower_invoker_ref_arg_marker(ctx, var_name, value.span))
+                } else {
+                    None
+                }
+                .unwrap_or_else(|| lower_expr(ctx, value));
+                ctx.emit_void(
+                    Op::HashSet,
+                    vec![hash.value, key.value, value.value],
+                    None,
+                    Op::HashSet.default_effects(),
+                    Some(arg.span),
+                );
+            }
+            _ => {
+                let key = emit_i64_at_span(ctx, next_positional_key, arg.span);
+                let value = if let Some(var_name) =
+                    invoker_ref_arg_variable(ctx, sig, next_positional_key as usize, arg)
+                {
+                    lower_invoker_ref_arg_marker(ctx, var_name, arg.span)
+                } else {
+                    lower_expr(ctx, arg)
+                };
+                next_positional_key += 1;
+                ctx.emit_void(
+                    Op::HashSet,
+                    vec![hash.value, key.value, value.value],
+                    None,
+                    Op::HashSet.default_effects(),
+                    Some(arg.span),
+                );
+            }
+        }
+    }
+    ctx.emit_value(
+        Op::MixedBox,
+        vec![hash.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
+    )
+}
+
 /// Returns the variable name when this literal argument should be passed by reference.
 fn invoker_ref_arg_variable<'a>(
+    _ctx: &LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     index: usize,
     item: &'a Expr,
 ) -> Option<&'a str> {
-    if !sig.and_then(|sig| sig.ref_params.get(index)).copied().unwrap_or(false) {
+    let ExprKind::Variable(name) = &item.kind else {
         return None;
+    };
+    if let Some(sig) = sig {
+        if !sig.ref_params.get(index).copied().unwrap_or(false) {
+            return None;
+        }
     }
-    match &item.kind {
-        ExprKind::Variable(name) => Some(name.as_str()),
-        _ => None,
-    }
+    Some(name.as_str())
+}
+
+/// Returns true when a local slot can be passed directly to a descriptor ref param.
+fn invoker_ref_arg_storage_compatible(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    var_name: &str,
+) -> bool {
+    let Some((_, param_ty)) = sig.params.get(index) else {
+        return true;
+    };
+    value_ir_type(&param_ty.codegen_repr()) == value_ir_type(&ctx.local_type(var_name).codegen_repr())
 }
 
 /// Emits an invoker reference-cell marker for a local variable argument.
