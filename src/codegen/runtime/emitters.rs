@@ -179,6 +179,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_random_uniform(emitter);
     arrays::emit_sort_int(emitter, false);
     arrays::emit_sort_int(emitter, true);
+    arrays::emit_sort_float(emitter, false);
+    arrays::emit_sort_float(emitter, true);
     arrays::emit_sort_str(emitter, false);
     arrays::emit_sort_str(emitter, true);
     arrays::emit_hash_fnv1a(emitter);

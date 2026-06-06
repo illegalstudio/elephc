@@ -128,6 +128,7 @@ mod mixed_unbox;
 mod mixed_write_stdout;
 mod refcount;
 mod shuffle;
+mod sort_float;
 mod sort_int;
 mod sort_str;
 mod undefined_array_key_warning;
@@ -363,6 +364,8 @@ pub use refcount::emit_refcount;
 /// Emit reference count helper.
 pub use shuffle::emit_shuffle;
 /// Emit array shuffle helper.
+/// Emit float sort helper.
+pub use sort_float::emit_sort_float;
 pub use sort_int::emit_sort_int;
 /// Emit string sort helper.
 pub use sort_str::emit_sort_str;

@@ -118,3 +118,46 @@ echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
     );
     assert_eq!(out, "date,cherry,banana,apple");
 }
+
+/// Verifies sort() orders a float array by numeric value, not by raw 64-bit
+/// bit-pattern. Negative and fractional values must order correctly (the old
+/// integer comparator placed negatives after positives).
+#[test]
+fn test_sort_float_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3.5, -1.2, 2.8, -9.9];
+sort($a);
+echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
+"#,
+    );
+    assert_eq!(out, "-9.9,-1.2,2.8,3.5");
+}
+
+/// Verifies rsort() orders a float array descending by numeric value.
+#[test]
+fn test_rsort_float_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3.5, -1.2, 2.8, -9.9];
+rsort($a);
+echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
+"#,
+    );
+    assert_eq!(out, "3.5,2.8,-1.2,-9.9");
+}
+
+/// Verifies the float sort order independently of float-to-string formatting,
+/// using value comparisons so a regression in the comparator is caught even if
+/// echo formatting changes.
+#[test]
+fn test_sort_float_array_order_is_numeric() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3.5, -1.2, 2.8, -9.9];
+sort($a);
+echo ($a[0] == -9.9 && $a[1] == -1.2 && $a[2] == 2.8 && $a[3] == 3.5) ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
