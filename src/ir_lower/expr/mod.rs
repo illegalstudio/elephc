@@ -4819,6 +4819,18 @@ fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr
     }
     let callable = ctx.load_local(var, Some(expr.span));
     let result_type = result_type.unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+    if instance_signature.is_none() {
+        if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
+            return ctx.emit_value(
+                Op::CallableDescriptorInvoke,
+                vec![callable.value, arg_container.value],
+                None,
+                result_type,
+                Op::CallableDescriptorInvoke.default_effects(),
+                Some(expr.span),
+            );
+        }
+    }
     let mut operands = vec![callable.value];
     operands.extend(lower_args_with_signature(ctx, instance_signature.as_ref(), args));
     ctx.emit_value(Op::ClosureCall, operands, None, result_type, Op::ClosureCall.default_effects(), Some(expr.span))
@@ -4891,6 +4903,16 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
     }
     let lowered_callee = lower_expr(ctx, callee);
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
+    if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
+        return ctx.emit_value(
+            Op::CallableDescriptorInvoke,
+            vec![lowered_callee.value, arg_container.value],
+            None,
+            result_type,
+            Op::CallableDescriptorInvoke.default_effects(),
+            Some(expr.span),
+        );
+    }
     let mut operands = vec![lowered_callee.value];
     operands.extend(lower_args(ctx, args));
     ctx.emit_value(Op::ExprCall, operands, None, result_type, Op::ExprCall.default_effects(), Some(expr.span))
@@ -4904,6 +4926,16 @@ fn lower_expr_call_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_callable_result_type(ctx, callee.value, expr);
+    if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
+        return ctx.emit_value(
+            Op::CallableDescriptorInvoke,
+            vec![callee.value, arg_container.value],
+            None,
+            result_type,
+            Op::CallableDescriptorInvoke.default_effects(),
+            Some(expr.span),
+        );
+    }
     let mut operands = vec![callee.value];
     operands.extend(lower_args(ctx, args));
     ctx.emit_value(
@@ -4916,6 +4948,65 @@ fn lower_expr_call_from_value(
     )
 }
 
+/// Lowers explicit named arguments for signature-unknown descriptor invocations.
+fn lower_untyped_descriptor_invoker_arg_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+    span: crate::span::Span,
+) -> Option<LoweredValue> {
+    if !crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let hash_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(args.len() as u32)),
+        hash_ty,
+        Op::HashNew.default_effects(),
+        Some(span),
+    );
+    let mut next_positional_key = 0i64;
+    for arg in args {
+        match &arg.kind {
+            ExprKind::NamedArg { name, value } => {
+                let key = lower_string_literal(ctx, name, arg);
+                let value = lower_expr(ctx, value);
+                ctx.emit_void(
+                    Op::HashSet,
+                    vec![hash.value, key.value, value.value],
+                    None,
+                    Op::HashSet.default_effects(),
+                    Some(arg.span),
+                );
+            }
+            _ => {
+                let key = emit_i64_at_span(ctx, next_positional_key, arg.span);
+                next_positional_key += 1;
+                let value = lower_expr(ctx, arg);
+                ctx.emit_void(
+                    Op::HashSet,
+                    vec![hash.value, key.value, value.value],
+                    None,
+                    Op::HashSet.default_effects(),
+                    Some(arg.span),
+                );
+            }
+        }
+    }
+    Some(ctx.emit_value(
+        Op::MixedBox,
+        vec![hash.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
+    ))
+}
+
 /// Returns the result storage type for an indirect callable with no static signature.
 fn dynamic_callable_result_type(
     ctx: &LoweringContext<'_, '_>,
@@ -4923,7 +5014,7 @@ fn dynamic_callable_result_type(
     expr: &Expr,
 ) -> PhpType {
     match ctx.builder.value_php_type(callable).codegen_repr() {
-        PhpType::Callable | PhpType::Str | PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
+        PhpType::Callable | PhpType::Str | PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
 }
