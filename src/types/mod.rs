@@ -34,6 +34,8 @@ mod result;
 mod schema;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
+/// PHP `SORT_*` flag constants for the sort builtins.
+pub(crate) mod sort_constants;
 pub(crate) mod stream_constants;
 /// Type checker diagnostics and warnings.
 mod warnings;

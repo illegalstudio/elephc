@@ -164,13 +164,13 @@ fn test_error_array_values_wrong_args() {
 /// Verifies that error sort wrong args.
 #[test]
 fn test_error_sort_wrong_args() {
-    expect_error("<?php sort();", "sort() takes exactly 1 argument");
+    expect_error("<?php sort();", "sort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error rsort wrong args.
 #[test]
 fn test_error_rsort_wrong_args() {
-    expect_error("<?php rsort();", "rsort() takes exactly 1 argument");
+    expect_error("<?php rsort();", "rsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error isset wrong args.
@@ -314,25 +314,25 @@ fn test_error_array_rand_wrong_args() {
 /// Verifies that error asort wrong args.
 #[test]
 fn test_error_asort_wrong_args() {
-    expect_error("<?php asort();", "asort() takes exactly 1 argument");
+    expect_error("<?php asort();", "asort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error arsort wrong args.
 #[test]
 fn test_error_arsort_wrong_args() {
-    expect_error("<?php arsort();", "arsort() takes exactly 1 argument");
+    expect_error("<?php arsort();", "arsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error ksort wrong args.
 #[test]
 fn test_error_ksort_wrong_args() {
-    expect_error("<?php ksort();", "ksort() takes exactly 1 argument");
+    expect_error("<?php ksort();", "ksort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error krsort wrong args.
 #[test]
 fn test_error_krsort_wrong_args() {
-    expect_error("<?php krsort();", "krsort() takes exactly 1 argument");
+    expect_error("<?php krsort();", "krsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error natsort wrong args.

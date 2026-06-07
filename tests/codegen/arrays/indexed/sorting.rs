@@ -161,3 +161,41 @@ echo ($a[0] == -9.9 && $a[1] == -1.2 && $a[2] == 2.8 && $a[3] == 3.5) ? "ok" : "
     );
     assert_eq!(out, "ok");
 }
+
+/// Regression (H7): the sort builtins accept an optional SORT_* `$flags` argument instead of
+/// failing to compile. elephc routes by the array's element family, so SORT_STRING on a string
+/// array, SORT_NUMERIC on a numeric array, and SORT_REGULAR all sort correctly (a flag mismatched
+/// to the element type is not yet specialized). The asort() call exercises flag acceptance on a
+/// key-preserving sort.
+#[test]
+fn test_sort_builtins_accept_sort_flags() {
+    let out = compile_and_run(
+        r#"<?php
+$s = ["banana", "apple", "cherry"];
+sort($s, SORT_STRING);
+echo implode(",", $s);
+$n = [3, 1, 2];
+sort($n, SORT_NUMERIC);
+echo "|" . implode(",", $n);
+$r = [3, 1, 2];
+rsort($r, SORT_NUMERIC);
+echo "|" . implode(",", $r);
+$a = ["x" => 3, "y" => 1];
+asort($a, SORT_REGULAR);
+echo "|ok";
+"#,
+    );
+    assert_eq!(out, "apple,banana,cherry|1,2,3|3,2,1|ok");
+}
+
+/// Regression (H7): the SORT_* flag constants resolve to their PHP integer values when used as
+/// plain expressions (the codegen prescan materializes them alongside the checker registration).
+#[test]
+fn test_sort_flag_constants_have_php_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo SORT_REGULAR . "," . SORT_NUMERIC . "," . SORT_STRING . "," . SORT_NATURAL . "," . SORT_FLAG_CASE;
+"#,
+    );
+    assert_eq!(out, "0,1,2,6,8");
+}

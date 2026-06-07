@@ -121,24 +121,38 @@ pub(super) fn check_builtin(
         }
         "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort" | "arsort"
         | "ksort" | "krsort" => {
-            if args.len() != 1 {
+            // sort/rsort/asort/arsort/ksort/krsort accept an optional $flags argument (a SORT_*
+            // constant); shuffle/natsort/natcasesort take only the array.
+            let accepts_flags = matches!(
+                name,
+                "sort" | "rsort" | "asort" | "arsort" | "ksort" | "krsort"
+            );
+            let max_args = if accepts_flags { 2 } else { 1 };
+            if args.is_empty() || args.len() > max_args {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() takes exactly 1 argument", name),
+                    &format!(
+                        "{}() takes {}",
+                        name,
+                        if accepts_flags {
+                            "1 or 2 arguments"
+                        } else {
+                            "exactly 1 argument"
+                        }
+                    ),
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
+            for arg in &args[1..] {
+                checker.infer_type(arg, env)?;
+            }
             if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,
                     &format!("{}() argument must be array", name),
                 ));
             }
-            Ok(Some(if name == "sort" || name == "rsort" {
-                PhpType::Void
-            } else {
-                PhpType::Void
-            }))
+            Ok(Some(PhpType::Void))
         }
         "isset" => {
             if args.is_empty() {

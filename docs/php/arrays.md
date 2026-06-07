@@ -174,12 +174,12 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `array_sum()` | `array_sum($arr): int\|float` | Sum of values |
 | `array_product()` | `array_product($arr): int\|float` | Product of values |
 | `array_column()` | `array_column($arr, $column_key): array` | Extract column from array of assoc rows |
-| `sort()` | `sort($arr): void` | Sort ascending (in-place) |
-| `rsort()` | `rsort($arr): void` | Sort descending |
-| `asort()` | `asort($arr): void` | Sort by value, maintain keys |
-| `arsort()` | `arsort($arr): void` | Sort by value desc, maintain keys |
-| `ksort()` | `ksort($arr): void` | Sort by key ascending |
-| `krsort()` | `krsort($arr): void` | Sort by key descending |
+| `sort()` | `sort($arr, $flags = SORT_REGULAR): void` | Sort ascending (in-place) |
+| `rsort()` | `rsort($arr, $flags = SORT_REGULAR): void` | Sort descending |
+| `asort()` | `asort($arr, $flags = SORT_REGULAR): void` | Sort by value, maintain keys |
+| `arsort()` | `arsort($arr, $flags = SORT_REGULAR): void` | Sort by value desc, maintain keys |
+| `ksort()` | `ksort($arr, $flags = SORT_REGULAR): void` | Sort by key ascending |
+| `krsort()` | `krsort($arr, $flags = SORT_REGULAR): void` | Sort by key descending |
 | `natsort()` | `natsort($arr): void` | Natural order sort |
 | `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
@@ -197,6 +197,8 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `isset()` | `isset($var, ...$vars): int` | Check that every variable or offset is defined and not null |
 
 `array_filter()` accepts `ARRAY_FILTER_USE_VALUE` (`0`), `ARRAY_FILTER_USE_BOTH` (`1`), and `ARRAY_FILTER_USE_KEY` (`2`). Invalid mode values throw `ValueError`.
+
+`sort()`, `rsort()`, `asort()`, `arsort()`, `ksort()`, and `krsort()` accept an optional `$flags` argument using the `SORT_*` constants (`SORT_REGULAR`, `SORT_NUMERIC`, `SORT_STRING`, `SORT_DESC`, `SORT_ASC`, `SORT_LOCALE_STRING`, `SORT_NATURAL`, `SORT_FLAG_CASE`). Sorting is driven by the array's element type, so `SORT_REGULAR` and a flag that matches the element type (for example `SORT_STRING` on a string array or `SORT_NUMERIC` on a numeric array) sort as expected. A flag that does not match the element type (such as `SORT_STRING` on a numeric array) is not yet specialized.
 
 > Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` stores mixed result elements when the selected callback return shape is only known at runtime.
 > `call_user_func_array()` also accepts dynamic indexed and associative argument arrays for callbacks with a known signature, including userland variadic callbacks. When a callable value has no single static signature at the call site, elephc emits an AOT runtime dispatch over user functions and closure/FCC wrappers available in that codegen context, then applies the matched target's descriptor metadata: parameter names, defaults, by-reference flags, variadic position, return shape, captures, hidden receiver arguments, and callable shape. Runtime string callback names dispatch over user functions, supported builtins, and public static-method strings by case-insensitive name matching, materialize the matched descriptor, and invoke its generated descriptor invoker. Descriptor invokers receive a temporary boxed Mixed clone of the argument container and inspect its runtime tag to handle indexed arrays and associative hashes through the same signature-level wrapper, so the source `$args` remains usable with its original static layout after the call. String keys bind named parameters; unconsumed string and numeric keys are copied into `...$rest` for variadic callbacks. Dynamic arrays passed to by-reference callback parameters use temporary reference cells, so callback writes do not mutate the source argument array.

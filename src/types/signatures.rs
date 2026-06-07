@@ -245,8 +245,10 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "array_pop" | "array_shift" => Some(first_param_ref(fixed(&["array"]))),
         "array_keys" | "array_values" | "array_reverse" | "array_unique" | "array_flip"
         | "array_sum" | "array_product" | "array_rand" => Some(fixed(&["array"])),
-        "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort"
-        | "arsort" | "ksort" | "krsort" => Some(first_param_ref(fixed(&["array"]))),
+        "sort" | "rsort" | "asort" | "arsort" | "ksort" | "krsort" => Some(first_param_ref(
+            optional(&["array", "flags"], 1, vec![int_lit(0)]),
+        )),
+        "shuffle" | "natsort" | "natcasesort" => Some(first_param_ref(fixed(&["array"]))),
         "in_array" => Some(optional(&["needle", "haystack", "strict"], 2, vec![bool_lit(false)])),
         "array_key_exists" => Some(fixed(&["key", "array"])),
         "array_search" => {
