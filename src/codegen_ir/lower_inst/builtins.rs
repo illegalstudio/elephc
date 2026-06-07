@@ -413,6 +413,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "spl_object_hash" => spl::lower_spl_object_hash(ctx, inst),
         "spl_classes" => spl::lower_spl_classes(ctx, inst),
         "iterator_count" => spl::lower_iterator_count(ctx, inst),
+        "iterator_to_array" => spl::lower_iterator_to_array(ctx, inst),
         _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
     }
 }

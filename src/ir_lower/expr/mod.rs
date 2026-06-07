@@ -4433,6 +4433,7 @@ fn call_return_type_for_args(
 ) -> Option<PhpType> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "array_map" => array_map_builtin_return_type(ctx, args, operands),
+        "iterator_to_array" => iterator_to_array_builtin_return_type(ctx, args, operands),
         _ => None,
     }
 }
@@ -4454,6 +4455,58 @@ fn array_map_builtin_return_type(
     let array = operands.get(1)?;
     match ctx.builder.value_php_type(*array).codegen_repr() {
         PhpType::Array(_) => Some(PhpType::Array(Box::new(return_ty))),
+        _ => None,
+    }
+}
+
+/// Returns the EIR result metadata for `iterator_to_array()` when preserve_keys is static.
+fn iterator_to_array_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    let source = operands.first()?;
+    let preserve_keys = match args.get(1) {
+        Some(arg) => static_preserve_keys_expr(arg),
+        None => Some(true),
+    };
+    preserve_keys
+        .map(|value| {
+            iterator_to_array_static_return_type(
+                &ctx.builder.value_php_type(*source).codegen_repr(),
+                value,
+            )
+        })
+        .or(Some(PhpType::Mixed))
+}
+
+/// Computes the concrete `iterator_to_array()` container type for one preserve_keys value.
+fn iterator_to_array_static_return_type(source_ty: &PhpType, preserve_keys: bool) -> PhpType {
+    match source_ty.codegen_repr() {
+        PhpType::Array(elem_ty) => PhpType::Array(elem_ty),
+        PhpType::AssocArray { key, value } if preserve_keys => PhpType::AssocArray { key, value },
+        PhpType::AssocArray { value, .. } => PhpType::Array(value),
+        _ if preserve_keys => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        _ => PhpType::Array(Box::new(PhpType::Mixed)),
+    }
+}
+
+/// Evaluates literal PHP truthiness used by static `iterator_to_array()` preserve_keys.
+fn static_preserve_keys_expr(expr: &Expr) -> Option<bool> {
+    match &expr.kind {
+        ExprKind::BoolLiteral(value) => Some(*value),
+        ExprKind::IntLiteral(value) => Some(*value != 0),
+        ExprKind::FloatLiteral(value) => Some(*value != 0.0),
+        ExprKind::StringLiteral(value) => Some(!value.is_empty() && value != "0"),
+        ExprKind::Null => Some(false),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => Some(*value != 0),
+            ExprKind::FloatLiteral(value) => Some(*value != 0.0),
+            _ => None,
+        },
         _ => None,
     }
 }

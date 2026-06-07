@@ -30,7 +30,7 @@ mod keys;
 mod search;
 mod shift;
 mod unshift;
-mod values;
+pub(in crate::codegen_ir::lower_inst::builtins) mod values;
 
 /// Lowers `array_sum()` over supported indexed-array payloads.
 pub(super) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {

@@ -9,14 +9,17 @@
 //! - The legacy backend exposes the object pointer as a process-stable identity.
 //!   `spl_object_hash()` stringifies that same identity with the shared itoa helper.
 
-use crate::codegen::abi;
+use crate::codegen::{
+    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    runtime_value_tag,
+};
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::Instruction;
+use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
-use super::super::iterators;
+use super::super::{iterators, predicates};
 use super::{expect_operand, store_if_result};
 
 const EXTS_PTR_SYMBOL: &str = "_spl_autoload_exts_ptr";
@@ -218,6 +221,30 @@ pub(super) fn lower_iterator_count(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `iterator_to_array()` over arrays, `iterable`, and Traversable objects.
+pub(super) fn lower_iterator_to_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "iterator_to_array", 1, 2)?;
+    let source = expect_operand(inst, 0)?;
+    let preserve = inst.operands.get(1).copied();
+    let source_ty = ctx.value_php_type(source)?.codegen_repr();
+
+    if let Some(preserve) = preserve {
+        if let Some(preserve_keys) = static_preserve_keys_operand(ctx, preserve)? {
+            ctx.load_value_to_result(source)?;
+            emit_to_array_loaded_source(ctx, &source_ty, preserve_keys)?;
+            return store_if_result(ctx, inst);
+        }
+        return emit_dynamic_preserve_keys(ctx, inst, source, preserve, &source_ty);
+    }
+
+    ctx.load_value_to_result(source)?;
+    emit_to_array_loaded_source(ctx, &source_ty, true)?;
+    store_if_result(ctx, inst)
+}
+
 /// Loads the single object operand into the canonical integer result register.
 fn load_object_operand(
     ctx: &mut FunctionContext<'_>,
@@ -240,6 +267,216 @@ fn load_object_operand(
 fn emit_count_loaded_array(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+}
+
+/// Emits `iterator_to_array()` once the source value is loaded into result registers.
+fn emit_to_array_loaded_source(
+    ctx: &mut FunctionContext<'_>,
+    source_ty: &PhpType,
+    preserve_keys: bool,
+) -> Result<()> {
+    match source_ty.codegen_repr() {
+        PhpType::Array(_) => {
+            emit_clone_loaded_array(ctx);
+            Ok(())
+        }
+        PhpType::AssocArray { value, .. } if preserve_keys => {
+            emit_clone_loaded_hash(ctx, value.codegen_repr() == PhpType::Mixed);
+            Ok(())
+        }
+        PhpType::AssocArray { value, .. } => {
+            super::arrays::values::emit_loaded_assoc_array_values(ctx, &value.codegen_repr())
+        }
+        PhpType::Iterable => emit_to_array_loaded_iterable(ctx, preserve_keys),
+        PhpType::Object(_) => emit_to_array_loaded_traversable_object(ctx, preserve_keys),
+        other => Err(CodegenIrError::unsupported(format!(
+            "iterator_to_array for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Emits the dynamic preserve-keys branch and boxes both possible result containers as Mixed.
+fn emit_dynamic_preserve_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    source: ValueId,
+    preserve: ValueId,
+    source_ty: &PhpType,
+) -> Result<()> {
+    let false_case = ctx.next_label("iterator_to_array_preserve_false");
+    let done = ctx.next_label("iterator_to_array_preserve_done");
+
+    ctx.load_value_to_result(source)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_preserve_keys_truthiness(ctx, preserve)?;
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &false_case);
+
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_to_array_loaded_source(ctx, source_ty, true)?;
+    let true_ty = static_iterator_to_array_result_ty(source_ty, true);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &true_ty);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&false_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_to_array_loaded_source(ctx, source_ty, false)?;
+    let false_ty = static_iterator_to_array_result_ty(source_ty, false);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &false_ty);
+
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Returns a static boolean for literal preserve-keys operands when available.
+fn static_preserve_keys_operand(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<bool>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match (inst_ref.op, inst_ref.immediate.as_ref()) {
+        (Op::ConstBool, Some(Immediate::Bool(value))) => Ok(Some(*value)),
+        (Op::ConstI64, Some(Immediate::I64(value))) => Ok(Some(*value != 0)),
+        (Op::ConstF64, Some(Immediate::F64(value))) => Ok(Some(*value != 0.0)),
+        (Op::ConstNull, _) => Ok(Some(false)),
+        (Op::ConstStr, Some(Immediate::Data(data))) => {
+            let value = ctx
+                .module
+                .data
+                .strings
+                .get(data.as_raw() as usize)
+                .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
+            Ok(Some(!value.is_empty() && value != "0"))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Materializes PHP truthiness for a dynamic preserve-keys operand.
+fn emit_preserve_keys_truthiness(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    match ctx.raw_value_php_type(value)? {
+        PhpType::Bool | PhpType::Int => {
+            ctx.load_value_to_result(value)?;
+            predicates::emit_int_result_nonzero_bool(ctx);
+        }
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            predicates::emit_float_result_nonzero_bool(ctx);
+        }
+        PhpType::Str => {
+            predicates::emit_string_truthiness(ctx, value)?;
+        }
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        PhpType::Union(_) | PhpType::Mixed => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "iterator_to_array preserve_keys PHP type {:?}",
+                other
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Computes the concrete result container type for one preserve-keys branch.
+fn static_iterator_to_array_result_ty(source_ty: &PhpType, preserve_keys: bool) -> PhpType {
+    match source_ty.codegen_repr() {
+        PhpType::Array(elem_ty) => PhpType::Array(elem_ty),
+        PhpType::AssocArray { key, value } if preserve_keys => PhpType::AssocArray { key, value },
+        PhpType::AssocArray { value, .. } => PhpType::Array(value),
+        _ if preserve_keys => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        _ => PhpType::Array(Box::new(PhpType::Mixed)),
+    }
+}
+
+/// Clones the loaded indexed array through the shared shallow-copy runtime helper.
+fn emit_clone_loaded_array(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the loaded indexed array to the shallow-clone helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+}
+
+/// Clones the loaded hash and optionally converts values to boxed Mixed cells.
+fn emit_clone_loaded_hash(ctx: &mut FunctionContext<'_>, mixed_values: bool) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the loaded hash to the shallow-clone helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
+    if !mixed_values {
+        return;
+    }
+    emit_loaded_hash_as_mixed(ctx);
+}
+
+/// Converts the loaded indexed array payload to boxed Mixed slots.
+fn emit_loaded_runtime_indexed_array_as_mixed(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before widening to Mixed slots
+            ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
+            ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rax - 8]");            // load indexed-array metadata before widening to Mixed slots
+            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
+            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the loaded indexed array to the Mixed conversion helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+        }
+    }
+}
+
+/// Converts the loaded hash payload to boxed Mixed values.
+fn emit_loaded_hash_as_mixed(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the loaded hash to the Mixed-entry conversion helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+}
+
+/// Allocates an indexed array whose slots store boxed Mixed values.
+fn emit_new_mixed_indexed_array(ctx: &mut FunctionContext<'_>) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 16);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 8);
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Mixed,
+    );
+}
+
+/// Allocates an associative array whose values are boxed Mixed cells.
+fn emit_new_mixed_hash(ctx: &mut FunctionContext<'_>) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 16);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        runtime_value_tag(&PhpType::Mixed) as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
 }
 
 /// Dispatches an `iterable` pointer to direct array/hash counts or object traversal.
@@ -316,6 +553,202 @@ fn emit_count_loaded_traversable_object(ctx: &mut FunctionContext<'_>) -> Result
     Ok(())
 }
 
+/// Dispatches an `iterable` pointer for `iterator_to_array()`.
+fn emit_to_array_loaded_iterable(
+    ctx: &mut FunctionContext<'_>,
+    preserve_keys: bool,
+) -> Result<()> {
+    let indexed_case = ctx.next_label("iterator_to_array_iterable_indexed");
+    let hash_case = ctx.next_label("iterator_to_array_iterable_hash");
+    let object_case = ctx.next_label("iterator_to_array_iterable_object");
+    let done = ctx.next_label("iterator_to_array_iterable_done");
+
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #2");                              // is the iterable an indexed array?
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_case));         // clone and widen the indexed-array payload
+            ctx.emitter.instruction("cmp x0, #3");                              // is the iterable an associative hash?
+            ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // materialize hash payload according to preserve_keys
+            ctx.emitter.instruction("cmp x0, #4");                              // is the iterable an object?
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // collect a Traversable object through Iterator dispatch
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 2");                              // is the iterable an indexed array?
+            ctx.emitter.instruction(&format!("je {}", indexed_case));           // clone and widen the indexed-array payload
+            ctx.emitter.instruction("cmp rax, 3");                              // is the iterable an associative hash?
+            ctx.emitter.instruction(&format!("je {}", hash_case));              // materialize hash payload according to preserve_keys
+            ctx.emitter.instruction("cmp rax, 4");                              // is the iterable an object?
+            ctx.emitter.instruction(&format!("je {}", object_case));            // collect a Traversable object through Iterator dispatch
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+
+    ctx.emitter.label(&object_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_to_array_loaded_traversable_object(ctx, preserve_keys)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if preserve_keys {
+        emit_clone_loaded_hash(ctx, true);
+    } else {
+        super::arrays::values::emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)?;
+    }
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&indexed_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_clone_loaded_array(ctx);
+    emit_loaded_runtime_indexed_array_as_mixed(ctx);
+
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Collects a loaded Traversable object into an array or hash result container.
+fn emit_to_array_loaded_traversable_object(
+    ctx: &mut FunctionContext<'_>,
+    preserve_keys: bool,
+) -> Result<()> {
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let direct_case = ctx.next_label("iterator_to_array_object_iterator");
+    let aggregate_case = ctx.next_label("iterator_to_array_object_aggregate");
+    let done = ctx.next_label("iterator_to_array_object_done");
+
+    ctx.emitter.instruction(&format!(
+        "mov {}, {}",
+        receiver_reg,
+        abi::int_result_reg(ctx.emitter)
+    )); // preserve iterator_to_array()'s receiver while allocating the result container
+    if preserve_keys {
+        emit_new_mixed_hash(ctx);
+    } else {
+        emit_new_mixed_indexed_array(ctx);
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.emitter.instruction(&format!(
+        "mov {}, {}",
+        abi::int_result_reg(ctx.emitter),
+        receiver_reg
+    )); // restore iterator_to_array()'s receiver for Traversable probing
+
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_branch_if_saved_receiver_implements(ctx, "Iterator", &direct_case)?;
+    emit_branch_if_saved_receiver_implements(ctx, "IteratorAggregate", &aggregate_case)?;
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+
+    ctx.emitter.label(&direct_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_to_array_loaded_iterator_object(ctx, preserve_keys)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&aggregate_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    move_result_to_receiver_arg(ctx);
+    iterators::emit_interface_dispatch_call(ctx, "IteratorAggregate", "getiterator", None)?;
+    emit_to_array_loaded_iterator_object(ctx, preserve_keys)?;
+
+    ctx.emitter.label(&done);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    Ok(())
+}
+
+/// Drives the Iterator protocol and appends each current value to the saved result container.
+fn emit_to_array_loaded_iterator_object(
+    ctx: &mut FunctionContext<'_>,
+    preserve_keys: bool,
+) -> Result<()> {
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    reload_saved_iterator_receiver(ctx);
+    iterators::emit_interface_dispatch_call(ctx, "Iterator", "rewind", None)?;
+
+    let loop_start = ctx.next_label("iterator_to_array_start");
+    let loop_end = ctx.next_label("iterator_to_array_end");
+    ctx.emitter.label(&loop_start);
+
+    reload_saved_iterator_receiver(ctx);
+    iterators::emit_interface_dispatch_call(ctx, "Iterator", "valid", None)?;
+    emit_branch_if_invalid_iterator(ctx, &loop_end);
+
+    if preserve_keys {
+        emit_insert_current_with_iterator_key(ctx)?;
+    } else {
+        emit_append_current_to_saved_array(ctx)?;
+    }
+    reload_saved_iterator_receiver(ctx);
+    iterators::emit_interface_dispatch_call(ctx, "Iterator", "next", None)?;
+    abi::emit_jump(ctx.emitter, &loop_start);
+
+    ctx.emitter.label(&loop_end);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Appends the current Iterator value to the saved indexed result array.
+fn emit_append_current_to_saved_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    reload_saved_iterator_receiver(ctx);
+    let current_ty = iterators::emit_interface_dispatch_call(ctx, "Iterator", "current", None)?;
+    emit_box_current_value_as_mixed(ctx.emitter, &current_ty.codegen_repr());
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // preserve boxed current() while loading the result array
+            ctx.emitter.instruction("ldr x0, [sp, #32]");                       // load iterator_to_array()'s indexed result beneath receiver and value
+            ctx.emitter.instruction("ldr x1, [sp], #16");                       // pass boxed current() as the appended Mixed payload
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // save the possibly-grown result array beneath the receiver
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");           // load iterator_to_array()'s indexed result beneath receiver and value
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                // pass boxed current() as the appended Mixed payload
+            ctx.emitter.instruction("add rsp, 16");                             // restore receiver to the top temporary slot before appending
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // save the possibly-grown result array beneath the receiver
+        }
+    }
+    Ok(())
+}
+
+/// Inserts the current Iterator value into the saved hash using the normalized Iterator key.
+fn emit_insert_current_with_iterator_key(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    reload_saved_iterator_receiver(ctx);
+    let key_ty = iterators::emit_interface_dispatch_call(ctx, "Iterator", "key", None)?;
+    emit_normalized_key_from_result(ctx, &key_ty.codegen_repr())?;
+    let (key_lo, key_hi) = normalized_key_regs(ctx);
+    abi::emit_push_reg_pair(ctx.emitter, key_lo, key_hi);
+
+    reload_saved_iterator_receiver_at_offset(ctx, 16);
+    let current_ty = iterators::emit_interface_dispatch_call(ctx, "Iterator", "current", None)?;
+    emit_box_current_value_as_mixed(ctx.emitter, &current_ty.codegen_repr());
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass boxed current() as hash value_lo
+            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash values do not use value_hi
+            ctx.emitter.instruction("mov x5, #7");                              // value tag 7 marks an owned boxed Mixed cell
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // load iterator_to_array()'s hash result beneath the receiver
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // save the possibly-grown hash result beneath the receiver
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass boxed current() as hash value_lo
+            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash values do not use value_hi
+            ctx.emitter.instruction("mov r9, 7");                               // value tag 7 marks an owned boxed Mixed cell
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // load iterator_to_array()'s hash result beneath the receiver
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // save the possibly-grown hash result beneath the receiver
+        }
+    }
+    Ok(())
+}
+
 /// Counts a loaded Iterator object by driving rewind(), valid(), and next().
 fn emit_count_loaded_iterator_object(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
@@ -352,6 +785,160 @@ fn emit_count_loaded_iterator_object(ctx: &mut FunctionContext<'_>) -> Result<()
     ctx.emitter.label(&loop_end);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    Ok(())
+}
+
+/// Returns the normalized key register pair for the active target.
+fn normalized_key_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rax", "rdx"),
+    }
+}
+
+/// Normalizes the current Iterator key result for insertion into an associative hash.
+fn emit_normalized_key_from_result(
+    ctx: &mut FunctionContext<'_>,
+    key_ty: &PhpType,
+) -> Result<()> {
+    match key_ty.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {
+            emit_integer_key_from_result(ctx);
+            Ok(())
+        }
+        PhpType::Float => {
+            emit_float_key_from_result(ctx);
+            Ok(())
+        }
+        PhpType::Str => {
+            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            Ok(())
+        }
+        PhpType::Mixed | PhpType::Union(_) => emit_mixed_key_from_result(ctx),
+        _ => {
+            emit_integer_key_from_result(ctx);
+            Ok(())
+        }
+    }
+}
+
+/// Marks the current scalar key payload as an integer hash key.
+fn emit_integer_key_from_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // use the scalar key payload as normalized key_lo
+            ctx.emitter.instruction("mov x2, #-1");                             // key_hi sentinel marks an integer key
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdx, -1");                             // key_hi sentinel marks an integer key while rax stays key_lo
+        }
+    }
+}
+
+/// Casts the current float key payload to PHP's integer array-key form.
+fn emit_float_key_from_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fcvtzs x1, d0");                           // PHP casts float iterator keys to integer array keys
+            ctx.emitter.instruction("mov x2, #-1");                             // key_hi sentinel marks an integer key
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // PHP casts float iterator keys to integer array keys
+            ctx.emitter.instruction("mov rdx, -1");                             // key_hi sentinel marks an integer key
+        }
+    }
+}
+
+/// Unboxes a Mixed key and normalizes supported scalar payloads.
+fn emit_mixed_key_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let string_label = ctx.next_label("iterator_key_string");
+    let int_label = ctx.next_label("iterator_key_int");
+    let bool_label = ctx.next_label("iterator_key_bool");
+    let float_label = ctx.next_label("iterator_key_float");
+    let null_label = ctx.next_label("iterator_key_null");
+    let done_label = ctx.next_label("iterator_key_done");
+    let (empty_label, _) = ctx.data.add_string(b"");
+
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // is the mixed iterator key a string?
+            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // normalize string iterator keys through the hash key helper
+            ctx.emitter.instruction("cmp x0, #0");                              // is the mixed iterator key an integer?
+            ctx.emitter.instruction(&format!("b.eq {}", int_label));            // use integer payloads directly as array keys
+            ctx.emitter.instruction("cmp x0, #3");                              // is the mixed iterator key a boolean?
+            ctx.emitter.instruction(&format!("b.eq {}", bool_label));           // use boolean payloads as integer array keys
+            ctx.emitter.instruction("cmp x0, #2");                              // is the mixed iterator key a float?
+            ctx.emitter.instruction(&format!("b.eq {}", float_label));          // cast float iterator keys to integer array keys
+            ctx.emitter.instruction("cmp x0, #8");                              // is the mixed iterator key null?
+            ctx.emitter.instruction(&format!("b.eq {}", null_label));           // PHP treats null array keys as the empty string
+            ctx.emitter.instruction(&format!("b {}", int_label));               // unsupported key payloads fall back to their low word
+
+            ctx.emitter.label(&string_label);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip scalar-key normalization after string handling
+
+            ctx.emitter.label(&int_label);
+            ctx.emitter.instruction("mov x2, #-1");                             // mark the unboxed integer low word as an integer key
+            ctx.emitter.instruction(&format!("b {}", done_label));              // finish normalized mixed-key handling
+
+            ctx.emitter.label(&bool_label);
+            ctx.emitter.instruction("mov x2, #-1");                             // mark the unboxed boolean low word as an integer key
+            ctx.emitter.instruction(&format!("b {}", done_label));              // finish normalized mixed-key handling
+
+            ctx.emitter.label(&float_label);
+            ctx.emitter.instruction("fmov d0, x1");                             // reinterpret the unboxed float payload bits for casting
+            ctx.emitter.instruction("fcvtzs x1, d0");                           // PHP casts float array keys to integer keys
+            ctx.emitter.instruction("mov x2, #-1");                             // mark the converted float payload as an integer key
+            ctx.emitter.instruction(&format!("b {}", done_label));              // finish normalized mixed-key handling
+
+            ctx.emitter.label(&null_label);
+            abi::emit_symbol_address(ctx.emitter, "x1", &empty_label);
+            ctx.emitter.instruction("mov x2, #0");                              // null iterator keys become the empty-string key
+            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // is the mixed iterator key a string?
+            ctx.emitter.instruction(&format!("je {}", string_label));           // normalize string iterator keys through the hash key helper
+            ctx.emitter.instruction("cmp rax, 0");                              // is the mixed iterator key an integer?
+            ctx.emitter.instruction(&format!("je {}", int_label));              // use integer payloads directly as array keys
+            ctx.emitter.instruction("cmp rax, 3");                              // is the mixed iterator key a boolean?
+            ctx.emitter.instruction(&format!("je {}", bool_label));             // use boolean payloads as integer array keys
+            ctx.emitter.instruction("cmp rax, 2");                              // is the mixed iterator key a float?
+            ctx.emitter.instruction(&format!("je {}", float_label));            // cast float iterator keys to integer array keys
+            ctx.emitter.instruction("cmp rax, 8");                              // is the mixed iterator key null?
+            ctx.emitter.instruction(&format!("je {}", null_label));             // PHP treats null array keys as the empty string
+            ctx.emitter.instruction(&format!("jmp {}", int_label));             // unsupported key payloads fall back to their low word
+
+            ctx.emitter.label(&string_label);
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed string pointer into hash-normalize key_lo
+            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip scalar-key normalization after string handling
+
+            ctx.emitter.label(&int_label);
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed integer low word into normalized key_lo
+            ctx.emitter.instruction("mov rdx, -1");                             // mark the key as integer
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // finish normalized mixed-key handling
+
+            ctx.emitter.label(&bool_label);
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed boolean low word into normalized key_lo
+            ctx.emitter.instruction("mov rdx, -1");                             // mark the key as integer
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // finish normalized mixed-key handling
+
+            ctx.emitter.label(&float_label);
+            ctx.emitter.instruction("movq xmm0, rdi");                          // reinterpret the unboxed float payload bits for casting
+            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // PHP casts float array keys to integer keys
+            ctx.emitter.instruction("mov rdx, -1");                             // mark the converted float payload as an integer key
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // finish normalized mixed-key handling
+
+            ctx.emitter.label(&null_label);
+            abi::emit_symbol_address(ctx.emitter, "rax", &empty_label);
+            ctx.emitter.instruction("xor rdx, rdx");                            // null iterator keys become the empty-string key
+            abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+            ctx.emitter.label(&done_label);
+        }
+    }
     Ok(())
 }
 
@@ -403,6 +990,21 @@ fn reload_saved_iterator_receiver(ctx: &mut FunctionContext<'_>) {
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload iterator receiver before the next protocol call
+        }
+    }
+}
+
+/// Reloads the saved iterator receiver from a non-top temporary stack slot.
+fn reload_saved_iterator_receiver_at_offset(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", offset));     // reload iterator receiver from below preserved key state
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", offset)); // reload iterator receiver from below preserved key state
         }
     }
 }

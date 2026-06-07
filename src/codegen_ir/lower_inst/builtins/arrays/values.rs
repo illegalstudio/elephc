@@ -88,11 +88,19 @@ fn lower_assoc_array_values(
     value_ty: &PhpType,
 ) -> Result<()> {
     ctx.load_value_to_result(array)?;
+    emit_loaded_assoc_array_values(ctx, value_ty)?;
+    store_if_result(ctx, inst)
+}
+
+/// Copies the currently loaded associative array values into a new indexed array.
+pub(in crate::codegen_ir::lower_inst::builtins) fn emit_loaded_assoc_array_values(
+    ctx: &mut FunctionContext<'_>,
+    value_ty: &PhpType,
+) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_assoc_array_values_aarch64(ctx, value_ty),
         Arch::X86_64 => lower_assoc_array_values_x86_64(ctx, value_ty),
-    }?;
-    store_if_result(ctx, inst)
+    }
 }
 
 /// Emits AArch64 associative-array value extraction into a freshly allocated indexed array.
