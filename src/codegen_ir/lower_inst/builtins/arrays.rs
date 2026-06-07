@@ -11,7 +11,8 @@
 //! - Associative key filters require hash operands because their runtime helpers copy hash entries.
 
 use crate::codegen::{
-    abi, callable_dispatch, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    abi, callable_descriptor, callable_dispatch, emit_box_current_owned_value_as_mixed,
+    emit_box_current_value_as_mixed,
 };
 use crate::codegen::context::DeferredCallbackWrapper;
 use crate::codegen::platform::Arch;
@@ -322,6 +323,19 @@ pub(super) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             store_if_result(ctx, inst)?;
             return Ok(());
         }
+        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Mixed | PhpType::Str) => {
+            let callback_elem_ty = array_map_descriptor_callback_result_element_type(inst)?;
+            let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
+            return lower_array_map_callable_array_descriptor_callback(
+                ctx,
+                inst,
+                callback,
+                array,
+                &elem_ty,
+                &callback_elem_ty,
+                &result_elem_ty,
+            );
+        }
         _ => {}
     }
     if descriptor_callback_local_without_same_block_store(ctx, callback)? {
@@ -393,6 +407,51 @@ fn lower_array_map_descriptor_callback(
     normalize_indexed_array_result(ctx, "array_map", callback_elem_ty, result_elem_ty)?;
     box_array_result_for_mixed_builtin(ctx, inst, result_elem_ty);
     store_if_result(ctx, inst)
+}
+
+/// Lowers `array_map()` for runtime callable-array callbacks through descriptor envs.
+fn lower_array_map_callable_array_descriptor_callback(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+    array: ValueId,
+    elem_ty: &PhpType,
+    callback_elem_ty: &PhpType,
+    result_elem_ty: &PhpType,
+) -> Result<()> {
+    let wrapper_label = emit_descriptor_callback_wrapper(
+        ctx,
+        vec![elem_ty.clone()],
+        callback_elem_ty.clone(),
+    );
+    super::super::callables::emit_runtime_callable_array_descriptor_value(
+        ctx,
+        callback,
+        "array_map callable array",
+    )?;
+    let descriptor_reg = abi::int_result_reg(ctx.emitter);
+    let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, descriptor_reg);
+    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
+    ctx.load_value_to_reg(array, array_arg_reg)?;
+    load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
+    abi::emit_call_label(ctx.emitter, array_map_runtime_label(callback_elem_ty, env_bytes));
+    release_descriptor_callback_env_preserving_result(ctx);
+    abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+    normalize_indexed_array_result(ctx, "array_map", callback_elem_ty, result_elem_ty)?;
+    box_array_result_for_mixed_builtin(ctx, inst, result_elem_ty);
+    store_if_result(ctx, inst)
+}
+
+/// Releases a one-slot descriptor callback env while preserving the runtime result.
+fn release_descriptor_callback_env_preserving_result(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    callable_descriptor::emit_release_current_descriptor(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
 }
 
 /// Emits a descriptor callback wrapper next to the current EIR function body.

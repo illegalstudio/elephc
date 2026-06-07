@@ -195,9 +195,24 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
-        Op::Nop => Ok(()),
+        Op::Nop => lower_nop(ctx, &inst),
         _ => Err(CodegenIrError::unsupported(format!("opcode {}", inst.op.name()))),
     }
+}
+
+/// Lowers metadata-only NOPs, emitting data-backed messages as assembly comments.
+fn lower_nop(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return Ok(());
+    };
+    let message = ctx
+        .module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
+    ctx.emitter.comment(message);
+    Ok(())
 }
 
 /// Lowers a closure capture marker after call operands already recorded the captured value.
@@ -303,7 +318,11 @@ fn emit_runtime_closure_descriptor_with_captures(
         }
         ctx.load_value_to_result(*operand)?;
         if ctx.value_ownership(*operand)? != Ownership::Owned {
-            abi::emit_incref_if_refcounted(ctx.emitter, capture_ty);
+            if capture_ty.codegen_repr() == PhpType::Str {
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            } else {
+                abi::emit_incref_if_refcounted(ctx.emitter, capture_ty);
+            }
         }
         callable_descriptor::emit_store_current_result_to_runtime_capture(
             ctx.emitter,

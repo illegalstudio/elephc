@@ -292,7 +292,14 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_))
         }),
-        Nop | ConstNull => {
+        Nop => {
+            if matches!(inst.immediate, None | Some(Imm::Data(_))) {
+                Ok(())
+            } else {
+                Err(ValidationError::UnexpectedImmediate(inst_id))
+            }
+        }
+        ConstNull => {
             if inst.immediate.is_some() {
                 Err(ValidationError::UnexpectedImmediate(inst_id))
             } else {
