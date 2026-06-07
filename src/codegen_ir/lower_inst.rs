@@ -1593,7 +1593,7 @@ pub(super) fn lower_runtime_object_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_runtime_object_call_result(ctx, inst, &target.return_ty)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args);
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -2309,7 +2309,7 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args);
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -2506,7 +2506,7 @@ fn lower_interface_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args);
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -4092,7 +4092,7 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         }
         ctx.store_result_value(result)?;
     }
-    emit_call_arg_temp_cleanups(ctx, &call_args);
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
@@ -4557,19 +4557,68 @@ fn save_call_arg_temp_cleanup(
 fn emit_call_arg_temp_cleanups(
     ctx: &mut FunctionContext<'_>,
     call_args: &CallArgMaterialization,
-) {
+    result: Option<ValueId>,
+) -> Result<()> {
     if call_args.cleanup_slots.is_empty() {
-        return;
+        return Ok(());
     }
+    let result_alias = call_result_can_alias_mixed_temp(ctx, result)?;
     for cleanup in &call_args.cleanup_slots {
         abi::emit_load_temporary_stack_slot(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
             cleanup.offset,
         );
+        let skip_cleanup_label = if let Some(result) = result_alias {
+            let label = ctx.next_label("call_arg_temp_cleanup_result_alias");
+            emit_branch_if_cleanup_temp_aliases_result(ctx, result, &label)?;
+            Some(label)
+        } else {
+            None
+        };
         abi::emit_decref_if_refcounted(ctx.emitter, &cleanup.ty);
+        if let Some(label) = skip_cleanup_label {
+            ctx.emitter.label(&label);
+        }
     }
     abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_bytes);
+    Ok(())
+}
+
+/// Returns the result value when it can alias a caller-owned temporary Mixed argument.
+fn call_result_can_alias_mixed_temp(
+    ctx: &FunctionContext<'_>,
+    result: Option<ValueId>,
+) -> Result<Option<ValueId>> {
+    let Some(result) = result else {
+        return Ok(None);
+    };
+    if matches!(ctx.value_php_type(result)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(Some(result));
+    }
+    Ok(None)
+}
+
+/// Skips temp cleanup when a callee returned the same Mixed cell that was passed as an argument.
+fn emit_branch_if_cleanup_temp_aliases_result(
+    ctx: &mut FunctionContext<'_>,
+    result: ValueId,
+    skip_label: &str,
+) -> Result<()> {
+    let cleanup_reg = abi::int_result_reg(ctx.emitter);
+    let result_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(result, result_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", cleanup_reg, result_reg));  // compare the temporary Mixed cell with the saved call result
+            ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // keep the temp alive when ownership moved to the result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", cleanup_reg, result_reg));  // compare the temporary Mixed cell with the saved call result
+            ctx.emitter.instruction(&format!("je {}", skip_label));             // keep the temp alive when ownership moved to the result
+        }
+    }
+    Ok(())
 }
 
 /// Releases borrowed stack Mixed cells after heap temp cleanups and before by-ref cells.
