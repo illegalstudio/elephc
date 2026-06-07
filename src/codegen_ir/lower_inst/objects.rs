@@ -53,6 +53,12 @@ struct PropertySlot {
     is_packed: bool,
 }
 
+/// Declared-property candidate reachable from a `Mixed` object receiver.
+struct MixedPropertyCandidate {
+    class_id: u64,
+    slot: PropertySlot,
+}
+
 /// Resolved object property default metadata for fixed-offset initialization.
 struct PropertyDefault {
     offset: usize,
@@ -1531,6 +1537,69 @@ fn lower_mixed_prop_get(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    let candidates = declared_mixed_property_candidates(ctx, property, inst)?;
+    if !candidates.is_empty() {
+        return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates);
+    }
+    lower_runtime_mixed_prop_get(ctx, inst, object, property)
+}
+
+/// Lowers a `Mixed` receiver by dispatching known user classes before stdClass fallback.
+fn lower_declared_mixed_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+    candidates: Vec<MixedPropertyCandidate>,
+) -> Result<()> {
+    let null_label = ctx.next_label("mixed_prop_null");
+    let done_label = ctx.next_label("mixed_prop_done");
+    let stdclass_label = ctx.next_label("mixed_prop_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_prop_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_object_payload_or_null(ctx, &null_label);
+    emit_mixed_property_class_dispatch(ctx, &candidates, &match_labels, &stdclass_label);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::int_result_reg(ctx.emitter);
+        if candidate.slot.is_declared {
+            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+        }
+        emit_property_load(ctx, &candidate.slot, base_reg)?;
+        box_mixed_property_candidate_result(ctx, &candidate.slot.php_type);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    emit_stdclass_get_from_loaded_object(ctx, property);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    emit_boxed_null(ctx);
+
+    ctx.emitter.label(&done_label);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a `Mixed` receiver through the runtime stdClass-style property helper.
+fn lower_runtime_mixed_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
     let (label, len) = ctx.data.add_string(property.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -1547,6 +1616,136 @@ fn lower_mixed_prop_get(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_property_get");
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
+}
+
+/// Collects declared-property candidates for a property read on an unknown `Mixed` object.
+fn declared_mixed_property_candidates(
+    ctx: &FunctionContext<'_>,
+    property: &str,
+    inst: &Instruction,
+) -> Result<Vec<MixedPropertyCandidate>> {
+    let mut candidates = Vec::new();
+    for (class_name, class_info) in &ctx.module.class_infos {
+        if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+            continue;
+        }
+        if !class_info
+            .properties
+            .iter()
+            .any(|(name, _)| name == property)
+        {
+            continue;
+        }
+        let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
+        candidates.push(MixedPropertyCandidate {
+            class_id: class_info.class_id,
+            slot,
+        });
+    }
+    candidates.sort_by_key(|candidate| candidate.class_id);
+    Ok(candidates)
+}
+
+/// Promotes an unboxed Mixed object payload into the normal result register or jumps to null.
+fn emit_mixed_object_payload_or_null(ctx: &mut FunctionContext<'_>, null_label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // check whether the Mixed receiver holds an object payload
+            ctx.emitter.instruction(&format!("b.ne {}", null_label));           // non-object Mixed receivers produce a null property result
+            ctx.emitter.instruction("mov x0, x1");                              // promote the unboxed object payload for class-id dispatch
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // check whether the Mixed receiver holds an object payload
+            ctx.emitter.instruction(&format!("jne {}", null_label));            // non-object Mixed receivers produce a null property result
+            ctx.emitter.instruction("mov rax, rdi");                            // promote the unboxed object payload for class-id dispatch
+        }
+    }
+}
+
+/// Emits class-id dispatch for declared property candidates and stdClass fallback.
+fn emit_mixed_property_class_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    candidates: &[MixedPropertyCandidate],
+    match_labels: &[String],
+    stdclass_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the receiver class id for Mixed property dispatch
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp x9, x10");                         // compare the receiver class id against this declared-property owner
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // read the declared property when the class id matches
+            }
+            emit_branch_to_stdclass_candidate(ctx, "x9", "x10", stdclass_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the receiver class id for Mixed property dispatch
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp r11, r10");                        // compare the receiver class id against this declared-property owner
+                ctx.emitter.instruction(&format!("je {}", label));              // read the declared property when the class id matches
+            }
+            emit_branch_to_stdclass_candidate(ctx, "r11", "r10", stdclass_label);
+        }
+    }
+}
+
+/// Branches to the stdClass fallback when the runtime module contains stdClass metadata.
+fn emit_branch_to_stdclass_candidate(
+    ctx: &mut FunctionContext<'_>,
+    class_id_reg: &str,
+    scratch_reg: &str,
+    stdclass_label: &str,
+) {
+    let Some(stdclass_id) = stdclass_class_id(ctx) else {
+        return;
+    };
+    abi::emit_load_int_immediate(ctx.emitter, scratch_reg, stdclass_id as i64);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, scratch_reg)); // check whether the object uses stdClass dynamic storage
+            ctx.emitter.instruction(&format!("b.eq {}", stdclass_label));       // route stdClass reads through the hash-backed helper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, scratch_reg)); // check whether the object uses stdClass dynamic storage
+            ctx.emitter.instruction(&format!("je {}", stdclass_label));         // route stdClass reads through the hash-backed helper
+        }
+    }
+}
+
+/// Returns the runtime class id assigned to stdClass in this module.
+fn stdclass_class_id(ctx: &FunctionContext<'_>) -> Option<u64> {
+    ctx.module
+        .class_infos
+        .iter()
+        .find(|(class_name, _)| crate::types::checker::builtin_stdclass::is_stdclass(class_name))
+        .map(|(_, class_info)| class_info.class_id)
+}
+
+/// Boxes a declared-property load so all Mixed receiver paths produce a Mixed cell.
+fn box_mixed_property_candidate_result(ctx: &mut FunctionContext<'_>, source_ty: &PhpType) {
+    if source_ty.codegen_repr() != PhpType::Mixed {
+        emit_box_current_value_as_mixed(ctx.emitter, &source_ty.codegen_repr());
+    }
+}
+
+/// Reads a static property name from an already-unboxed stdClass payload.
+fn emit_stdclass_get_from_loaded_object(ctx: &mut FunctionContext<'_>, property: &str) {
+    let (label, len) = ctx.data.add_string(property.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the unboxed stdClass object pointer to the dynamic getter
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
+        }
+    }
 }
 
 /// Branches when `__rt_mixed_unbox` returned an object payload tag.
