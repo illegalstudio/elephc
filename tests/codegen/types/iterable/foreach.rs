@@ -550,6 +550,25 @@ fn test_iterable_value_in_assoc_array_stays_boxed() {
     assert_eq!(out, "array:array(2) {\n}\n");
 }
 
+/// Verifies an `iterable` value stored in a mixed associative array remains a boxed Mixed value
+/// when read directly through `hash_get`.
+#[test]
+fn test_iterable_value_in_mixed_assoc_array_direct_read_stays_boxed() {
+    let out = compile_and_run(
+        "<?php
+        function id(iterable $items): iterable {
+            return $items;
+        }
+        $items = ['inner' => id([1, 2]), 'n' => 1];
+        $value = $items['inner'];
+        echo is_iterable($value) ? gettype($value) : 'no';
+        echo ':';
+        var_dump($value);
+        ",
+    );
+    assert_eq!(out, "array:array(2) {\n}\n");
+}
+
 /// Verifies an inner `iterable` array appended to a plain array stays boxed and `is_iterable()` is
 /// true for it inside the outer foreach.
 #[test]

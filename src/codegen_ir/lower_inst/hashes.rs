@@ -9,7 +9,9 @@
 //! - Hash writes may copy-on-write or grow the table, so the returned pointer is
 //!   written back to the source SSA slot and local slot.
 
-use crate::codegen::abi;
+use crate::codegen::{
+    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+};
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
@@ -481,7 +483,7 @@ fn materialize_hash_value_aarch64(
     storage_value_ty: &PhpType,
 ) -> Result<()> {
     if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable) {
-        return materialize_hash_mixed_value_aarch64(ctx, value, value_ty);
+        return materialize_hash_mixed_value_aarch64(ctx, value, value_ty, storage_value_ty);
     }
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
@@ -518,7 +520,7 @@ fn materialize_hash_value_x86_64(
     storage_value_ty: &PhpType,
 ) -> Result<()> {
     if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable) {
-        return materialize_hash_mixed_value_x86_64(ctx, value, value_ty);
+        return materialize_hash_mixed_value_x86_64(ctx, value, value_ty, storage_value_ty);
     }
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
@@ -564,12 +566,19 @@ fn materialize_hash_mixed_value_aarch64(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     value_ty: &PhpType,
+    storage_value_ty: &PhpType,
 ) -> Result<()> {
     if value_ty == &PhpType::Mixed {
         ctx.load_value_to_result(value)?;
         retain_hash_refcounted_value_if_borrowed(ctx, value, value_ty)?;
         ctx.emitter.instruction("mov x3, x0");                                  // pass the retained boxed Mixed pointer as the hash value low word
         ctx.emitter.instruction("mov x4, xzr");                                 // boxed Mixed hash values do not use the high payload word
+        return Ok(());
+    }
+    if storage_value_ty == &PhpType::Mixed && value_ty == &PhpType::Iterable {
+        box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
+        ctx.emitter.instruction("mov x3, x0");                                  // pass the boxed iterable Mixed cell as the hash value low word
+        ctx.emitter.instruction("mov x4, xzr");                                 // boxed iterable Mixed cells do not use the high payload word
         return Ok(());
     }
     materialize_hash_concrete_value_aarch64(ctx, value, value_ty)
@@ -580,6 +589,7 @@ fn materialize_hash_mixed_value_x86_64(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     value_ty: &PhpType,
+    storage_value_ty: &PhpType,
 ) -> Result<()> {
     if value_ty == &PhpType::Mixed {
         ctx.load_value_to_result(value)?;
@@ -588,7 +598,28 @@ fn materialize_hash_mixed_value_x86_64(
         ctx.emitter.instruction("xor r8, r8");                                  // boxed Mixed hash values do not use the high payload word
         return Ok(());
     }
+    if storage_value_ty == &PhpType::Mixed && value_ty == &PhpType::Iterable {
+        box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
+        ctx.emitter.instruction("mov rcx, rax");                                // pass the boxed iterable Mixed cell as the hash value low word
+        ctx.emitter.instruction("xor r8, r8");                                  // boxed iterable Mixed cells do not use the high payload word
+        return Ok(());
+    }
     materialize_hash_concrete_value_x86_64(ctx, value, value_ty)
+}
+
+/// Boxes an EIR value into a Mixed cell for Mixed-valued associative-array storage.
+fn box_hash_value_for_mixed_storage(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    if ctx.value_can_own_mixed_box_source(value)? {
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &value_ty.codegen_repr());
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, &value_ty.codegen_repr());
+    }
+    Ok(())
 }
 
 /// Returns the runtime value tag to store for one hash-set payload.

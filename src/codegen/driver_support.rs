@@ -538,7 +538,10 @@ pub(crate) fn emit_release_pushed_refcounted_temp_after_array_push(
 pub(crate) fn emit_box_current_owned_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Str => emit_box_current_owned_string_as_mixed_for_container(emitter, ty),
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Object(_) => {
             emit_box_current_owned_refcounted_as_mixed_for_container(emitter, ty);
         }
         _ => emit_box_current_value_as_mixed(emitter, ty),
@@ -574,8 +577,8 @@ fn emit_box_current_owned_string_as_mixed_for_container(emitter: &mut Emitter, t
 
 /// Boxes an owned refcounted value from the result register into a Mixed cell while
 /// preserving the original heap pointer, boxing it, releasing the original via
-/// decref, and restoring the boxed result. Used for owned arrays and objects that
-/// must be transferred into a Mixed container without double-freeing.
+/// decref, and restoring the boxed result. Used for owned arrays, iterables, and
+/// objects that must be transferred into a Mixed container without double-freeing.
 fn emit_box_current_owned_refcounted_as_mixed_for_container(emitter: &mut Emitter, ty: &PhpType) {
     match emitter.target.arch {
         Arch::AArch64 => {

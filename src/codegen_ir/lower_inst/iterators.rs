@@ -1306,28 +1306,62 @@ fn load_current_hash_value_as_mixed_x86_64(ctx: &mut FunctionContext<'_>, offset
 
 /// Boxes or retains an AArch64 hash payload as an owned `Mixed` value.
 fn box_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
-    let reuse_box = ctx.next_label("iter_hash_value_reuse_box");
+    let inspect_tagged_box = ctx.next_label("iter_hash_value_inspect_box");
     let done = ctx.next_label("iter_hash_value_boxed");
-    ctx.emitter.instruction("cmp x5, #7");                                      // does the hash entry already store a boxed Mixed value?
-    ctx.emitter.instruction(&format!("b.eq {}", reuse_box));                    // retain existing Mixed boxes instead of nesting them
+    ctx.emitter.instruction("cmp x5, #7");                                      // does the hash entry use the Mixed-or-iterable runtime tag?
+    ctx.emitter.instruction(&format!("b.eq {}", inspect_tagged_box));           // inspect tag-7 payloads because iterable hashes also use that tag
     emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
-    ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing-box retention path
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip tag-7 inspection after boxing a concrete payload
+    ctx.emitter.label(&inspect_tagged_box);
+    box_tagged_hash_payload_as_mixed_aarch64(ctx);
+    ctx.emitter.label(&done);
+}
+
+/// Boxes or retains an AArch64 tag-7 hash payload as Mixed after checking its heap kind.
+fn box_tagged_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
+    let reuse_box = ctx.next_label("iter_hash_value_reuse_box");
+    let done = ctx.next_label("iter_hash_value_tagged_done");
+    ctx.emitter.instruction("str x3, [sp, #-16]!");                             // preserve the tag-7 payload while probing its heap kind
+    ctx.emitter.instruction("mov x0, x3");                                      // pass the tag-7 payload to the heap-kind probe
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    ctx.emitter.instruction("cmp x0, #5");                                      // heap kind 5 means the payload is already a boxed Mixed cell
+    ctx.emitter.instruction(&format!("b.eq {}", reuse_box));                    // retain existing Mixed boxes instead of nesting them
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the raw iterable payload before boxing it as Mixed
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Iterable);
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing Mixed retention path
     ctx.emitter.label(&reuse_box);
-    ctx.emitter.instruction("mov x0, x3");                                      // pass the existing Mixed box to the retain helper
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the existing Mixed box before retaining it
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     ctx.emitter.label(&done);
 }
 
 /// Boxes or retains an x86_64 hash payload as an owned `Mixed` value.
 fn box_hash_payload_as_mixed_x86_64(ctx: &mut FunctionContext<'_>) {
-    let reuse_box = ctx.next_label("iter_hash_value_reuse_box");
+    let inspect_tagged_box = ctx.next_label("iter_hash_value_inspect_box");
     let done = ctx.next_label("iter_hash_value_boxed");
-    ctx.emitter.instruction("cmp r9, 7");                                       // does the hash entry already store a boxed Mixed value?
-    ctx.emitter.instruction(&format!("je {}", reuse_box));                      // retain existing Mixed boxes instead of nesting them
+    ctx.emitter.instruction("cmp r9, 7");                                       // does the hash entry use the Mixed-or-iterable runtime tag?
+    ctx.emitter.instruction(&format!("je {}", inspect_tagged_box));             // inspect tag-7 payloads because iterable hashes also use that tag
     emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
-    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing-box retention path
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip tag-7 inspection after boxing a concrete payload
+    ctx.emitter.label(&inspect_tagged_box);
+    box_tagged_hash_payload_as_mixed_x86_64(ctx);
+    ctx.emitter.label(&done);
+}
+
+/// Boxes or retains an x86_64 tag-7 hash payload as Mixed after checking its heap kind.
+fn box_tagged_hash_payload_as_mixed_x86_64(ctx: &mut FunctionContext<'_>) {
+    let reuse_box = ctx.next_label("iter_hash_value_reuse_box");
+    let done = ctx.next_label("iter_hash_value_tagged_done");
+    abi::emit_push_reg(ctx.emitter, "rcx");
+    ctx.emitter.instruction("mov rax, rcx");                                    // pass the tag-7 payload to the heap-kind probe
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    ctx.emitter.instruction("cmp rax, 5");                                      // heap kind 5 means the payload is already a boxed Mixed cell
+    ctx.emitter.instruction(&format!("je {}", reuse_box));                      // retain existing Mixed boxes instead of nesting them
+    abi::emit_pop_reg(ctx.emitter, "rax");
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Iterable);
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing Mixed retention path
     ctx.emitter.label(&reuse_box);
-    ctx.emitter.instruction("mov rax, rcx");                                    // pass the existing Mixed box to the retain helper
+    abi::emit_pop_reg(ctx.emitter, "rax");
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     ctx.emitter.label(&done);
 }
