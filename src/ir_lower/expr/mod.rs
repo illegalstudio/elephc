@@ -3190,6 +3190,7 @@ fn lower_preg_replace_callback_args(
         let callback = lower_preg_replace_callback_closure(ctx, &args[1])
             .expect("preg_replace_callback closure check must match lowering");
         let subject = lower_expr(ctx, &args[2]);
+        let subject = persist_call_arg_if_string(ctx, subject, args[2].span);
         return vec![pattern.value, callback.value, subject.value];
     }
     let Some(callback) = preg_replace_static_callback(ctx, &args[1]) else {
@@ -3198,6 +3199,7 @@ fn lower_preg_replace_callback_args(
     let pattern = lower_expr(ctx, &args[0]);
     let callback = lower_string_literal(ctx, &callback, &args[1]);
     let subject = lower_expr(ctx, &args[2]);
+    let subject = persist_call_arg_if_string(ctx, subject, args[2].span);
     vec![pattern.value, callback.value, subject.value]
 }
 
@@ -5185,7 +5187,9 @@ fn lower_indexed_array_spread_into_array(
     ctx.builder.terminate(Terminator::Br { target: header, args: vec![next.value] });
 
     ctx.builder.position_at_end(exit);
-    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
 }
 
 /// Emits an integer constant at a specific source span.
