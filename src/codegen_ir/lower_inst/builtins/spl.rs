@@ -108,6 +108,10 @@ enum IteratorApplyCallback {
         callable: ValueId,
         targets: Vec<IteratorApplyCallbackTarget>,
     },
+    DescriptorCallable {
+        callable: ValueId,
+        arg_container: Option<ValueId>,
+    },
     DescriptorCallableArray {
         callable: ValueId,
         arg_container: Option<ValueId>,
@@ -317,6 +321,12 @@ fn emit_apply_callback_state(
             abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
             Ok(())
         }
+        IteratorApplyCallback::DescriptorCallable { callable, .. } => {
+            ctx.load_value_to_result(*callable)?;
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Callable);
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            Ok(())
+        }
         IteratorApplyCallback::DescriptorCallableArray {
             callable,
             release_runtime_descriptor,
@@ -343,6 +353,9 @@ fn release_apply_callback_state(ctx: &mut FunctionContext<'_>, callback: &Iterat
     match callback {
         IteratorApplyCallback::DynamicString { .. } => {
             abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
+        IteratorApplyCallback::DescriptorCallable { .. } => {
+            emit_release_saved_apply_descriptor(ctx);
         }
         IteratorApplyCallback::DescriptorCallableArray {
             release_runtime_descriptor,
@@ -427,6 +440,12 @@ fn iterator_apply_callback(
                 ));
             }
             Ok(IteratorApplyCallback::DynamicString { callable: callback, targets })
+        }
+        PhpType::Callable => {
+            Ok(IteratorApplyCallback::DescriptorCallable {
+                callable: callback,
+                arg_container: iterator_apply_arg_container(ctx, inst)?,
+            })
         }
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
             Ok(IteratorApplyCallback::DescriptorCallableArray {
@@ -1587,6 +1606,9 @@ fn emit_apply_callback_invocation(
         } => emit_static_apply_callback_invocation(ctx, label, return_ty, args, param_types, loop_end),
         IteratorApplyCallback::DynamicString { targets, .. } => {
             emit_dynamic_string_apply_callback_invocation(ctx, targets, loop_end)
+        }
+        IteratorApplyCallback::DescriptorCallable { arg_container, .. } => {
+            emit_descriptor_apply_callback_invocation(ctx, *arg_container, loop_end)
         }
         IteratorApplyCallback::DescriptorCallableArray { arg_container, .. } => {
             emit_descriptor_apply_callback_invocation(ctx, *arg_container, loop_end)

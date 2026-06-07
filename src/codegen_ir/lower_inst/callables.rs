@@ -1392,7 +1392,7 @@ fn emit_descriptor_reg_invoker_mixed_result_with_normalized_arg(
 
 /// Returns the branch-ready label name for a descriptor invoker callsite.
 fn descriptor_invoker_ready_label(ctx: &mut FunctionContext<'_>, op_name: &str) -> String {
-    if op_name == "callable_descriptor_invoke" {
+    if matches!(op_name, "callable_descriptor_invoke" | "iterator_apply") {
         return ctx.next_label("cufa_descriptor_invoker_ready");
     }
     ctx.next_label(&format!("{}_descriptor_invoker_ready", op_name))
