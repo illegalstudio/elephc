@@ -23,6 +23,19 @@ fn test_error_unterminated_string() {
     expect_error("<?php \"no end", "Unterminated string");
 }
 
+/// Verifies a complex `{$...}` interpolation without a closing brace is reported, rather
+/// than running past the end of the string.
+#[test]
+fn test_error_unterminated_complex_interpolation() {
+    expect_error("<?php $x = 1; echo \"a{$x\";", "complex interpolation");
+}
+
+/// Verifies a simple `$arr[offset` interpolation without a closing bracket is reported.
+#[test]
+fn test_error_unterminated_interpolation_offset() {
+    expect_error("<?php $a = [1]; echo \"$a[0\";", "Unterminated array offset");
+}
+
 /// Verifies the error diagnostic for invalid unicode string escape.
 #[test]
 fn test_error_invalid_unicode_string_escape() {

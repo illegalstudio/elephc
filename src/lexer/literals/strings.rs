@@ -16,12 +16,17 @@ use crate::span::Span;
 use std::iter::Peekable;
 use std::str::Chars;
 
-/// Abstracts single-character lookahead and consumption for escape sequence parsers.
+/// Abstracts character lookahead and consumption for escape sequence and interpolation
+/// parsers, so the double-quoted (cursor-backed) and heredoc (chars-backed) paths share
+/// one implementation.
 trait EscapeInput {
     /// Returns the next character without consuming it.
     fn peek_escape(&mut self) -> Option<char>;
     /// Consumes and returns the next character.
     fn advance_escape(&mut self) -> Option<char>;
+    /// Returns the character `n` positions ahead (0 = next) without consuming, for the
+    /// multi-character lookahead interpolation needs (`{$`, `->prop`).
+    fn peek_nth(&mut self, n: usize) -> Option<char>;
 }
 
 impl EscapeInput for Cursor<'_> {
@@ -32,6 +37,10 @@ impl EscapeInput for Cursor<'_> {
     /// Consumes and returns the next character from the cursor.
     fn advance_escape(&mut self) -> Option<char> {
         self.advance()
+    }
+    /// Returns the character `n` positions ahead in the remaining source.
+    fn peek_nth(&mut self, n: usize) -> Option<char> {
+        self.remaining().chars().nth(n)
     }
 }
 
@@ -50,40 +59,101 @@ impl EscapeInput for CharsEscapeInput<'_, '_> {
     fn advance_escape(&mut self) -> Option<char> {
         self.chars.next()
     }
+
+    /// Returns the character `n` positions ahead by cloning the peekable iterator, which
+    /// is cheap (a `Chars` slice cursor) and leaves the original position untouched.
+    fn peek_nth(&mut self, n: usize) -> Option<char> {
+        (*self.chars).clone().nth(n)
+    }
 }
 
 /// Scan a double-quoted string with interpolation support.
 /// Returns one or more tokens: for `"Hello $name!"` it returns
-/// `StringLiteral("Hello ") . Variable("name") . StringLiteral("!")`
-/// (with Dot tokens for concatenation).
+/// `("Hello " . Variable("name") . "!")` (parenthesized, with Dot tokens for concatenation).
 pub(in crate::lexer) fn scan_double_string_interpolated(
     cursor: &mut Cursor,
 ) -> Result<Vec<(Token, Span)>, CompileError> {
     let span = cursor.span();
     cursor.advance(); // opening "
+    interpolate(cursor, span, Some('"'), MissingEscape::Error)
+}
 
-    let mut tokens = Vec::new();
+/// Appends one interpolated expression part (already a token list) to the running stream,
+/// flushing any pending literal text and inserting `.` concatenation.
+///
+/// When this is the first part, the pending literal (possibly empty) is emitted first so
+/// the resulting `.` chain is always string-typed, matching PHP's rule that a
+/// double-quoted/heredoc string is always a string.
+fn push_interp_part(
+    tokens: &mut Vec<(Token, Span)>,
+    current: &mut String,
+    part: Vec<Token>,
+    span: Span,
+) {
+    if tokens.is_empty() {
+        tokens.push((Token::StringLiteral(std::mem::take(current)), span));
+    } else if !current.is_empty() {
+        tokens.push((Token::Dot, span));
+        tokens.push((Token::StringLiteral(std::mem::take(current)), span));
+    }
+    tokens.push((Token::Dot, span));
+    for token in part {
+        tokens.push((token, span));
+    }
+}
+
+/// Shared interpolation routine for double-quoted strings and heredoc bodies.
+///
+/// `terminator` is the closing delimiter (`Some('"')` for double-quoted strings, `None`
+/// for heredoc content that ends at input end). Handles escapes, simple `$name`,
+/// `$name[offset]` and `$name->prop` syntax, and complex `{$expr}` interpolation. Returns
+/// a single `StringLiteral` when no interpolation occurred, otherwise a parenthesized
+/// concatenation token stream.
+fn interpolate(
+    input: &mut impl EscapeInput,
+    span: Span,
+    terminator: Option<char>,
+    missing_escape: MissingEscape,
+) -> Result<Vec<(Token, Span)>, CompileError> {
+    let mut tokens: Vec<(Token, Span)> = Vec::new();
     let mut current = String::new();
     let mut has_interpolation = false;
 
     loop {
-        match cursor.peek() {
-            Some('"') => {
-                cursor.advance();
+        match input.peek_escape() {
+            None => {
+                if terminator.is_some() {
+                    return Err(CompileError::new(span, "Unterminated string literal"));
+                }
+                break;
+            }
+            Some(c) if Some(c) == terminator => {
+                input.advance_escape();
                 break;
             }
             Some('\\') => {
-                cursor.advance();
-                let escaped = scan_double_quoted_escape(cursor, span, MissingEscape::Error)?;
+                input.advance_escape();
+                let escaped = scan_double_quoted_escape(input, span, missing_escape)?;
                 current.push_str(&escaped);
             }
+            // Complex interpolation: `{$expr}` (the `{` is only special when followed by `$`).
+            Some('{') if input.peek_nth(1) == Some('$') => {
+                input.advance_escape(); // consume '{'
+                let inner = capture_braced_expr(input, span)?;
+                let fragment = tokenize_fragment(&inner, span)?;
+                has_interpolation = true;
+                let mut part = vec![Token::LParen];
+                part.extend(fragment.into_iter().map(|(token, _)| token));
+                part.push(Token::RParen);
+                push_interp_part(&mut tokens, &mut current, part, span);
+            }
             Some('$') => {
-                cursor.advance(); // consume '$'
+                input.advance_escape(); // consume '$'
                 let mut name = String::new();
-                while let Some(ch) = cursor.peek() {
+                while let Some(ch) = input.peek_escape() {
                     if is_ident_continue(ch) {
                         name.push(ch);
-                        cursor.advance();
+                        input.advance_escape();
                     } else {
                         break;
                     }
@@ -92,23 +162,15 @@ pub(in crate::lexer) fn scan_double_string_interpolated(
                     current.push('$');
                 } else {
                     has_interpolation = true;
-                    if !current.is_empty() || tokens.is_empty() {
-                        if !tokens.is_empty() {
-                            tokens.push((Token::Dot, span));
-                        }
-                        tokens.push((Token::StringLiteral(std::mem::take(&mut current)), span));
-                    }
-                    if !tokens.is_empty() && !matches!(tokens.last(), Some((Token::Dot, _))) {
-                        tokens.push((Token::Dot, span));
-                    }
-                    tokens.push((Token::Variable(name), span));
+                    let mut part = vec![Token::Variable(name)];
+                    append_simple_access(input, &mut part, span)?;
+                    push_interp_part(&mut tokens, &mut current, part, span);
                 }
             }
             Some(c) => {
                 push_literal_char(c, &mut current);
-                cursor.advance();
+                input.advance_escape();
             }
-            None => return Err(CompileError::new(span, "Unterminated string literal")),
         }
     }
 
@@ -125,6 +187,172 @@ pub(in crate::lexer) fn scan_double_string_interpolated(
     result.extend(tokens);
     result.push((Token::RParen, span));
     Ok(result)
+}
+
+/// Appends the simple-syntax access that may follow a `$name` in an interpolated string:
+/// a single `[offset]` or a single `->prop`. PHP's "simple syntax" allows exactly one
+/// level; anything more must use the complex `{$expr}` form. Leaves `input` positioned
+/// after the consumed access (or unchanged if none applies).
+fn append_simple_access(
+    input: &mut impl EscapeInput,
+    part: &mut Vec<Token>,
+    span: Span,
+) -> Result<(), CompileError> {
+    if input.peek_escape() == Some('[') {
+        input.advance_escape(); // consume '['
+        append_simple_offset_key(input, part);
+        if input.peek_escape() == Some(']') {
+            input.advance_escape();
+        } else {
+            return Err(CompileError::new(
+                span,
+                "Unterminated array offset in string interpolation",
+            ));
+        }
+    } else if input.peek_escape() == Some('-')
+        && input.peek_nth(1) == Some('>')
+        && input.peek_nth(2).is_some_and(is_ident_continue)
+    {
+        input.advance_escape(); // consume '-'
+        input.advance_escape(); // consume '>'
+        let mut prop = String::new();
+        while let Some(ch) = input.peek_escape() {
+            if is_ident_continue(ch) {
+                prop.push(ch);
+                input.advance_escape();
+            } else {
+                break;
+            }
+        }
+        part.push(Token::Arrow);
+        part.push(Token::Identifier(prop));
+    }
+    Ok(())
+}
+
+/// Reads the offset key for a simple `$name[offset]` interpolation and appends the
+/// `[ key ]` tokens to `part`. PHP simple syntax keys are a `$var`, an optionally-negative
+/// integer, or a bareword treated as a string key (never quoted).
+fn append_simple_offset_key(input: &mut impl EscapeInput, part: &mut Vec<Token>) {
+    part.push(Token::LBracket);
+    match input.peek_escape() {
+        Some('$') => {
+            input.advance_escape();
+            let mut name = String::new();
+            while let Some(ch) = input.peek_escape() {
+                if is_ident_continue(ch) {
+                    name.push(ch);
+                    input.advance_escape();
+                } else {
+                    break;
+                }
+            }
+            part.push(Token::Variable(name));
+        }
+        Some(c) if c == '-' || c.is_ascii_digit() => {
+            let mut digits = String::new();
+            if c == '-' {
+                digits.push('-');
+                input.advance_escape();
+            }
+            while let Some(ch) = input.peek_escape() {
+                if ch.is_ascii_digit() {
+                    digits.push(ch);
+                    input.advance_escape();
+                } else {
+                    break;
+                }
+            }
+            part.push(Token::IntLiteral(digits.parse().unwrap_or(0)));
+        }
+        _ => {
+            let mut key = String::new();
+            while let Some(ch) = input.peek_escape() {
+                if is_ident_continue(ch) {
+                    key.push(ch);
+                    input.advance_escape();
+                } else {
+                    break;
+                }
+            }
+            part.push(Token::StringLiteral(key));
+        }
+    }
+    part.push(Token::RBracket);
+}
+
+/// Captures the source text of a complex `{$expr}` interpolation up to its matching `}`.
+///
+/// The opening `{` has already been consumed; the leading `$` is still pending and is
+/// included in the returned text. Nested braces are balanced, and string literals inside
+/// the expression are copied verbatim so their braces/quotes do not affect the depth.
+fn capture_braced_expr(
+    input: &mut impl EscapeInput,
+    span: Span,
+) -> Result<String, CompileError> {
+    let mut inner = String::new();
+    let mut depth = 1usize;
+    loop {
+        match input.advance_escape() {
+            None => {
+                return Err(CompileError::new(
+                    span,
+                    "Unterminated complex interpolation '{$...}'",
+                ))
+            }
+            Some('{') => {
+                depth += 1;
+                inner.push('{');
+            }
+            Some('}') => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+                inner.push('}');
+            }
+            Some(quote @ ('"' | '\'')) => {
+                inner.push(quote);
+                loop {
+                    match input.advance_escape() {
+                        None => {
+                            return Err(CompileError::new(
+                                span,
+                                "Unterminated string in complex interpolation '{$...}'",
+                            ))
+                        }
+                        Some('\\') => {
+                            inner.push('\\');
+                            if let Some(escaped) = input.advance_escape() {
+                                inner.push(escaped);
+                            }
+                        }
+                        Some(c) if c == quote => {
+                            inner.push(c);
+                            break;
+                        }
+                        Some(c) => inner.push(c),
+                    }
+                }
+            }
+            Some(c) => inner.push(c),
+        }
+    }
+    Ok(inner)
+}
+
+/// Tokenizes the captured `{$expr}` source as a standalone expression by lexing it behind
+/// a synthetic `<?php` tag, then dropping the open tag and EOF and re-spanning the tokens
+/// to the enclosing string's span. Reuses the full lexer so nested strings, calls, and
+/// array/property access inside the braces are handled like any other expression.
+fn tokenize_fragment(inner: &str, span: Span) -> Result<Vec<(Token, Span)>, CompileError> {
+    let source = format!("<?php {}", inner);
+    let tokens = crate::lexer::tokenize(&source)?;
+    Ok(tokens
+        .into_iter()
+        .filter(|(token, _)| !matches!(token, Token::OpenTag | Token::Eof))
+        .map(|(token, _)| (token, span))
+        .collect())
 }
 
 /// Scans a single-quoted PHP string, handling `\'` and `\\` escape sequences.
@@ -254,7 +482,9 @@ pub(in crate::lexer) fn scan_heredoc(
                     return Ok(vec![(Token::StringLiteral(content), span)]);
                 }
 
-                return interpolate_heredoc_content(&content, span);
+                let mut chars = content.chars().peekable();
+                let mut input = CharsEscapeInput { chars: &mut chars };
+                return interpolate(&mut input, span, None, MissingEscape::Literal);
             }
         }
 
@@ -263,80 +493,6 @@ pub(in crate::lexer) fn scan_heredoc(
             None => return Err(CompileError::new(span, "Unterminated heredoc/nowdoc")),
         }
     }
-}
-
-/// Interpolate variables and process escape sequences in heredoc content.
-/// Handles both in a single pass so that `\$` produces a literal `$` without triggering
-/// variable interpolation. Scans for `$identifier` patterns and expands them into
-/// concatenation tokens: `Hello $name!` -> `("Hello " . $name . "!")`
-fn interpolate_heredoc_content(
-    content: &str,
-    span: Span,
-) -> Result<Vec<(Token, Span)>, CompileError> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut has_interpolation = false;
-    let mut chars = content.chars().peekable();
-
-    loop {
-        match chars.peek() {
-            None => break,
-            Some(&'\\') => {
-                chars.next();
-                let mut input = CharsEscapeInput { chars: &mut chars };
-                let escaped = scan_double_quoted_escape(&mut input, span, MissingEscape::Literal)?;
-                current.push_str(&escaped);
-            }
-            Some(&'$') => {
-                chars.next();
-                let mut name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    if is_ident_continue(ch) {
-                        name.push(ch);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                if name.is_empty() {
-                    current.push('$');
-                } else {
-                    has_interpolation = true;
-                    if !current.is_empty() || tokens.is_empty() {
-                        if !tokens.is_empty() {
-                            tokens.push((Token::Dot, span));
-                        }
-                        tokens.push((
-                            Token::StringLiteral(std::mem::take(&mut current)),
-                            span,
-                        ));
-                    }
-                    if !tokens.is_empty() && !matches!(tokens.last(), Some((Token::Dot, _))) {
-                        tokens.push((Token::Dot, span));
-                    }
-                    tokens.push((Token::Variable(name), span));
-                }
-            }
-            Some(&ch) => {
-                push_literal_char(ch, &mut current);
-                chars.next();
-            }
-        }
-    }
-
-    if !has_interpolation {
-        return Ok(vec![(Token::StringLiteral(current), span)]);
-    }
-
-    if !current.is_empty() {
-        tokens.push((Token::Dot, span));
-        tokens.push((Token::StringLiteral(current), span));
-    }
-
-    let mut result = vec![(Token::LParen, span)];
-    result.extend(tokens);
-    result.push((Token::RParen, span));
-    Ok(result)
 }
 
 /// Controls how a bare backslash at end of input is treated inside double-quoted strings.

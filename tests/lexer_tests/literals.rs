@@ -43,6 +43,65 @@ fn test_echo_string() {
     );
 }
 
+/// Verifies complex `{$var}` interpolation lexes the braced expression as a parenthesized
+/// operand rather than emitting the braces as literal text.
+#[test]
+fn test_interpolation_complex_braces() {
+    let t = tokens("<?php \"a{$b}c\";");
+    assert_eq!(
+        &t[1..t.len() - 2],
+        &[
+            Token::LParen,
+            Token::StringLiteral("a".into()),
+            Token::Dot,
+            Token::LParen,
+            Token::Variable("b".into()),
+            Token::RParen,
+            Token::Dot,
+            Token::StringLiteral("c".into()),
+            Token::RParen,
+        ]
+    );
+}
+
+/// Verifies simple `$arr[key]` interpolation lexes a bareword offset as a string-keyed
+/// array access on the variable.
+#[test]
+fn test_interpolation_simple_offset_bareword() {
+    let t = tokens("<?php \"$a[k]\";");
+    assert_eq!(
+        &t[1..t.len() - 2],
+        &[
+            Token::LParen,
+            Token::StringLiteral(String::new()),
+            Token::Dot,
+            Token::Variable("a".into()),
+            Token::LBracket,
+            Token::StringLiteral("k".into()),
+            Token::RBracket,
+            Token::RParen,
+        ]
+    );
+}
+
+/// Verifies simple `$obj->prop` interpolation lexes a single property access on the variable.
+#[test]
+fn test_interpolation_simple_property() {
+    let t = tokens("<?php \"$o->x\";");
+    assert_eq!(
+        &t[1..t.len() - 2],
+        &[
+            Token::LParen,
+            Token::StringLiteral(String::new()),
+            Token::Dot,
+            Token::Variable("o".into()),
+            Token::Arrow,
+            Token::Identifier("x".into()),
+            Token::RParen,
+        ]
+    );
+}
+
 /// Verifies double-quoted string `"hello\nworld\t!"` produces `StringLiteral`
 /// with actual newline (`\n`) and tab (`\t`) characters — confirming escape sequence
 /// interpretation, not raw literal text.

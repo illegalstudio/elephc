@@ -36,10 +36,30 @@ echo 'It\'s here';   // prints: It's here
 
 ## String interpolation
 
+Double-quoted strings and heredocs interpolate variables. Both the simple and complex
+syntaxes are supported:
+
 ```php
 <?php
 $name = "World";
-echo "Hello, $name\n";
+echo "Hello, $name\n";          // simple: $variable
+
+$user = ["name" => "Ada", "age" => 36];
+echo "Name: $user[name]\n";     // simple: one $var[offset] (bareword key, no quotes)
+
+class Point { public int $x = 1; }
+$p = new Point();
+echo "x = $p->x\n";             // simple: one $var->prop
+
+echo "Sum: {$user['age']}\n";   // complex: {$expr} allows full expressions
+```
+
+Variable and identifier names may contain non-ASCII letters, matching PHP:
+
+```php
+<?php
+$café = "espresso";
+echo "Order: $café\n";
 ```
 
 ## Heredoc strings
