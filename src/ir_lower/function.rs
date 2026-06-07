@@ -317,7 +317,7 @@ pub(crate) fn lower_closure_function(
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
 ) -> FunctionSig {
-    let signature = closure_signature_from_ast(params, variadic, return_type, body);
+    let signature = closure_signature_from_ast(params, variadic, return_type, body, captures);
     lower_closure_function_with_signature(
         parent,
         name,
@@ -340,7 +340,7 @@ pub(crate) fn lower_closure_function_with_context(
     contextual_arg_types: &[PhpType],
     self_ref_callable_capture: Option<&str>,
 ) -> FunctionSig {
-    let mut signature = closure_signature_from_ast(params, variadic, return_type, body);
+    let mut signature = closure_signature_from_ast(params, variadic, return_type, body, captures);
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
         if type_ann.is_none() {
             if let Some(contextual_ty) = contextual_arg_types.get(idx) {
@@ -766,6 +766,7 @@ fn closure_signature_from_ast(
     variadic: Option<&str>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
+    captures: &[(String, PhpType, bool)],
 ) -> FunctionSig {
     let mut signature = signature_from_ast_with_variadic(params, return_type, variadic);
     if crate::types::checker::yield_validation::body_contains_yield(body) {
@@ -773,7 +774,7 @@ fn closure_signature_from_ast(
         return signature;
     }
     if return_type.is_none() {
-        if let Some(return_ty) = direct_closure_return_type(body) {
+        if let Some(return_ty) = direct_closure_return_type(body, captures) {
             signature.return_type = return_ty;
         } else if !body_contains_value_return(body) {
             signature.return_type = PhpType::Void;
@@ -783,14 +784,33 @@ fn closure_signature_from_ast(
 }
 
 /// Infers a closure return type for the no-fallthrough `return <expr>;` shape.
-fn direct_closure_return_type(body: &[Stmt]) -> Option<PhpType> {
+fn direct_closure_return_type(
+    body: &[Stmt],
+    captures: &[(String, PhpType, bool)],
+) -> Option<PhpType> {
     let [stmt] = body else {
         return None;
     };
     let StmtKind::Return(Some(expr)) = &stmt.kind else {
         return None;
     };
-    Some(crate::types::checker::infer_expr_type_syntactic(expr))
+    Some(direct_closure_return_expr_type(expr, captures))
+}
+
+/// Returns a direct closure return expression type, consulting capture metadata first.
+fn direct_closure_return_expr_type(
+    expr: &crate::parser::ast::Expr,
+    captures: &[(String, PhpType, bool)],
+) -> PhpType {
+    if let ExprKind::Variable(name) = &expr.kind {
+        if let Some((_, php_type, _)) = captures
+            .iter()
+            .find(|(capture_name, _, _)| capture_name == name)
+        {
+            return php_type.clone();
+        }
+    }
+    crate::types::checker::infer_expr_type_syntactic(expr)
 }
 
 /// Returns true when a statement list contains a `return <expr>` for its own function body.
