@@ -514,6 +514,9 @@ fn ensure_static_property_value_supported(
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return Ok(());
     }
+    if is_empty_array_for_array_static_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "{} assigning PHP type {:?} to {}::${} with PHP type {:?}",
         inst.op.name(),
@@ -522,6 +525,17 @@ fn ensure_static_property_value_supported(
         slot.property,
         slot.php_type
     )))
+}
+
+/// Returns true when an empty array literal initializes a typed static array property.
+fn is_empty_array_for_array_static_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    let PhpType::Array(value_elem) = value_ty.codegen_repr() else {
+        return false;
+    };
+    if !matches!(slot_ty.codegen_repr(), PhpType::Array(_)) {
+        return false;
+    }
+    matches!(value_elem.codegen_repr(), PhpType::Never | PhpType::Void)
 }
 
 /// Boxes concrete values when the static property storage is Mixed/Union.

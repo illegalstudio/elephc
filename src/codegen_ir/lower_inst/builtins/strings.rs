@@ -458,14 +458,9 @@ fn load_single_string_arg(
             inst.operands.len()
         )));
     }
-    let value = expect_operand(inst, 0)?;
-    match ctx.load_value_to_result(value)?.codegen_repr() {
-        PhpType::Str => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name, other
-        ))),
-    }
+    let ptr_reg = string_ptr_reg(ctx);
+    let len_reg = string_len_reg(ctx);
+    load_string_arg_to_regs(ctx, inst, 0, name, ptr_reg, len_reg)
 }
 
 /// Preserves the trim source string while loading the explicit character mask.
@@ -516,21 +511,19 @@ fn load_binary_string_args(
             inst.operands.len()
         )));
     }
-    let first = expect_string_operand(ctx, inst, 0, name)?;
-    let second = expect_string_operand(ctx, inst, 1, name)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.load_string_value_to_regs(first, "x1", "x2")?;
+            load_string_arg_to_regs(ctx, inst, 0, name, "x1", "x2")?;
             ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the first string pointer and length while loading the second
-            ctx.load_string_value_to_regs(second, "x1", "x2")?;
+            load_string_arg_to_regs(ctx, inst, 1, name, "x1", "x2")?;
             ctx.emitter.instruction("mov x3, x1");                              // pass the second string pointer as the secondary string argument
             ctx.emitter.instruction("mov x4, x2");                              // pass the second string length as the secondary string argument
             ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the first string pointer and length into primary argument registers
         }
         Arch::X86_64 => {
-            ctx.load_string_value_to_regs(first, "rax", "rdx")?;
+            load_string_arg_to_regs(ctx, inst, 0, name, "rax", "rdx")?;
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            ctx.load_string_value_to_regs(second, "rax", "rdx")?;
+            load_string_arg_to_regs(ctx, inst, 1, name, "rax", "rdx")?;
             ctx.emitter.instruction("mov rcx, rdx");                            // pass the second string length as the fourth SysV string argument
             ctx.emitter.instruction("mov rdx, rax");                            // pass the second string pointer as the third SysV string argument
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
@@ -601,9 +594,8 @@ fn load_substr_string_and_offset_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    let source = expect_string_operand(ctx, inst, 0, "substr")?;
     let offset = expect_operand(inst, 1)?;
-    ctx.load_string_value_to_regs(source, "x1", "x2")?;
+    load_string_arg_to_regs(ctx, inst, 0, "substr", "x1", "x2")?;
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string while materializing numeric arguments
     load_as_int(ctx, offset, "substr offset")?;
     ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the substring offset while materializing the optional length
@@ -656,9 +648,8 @@ fn load_substr_string_and_offset_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    let source = expect_string_operand(ctx, inst, 0, "substr")?;
     let offset = expect_operand(inst, 1)?;
-    ctx.load_string_value_to_regs(source, "rax", "rdx")?;
+    load_string_arg_to_regs(ctx, inst, 0, "substr", "rax", "rdx")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     load_as_int(ctx, offset, "substr offset")?;
     abi::emit_push_reg(ctx.emitter, "rax");
@@ -1112,14 +1103,11 @@ fn lower_string_replace_aarch64(
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
-    let search = expect_string_operand(ctx, inst, 0, name)?;
-    let replacement = expect_string_operand(ctx, inst, 1, name)?;
-    let subject = expect_string_operand(ctx, inst, 2, name)?;
-    ctx.load_string_value_to_regs(search, "x1", "x2")?;
+    load_string_arg_to_regs(ctx, inst, 0, name, "x1", "x2")?;
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the search string while materializing replacement and subject
-    ctx.load_string_value_to_regs(replacement, "x1", "x2")?;
+    load_string_arg_to_regs(ctx, inst, 1, name, "x1", "x2")?;
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the replacement string while materializing the subject
-    ctx.load_string_value_to_regs(subject, "x1", "x2")?;
+    load_string_arg_to_regs(ctx, inst, 2, name, "x1", "x2")?;
     ctx.emitter.instruction("mov x5, x1");                                      // pass the subject string pointer as the third runtime string argument
     ctx.emitter.instruction("mov x6, x2");                                      // pass the subject string length as the third runtime string argument
     ctx.emitter.instruction("ldp x3, x4, [sp], #16");                           // restore replacement into the secondary runtime string argument
@@ -1133,14 +1121,11 @@ fn lower_string_replace_x86_64(
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
-    let search = expect_string_operand(ctx, inst, 0, name)?;
-    let replacement = expect_string_operand(ctx, inst, 1, name)?;
-    let subject = expect_string_operand(ctx, inst, 2, name)?;
-    ctx.load_string_value_to_regs(search, "rax", "rdx")?;
+    load_string_arg_to_regs(ctx, inst, 0, name, "rax", "rdx")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    ctx.load_string_value_to_regs(replacement, "rax", "rdx")?;
+    load_string_arg_to_regs(ctx, inst, 1, name, "rax", "rdx")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    ctx.load_string_value_to_regs(subject, "rax", "rdx")?;
+    load_string_arg_to_regs(ctx, inst, 2, name, "rax", "rdx")?;
     ctx.emitter.instruction("mov rcx, rax");                                    // pass the subject string pointer as the third runtime string argument
     ctx.emitter.instruction("mov r8, rdx");                                     // pass the subject string length as the third runtime string argument
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
