@@ -11,7 +11,7 @@
 //!   callable values through a regex-specific callback wrapper.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
 
-use crate::codegen::abi;
+use crate::codegen::{abi, callable_descriptor};
 use crate::codegen::context::DeferredCallbackWrapper;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
@@ -20,6 +20,7 @@ use crate::names::function_symbol;
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
+use super::super::callables;
 
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
 
@@ -111,25 +112,74 @@ pub(super) fn lower_preg_replace_callback(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace_callback");
-    if env_bytes != 0 {
-        abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
-    }
+    callback_target.release_env(ctx, env_bytes);
     super::store_if_result(ctx, inst)
 }
 
 /// Runtime callback target passed to `__rt_preg_replace_callback`.
 struct PregReplaceCallbackTarget {
     entry_label: String,
-    descriptor_value: Option<ValueId>,
+    env: PregReplaceCallbackEnv,
 }
 
 impl PregReplaceCallbackTarget {
     /// Reserves any callback environment required by the regex callback runtime.
     fn reserve_env(&self, ctx: &mut FunctionContext<'_>) -> Result<usize> {
-        let Some(callback) = self.descriptor_value else {
-            return Ok(0);
-        };
-        reserve_descriptor_callback_env(ctx, callback)
+        self.env.reserve(ctx)
+    }
+
+    /// Releases any reserved callback environment while preserving the regex result.
+    fn release_env(&self, ctx: &mut FunctionContext<'_>, env_bytes: usize) {
+        self.env.release(ctx, env_bytes);
+    }
+}
+
+/// Descriptor environment source used by the regex callback wrapper.
+enum PregReplaceCallbackEnv {
+    None,
+    Descriptor(ValueId),
+    RuntimeString(ValueId),
+    CallableArray {
+        callable: ValueId,
+        instance_only: bool,
+    },
+}
+
+impl PregReplaceCallbackEnv {
+    /// Reserves the stack environment expected by the deferred regex callback wrapper.
+    fn reserve(&self, ctx: &mut FunctionContext<'_>) -> Result<usize> {
+        match self {
+            Self::None => Ok(0),
+            Self::Descriptor(callback) => reserve_descriptor_callback_env(ctx, *callback),
+            Self::RuntimeString(callback) => {
+                reserve_runtime_string_descriptor_callback_env(ctx, *callback)
+            }
+            Self::CallableArray {
+                callable,
+                instance_only,
+                ..
+            } => reserve_callable_array_descriptor_callback_env(ctx, *callable, *instance_only),
+        }
+    }
+
+    /// Releases a descriptor environment only when this target owns the descriptor.
+    fn release(&self, ctx: &mut FunctionContext<'_>, env_bytes: usize) {
+        if env_bytes == 0 {
+            return;
+        }
+        if self.releases_descriptor() {
+            release_descriptor_callback_env_preserving_result(ctx, env_bytes);
+        } else {
+            abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+        }
+    }
+
+    /// Returns true when the environment owns a descriptor pointer that must be released.
+    fn releases_descriptor(&self) -> bool {
+        matches!(
+            self,
+            Self::RuntimeString(_) | Self::CallableArray { .. }
+        )
     }
 }
 
@@ -141,14 +191,41 @@ fn preg_replace_callback_target(
     if let Some(entry_label) = static_string_callback_entry(ctx, callback)? {
         return Ok(PregReplaceCallbackTarget {
             entry_label,
-            descriptor_value: None,
+            env: PregReplaceCallbackEnv::None,
         });
     }
-    if ctx.value_php_type(callback)?.codegen_repr() == PhpType::Callable {
-        return Ok(PregReplaceCallbackTarget {
-            entry_label: emit_descriptor_callback_wrapper(ctx),
-            descriptor_value: Some(callback),
-        });
+    match ctx.value_php_type(callback)?.codegen_repr() {
+        PhpType::Str => {
+            return Ok(PregReplaceCallbackTarget {
+                entry_label: emit_descriptor_callback_wrapper(ctx),
+                env: PregReplaceCallbackEnv::RuntimeString(callback),
+            });
+        }
+        PhpType::Callable => {
+            return Ok(PregReplaceCallbackTarget {
+                entry_label: emit_descriptor_callback_wrapper(ctx),
+                env: PregReplaceCallbackEnv::Descriptor(callback),
+            });
+        }
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            return Ok(PregReplaceCallbackTarget {
+                entry_label: emit_descriptor_callback_wrapper(ctx),
+                env: PregReplaceCallbackEnv::CallableArray {
+                    callable: callback,
+                    instance_only: true,
+                },
+            });
+        }
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => {
+            return Ok(PregReplaceCallbackTarget {
+                entry_label: emit_descriptor_callback_wrapper(ctx),
+                env: PregReplaceCallbackEnv::CallableArray {
+                    callable: callback,
+                    instance_only: false,
+                },
+            });
+        }
+        _ => {}
     }
     Err(CodegenIrError::unsupported(
         "preg_replace_callback callback with unsupported EIR type",
@@ -163,15 +240,12 @@ fn static_string_callback_entry(
     let Some(callback_name) = maybe_const_string_operand(ctx, callback)? else {
         return Ok(None);
     };
-    let function_name = ctx
+    let Some(function_name) = ctx
         .callable_function_by_name(&callback_name)
         .map(|function| function.name.to_string())
-        .ok_or_else(|| {
-            CodegenIrError::unsupported(format!(
-                "preg_replace_callback static callback {}",
-                callback_name
-            ))
-        })?;
+    else {
+        return Ok(None);
+    };
     Ok(Some(function_symbol(&function_name)))
 }
 
@@ -215,6 +289,71 @@ fn reserve_descriptor_callback_env(
         }
     }
     Ok(16)
+}
+
+/// Reserves a one-slot callback environment containing a runtime string descriptor.
+fn reserve_runtime_string_descriptor_callback_env(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+) -> Result<usize> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    let descriptor_reg = abi::int_result_reg(ctx.emitter).to_string();
+    callables::emit_runtime_string_descriptor_value(
+        ctx,
+        callable,
+        &descriptor_reg,
+        "preg_replace_callback",
+    )?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("str {descriptor_reg}, [sp]"));    // store the runtime string descriptor for the regex callback wrapper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}")); // store the runtime string descriptor for the regex callback wrapper
+        }
+    }
+    Ok(16)
+}
+
+/// Reserves a one-slot callback environment containing a callable-array descriptor.
+fn reserve_callable_array_descriptor_callback_env(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    instance_only: bool,
+) -> Result<usize> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    if instance_only {
+        callables::emit_runtime_mixed_instance_callable_array_descriptor_value(
+            ctx,
+            callable,
+            "preg_replace_callback",
+        )?;
+    } else {
+        callables::emit_runtime_callable_array_descriptor_value(ctx, callable, "preg_replace_callback")?;
+    }
+    let descriptor_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("str {descriptor_reg}, [sp]"));    // store the callable-array descriptor for the regex callback wrapper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}")); // store the callable-array descriptor for the regex callback wrapper
+        }
+    }
+    Ok(16)
+}
+
+/// Releases an owned descriptor env while preserving the regex replacement string result.
+fn release_descriptor_callback_env_preserving_result(
+    ctx: &mut FunctionContext<'_>,
+    env_bytes: usize,
+) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    callable_descriptor::emit_release_current_descriptor(ctx.emitter);
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
 }
 
 /// Loads the optional callback environment argument expected by the regex runtime.
