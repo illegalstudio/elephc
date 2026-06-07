@@ -124,6 +124,65 @@ echo count($c);
     assert_eq!(out, "3");
 }
 
+/// Regression (M8): array_chunk() returns an array of sub-arrays, but the codegen local-type
+/// table inferred Array(Int) (dropping a nesting level), so indexing/iterating a chunk treated the
+/// sub-array pointer as an int. The infer now nests as Array(Array(Int)), matching the emitter, so
+/// `$c[i][j]` and `foreach` over the chunks read real sub-arrays.
+#[test]
+fn test_array_chunk_nested_element_indexing() {
+    let out = compile_and_run(
+        r#"<?php
+$c = array_chunk([1, 2, 3, 4, 5, 6], 2);
+echo $c[0][0] . $c[0][1] . "|" . $c[2][0] . $c[2][1];
+echo "/";
+$sum = 0;
+foreach ($c as $pair) {
+    $sum = $sum + $pair[0] + $pair[1];
+}
+echo $sum;
+"#,
+    );
+    assert_eq!(out, "12|56/21");
+}
+
+/// Regression (M8): array_column() returns the column's value type, but the infer table reported
+/// the row element type. With string columns the result-array element type must be Str so the
+/// foreach value var is sized for a string; the infer now mirrors the emitter's column value type.
+#[test]
+fn test_array_column_string_values_foreach() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [
+    ["id" => 1, "name" => "alice"],
+    ["id" => 2, "name" => "bob"],
+];
+$names = array_column($rows, "name");
+$out = "";
+foreach ($names as $n) {
+    $out = $out . $n . ",";
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "alice,bob,");
+}
+
+/// Regression (M8): array_rand() returns a single key, but the infer table reported an Array, so a
+/// local holding the result was mis-typed. The infer now reports Int, matching the emitter; the
+/// returned key indexes back into the source array.
+#[test]
+fn test_array_rand_single_key_is_scalar() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30];
+$k = array_rand($a);
+$ok = ($k === 0 || $k === 1 || $k === 2) && ($a[$k] === 10 || $a[$k] === 20 || $a[$k] === 30);
+echo $ok ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Tests `array_fill_keys($keys, value)` — creates an array from `["x", "y"]` as keys,
 /// both initialized to `0`, then verifies the resulting associative array has exactly 2 entries.
 #[test]

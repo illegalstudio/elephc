@@ -59,6 +59,26 @@ echo $b[1];
     assert_eq!(out, "2,4");
 }
 
+/// Regression (M8): the codegen local-type table inferred array_map() as Array(Int) by reading
+/// args[0] (the callback) instead of the callback's return type. With a string-returning callback
+/// the result is a string-element array, so a foreach value var must be sized for a full string
+/// (ptr+len); the old Array(Int) inference sized it for an int and truncated the length word. The
+/// foreach iterates the array_map() result directly so the call's inferred element type (now
+/// Array(Str), matching the __rt_array_map_str emitter) drives the value-var slot.
+#[test]
+fn test_array_map_string_callback_result_foreach_value_slot() {
+    let out = compile_and_run(
+        r#"<?php
+$out = "";
+foreach (array_map(fn($n) => "item" . $n, [1, 2, 3]) as $s) {
+    $out = $out . $s . "|";
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "item1|item2|item3|");
+}
+
 /// Verifies runtime string builtin callback variables dispatch through descriptor-backed array_map.
 #[test]
 fn test_array_map_dynamic_string_builtin_callback_uses_descriptor_invoker() {

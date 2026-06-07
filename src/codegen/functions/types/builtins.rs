@@ -8,6 +8,7 @@
 //! Key details:
 //! - Results must agree with `crate::types` so local slots and runtime value shapes are selected correctly.
 
+use crate::codegen::builtins::arrays::array_map_callback_returns_str::callback_returns_str;
 use crate::codegen::builtins::callable_lookup::{lookup_function, FunctionLookup};
 use crate::codegen::context::Context;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
@@ -131,6 +132,46 @@ pub(super) fn infer_function_call_type(
                 _ => PhpType::Int,
             }
         }
+        // array_chunk() nests one level deeper: [1,2,3,4] -> [[1,2],[3,4]]. Mirror the emitter,
+        // which wraps an indexed source element type in an extra Array and otherwise falls back to
+        // Array(Array(Int)). A wrong (un-nested) element type here mis-models nested-inference uses.
+        "array_chunk" => {
+            let inner = match args.first().map(|a| infer_local_type(a, sig, ctx)) {
+                Some(PhpType::Array(t)) => PhpType::Array(t),
+                _ => PhpType::Array(Box::new(PhpType::Int)),
+            };
+            PhpType::Array(Box::new(inner))
+        }
+        // array_column() returns a flat array of one column's values; mirror the emitter's val_ty:
+        // the assoc value type of the row element, defaulting to Str.
+        "array_column" => {
+            let arr_ty = args
+                .first()
+                .map(|a| infer_local_type(a, sig, ctx))
+                .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Str)));
+            let val_ty = match &arr_ty {
+                PhpType::Array(inner) => match inner.as_ref() {
+                    PhpType::AssocArray { value, .. } => (**value).clone(),
+                    _ => PhpType::Str,
+                },
+                _ => PhpType::Str,
+            };
+            PhpType::Array(Box::new(val_ty))
+        }
+        // array_map()'s element type follows the CALLBACK's return type (args[0]), not the source
+        // array (args[1]). Mirror the emitter's static-callback paths: Array(Str) when the callback
+        // returns a string, else Array(Int). (Dynamic string/callable-array callbacks emit
+        // Array(Mixed); those rarer paths still yield an array pointer, so the slot is unaffected.)
+        "array_map" => {
+            if args.len() >= 2 && ctx.is_some_and(|c| callback_returns_str(args, c)) {
+                PhpType::Array(Box::new(PhpType::Str))
+            } else {
+                PhpType::Array(Box::new(PhpType::Int))
+            }
+        }
+        // array_rand() returns a single key (the emitter always produces an Int key); it does not
+        // return an array for the default count. Inferring Array here mis-typed the local.
+        "array_rand" => PhpType::Int,
         "explode"
         | "str_split"
         | "file"
@@ -140,17 +181,13 @@ pub(super) fn infer_function_call_type(
         | "array_slice"
         | "array_reverse"
         | "array_unique"
-        | "array_chunk"
         | "array_pad"
         | "array_fill"
         | "array_diff"
         | "array_intersect"
         | "array_splice"
-        | "array_column"
-        | "array_map"
         | "array_filter"
         | "range"
-        | "array_rand"
         | "sscanf"
         | "fscanf"
         | "fgetcsv"
