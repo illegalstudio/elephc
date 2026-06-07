@@ -16,6 +16,7 @@ use crate::ir_lower::expr::{
     lower_callable_array_for_assignment, lower_closure_for_assignment, lower_expr,
     static_callable_binding_for_expr, type_satisfies_array_access_for_ir,
 };
+use crate::names::php_symbol_key;
 use crate::parser::ast::{CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::span::Span;
 use crate::types::PhpType;
@@ -1586,6 +1587,10 @@ fn lower_property_assign(
         value_expr,
         span,
     );
+    if magic_set_receiver_has_method(ctx, object.value, property) {
+        lower_magic_property_set(ctx, object.value, property, value, span);
+        return;
+    }
     let data = ctx.intern_string(property);
     ctx.emit_void(
         Op::PropSet,
@@ -1596,6 +1601,66 @@ fn lower_property_assign(
     );
     if let Some(property_ty) = object_property_type(ctx, object.value, property) {
         release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+    }
+}
+
+/// Returns true when a property write should dispatch to `__set`.
+fn magic_set_receiver_has_method(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return false;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.classes.get(normalized) else {
+        return false;
+    };
+    if class_info.properties.iter().any(|(name, _)| name == property) {
+        return false;
+    }
+    class_info
+        .methods
+        .contains_key(&php_symbol_key("__set"))
+}
+
+/// Lowers an undeclared property write to a normal `__set` instance-method call.
+fn lower_magic_property_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    value: LoweredValue,
+    span: Span,
+) {
+    let property_data = ctx.intern_string(property);
+    let property_name = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(property_data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(span),
+    );
+    let method_data = ctx.intern_string("__set");
+    ctx.emit_void(
+        Op::MethodCall,
+        vec![object, property_name.value, value.value],
+        Some(Immediate::Data(method_data)),
+        Op::MethodCall.default_effects(),
+        Some(span),
+    );
+    release_magic_set_value_after_call(ctx, value, span);
+}
+
+/// Releases an owning RHS temporary after the `__set` call has consumed it.
+fn release_magic_set_value_after_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) {
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
 }
 
