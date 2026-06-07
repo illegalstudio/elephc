@@ -2038,9 +2038,6 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     if let Some(intrinsic) = callback_filter_intrinsic(&class_name, &method_name) {
         return lower_callback_filter_accept_intrinsic(ctx, inst, intrinsic);
     }
-    if let Some(intrinsic) = runtime_backed_instance_intrinsic(&class_name, &method_name) {
-        return lower_instance_runtime_intrinsic(ctx, inst, &class_name, &method_name, intrinsic);
-    }
     if is_fiber_start_call(&class_name, &method_name) {
         return lower_fiber_start(ctx, inst, object);
     }
@@ -2052,6 +2049,9 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     }
     if is_fiber_get_return_call(&class_name, &method_name) {
         return lower_fiber_noarg_runtime_method(ctx, inst, object, "__rt_fiber_get_return");
+    }
+    if let Some(intrinsic) = runtime_backed_instance_intrinsic(&class_name, &method_name) {
+        return lower_instance_runtime_intrinsic(ctx, inst, &class_name, &method_name, intrinsic);
     }
     if is_throwable_standard_method_call(ctx, &class_name, &method_name) {
         return lower_throwable_standard_method(ctx, inst, object, &method_name);
