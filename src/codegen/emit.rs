@@ -55,6 +55,21 @@ impl Emitter {
         );
     }
 
+    /// Emits an `@src line=L col=C` source-position comment for a statement.
+    ///
+    /// Formats the line/column directly into the output buffer, avoiding the
+    /// intermediate `String` that a `format!(...)` + `comment(...)` pair would
+    /// allocate on every statement node in the program.
+    pub fn comment_src(&mut self, line: usize, col: usize) {
+        let _ = writeln!(
+            self.buf,
+            "    {} @src line={} col={}",
+            self.target.line_comment_prefix(),
+            line,
+            col
+        );
+    }
+
     /// Emits a blank line for visual separation.
     pub fn blank(&mut self) {
         self.buf.push('\n');

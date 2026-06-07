@@ -99,10 +99,7 @@ fn emit_static_store(emitter: &mut Emitter, ctx: &Context, name: &str, ty: &PhpT
 /// Emits code for a single statement AST node.
 pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
     if stmt.span.line > 0 {
-        emitter.comment(&format!(
-            "@src line={} col={}",
-            stmt.span.line, stmt.span.col
-        ));
+        emitter.comment_src(stmt.span.line, stmt.span.col);
     }
 
     // -- reset concat buffer at the start of each statement --
