@@ -126,31 +126,27 @@ fn dummy_arg_for_array_scalar_elem(arr_ty: &PhpType, span: crate::span::Span) ->
     }
 }
 
-/// Returns true when a multi-array `array_map()` callback is a supported non-capturing form.
+/// Returns true when a multi-array `array_map()` callback is a supported form.
 ///
-/// The bounded multi-array path invokes the callback directly with one argument per
-/// input array, so it can only accept callbacks that carry no capture environment: a
-/// named function (`StringLiteral`) or a capture-less closure/arrow function. Capturing
-/// closures, first-class callables, `[obj, method]` arrays, and runtime-string callbacks
-/// are deferred to a later increment and rejected with a clear diagnostic.
+/// The bounded multi-array path supports a named function (`StringLiteral`) or a closure
+/// literal — including capturing closures and arrow functions, which are lowered through
+/// the same N-visible-argument wrapper environment used by the single-array path. Callback
+/// forms that select a callable indirectly (a callable variable, first-class callable,
+/// `[obj, method]` array, or runtime-string name) are deferred to a later increment and
+/// rejected with a clear diagnostic.
 fn array_map_multi_callback_supported(callback: &Expr) -> bool {
-    match &callback.kind {
-        ExprKind::StringLiteral(_) => true,
-        ExprKind::Closure {
-            captures,
-            capture_refs,
-            ..
-        } => captures.is_empty() && capture_refs.is_empty(),
-        _ => false,
-    }
+    matches!(
+        &callback.kind,
+        ExprKind::StringLiteral(_) | ExprKind::Closure { .. }
+    )
 }
 
 /// Type-checks the multi-array form `array_map($callback, $a, $b, ...)`.
 ///
-/// Bounded first increment of multi-array support: exactly two input arrays whose
-/// elements use the integer codegen representation, with a non-capturing callback
-/// that returns an integer-representable value. Shapes outside this subset (more than
-/// two arrays, non-integer arrays, capturing/exotic callbacks, string/float-returning
+/// Bounded multi-array support: exactly two input arrays whose elements use the integer
+/// codegen representation, with a named-function or closure callback (capturing closures
+/// included) that returns an integer-representable value. Shapes outside this subset (more
+/// than two arrays, non-integer arrays, indirect/exotic callbacks, string/float-returning
 /// callbacks, or the `array_map(null, ...)` zip form) are rejected with a clear
 /// "not yet supported" diagnostic so they fail at compile time rather than miscompiling.
 /// Returns `Array(Int)` to match the runtime, which collects 8-byte integer results.
@@ -175,7 +171,7 @@ fn check_array_map_multi(
     if !array_map_multi_callback_supported(&args[0]) {
         return Err(CompileError::new(
             args[0].span,
-            "array_map() with multiple arrays currently supports a named function or a capture-less closure as the callback",
+            "array_map() with multiple arrays currently supports a named function or a closure as the callback",
         ));
     }
     let mut elem_tys = Vec::new();

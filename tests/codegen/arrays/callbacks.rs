@@ -93,6 +93,34 @@ echo implode(",", $r);
     assert_eq!(out, "4,4,-3,-4");
 }
 
+/// Verifies the multi-array form supports a capturing arrow function (auto-captures `$base`),
+/// lowered through the two-visible-argument wrapper environment (H11 increment 2).
+#[test]
+fn test_array_map_two_arrays_capturing_arrow() {
+    let out = compile_and_run(
+        r#"<?php
+$base = 100;
+$r = array_map(fn($a, $b) => $a + $b + $base, [1, 2, 3], [10, 20, 30]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "111,122,133");
+}
+
+/// Verifies the multi-array form supports a `function(...) use (...)` closure capturing by value
+/// with two input arrays (H11 increment 2).
+#[test]
+fn test_array_map_two_arrays_capturing_closure_use() {
+    let out = compile_and_run(
+        r#"<?php
+$mult = 2;
+$r = array_map(function($x, $y) use ($mult) { return ($x + $y) * $mult; }, [1, 2], [3, 4]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "8,12");
+}
+
 // Tests `array_map` with a typed builtin callback (`strlen`) applied to string values,
 // verifying mixed-type result handling in array_map codegen.
 /// Verifies that array map string values to ints.
