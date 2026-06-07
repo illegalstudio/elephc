@@ -148,24 +148,24 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `count()` | `count($arr_or_countable): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()` |
 | `array_push()` | `array_push($arr, $val): void` | Add element to end |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
-| `in_array()` | `in_array($needle, $arr): int` | Search for value (0/1) |
+| `in_array()` | `in_array($needle, $arr [, $strict]): int` | Search for value (0/1); `$strict` is accepted |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
-| `array_search()` | `array_search($needle, $arr): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found |
+| `array_search()` | `array_search($needle, $arr [, $strict]): int\|string\|false` | Search for value (accepts `$strict`), returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found |
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove a slice in place and return the removed elements |
 | `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks |
-| `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
+| `array_merge()` | `array_merge($arr1, $arr2, ...): array` | Merge two or more arrays |
 | `array_combine()` | `array_combine($keys, $values): array` | Create array from keys/values |
 | `array_fill()` | `array_fill($start, $num, $value): array` | Fill with values |
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill with values using keys |
 | `array_pad()` | `array_pad($arr, $size, $value): array` | Pad to length |
 | `range()` | `range($start, $end): array` | Sequential integers |
-| `array_diff()` | `array_diff($arr1, $arr2): array` | Values in $arr1 not in $arr2 |
-| `array_intersect()` | `array_intersect($arr1, $arr2): array` | Values in both |
-| `array_diff_key()` | `array_diff_key($arr1, $arr2): array` | Keys in $arr1 not in $arr2 |
-| `array_intersect_key()` | `array_intersect_key($arr1, $arr2): array` | Keys in both |
+| `array_diff()` | `array_diff($arr1, $arr2, ...): array` | Values in $arr1 not in the others |
+| `array_intersect()` | `array_intersect($arr1, $arr2, ...): array` | Values present in every array |
+| `array_diff_key()` | `array_diff_key($arr1, $arr2, ...): array` | Keys in $arr1 not in the others |
+| `array_intersect_key()` | `array_intersect_key($arr1, $arr2, ...): array` | Keys present in every array |
 | `array_unique()` | `array_unique($arr): array` | Remove duplicates |
 | `array_reverse()` | `array_reverse($arr): array` | Reverse order |
 | `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys |
