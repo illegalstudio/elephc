@@ -28,6 +28,7 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
+    lower_statement_concat_reset(ctx, stmt.span);
     match &stmt.kind {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
         StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),
@@ -224,6 +225,20 @@ fn expr_statement_result_can_own_storage(
     )
 }
 
+/// Emits the statement-boundary concat-buffer reset expected by the ASM backend.
+fn lower_statement_concat_reset(ctx: &mut LoweringContext<'_, '_>, span: Span) {
+    if span.line == 0 {
+        return;
+    }
+    ctx.emit_void(
+        Op::ConcatReset,
+        vec![],
+        None,
+        Op::ConcatReset.default_effects(),
+        Some(span),
+    );
+}
+
 /// Lowers a sequence of statements until the current block terminates.
 fn lower_block(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
     for stmt in body {
@@ -244,6 +259,9 @@ fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
         Op::EchoValue.default_effects(),
         Some(span),
     );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
 }
 
 /// Lowers a plain PHP local assignment.

@@ -98,6 +98,20 @@ echo "done";
     );
 }
 
+/// Verifies chained concat temporaries are released after `echo` consumes them.
+#[test]
+fn parity_echo_concat_chain_releases_intermediates() {
+    assert_backend_gc_clean(
+        "echo_concat_chain_releases_intermediates",
+        r#"<?php
+for ($i = 0; $i < 8; $i++) {
+    echo "a" . $i . "b" . $i . "c" . $i . "\n";
+}
+echo "done";
+"#,
+    );
+}
+
 /// Verifies `explode()` arrays and copied string elements are released at function exit.
 #[test]
 fn parity_explode_parser_releases_arrays_and_elements() {

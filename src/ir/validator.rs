@@ -351,7 +351,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         | CallableArrayNew | GeneratorNew | InvokerRefArg
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
-        | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | Nop => {
+        | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | ConcatReset | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
         ClosureNew => Ok(()),

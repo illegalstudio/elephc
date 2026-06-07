@@ -237,6 +237,7 @@ pub enum Op {
     StrPersist,
     StrCharAt,
     StrInterpolate,
+    ConcatReset,
     WriteStrStdout,
     ArrayNew,
     HashNew,
@@ -377,6 +378,7 @@ impl Op {
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
             IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
+            ConcatReset => E::WRITES_GLOBAL,
             Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
@@ -531,6 +533,7 @@ impl Op {
             StrPersist => "str_persist",
             StrCharAt => "str_char_at",
             StrInterpolate => "str_interpolate",
+            ConcatReset => "concat_reset",
             WriteStrStdout => "write_str_stdout",
             ArrayNew => "array_new",
             HashNew => "hash_new",

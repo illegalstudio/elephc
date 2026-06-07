@@ -502,6 +502,7 @@ preserves PHP exponentiation result rules.
 | `StrPersist` | `Str` | `Str` | `alloc_heap`, `refcount_op` when copy needed |
 | `StrCharAt` | `Str`, `I64` | `Str` | `may_fatal`, `alloc_concat` |
 | `StrInterpolate` | string parts and values | `Str` | combined value effects, `alloc_concat` |
+| `ConcatReset` | none | `Void` | `writes_global` |
 | `WriteStrStdout` | `Str` | `Void` | `output` |
 
 Concat-buffer operations are statement-boundary-sensitive. Lowering must emit

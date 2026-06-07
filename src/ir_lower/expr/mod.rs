@@ -515,7 +515,7 @@ fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right: &Expr, ex
     let rhs = lower_expr(ctx, right);
     let rhs = coerce_to_string(ctx, rhs, expr);
     if lhs.ir_type == IrType::Str && rhs.ir_type == IrType::Str {
-        return ctx.emit_value(
+        let result = ctx.emit_value(
             Op::StrConcat,
             vec![lhs.value, rhs.value],
             None,
@@ -523,15 +523,25 @@ fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right: &Expr, ex
             Op::StrConcat.default_effects(),
             Some(expr.span),
         );
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        return result;
     }
-    ctx.emit_value(
+    let result = ctx.emit_value(
         Op::RuntimeCall,
         vec![lhs.value, rhs.value],
         None,
         PhpType::Str,
         effects_lookup::runtime_effects(),
         Some(expr.span),
-    )
+    );
+    release_binary_operand_temporary(ctx, lhs, expr.span);
+    if rhs.value != lhs.value {
+        release_binary_operand_temporary(ctx, rhs, expr.span);
+    }
+    result
 }
 
 /// Lowers a comparison operation.

@@ -197,9 +197,16 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
+        Op::ConcatReset => lower_concat_reset(ctx),
         Op::Nop => lower_nop(ctx, &inst),
         _ => Err(CodegenIrError::unsupported(format!("opcode {}", inst.op.name()))),
     }
+}
+
+/// Lowers a statement-boundary concat-buffer reset.
+fn lower_concat_reset(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_concat_off", 0);
+    Ok(())
 }
 
 /// Lowers metadata-only NOPs, emitting data-backed messages as assembly comments.
