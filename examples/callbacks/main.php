@@ -16,6 +16,12 @@ echo "Doubled: ";
 foreach ($doubled as $v) { echo $v . " "; }
 echo "\n";
 
+// array_map with two arrays: zip them element-wise through the callback
+$summed = array_map("sum", [1, 2, 3], [10, 20, 30]);
+echo "Zipped sum: ";
+foreach ($summed as $v) { echo $v . " "; }
+echo "\n";
+
 // array_filter: keep only matching elements
 $positives = array_filter($numbers, "is_positive", ARRAY_FILTER_USE_VALUE);
 echo "Positives: ";

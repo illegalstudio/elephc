@@ -56,6 +56,9 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("array_map()");
+    if args.len() > 2 {
+        return emit_two_array_map(&args[0], &args[1], &args[2], emitter, ctx, data);
+    }
     let call_reg = abi::nested_call_reg(emitter);
     let result_reg = abi::int_result_reg(emitter);
     let callback_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
@@ -251,6 +254,55 @@ pub fn emit(
         abi::emit_call_label(emitter, "__rt_array_map");                        // call the scalar array_map runtime helper
         Some(PhpType::Array(Box::new(PhpType::Int)))
     }
+}
+
+/// Emits the two-input-array form `array_map($callback, $a, $b)`.
+///
+/// Bounded multi-array support (checker-gated): both arrays carry integer elements and
+/// the callback is non-capturing — a named function or a capture-less closure/arrow
+/// function — so the callback can be invoked directly with two integer arguments.
+/// Evaluates the callback then both arrays in PHP source order, preserving each on the
+/// temporary stack, then calls `__rt_array_map2`, which zips the two arrays (padding the
+/// shorter with 0) through the callback and collects the results into a new
+/// integer-keyed list. Returns `Some(PhpType::Array(Int))`.
+fn emit_two_array_map(
+    callback: &Expr,
+    arr0: &Expr,
+    arr1: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    emitter.comment("array_map() with two input arrays");
+    let call_reg = abi::nested_call_reg(emitter);
+    let result_reg = abi::int_result_reg(emitter);
+    let cb_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let arr0_arg_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let arr1_arg_reg = abi::int_arg_reg_name(emitter.target, 2);
+    let env_arg_reg = abi::int_arg_reg_name(emitter.target, 3);
+
+    // -- evaluate the callback first, matching PHP source order --
+    let captures =
+        callback_env::materialize_callback_address(callback, call_reg, emitter, ctx, data);
+    debug_assert!(
+        captures.is_empty(),
+        "multi-array array_map callback must be non-capturing (checker-gated)"
+    );
+    abi::emit_push_reg(emitter, call_reg);                                      // save the callback entry point across array evaluation
+
+    // -- evaluate the two input arrays in source order --
+    emit_expr(arr0, emitter, ctx, data);
+    abi::emit_push_reg(emitter, result_reg);                                    // save the first array pointer
+    emit_expr(arr1, emitter, ctx, data);
+    abi::emit_push_reg(emitter, result_reg);                                    // save the second array pointer
+
+    // -- pop into ABI argument registers and call the runtime --
+    abi::emit_pop_reg(emitter, arr1_arg_reg);                                   // restore the second array pointer into the third runtime argument register
+    abi::emit_pop_reg(emitter, arr0_arg_reg);                                   // restore the first array pointer into the second runtime argument register
+    abi::emit_pop_reg(emitter, cb_arg_reg);                                     // restore the callback entry point into the first runtime argument register
+    abi::emit_load_int_immediate(emitter, env_arg_reg, 0);                      // non-capturing callbacks need no capture environment
+    abi::emit_call_label(emitter, "__rt_array_map2");                           // zip the two arrays through the callback into a new integer list
+    Some(PhpType::Array(Box::new(PhpType::Int)))
 }
 
 /// Emits runtime-string callback selection through descriptor-backed `array_map()`.

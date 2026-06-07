@@ -184,7 +184,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
 | `array_rand()` | `array_rand($arr): int` | Pick one random key |
-| `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |
+| `array_map()` | `array_map($callback, $arr, ...$arrays): array` | Apply callback to each element. With two integer arrays it zips them element-wise (`array_map($cb, $a, $b)`), result length `max(len)`, padding the shorter with 0; the callback must be a named function or a capture-less closure. |
 | `array_filter()` | `array_filter($arr, $callback, $mode = ARRAY_FILTER_USE_VALUE): array` | Filter where callback is truthy; mode selects value, key, or both callback args |
 | `array_reduce()` | `array_reduce($arr, $callback, $init): int` | Reduce to single value |
 | `array_walk()` | `array_walk($arr, $callback): void` | Call callback on each element |

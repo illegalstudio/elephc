@@ -251,6 +251,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_ksort(emitter);
     arrays::emit_natsort(emitter);
     arrays::emit_array_map(emitter);
+    arrays::emit_array_map2(emitter);
     arrays::emit_array_map_mixed(emitter);
     arrays::emit_array_map_str(emitter);
     arrays::emit_array_map_str_owned(emitter);

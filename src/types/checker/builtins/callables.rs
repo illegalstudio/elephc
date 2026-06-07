@@ -126,6 +126,99 @@ fn dummy_arg_for_array_scalar_elem(arr_ty: &PhpType, span: crate::span::Span) ->
     }
 }
 
+/// Returns true when a multi-array `array_map()` callback is a supported non-capturing form.
+///
+/// The bounded multi-array path invokes the callback directly with one argument per
+/// input array, so it can only accept callbacks that carry no capture environment: a
+/// named function (`StringLiteral`) or a capture-less closure/arrow function. Capturing
+/// closures, first-class callables, `[obj, method]` arrays, and runtime-string callbacks
+/// are deferred to a later increment and rejected with a clear diagnostic.
+fn array_map_multi_callback_supported(callback: &Expr) -> bool {
+    match &callback.kind {
+        ExprKind::StringLiteral(_) => true,
+        ExprKind::Closure {
+            captures,
+            capture_refs,
+            ..
+        } => captures.is_empty() && capture_refs.is_empty(),
+        _ => false,
+    }
+}
+
+/// Type-checks the multi-array form `array_map($callback, $a, $b, ...)`.
+///
+/// Bounded first increment of multi-array support: exactly two input arrays whose
+/// elements use the integer codegen representation, with a non-capturing callback
+/// that returns an integer-representable value. Shapes outside this subset (more than
+/// two arrays, non-integer arrays, capturing/exotic callbacks, string/float-returning
+/// callbacks, or the `array_map(null, ...)` zip form) are rejected with a clear
+/// "not yet supported" diagnostic so they fail at compile time rather than miscompiling.
+/// Returns `Array(Int)` to match the runtime, which collects 8-byte integer results.
+fn check_array_map_multi(
+    checker: &mut Checker,
+    args: &[Expr],
+    span: crate::span::Span,
+    env: &TypeEnv,
+) -> BuiltinResult {
+    if args.len() != 3 {
+        return Err(CompileError::new(
+            span,
+            "array_map() with more than two input arrays is not yet supported",
+        ));
+    }
+    if matches!(args[0].kind, ExprKind::Null) {
+        return Err(CompileError::new(
+            span,
+            "array_map(null, ...) array zipping is not yet supported",
+        ));
+    }
+    if !array_map_multi_callback_supported(&args[0]) {
+        return Err(CompileError::new(
+            args[0].span,
+            "array_map() with multiple arrays currently supports a named function or a capture-less closure as the callback",
+        ));
+    }
+    let mut elem_tys = Vec::new();
+    for arr_arg in &args[1..] {
+        match checker.infer_type(arr_arg, env)? {
+            PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Int) => {
+                elem_tys.push((*elem).clone());
+            }
+            PhpType::Array(_) => {
+                return Err(CompileError::new(
+                    span,
+                    "array_map() with multiple arrays currently supports only integer-valued arrays",
+                ));
+            }
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "array_map() arguments after the first must be arrays",
+                ));
+            }
+        }
+    }
+    let dummy_args: Vec<Expr> = elem_tys
+        .iter()
+        .map(|et| dummy_arg_for_array_scalar_elem(&PhpType::Array(Box::new(et.clone())), span))
+        .collect();
+    let callback_ret_ty = check_callback_builtin_call(
+        checker,
+        &args[0],
+        &dummy_args,
+        span,
+        env,
+        "array_map() callback",
+    )?;
+    if matches!(callback_ret_ty.codegen_repr(), PhpType::Str | PhpType::Float) {
+        return Err(CompileError::new(
+            span,
+            "array_map() with multiple arrays currently supports only integer-returning callbacks",
+        ));
+    }
+    Ok(Some(PhpType::Array(Box::new(PhpType::Int))))
+}
+
 /// Checks object or array callable call and reports a compile error when it is invalid.
 fn check_object_or_array_callable_call(
     checker: &mut Checker,
@@ -772,11 +865,17 @@ pub(super) fn check_builtin(
     match name {
         "preg_replace_callback" => preg_replace_callback::check(checker, args, span, env),
         "array_map" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "array_map() takes exactly 2 arguments"));
+            if args.len() < 2 {
+                return Err(CompileError::new(
+                    span,
+                    "array_map() takes at least 2 arguments",
+                ));
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
+            }
+            if args.len() > 2 {
+                return check_array_map_multi(checker, args, span, env);
             }
             let arr_ty = checker.infer_type(&args[1], env)?;
             match arr_ty {

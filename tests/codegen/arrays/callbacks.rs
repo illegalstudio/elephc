@@ -41,6 +41,58 @@ echo $b[0];
     assert_eq!(out, "11");
 }
 
+/// Verifies the multi-array form `array_map($cb, $a, $b)` zips two integer arrays element-wise
+/// through a named user function, producing a new integer list (H11).
+#[test]
+fn test_array_map_two_arrays_named_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function add($a, $b) { return $a + $b; }
+$r = array_map("add", [1, 2, 3], [10, 20, 30]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "11,22,33");
+}
+
+/// Verifies the multi-array form works with a capture-less arrow-function callback (H11).
+#[test]
+fn test_array_map_two_arrays_arrow_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => $a * $b, [1, 2, 3, 4], [10, 20, 30, 40]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "10,40,90,160");
+}
+
+/// Verifies that when the two arrays differ in length, the result length is the maximum and the
+/// shorter array is padded with 0 (PHP passes null, which coerces to 0 in integer context). The
+/// second array is shorter here (H11).
+#[test]
+fn test_array_map_two_arrays_unequal_second_shorter() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => $a + $b, [1, 2, 3], [10, 20]);
+echo implode(",", $r) . "|" . count($r);
+"#,
+    );
+    assert_eq!(out, "11,22,3|3");
+}
+
+/// Verifies the padding direction also holds when the first array is shorter than the second (H11).
+#[test]
+fn test_array_map_two_arrays_unequal_first_shorter() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => $a - $b, [5, 6], [1, 2, 3, 4]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "4,4,-3,-4");
+}
+
 // Tests `array_map` with a typed builtin callback (`strlen`) applied to string values,
 // verifying mixed-type result handling in array_map codegen.
 /// Verifies that array map string values to ints.

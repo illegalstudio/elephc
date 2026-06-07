@@ -374,7 +374,37 @@ fn test_error_array_column_wrong_args() {
 fn test_error_array_map_wrong_args() {
     expect_error(
         r#"<?php array_map("fn");"#,
-        "array_map() takes exactly 2 arguments",
+        "array_map() takes at least 2 arguments",
+    );
+}
+
+/// Verifies that the `array_map(null, ...)` zip form reports a clear "not yet supported"
+/// diagnostic rather than miscompiling (bounded H11 increment).
+#[test]
+fn test_error_array_map_null_zip_unsupported() {
+    expect_error(
+        r#"<?php array_map(null, [1, 2], [3, 4]);"#,
+        "array_map(null, ...) array zipping is not yet supported",
+    );
+}
+
+/// Verifies that the multi-array form rejects non-integer input arrays with a clear diagnostic
+/// (bounded H11 increment supports only integer-valued arrays).
+#[test]
+fn test_error_array_map_multi_non_integer_arrays() {
+    expect_error(
+        r#"<?php array_map(fn($a, $b) => $a, ["x"], ["y"]);"#,
+        "array_map() with multiple arrays currently supports only integer-valued arrays",
+    );
+}
+
+/// Verifies that the multi-array form rejects a capturing closure callback with a clear diagnostic
+/// (bounded H11 increment supports only non-capturing callbacks).
+#[test]
+fn test_error_array_map_multi_capturing_callback() {
+    expect_error(
+        r#"<?php $base = 5; array_map(fn($a, $b) => $a + $b + $base, [1], [2]);"#,
+        "array_map() with multiple arrays currently supports a named function or a capture-less closure",
     );
 }
 
