@@ -778,9 +778,11 @@ fn required_builtin_spl_metadata_methods(class_name: &str) -> &'static [&'static
             "offsetSet",
             "offsetUnset",
         ],
+        "RegexIterator" => &["accept", "current", "key"],
         "RecursiveArrayIterator" => &["hasChildren", "getChildren"],
         "RecursiveFilterIterator" => &["hasChildren"],
         "RecursiveCallbackFilterIterator" => &["hasChildren", "getChildren"],
+        "RecursiveRegexIterator" => &["accept", "current", "key", "hasChildren", "getChildren"],
         "ParentIterator" => &["accept", "getChildren"],
         "RecursiveIteratorIterator" => &[
             "current",
@@ -1045,6 +1047,27 @@ fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
                 | "key"
                 | "current"
                 | "next"
+        ),
+        "RegexIterator" | "RecursiveRegexIterator" => matches!(
+            method_key,
+            "__construct"
+                | "accept"
+                | "current"
+                | "key"
+                | "getmode"
+                | "setmode"
+                | "getflags"
+                | "setflags"
+                | "getregex"
+                | "getpregflags"
+                | "setpregflags"
+                | "__elephcregextarget"
+                | "__elephcfirstmatch"
+                | "__elephcallmatches"
+                | "__elephcsplit"
+                | "haschildren"
+                | "getchildren"
+                | "__elephcassumerecursiveiterator"
         ),
         "RecursiveArrayIterator" => matches!(
             method_key,

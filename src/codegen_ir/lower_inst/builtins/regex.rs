@@ -7,11 +7,12 @@
 //!
 //! Key details:
 //! - `preg_match()` captures currently support direct local `$matches` variables.
-//! - `preg_replace_callback()` supports static string callbacks and no-capture
-//!   closure descriptors whose ABI matches the regex callback runtime.
+//! - `preg_replace_callback()` supports static string callbacks and descriptor-backed
+//!   callable values through a regex-specific callback wrapper.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
 
 use crate::codegen::abi;
+use crate::codegen::context::DeferredCallbackWrapper;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
@@ -94,42 +95,63 @@ pub(super) fn lower_preg_replace_callback(
     let callback = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
     let callback_target = preg_replace_callback_target(ctx, callback)?;
+    let env_bytes = callback_target.reserve_env(ctx)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_arg(ctx, pattern, "x1", "x2", "preg_replace_callback pattern")?;
             abi::emit_symbol_address(ctx.emitter, "x3", &callback_target.entry_label);
-            abi::emit_load_int_immediate(ctx.emitter, "x4", 0);
+            load_static_callback_env_arg(ctx, "x4", env_bytes);
             load_string_arg(ctx, subject, "x5", "x6", "preg_replace_callback subject")?;
         }
         Arch::X86_64 => {
             load_string_arg(ctx, pattern, "rdi", "rsi", "preg_replace_callback pattern")?;
             abi::emit_symbol_address(ctx.emitter, "rdx", &callback_target.entry_label);
-            abi::emit_load_int_immediate(ctx.emitter, "rcx", 0);
+            load_static_callback_env_arg(ctx, "rcx", env_bytes);
             load_string_arg(ctx, subject, "r8", "r9", "preg_replace_callback subject")?;
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace_callback");
+    if env_bytes != 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+    }
     super::store_if_result(ctx, inst)
 }
 
 /// Runtime callback target passed to `__rt_preg_replace_callback`.
 struct PregReplaceCallbackTarget {
     entry_label: String,
+    descriptor_value: Option<ValueId>,
 }
 
-/// Resolves a regex replacement callback to a direct entry with no environment.
+impl PregReplaceCallbackTarget {
+    /// Reserves any callback environment required by the regex callback runtime.
+    fn reserve_env(&self, ctx: &mut FunctionContext<'_>) -> Result<usize> {
+        let Some(callback) = self.descriptor_value else {
+            return Ok(0);
+        };
+        reserve_descriptor_callback_env(ctx, callback)
+    }
+}
+
+/// Resolves a regex replacement callback to a runtime callback entry and optional environment.
 fn preg_replace_callback_target(
-    ctx: &FunctionContext<'_>,
+    ctx: &mut FunctionContext<'_>,
     callback: ValueId,
 ) -> Result<PregReplaceCallbackTarget> {
     if let Some(entry_label) = static_string_callback_entry(ctx, callback)? {
-        return Ok(PregReplaceCallbackTarget { entry_label });
+        return Ok(PregReplaceCallbackTarget {
+            entry_label,
+            descriptor_value: None,
+        });
     }
-    if let Some(entry_label) = closure_callback_entry(ctx, callback)? {
-        return Ok(PregReplaceCallbackTarget { entry_label });
+    if ctx.value_php_type(callback)?.codegen_repr() == PhpType::Callable {
+        return Ok(PregReplaceCallbackTarget {
+            entry_label: emit_descriptor_callback_wrapper(ctx),
+            descriptor_value: Some(callback),
+        });
     }
     Err(CodegenIrError::unsupported(
-        "preg_replace_callback callback with non-literal string",
+        "preg_replace_callback callback with unsupported EIR type",
     ))
 }
 
@@ -153,41 +175,60 @@ fn static_string_callback_entry(
     Ok(Some(function_symbol(&function_name)))
 }
 
-/// Resolves a no-capture closure descriptor to its direct EIR closure entry.
-fn closure_callback_entry(
-    ctx: &FunctionContext<'_>,
+/// Emits a descriptor callback wrapper that adapts regex matches to callable descriptors.
+fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
+    let wrapper_label = ctx.next_label("preg_replace_descriptor_callback_wrapper");
+    let done_label = ctx.next_label("preg_replace_descriptor_callback_after_wrapper");
+    let wrapper = DeferredCallbackWrapper {
+        label: wrapper_label.clone(),
+        visible_arg_types: vec![preg_matches_type()],
+        target_visible_arg_types: None,
+        capture_types: Vec::new(),
+        descriptor_prefix_types: Vec::new(),
+        descriptor_return_type: Some(PhpType::Str),
+    };
+    abi::emit_jump(ctx.emitter, &done_label);
+    crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
+    ctx.emitter.label(&done_label);
+    wrapper_label
+}
+
+/// Reserves a one-slot callback environment containing the callable descriptor.
+fn reserve_descriptor_callback_env(
+    ctx: &mut FunctionContext<'_>,
     callback: ValueId,
-) -> Result<Option<String>> {
-    let Some(inst) = value_source_instruction(ctx, callback)? else {
-        return Ok(None);
-    };
-    if inst.op != Op::ClosureNew {
-        return Ok(None);
-    }
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return Err(CodegenIrError::invalid_module(
-            "preg_replace_callback closure descriptor has no data id",
-        ));
-    };
-    let closure_name = ctx
-        .module
-        .data
-        .strings
-        .get(data.as_raw() as usize)
-        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
-    let closure = ctx
-        .module
-        .closures
-        .iter()
-        .find(|function| function.name == *closure_name)
-        .ok_or_else(|| CodegenIrError::missing_entry("closure", data.as_raw()))?;
-    if closure.params.len() != 1 || closure.return_php_type.codegen_repr() != PhpType::Str {
-        return Err(CodegenIrError::unsupported(format!(
-            "preg_replace_callback closure {} with unsupported signature",
-            closure_name
+) -> Result<usize> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    let callback_ty = ctx.load_value_to_result(callback)?;
+    if callback_ty.codegen_repr() != PhpType::Callable {
+        return Err(CodegenIrError::invalid_module(format!(
+            "preg_replace_callback descriptor operand has PHP type {:?}",
+            callback_ty
         )));
     }
-    Ok(Some(function_symbol(closure_name)))
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp]");                            // store the runtime callable descriptor for the regex callback wrapper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // store the runtime callable descriptor for the regex callback wrapper
+        }
+    }
+    Ok(16)
+}
+
+/// Loads the optional callback environment argument expected by the regex runtime.
+fn load_static_callback_env_arg(ctx: &mut FunctionContext<'_>, env_reg: &str, env_bytes: usize) {
+    if env_bytes == 0 {
+        abi::emit_load_int_immediate(ctx.emitter, env_reg, 0);
+    } else {
+        abi::emit_temporary_stack_address(ctx.emitter, env_reg, 0);
+    }
+}
+
+/// Returns the matches array type passed to preg replacement callbacks.
+fn preg_matches_type() -> PhpType {
+    PhpType::Array(Box::new(PhpType::Str))
 }
 
 /// Lowers `preg_split(pattern, subject, limit?, flags?)` through the regex split helper.
