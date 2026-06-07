@@ -5954,6 +5954,13 @@ fn property_get_result_type(
         };
     }
     let Some((_, property_ty)) = class_info.properties.iter().find(|(name, _)| name == property) else {
+        if class_info.allow_dynamic_properties {
+            return if nullable {
+                nullable_result_type(PhpType::Mixed)
+            } else {
+                PhpType::Mixed
+            };
+        }
         return fallback_expr_type(expr);
     };
     let property_ty = normalize_value_php_type(property_ty.clone());

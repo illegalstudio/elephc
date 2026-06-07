@@ -57,6 +57,7 @@ pub(super) fn lower_reflection_owner_new(
         ctx,
         class_id,
         property_count,
+        false,
         &uninitialized_marker_offsets,
     )?;
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {

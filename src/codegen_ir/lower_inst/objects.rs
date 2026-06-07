@@ -8,14 +8,14 @@
 //! Key details:
 //! - Object payload layout must match the legacy backend and runtime helpers:
 //!   heap kind word before payload, class id at payload offset 0, then 16 bytes
-//!   per declared property slot.
-//! - This slice intentionally rejects dynamic properties, references, interface
-//!   method entries that need missing EIR symbols, and non-literal default
-//!   property expressions until their runtime paths land.
+//!   per declared property slot plus an optional dynamic-property hash pointer.
+//! - This slice intentionally rejects references, interface method entries that
+//!   need missing EIR symbols, and non-literal default property expressions
+//!   until their runtime paths land.
 
 use std::collections::HashSet;
 
-use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed};
+use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, runtime_value_tag};
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::intrinsics::IntrinsicCall;
@@ -71,6 +71,7 @@ struct DynamicNewCandidate {
     class_name: String,
     class_id: u64,
     property_count: usize,
+    allow_dynamic_properties: bool,
     uninitialized_marker_offsets: Vec<usize>,
     property_defaults: Vec<PropertyDefault>,
     constructor_impl: Option<(String, Vec<PhpType>)>,
@@ -104,6 +105,7 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let (
         class_id,
         property_count,
+        allow_dynamic_properties,
         uninitialized_marker_offsets,
         property_defaults,
         constructor_impl,
@@ -113,12 +115,6 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
             .class_infos
             .get(&class_name)
             .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", class_name)))?;
-        if class_info.allow_dynamic_properties {
-            return Err(CodegenIrError::unsupported(format!(
-                "object allocation requiring dynamic properties for {}",
-                class_name
-            )));
-        }
         if class_interfaces_require_missing_method_symbols(ctx, &class_name, class_info) {
             return Err(CodegenIrError::unsupported(format!(
                 "object allocation requiring interface method symbols not emitted by EIR for {}",
@@ -164,6 +160,7 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         (
             class_info.class_id,
             class_info.properties.len(),
+            class_info.allow_dynamic_properties,
             marker_offsets,
             property_defaults,
             constructor_impl,
@@ -173,6 +170,7 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ctx,
         class_id,
         property_count,
+        allow_dynamic_properties,
         &uninitialized_marker_offsets,
     )?;
     let result = inst
@@ -309,6 +307,7 @@ fn lower_callback_filter_iterator_new(
         ctx,
         class_id,
         property_count,
+        false,
         &uninitialized_marker_offsets,
     )?;
     let result = inst
@@ -451,6 +450,7 @@ fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ctx,
         class_id,
         property_count,
+        false,
         &uninitialized_marker_offsets,
     )?;
     let result = inst
@@ -1135,9 +1135,7 @@ fn dynamic_new_candidate(
     arg_count: usize,
     inst: &Instruction,
 ) -> Result<Option<DynamicNewCandidate>> {
-    if class_info.allow_dynamic_properties
-        || class_interfaces_require_missing_method_symbols(ctx, class_name, class_info)
-    {
+    if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
     let constructor_key = php_symbol_key("__construct");
@@ -1169,6 +1167,7 @@ fn dynamic_new_candidate(
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
         property_count: class_info.properties.len(),
+        allow_dynamic_properties: class_info.allow_dynamic_properties,
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
         property_defaults,
         constructor_impl,
@@ -1283,6 +1282,7 @@ fn emit_dynamic_new_candidate(
         ctx,
         candidate.class_id,
         candidate.property_count,
+        candidate.allow_dynamic_properties,
         &candidate.uninitialized_marker_offsets,
     )?;
     ctx.store_result_value(result)?;
@@ -1502,6 +1502,9 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return lower_mixed_prop_get(ctx, inst, object, &property);
     }
+    if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
+        return lower_allow_dynamic_prop_get(ctx, inst, object, &property, offset);
+    }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
@@ -1509,6 +1512,47 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a static-name read from an undeclared property on an allow-dynamic class.
+fn lower_allow_dynamic_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+    hash_offset: usize,
+) -> Result<()> {
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let (label, key_len) = ctx.data.add_string(property.as_bytes());
+    let miss_label = ctx.next_label("dynamic_prop_miss");
+    let done_label = ctx.next_label("dynamic_prop_done");
+    ctx.load_value_to_reg(object, object_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x0, [{}, #{}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+            ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // missing dynamic properties read as PHP null
+            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null fallback after a successful dynamic-property hit
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [{} + {}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+            ctx.emitter.instruction("test rax, rax");                           // check whether the dynamic-property key was present
+            ctx.emitter.instruction(&format!("je {}", miss_label));             // missing dynamic properties read as PHP null
+            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null fallback after a successful dynamic-property hit
+        }
+    }
+    ctx.emitter.label(&miss_label);
+    emit_boxed_null(ctx);
+    ctx.emitter.label(&done_label);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
 
@@ -2117,12 +2161,80 @@ pub(super) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_prop_set(ctx, inst, object, value, &class_name, &property);
     }
+    if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
+        return lower_allow_dynamic_prop_set(ctx, object, value, &property, offset);
+    }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     emit_property_store(ctx, value, &slot, base_reg)
+}
+
+/// Lowers a static-name write to an undeclared property on an allow-dynamic class.
+fn lower_allow_dynamic_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+    hash_offset: usize,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let boxed_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let (label, key_len) = ctx.data.add_string(property.as_bytes());
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov {}, x0", boxed_reg));         // preserve the boxed dynamic-property value across receiver restore
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            ctx.emitter.instruction(&format!("ldr x0, [{}, #{}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
+            abi::emit_push_reg(ctx.emitter, object_reg);
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+            ctx.emitter.instruction(&format!("mov x3, {}", boxed_reg));         // pass the boxed Mixed cell as the hash value payload
+            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash entries do not use the high payload word
+            abi::emit_load_int_immediate(ctx.emitter, "x5", runtime_value_tag(&PhpType::Mixed) as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            abi::emit_store_to_address(ctx.emitter, "x0", object_reg, hash_offset);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, rax", boxed_reg));        // preserve the boxed dynamic-property value across receiver restore
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [{} + {}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
+            abi::emit_push_reg(ctx.emitter, object_reg);
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+            ctx.emitter.instruction(&format!("mov rcx, {}", boxed_reg));        // pass the boxed Mixed cell as the hash value payload
+            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash entries do not use the high payload word
+            abi::emit_load_int_immediate(ctx.emitter, "r9", runtime_value_tag(&PhpType::Mixed) as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, hash_offset);
+        }
+    }
+    Ok(())
+}
+
+/// Materializes a property value as an owned boxed `Mixed` cell in the result register.
+fn materialize_dynamic_property_mixed_value(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+        if !ctx.value_can_own_mixed_box_source(value)? {
+            abi::emit_incref_if_refcounted(ctx.emitter, &value_ty.codegen_repr());
+        }
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, value_ty);
+    }
+    Ok(())
 }
 
 /// Lowers a property write on a nullable receiver, fataling after RHS evaluation when null.
@@ -2230,9 +2342,12 @@ fn emit_object_allocation(
     ctx: &mut FunctionContext<'_>,
     class_id: u64,
     property_count: usize,
+    allow_dynamic_properties: bool,
     uninitialized_marker_offsets: &[usize],
 ) -> Result<()> {
-    let payload_size = 8 + property_count * 16;
+    let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
+    let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
+    let payload_size = dynamic_properties_offset + dynamic_properties_bytes;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("mov x0, #{}", payload_size));     // request object payload storage for the class id and property slots
@@ -2264,7 +2379,41 @@ fn emit_object_allocation(
             abi::emit_store_to_address(ctx.emitter, marker_reg, object_reg, *offset);
         }
     }
+    if allow_dynamic_properties {
+        emit_dynamic_property_hash_init(ctx, object_reg, dynamic_properties_offset);
+    }
     Ok(())
+}
+
+/// Returns the byte offset of the dynamic-property hash pointer for this layout.
+fn dynamic_property_hash_offset(property_count: usize) -> usize {
+    8 + property_count * 16
+}
+
+/// Allocates the per-object dynamic-property hash and stores it in the object payload.
+fn emit_dynamic_property_hash_init(
+    ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
+    offset: usize,
+) {
+    let hash_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 4);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", runtime_value_tag(&PhpType::Mixed) as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+            ctx.emitter.instruction(&format!("mov {}, x0", hash_reg));          // preserve the dynamic-property hash across object restore
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", 4);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", runtime_value_tag(&PhpType::Mixed) as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+            ctx.emitter.instruction(&format!("mov {}, rax", hash_reg));         // preserve the dynamic-property hash across object restore
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, hash_reg, object_reg, offset);
 }
 
 /// Returns true when implemented interfaces require method-wrapper metadata not emitted here.
@@ -2407,6 +2556,40 @@ fn resolve_property_slot(
         )));
     };
     resolve_property_slot_for_class(ctx, &class_name, property, inst)
+}
+
+/// Returns the dynamic-property hash slot offset for an undeclared allow-dynamic property.
+fn dynamic_property_hash_offset_for_object(
+    ctx: &FunctionContext<'_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> Result<Option<usize>> {
+    let object_ty = ctx.value_php_type(object)?;
+    let PhpType::Object(class_name) = object_ty else {
+        return Ok(None);
+    };
+    dynamic_property_hash_offset_for_class(ctx, &class_name, property)
+}
+
+/// Returns the dynamic-property hash slot offset for a known class and property name.
+fn dynamic_property_hash_offset_for_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) -> Result<Option<usize>> {
+    let normalized = class_name.trim_start_matches('\\');
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(normalized)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", normalized)))?;
+    if class_info.properties.iter().any(|(name, _)| name == property) {
+        return Ok(None);
+    }
+    if class_info.allow_dynamic_properties {
+        return Ok(Some(dynamic_property_hash_offset(class_info.properties.len())));
+    }
+    Ok(None)
 }
 
 /// Resolves a property slot for a known class name.
