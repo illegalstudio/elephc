@@ -240,7 +240,26 @@ pub struct FunctionSig {
 - `variadic` holds the name of the variadic parameter (e.g., `$args` in `function foo(...$args)`). Extra arguments beyond the regular parameters are collected into an array.
 - `deprecation` carries PHP 8.4 `#[Deprecated]` metadata when present, so call sites can surface the warning consistently.
 
+### Call-site inference for untyped parameters
+
+Parameters without a type hint start from an `Int` fallback and are specialized from the actual argument types observed at call sites. The checker accumulates the argument types seen across *all* call sites for each undeclared parameter: a parameter called with a single type takes that type, while a parameter called with incompatible types (e.g. `int` at one site and `string` at another) widens to a `Union` so each argument keeps its own runtime representation instead of being coerced to the last-seen type. A union whose members are all `int`/`bool` collapses back to `Int` (preserving the int fallback for int- or bool-only calls), and a `void` argument never specializes a parameter. Because `Union` lowers to the same boxed runtime shape as `Mixed`, such arguments are boxed at the call site and unboxed where they are used.
+
+The same accumulation applies to instance-method and static-method parameters. Closure parameters specialize to the first observed argument type but do not widen to a union, so a closure invoked with incompatible argument types is rejected rather than coerced.
+
 This information is then used when checking calls to that function.
+
+### Type narrowing (`is_*` / `instanceof` guards)
+
+Inside an `if` guarded by a type predicate on a single variable, the checker narrows that variable's type for the guarded branch. `is_int`/`is_integer`/`is_long`, `is_float`/`is_double`, `is_string`, and `is_bool` narrow to the corresponding scalar; `$x instanceof Class` narrows to that class. The then-branch sees the guarded type and the else-branch sees the complement (a `Union` drops the matched members); a leading `!` swaps the two. A guard with no `else` whose body always diverges (`return`/`throw`) narrows the statements after the `if` to the complement. This is what makes the common "overload" shape type-check:
+
+```php
+function set($x): void {                 // $x inferred int|Foo from the call sites
+    if (is_int($x)) { $this->n = $x; }   // $x is int here -> stored into an int property
+    else { $this->o = $x->run(); }       // $x is Foo here -> method dispatched on its class
+}
+```
+
+Narrowing is purely a type-checker step: the variable keeps its boxed runtime (`Mixed`) representation, and codegen coerces it where the narrowed type is required — unboxing for scalar uses, and dispatching a method on a `Mixed`/union receiver by its runtime class id. Narrowing is not flow-sensitive across reassignment of the variable within a branch.
 
 ## Diagnostics and warnings
 

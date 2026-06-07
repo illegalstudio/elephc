@@ -160,6 +160,24 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `settype()`     | `settype($var, $type): bool` | Changes variable type in place |
 
 
+### Type narrowing
+
+Inside an `if` (or `if`/`elseif`*/`else` chain) guarded by a type predicate on a variable, that variable is narrowed to the tested type within the matching branch(es), so it can be used as that type without an explicit cast. `is_int()`, `is_float()`, `is_string()`, and `is_bool()` (and their aliases) narrow to the matching scalar, and `$x instanceof SomeClass` narrows to that class — including calling its methods. Each subsequent `elseif`, and the `else` branch, see the complement of all previous guards. The statements *after* the whole construct also see the complement when the chain is exhaustive by divergence — there is no `else` and *every* clause body always diverges (`return`, `throw`, `exit()`, `die()`, or a call to a `: never` function) — because reaching them means every guard was false. A leading `!` flips the then/else branches.
+
+```php
+function describe($x): string {        // $x may be int or a Point across call sites
+    if (is_int($x)) {
+        return "int " . ($x + 1);      // $x is int here
+    }
+    return "point " . $x->label();     // $x is the object here
+}
+```
+
+Narrowing is not tracked across a reassignment of the variable inside the branch.
+
+Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
+
+
 ### Known incompatibilities with PHP
 
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
