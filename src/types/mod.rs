@@ -60,6 +60,17 @@ pub(crate) use signatures::{
 };
 pub use signatures::FunctionSig;
 
+/// Returns true when an `array_slice()` call requests key preservation via a literal `true` fourth
+/// argument. Shared by the type checker, codegen emitter, and codegen local-type inference so all
+/// three agree on the result shape (an integer-keyed associative array). A drift between callers
+/// would disagree on Array-vs-AssocArray storage, which is a heap-shape mismatch.
+pub(crate) fn array_slice_literal_preserve_keys(args: &[crate::parser::ast::Expr]) -> bool {
+    matches!(
+        args.get(3).map(|arg| &arg.kind),
+        Some(crate::parser::ast::ExprKind::BoolLiteral(true))
+    )
+}
+
 /// Type checks the program after name resolution. Returns `CheckResult` with type
 /// metadata, function/class/interface/enum info, warnings, required libraries, and the
 /// internal `Mixed` type for heterogeneous assoc-array values. Runs before optimization/codegen.

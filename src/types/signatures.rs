@@ -264,9 +264,9 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "array_pad" => Some(fixed(&["array", "length", "value"])),
         "array_fill" => Some(fixed(&["start_index", "count", "value"])),
         "array_slice" => Some(optional(
-            &["array", "offset", "length"],
+            &["array", "offset", "length", "preserve_keys"],
             2,
-            vec![null_lit()],
+            vec![null_lit(), bool_lit(false)],
         )),
         "array_splice" => Some(first_param_ref(optional(
             &["array", "offset", "length"],

@@ -61,6 +61,7 @@ mod array_reverse_refcounted;
 mod array_search;
 mod array_shift;
 mod array_slice;
+mod array_slice_preserve;
 mod array_slice_refcounted;
 mod array_splice;
 mod array_splice_refcounted;
@@ -241,6 +242,8 @@ pub use array_search::emit_array_search;
 pub use array_shift::emit_array_shift;
 /// Emit array shift (remove first) helper.
 pub use array_slice::emit_array_slice;
+/// Emit key-preserving array slice helper (`array_slice($a, $off, $len, true)`).
+pub use array_slice_preserve::emit_array_slice_preserve;
 /// Emit array slice extraction helper.
 pub use array_slice_refcounted::emit_array_slice_refcounted;
 /// Emit refcounted array slice helper.

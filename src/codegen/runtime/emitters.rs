@@ -216,6 +216,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_merge_refcounted(emitter);
     arrays::emit_array_merge_str(emitter);
     arrays::emit_array_slice(emitter);
+    arrays::emit_array_slice_preserve(emitter);
     arrays::emit_array_slice_refcounted(emitter);
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);

@@ -172,6 +172,25 @@ pub(super) fn infer_function_call_type(
         // array_rand() returns a single key (the emitter always produces an Int key); it does not
         // return an array for the default count. Inferring Array here mis-typed the local.
         "array_rand" => PhpType::Int,
+        // array_slice() with a literal preserve_keys=true on a scalar indexed array yields an
+        // integer-keyed associative result; this MUST match the checker and the codegen emitter so
+        // the local's storage shape (packed Array vs. AssocArray hash) is consistent.
+        "array_slice"
+            if crate::types::array_slice_literal_preserve_keys(args)
+                && matches!(
+                    args.first().map(|a| infer_local_type(a, sig, ctx)),
+                    Some(PhpType::Array(ref inner))
+                        if matches!(**inner, PhpType::Int | PhpType::Float | PhpType::Bool)
+                ) =>
+        {
+            match infer_local_type(&args[0], sig, ctx) {
+                PhpType::Array(inner) => PhpType::AssocArray {
+                    key: Box::new(PhpType::Int),
+                    value: inner,
+                },
+                other => other,
+            }
+        }
         "explode"
         | "str_split"
         | "file"

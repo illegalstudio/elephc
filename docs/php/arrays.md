@@ -153,7 +153,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $arr [, $strict]): int\|string\|false` | Search for value (accepts `$strict`), returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found |
-| `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice |
+| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice; `$preserve_keys=true` keeps original integer keys |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove a slice in place and return the removed elements |
 | `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks |
 | `array_merge()` | `array_merge($arr1, $arr2, ...): array` | Merge two or more arrays |

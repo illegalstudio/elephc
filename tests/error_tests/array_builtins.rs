@@ -88,7 +88,17 @@ fn test_error_array_key_exists_wrong_args() {
 fn test_error_array_slice_wrong_args() {
     expect_error(
         "<?php $a = [1]; array_slice($a);",
-        "array_slice() takes 2 or 3 arguments",
+        "array_slice() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies array_slice() with preserve_keys=true on a non-scalar element array is rejected (M6):
+/// only int/float/bool element arrays are supported for the key-preserving associative result.
+#[test]
+fn test_error_array_slice_preserve_keys_string_array() {
+    expect_error(
+        r#"<?php $a = ["x", "y", "z"]; array_slice($a, 1, 2, true);"#,
+        "preserve_keys=true is only supported for arrays of int, float, or bool",
     );
 }
 
