@@ -791,16 +791,22 @@ fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
     }
 }
 
-/// Lowers `strlen(string)` by returning the loaded string-result length register.
+/// Lowers `strlen()` by coercing string-like values and returning the byte length.
 fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "strlen", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
-    if ty != PhpType::Str {
-        return Err(CodegenIrError::unsupported(format!(
-            "strlen for PHP type {:?}",
-            ty
-        )));
+    match ty.codegen_repr() {
+        PhpType::Str => {}
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "strlen for PHP type {:?}",
+                other
+            )));
+        }
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
     let len_reg = abi::string_result_regs(ctx.emitter).1;
