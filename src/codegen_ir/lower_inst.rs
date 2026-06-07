@@ -130,6 +130,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayGet => arrays::lower_array_get(ctx, &inst),
         Op::ArraySet => arrays::lower_array_set(ctx, &inst),
         Op::ArrayPush => arrays::lower_array_push(ctx, &inst),
+        Op::MixedArrayAppend => arrays::lower_mixed_array_append(ctx, &inst),
         Op::ArrayUnion => arrays::lower_array_union(ctx, &inst),
         Op::ArrayHashUnion => arrays::lower_array_hash_union(ctx, &inst),
         Op::ArrayToHash => arrays::lower_array_to_hash(ctx, &inst),

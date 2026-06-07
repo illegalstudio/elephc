@@ -224,6 +224,28 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     Ok(())
 }
 
+/// Lowers appends through a boxed Mixed array cell.
+pub(super) fn lower_mixed_array_append(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let receiver = expect_operand(inst, 0)?;
+    let value = expect_operand(inst, 1)?;
+    match ctx.value_php_type(receiver)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {}
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "mixed_array_append receiver PHP type {:?}",
+                other
+            )))
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_mixed_array_append_aarch64(ctx, receiver, value),
+        Arch::X86_64 => lower_mixed_array_append_x86_64(ctx, receiver, value),
+    }
+}
+
 /// Lowers PHP indexed-array union through the shared runtime helper.
 pub(super) fn lower_array_union(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let left = expect_operand(inst, 0)?;
@@ -635,6 +657,95 @@ fn lower_array_push_x86_64(
 fn array_push_value_needs_mixed_box(elem_ty: &PhpType, value_ty: &PhpType) -> bool {
     matches!(elem_ty.codegen_repr(), PhpType::Mixed)
         && !matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Appends to an indexed array stored inside a boxed Mixed cell on AArch64.
+fn lower_mixed_array_append_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    receiver: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    let drop_label = ctx.next_label("mixed_array_append_drop");
+    let done_label = ctx.next_label("mixed_array_append_done");
+    prepare_boxed_mixed_value_for_container(ctx, value)?;
+    abi::emit_push_reg(ctx.emitter, "x0");
+    ctx.load_value_to_reg(receiver, "x0")?;
+    abi::emit_push_reg(ctx.emitter, "x0");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before deriving the append key
+    ctx.emitter.instruction(&format!("b.ne {}", drop_label));                   // drop the boxed value when the Mixed cell is not an indexed array
+    ctx.emitter.instruction(&format!("cbz x1, {}", drop_label));                // drop the boxed value when the indexed-array payload is null
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
+    ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
+    ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+    abi::emit_pop_reg(ctx.emitter, "x10");
+    ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted indexed array back into the Mixed cell
+    ctx.emitter.instruction("ldr x1, [x0]");                                    // use the current logical length as the append index
+    ctx.emitter.instruction("mov x0, x10");                                     // pass the target Mixed cell to the runtime setter
+    abi::emit_pop_reg(ctx.emitter, "x3");
+    ctx.emitter.instruction("mov x2, #-1");                                     // key_hi = -1 marks an integer array key
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the failure cleanup after the setter consumes the value
+    ctx.emitter.label(&drop_label);
+    abi::emit_pop_reg(ctx.emitter, "x9");
+    abi::emit_pop_reg(ctx.emitter, "x0");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Appends to an indexed array stored inside a boxed Mixed cell on x86_64.
+fn lower_mixed_array_append_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    receiver: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    let drop_label = ctx.next_label("mixed_array_append_drop");
+    let done_label = ctx.next_label("mixed_array_append_done");
+    prepare_boxed_mixed_value_for_container(ctx, value)?;
+    abi::emit_push_reg(ctx.emitter, "rax");
+    ctx.load_value_to_reg(receiver, "rax")?;
+    abi::emit_push_reg(ctx.emitter, "rax");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before deriving the append key
+    ctx.emitter.instruction(&format!("jne {}", drop_label));                    // drop the boxed value when the Mixed cell is not an indexed array
+    ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
+    ctx.emitter.instruction(&format!("je {}", drop_label));                     // drop the boxed value when the indexed-array payload is null
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
+    ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
+    ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+    abi::emit_pop_reg(ctx.emitter, "r10");
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted indexed array back into the Mixed cell
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rax]");                        // use the current logical length as the append index
+    ctx.emitter.instruction("mov rdi, r10");                                    // pass the target Mixed cell to the runtime setter
+    abi::emit_pop_reg(ctx.emitter, "rcx");
+    ctx.emitter.instruction("mov rdx, -1");                                     // key_hi = -1 marks an integer array key
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the failure cleanup after the setter consumes the value
+    ctx.emitter.label(&drop_label);
+    abi::emit_pop_reg(ctx.emitter, "r11");
+    abi::emit_pop_reg(ctx.emitter, "rax");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Materializes the appended value as an owned boxed Mixed cell.
+fn prepare_boxed_mixed_value_for_container(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+        ctx.load_value_to_result(value)?;
+        abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+    } else {
+        box_value_for_mixed_container(ctx, value, &value_ty)?;
+    }
+    Ok(())
 }
 
 /// Boxes a concrete AArch64 value and appends the owned Mixed cell to a Mixed array.

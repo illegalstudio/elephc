@@ -90,3 +90,21 @@ fn overwriting_string_local_emits_release() {
     assert!(text.contains("acquire"), "expected acquire in {text}");
     assert!(text.contains("release"), "expected release in {text}");
 }
+
+/// Verifies appends into mixed function parameters use an explicit append opcode.
+#[test]
+fn mixed_parameter_array_push_uses_explicit_opcode() {
+    let module = super::lower_source(
+        r#"<?php
+function add($arr, $value) {
+    $arr[] = $value;
+    return $arr;
+}
+"#,
+    );
+    let text = print_module(&module);
+    assert!(
+        text.contains("mixed_array_append"),
+        "expected mixed_array_append for mixed parameter array push in {text}"
+    );
+}
