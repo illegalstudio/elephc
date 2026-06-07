@@ -112,6 +112,10 @@ enum IteratorApplyCallback {
         callable: ValueId,
         arg_container: Option<ValueId>,
     },
+    DescriptorString {
+        callable: ValueId,
+        arg_container: Option<ValueId>,
+    },
     DescriptorCallableArray {
         callable: ValueId,
         arg_container: Option<ValueId>,
@@ -327,6 +331,16 @@ fn emit_apply_callback_state(
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             Ok(())
         }
+        IteratorApplyCallback::DescriptorString { callable, .. } => {
+            callables::emit_runtime_string_descriptor_value(
+                ctx,
+                *callable,
+                abi::int_result_reg(ctx.emitter),
+                "iterator_apply",
+            )?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            Ok(())
+        }
         IteratorApplyCallback::DescriptorCallableArray {
             callable,
             release_runtime_descriptor,
@@ -356,6 +370,9 @@ fn release_apply_callback_state(ctx: &mut FunctionContext<'_>, callback: &Iterat
         }
         IteratorApplyCallback::DescriptorCallable { .. } => {
             emit_release_saved_apply_descriptor(ctx);
+        }
+        IteratorApplyCallback::DescriptorString { .. } => {
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
         }
         IteratorApplyCallback::DescriptorCallableArray {
             release_runtime_descriptor,
@@ -388,14 +405,39 @@ fn iterator_apply_callback(
     inst: &Instruction,
 ) -> Result<IteratorApplyCallback> {
     if let Some(callback_name) = static_string_operand(ctx, callback)? {
-        let args = iterator_apply_callback_args(ctx, inst)?;
-        let callback_function = ctx.callable_function_by_name(&callback_name).ok_or_else(|| {
-            CodegenIrError::unsupported(format!(
+        let arg_container = iterator_apply_arg_container(ctx, inst)?;
+        let args = if let Some(arg_container) = arg_container {
+            match iterator_apply_static_array_items(ctx, inst, arg_container)? {
+                Some(args) => args,
+                None => {
+                    return Ok(IteratorApplyCallback::DescriptorString {
+                        callable: callback,
+                        arg_container: Some(arg_container),
+                    })
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        let Some(callback_function) = ctx.callable_function_by_name(&callback_name) else {
+            if arg_container.is_some() {
+                return Ok(IteratorApplyCallback::DescriptorString {
+                    callable: callback,
+                    arg_container,
+                });
+            }
+            return Err(CodegenIrError::unsupported(format!(
                 "iterator_apply callback {} without emitted EIR function",
                 callback_name
-            ))
-        })?;
+            )));
+        };
         if callback_function.params.len() != args.len() {
+            if arg_container.is_some() {
+                return Ok(IteratorApplyCallback::DescriptorString {
+                    callable: callback,
+                    arg_container,
+                });
+            }
             return Err(CodegenIrError::unsupported(format!(
                 "iterator_apply callback {} with {} params and {} EIR args",
                 callback_name,
@@ -408,6 +450,12 @@ fn iterator_apply_callback(
             .iter()
             .any(|param| param.by_ref || param.variadic)
         {
+            if arg_container.is_some() {
+                return Ok(IteratorApplyCallback::DescriptorString {
+                    callable: callback,
+                    arg_container,
+                });
+            }
             return Err(CodegenIrError::unsupported(format!(
                 "iterator_apply callback {} with by-ref or variadic params",
                 callback_name
@@ -428,10 +476,12 @@ fn iterator_apply_callback(
 
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Str => {
-            if iterator_apply_arg_container(ctx, inst)?.is_some() {
-                return Err(CodegenIrError::unsupported(
-                    "iterator_apply EIR dynamic string callback with arg arrays",
-                ));
+            let arg_container = iterator_apply_arg_container(ctx, inst)?;
+            if arg_container.is_some() {
+                return Ok(IteratorApplyCallback::DescriptorString {
+                    callable: callback,
+                    arg_container,
+                });
             }
             let targets = iterator_apply_runtime_string_targets(ctx);
             if targets.is_empty() {
@@ -507,22 +557,6 @@ fn iterator_apply_callback_return_supported(return_ty: &PhpType) -> bool {
             | PhpType::Mixed
             | PhpType::Union(_)
     )
-}
-
-/// Returns callback argument SSA values for the static arg-array subset.
-fn iterator_apply_callback_args(
-    ctx: &FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<Vec<ValueId>> {
-    let Some(args) = inst.operands.get(2).copied() else {
-        return Ok(Vec::new());
-    };
-    if iterator_apply_arg_is_null(ctx, args)? {
-        return Ok(Vec::new());
-    }
-    iterator_apply_static_array_items(ctx, inst, args)?.ok_or_else(|| {
-        CodegenIrError::unsupported("iterator_apply EIR callback argument arrays")
-    })
 }
 
 /// Returns the original callback argument container for descriptor-backed callbacks.
@@ -1608,6 +1642,9 @@ fn emit_apply_callback_invocation(
             emit_dynamic_string_apply_callback_invocation(ctx, targets, loop_end)
         }
         IteratorApplyCallback::DescriptorCallable { arg_container, .. } => {
+            emit_descriptor_apply_callback_invocation(ctx, *arg_container, loop_end)
+        }
+        IteratorApplyCallback::DescriptorString { arg_container, .. } => {
             emit_descriptor_apply_callback_invocation(ctx, *arg_container, loop_end)
         }
         IteratorApplyCallback::DescriptorCallableArray { arg_container, .. } => {
