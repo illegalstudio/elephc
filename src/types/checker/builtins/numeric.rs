@@ -10,9 +10,20 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
+use crate::types::round_constants::round_mode_value;
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
+
+/// Resolves a statically-known `round()` mode value from an integer literal or a `PHP_ROUND_HALF_*`
+/// constant reference. Returns `None` for a runtime (non-constant) mode argument.
+fn static_round_mode(arg: &Expr) -> Option<i64> {
+    match &arg.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::ConstRef(name) => round_mode_value(name),
+        _ => None,
+    }
+}
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
@@ -154,12 +165,22 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Float))
         }
         "round" => {
-            if args.is_empty() || args.len() > 2 {
-                return Err(CompileError::new(span, "round() takes 1 or 2 arguments"));
+            if args.is_empty() || args.len() > 3 {
+                return Err(CompileError::new(span, "round() takes 1 to 3 arguments"));
             }
             checker.infer_type(&args[0], env)?;
-            if args.len() == 2 {
-                checker.infer_type(&args[1], env)?;
+            for arg in &args[1..] {
+                checker.infer_type(arg, env)?;
+            }
+            // PHP_ROUND_HALF_DOWN (2) and PHP_ROUND_HALF_ODD (4) tie-breaking are not yet
+            // specialized; PHP_ROUND_HALF_UP (1, the default) and PHP_ROUND_HALF_EVEN (3) are.
+            if let Some(mode) = args.get(2).and_then(static_round_mode) {
+                if mode == 2 || mode == 4 {
+                    return Err(CompileError::new(
+                        span,
+                        "round(): only PHP_ROUND_HALF_UP and PHP_ROUND_HALF_EVEN modes are supported",
+                    ));
+                }
             }
             Ok(Some(PhpType::Float))
         }

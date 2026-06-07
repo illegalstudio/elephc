@@ -13,8 +13,23 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::codegen::{abi, platform::Arch};
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
+use crate::types::round_constants::round_mode_value;
 use crate::types::PhpType;
+
+/// Resolves the statically-known `round()` mode from the optional third argument.
+///
+/// Returns the `PHP_ROUND_HALF_*` value for an integer literal or a recognized constant reference,
+/// defaulting to `1` (`PHP_ROUND_HALF_UP`) when the mode is absent or a runtime value. The checker
+/// rejects `PHP_ROUND_HALF_DOWN`/`PHP_ROUND_HALF_ODD`, so codegen only distinguishes
+/// `PHP_ROUND_HALF_EVEN` (`3`) from the default away-from-zero rounding.
+fn static_round_mode(args: &[Expr]) -> i64 {
+    match args.get(2).map(|arg| &arg.kind) {
+        Some(ExprKind::IntLiteral(value)) => *value,
+        Some(ExprKind::ConstRef(name)) => round_mode_value(name).unwrap_or(1),
+        _ => 1,
+    }
+}
 
 /// Emits code for the PHP `round(value [, precision])` builtin.
 ///
@@ -71,6 +86,9 @@ pub fn emit(
             }
         }
     } else {
+        // PHP_ROUND_HALF_EVEN (3) rounds ties to even; every other supported mode rounds ties
+        // away from zero (the default). The checker has already rejected the unsupported modes.
+        let half_even = static_round_mode(args) == 3;
         let ty = emit_expr(&args[0], emitter, ctx, data);
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -95,7 +113,11 @@ pub fn emit(
                 emitter.instruction("ldr d1, [sp], #16");                       // restore the original value after pow() returns the precision multiplier
                 emitter.instruction("fmul d1, d1, d0");                         // scale the original value by the precision multiplier before rounding
                 emitter.instruction("str d0, [sp, #-16]!");                     // preserve the precision multiplier for the final division step
-                emitter.instruction("frinta d0, d1");                           // round the scaled value to the nearest integer with ties away from zero
+                if half_even {
+                    emitter.instruction("frintn d0, d1");                       // PHP_ROUND_HALF_EVEN: round the scaled value to nearest, ties to even
+                } else {
+                    emitter.instruction("frinta d0, d1");                       // round the scaled value to the nearest integer with ties away from zero
+                }
                 emitter.instruction("ldr d1, [sp], #16");                       // restore the precision multiplier for the final division step
                 emitter.instruction("fdiv d0, d0, d1");                         // divide the rounded scaled value back down by the precision multiplier
             }
@@ -120,7 +142,11 @@ pub fn emit(
                 emitter.instruction("mulsd xmm1, xmm0");                        // scale the original value by the precision multiplier before rounding
                 abi::emit_push_float_reg(emitter, "xmm0");                      // preserve the precision multiplier for the final division step
                 emitter.instruction("movsd xmm0, xmm1");                        // move the scaled value into the first libc round() floating-point argument register
-                emitter.instruction("call round");                              // round the scaled value through libc round() to preserve PHP rounding semantics
+                if half_even {
+                    emitter.instruction("call rint");                           // PHP_ROUND_HALF_EVEN: round to nearest using the default ties-to-even FP mode
+                } else {
+                    emitter.instruction("call round");                          // round the scaled value through libc round() to preserve PHP rounding semantics
+                }
                 abi::emit_pop_float_reg(emitter, "xmm1");                       // restore the precision multiplier into the left-hand floating-point scratch register
                 emitter.instruction("divsd xmm0, xmm1");                        // divide the rounded scaled value back down by the precision multiplier
             }

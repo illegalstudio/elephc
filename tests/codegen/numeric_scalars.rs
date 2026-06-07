@@ -498,3 +498,22 @@ fn test_float_separator_exponent_echo() {
     let out = compile_and_run("<?php echo 1e1_0;");
     assert_eq!(out, "10000000000");
 }
+
+/// Regression (M5): round() accepts an optional $mode argument. The default and PHP_ROUND_HALF_UP
+/// round ties away from zero, while PHP_ROUND_HALF_EVEN rounds ties to even (banker's rounding),
+/// both with and without a precision. The PHP_ROUND_* constants also resolve to their PHP values.
+#[test]
+fn test_round_modes_half_up_and_half_even() {
+    let out = compile_and_run(
+        r#"<?php
+echo round(2.5);
+echo "|" . round(2.5, 0, PHP_ROUND_HALF_EVEN);
+echo "|" . round(3.5, 0, PHP_ROUND_HALF_EVEN);
+echo "|" . round(1.45, 1, PHP_ROUND_HALF_EVEN);
+echo "|" . round(1.55, 1);
+echo "|" . round(2.5, 0, PHP_ROUND_HALF_UP);
+echo "|" . PHP_ROUND_HALF_EVEN;
+"#,
+    );
+    assert_eq!(out, "3|2|4|1.4|1.6|3|3");
+}

@@ -305,7 +305,11 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "clamp" => Some(fixed(&["value", "min", "max"])),
         "min" | "max" => Some(variadic(&["value"], "values")),
         "rand" | "mt_rand" | "random_int" => Some(fixed(&["min", "max"])),
-        "round" => Some(optional(&["num", "precision"], 1, vec![int_lit(0)])),
+        "round" => Some(optional(
+            &["num", "precision", "mode"],
+            1,
+            vec![int_lit(0), int_lit(1)],
+        )),
 
         "sleep" => Some(fixed(&["seconds"])),
         "usleep" => Some(fixed(&["microseconds"])),

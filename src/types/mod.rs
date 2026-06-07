@@ -32,6 +32,8 @@ pub(crate) mod preg_constants;
 mod result;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
+/// PHP `PHP_ROUND_HALF_*` mode constants for `round()`.
+pub(crate) mod round_constants;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
 /// PHP `SORT_*` flag constants for the sort builtins.
