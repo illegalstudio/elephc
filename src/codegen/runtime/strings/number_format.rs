@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the `__rt_number_format`, `__rt_nf_count` runtime helper assembly for number format.
+//! Emits the `__rt_number_format` runtime helper assembly for number formatting.
 //! Keeps PHP byte-string pointer/length behavior and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - Both separators are full `(ptr, len)` strings: a length of 0 means "insert no separator",
+//!   and multi-byte separators are copied byte-for-byte (so a non-breaking-space separator works).
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -16,84 +18,78 @@ use crate::codegen::platform::Arch;
 /// Formats a floating-point number with configurable decimal places and separators,
 /// writing the result into the concat buffer. Dispatches to target-specific implementations.
 ///
-/// Input registers (ARM64): `d0` = number, `x1` = decimals, `x2` = dec_point char, `x3` = thousands_sep (0=none)
+/// Input registers (ARM64): `d0` = number, `x1` = decimals, `x2`/`x3` = dec-separator ptr/len, `x4`/`x5` = thousands-separator ptr/len
 /// Output registers (ARM64): `x1` = string pointer, `x2` = string length
-/// Input registers (x86_64 SysV): `xmm0` = number, `rdi` = decimals, `rsi` = dec_point, `rdx` = thousands_sep
+/// Input registers (x86_64 SysV): `xmm0` = number, `rdi` = decimals, `rsi`/`rdx` = dec-separator ptr/len, `rcx`/`r8` = thousands-separator ptr/len
 /// Output registers (x86_64 SysV): `rax` = string pointer, `rdx` = string length
 ///
-/// Stack frame layout (ARM64, 128 bytes):
-///   `[sp+0..47]`  snprintf buffer (48 bytes)
-///   `[sp+64..68]` format string `"%.Nf\0"`
-///   `[sp+72]`     result start ptr
-///   `[sp+80]`     raw snprintf length
-///   `[sp+88]`     number (double)
-///   `[sp+96]`     decimals
-///   `[sp+100]`    dec_point char
-///   `[sp+104]`    thousands_sep char
-///   `[sp+112]`    saved x29, x30
+/// Stack frame layout (ARM64, 160 bytes):
+///   `[sp+0..47]`   snprintf buffer (48 bytes)
+///   `[sp+48..52]`  format string `"%.Nf\0"`
+///   `[sp+56]`      result start ptr
+///   `[sp+64]`      raw snprintf length
+///   `[sp+72]`      number (double)
+///   `[sp+80]`      decimals
+///   `[sp+88]`      dec-separator ptr
+///   `[sp+96]`      dec-separator len
+///   `[sp+104]`     thousands-separator ptr
+///   `[sp+112]`     thousands-separator len
+///   `[sp+144]`     saved x29, x30
 pub fn emit_number_format(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_number_format_linux_x86_64(emitter);
         return;
     }
 
-    // Stack frame layout (128 bytes):
-    //   [sp+0..47]  snprintf buffer (48 bytes)
-    //   [sp+64..68] format string "%.Nf\0"
-    //   [sp+72]     result start ptr
-    //   [sp+80]     raw_len
-    //   [sp+88]     number (d0)
-    //   [sp+96]     decimals
-    //   [sp+100]    dec_point char
-    //   [sp+104]    thousands_sep char
-    //   [sp+112]    saved x29, x30
     emitter.blank();
     emitter.comment("--- runtime: number_format ---");
     emitter.label_global("__rt_number_format");
 
-    // -- set up stack frame (128 bytes) --
-    emitter.instruction("sub sp, sp, #128");                                    // allocate 128 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #112");                                   // establish new frame pointer
+    // -- set up stack frame (160 bytes) --
+    emitter.instruction("sub sp, sp, #160");                                    // allocate 160 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #144]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #144");                                   // establish new frame pointer
 
     // -- save input arguments --
-    emitter.instruction("str x1, [sp, #96]");                                   // save decimals count
-    emitter.instruction("str d0, [sp, #88]");                                   // save the floating-point number
-    emitter.instruction("str x2, [sp, #100]");                                  // save decimal point character
-    emitter.instruction("str x3, [sp, #104]");                                  // save thousands separator character
+    emitter.instruction("str d0, [sp, #72]");                                   // save the floating-point number
+    emitter.instruction("str x1, [sp, #80]");                                   // save the decimals count
+    emitter.instruction("str x2, [sp, #88]");                                   // save the decimal-separator pointer
+    emitter.instruction("str x3, [sp, #96]");                                   // save the decimal-separator length
+    emitter.instruction("str x4, [sp, #104]");                                  // save the thousands-separator pointer
+    emitter.instruction("str x5, [sp, #112]");                                  // save the thousands-separator length
 
-    // -- build format string "%.Nf" at [sp+64] --
+    // -- build format string "%.Nf" at [sp+48] --
     emitter.instruction("mov w9, #37");                                         // ASCII '%'
-    emitter.instruction("strb w9, [sp, #64]");                                  // write '%' to format string
+    emitter.instruction("strb w9, [sp, #48]");                                  // write '%' to format string
     emitter.instruction("mov w9, #46");                                         // ASCII '.'
-    emitter.instruction("strb w9, [sp, #65]");                                  // write '.' to format string
-    emitter.instruction("ldr x9, [sp, #96]");                                   // load decimals count
+    emitter.instruction("strb w9, [sp, #49]");                                  // write '.' to format string
+    emitter.instruction("ldr x9, [sp, #80]");                                   // load decimals count
     emitter.instruction("add w9, w9, #48");                                     // convert to ASCII digit ('0' + N)
-    emitter.instruction("strb w9, [sp, #66]");                                  // write decimal count digit
+    emitter.instruction("strb w9, [sp, #50]");                                  // write decimal count digit
     emitter.instruction("mov w9, #102");                                        // ASCII 'f'
-    emitter.instruction("strb w9, [sp, #67]");                                  // write 'f' format specifier
-    emitter.instruction("strb wzr, [sp, #68]");                                 // null-terminate the format string
+    emitter.instruction("strb w9, [sp, #51]");                                  // write 'f' format specifier
+    emitter.instruction("strb wzr, [sp, #52]");                                 // null-terminate the format string
 
     // -- call snprintf(buf, 48, fmt, d0) --
     emitter.instruction("add x0, sp, #0");                                      // x0 = output buffer at start of stack frame
     emitter.instruction("mov x1, #48");                                         // buffer size = 48 bytes
-    emitter.instruction("add x2, sp, #64");                                     // x2 = format string pointer
-    emitter.instruction("ldr d0, [sp, #88]");                                   // reload the float value
+    emitter.instruction("add x2, sp, #48");                                     // x2 = format string pointer
+    emitter.instruction("ldr d0, [sp, #72]");                                   // reload the float value
     emitter.instruction("str d0, [sp, #-16]!");                                 // push double for variadic ABI, adjust sp
     emitter.bl_c("snprintf");                                        // call snprintf; returns char count in x0
     emitter.instruction("add sp, sp, #16");                                     // pop the variadic argument from stack
-    emitter.instruction("str x0, [sp, #80]");                                   // save raw string length
+    emitter.instruction("str x0, [sp, #64]");                                   // save raw string length
 
     // -- set up concat_buf destination --
     crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current concat_buf write offset
     crate::codegen::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x10, x7, x8");                                     // compute destination pointer
-    emitter.instruction("str x10, [sp, #72]");                                  // save result start pointer
+    emitter.instruction("str x10, [sp, #56]");                                  // save result start pointer
 
     // -- scan raw string to find integer part length --
     emitter.instruction("add x11, sp, #0");                                     // x11 = source ptr (snprintf output)
-    emitter.instruction("ldr x12, [sp, #80]");                                  // x12 = raw string length
+    emitter.instruction("ldr x12, [sp, #64]");                                  // x12 = raw string length
     emitter.instruction("mov x13, #0");                                         // x13 = integer part digit count
 
     // -- handle leading minus sign --
@@ -132,13 +128,21 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("cmp x16, x13");                                        // check if all integer digits copied
     emitter.instruction("b.ge __rt_nf_decimal");                                // if done, move to decimal part
 
-    // -- insert thousands separator between groups --
+    // -- insert thousands separator string between groups --
     emitter.instruction("cbz x16, __rt_nf_no_sep");                             // skip separator before first digit
     emitter.instruction("cmp x14, #0");                                         // check if current group is exhausted
     emitter.instruction("b.ne __rt_nf_no_sep");                                 // group not done, no separator yet
-    emitter.instruction("ldr x9, [sp, #104]");                                  // load thousands separator char
-    emitter.instruction("cbz x9, __rt_nf_no_sep_reset");                        // skip if separator is 0 (none)
-    emitter.instruction("strb w9, [x10], #1");                                  // write separator to output, advance dest
+    emitter.instruction("ldr x9, [sp, #112]");                                  // load thousands separator length
+    emitter.instruction("cbz x9, __rt_nf_no_sep_reset");                        // skip if separator is empty (length 0)
+    emitter.instruction("ldr x7, [sp, #104]");                                  // load thousands separator pointer
+    emitter.instruction("mov x8, #0");                                          // separator byte index
+    emitter.label("__rt_nf_sep_copy");
+    emitter.instruction("cmp x8, x9");                                          // have all separator bytes been written?
+    emitter.instruction("b.ge __rt_nf_no_sep_reset");                           // separator fully copied, resume digits
+    emitter.instruction("ldrb w11, [x7, x8]");                                  // load next separator byte
+    emitter.instruction("strb w11, [x10], #1");                                 // write separator byte to output, advance dest
+    emitter.instruction("add x8, x8, #1");                                      // advance separator byte index
+    emitter.instruction("b __rt_nf_sep_copy");                                  // continue copying separator bytes
     emitter.label("__rt_nf_no_sep_reset");
     emitter.instruction("mov x14, #3");                                         // reset group counter for next 3 digits
 
@@ -149,35 +153,56 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("sub x14, x14, #1");                                    // decrement group counter
     emitter.instruction("b __rt_nf_copy_int");                                  // continue copying integer digits
 
-    // -- copy decimal part, replacing '.' with custom separator --
+    // -- copy decimal part, replacing '.' with custom separator string --
     emitter.label("__rt_nf_decimal");
     emitter.instruction("add x15, x15, x13");                                   // advance source past integer digits
     emitter.label("__rt_nf_copy_dec");
     emitter.instruction("cbz x12, __rt_nf_done");                               // if no decimal chars remain, done
     emitter.instruction("ldrb w9, [x15], #1");                                  // load next decimal char, advance source
+    emitter.instruction("sub x12, x12, #1");                                    // consume one raw decimal char
     emitter.instruction("cmp w9, #46");                                         // check if it's '.' (snprintf decimal point)
-    emitter.instruction("b.ne __rt_nf_dec_store");                              // if not '.', store as-is
-    emitter.instruction("ldr x9, [sp, #100]");                                  // replace with custom decimal point char
+    emitter.instruction("b.ne __rt_nf_dec_store");                              // if not '.', store the byte as-is
+    emitter.instruction("ldr x9, [sp, #96]");                                   // load custom decimal-separator length
+    emitter.instruction("cbz x9, __rt_nf_copy_dec");                            // empty separator → write nothing, continue
+    emitter.instruction("ldr x7, [sp, #88]");                                   // load custom decimal-separator pointer
+    emitter.instruction("mov x8, #0");                                          // separator byte index
+    emitter.label("__rt_nf_dec_sep_copy");
+    emitter.instruction("cmp x8, x9");                                          // have all decimal-separator bytes been written?
+    emitter.instruction("b.ge __rt_nf_copy_dec");                               // separator fully copied, resume decimal part
+    emitter.instruction("ldrb w11, [x7, x8]");                                  // load next decimal-separator byte
+    emitter.instruction("strb w11, [x10], #1");                                 // write separator byte to output, advance dest
+    emitter.instruction("add x8, x8, #1");                                      // advance separator byte index
+    emitter.instruction("b __rt_nf_dec_sep_copy");                              // continue copying decimal-separator bytes
     emitter.label("__rt_nf_dec_store");
-    emitter.instruction("strb w9, [x10], #1");                                  // write char to output, advance dest
-    emitter.instruction("sub x12, x12, #1");                                    // decrement remaining chars
+    emitter.instruction("strb w9, [x10], #1");                                  // write decimal digit to output, advance dest
     emitter.instruction("b __rt_nf_copy_dec");                                  // continue copying decimal part
 
     // -- finalize: compute length and update concat_off --
     emitter.label("__rt_nf_done");
-    emitter.instruction("ldr x1, [sp, #72]");                                   // load result start pointer
+    emitter.instruction("ldr x1, [sp, #56]");                                   // load result start pointer
     emitter.instruction("sub x2, x10, x1");                                     // result length = dest_end - dest_start
     emitter.instruction("ldr x8, [x6]");                                        // load current concat_off
     emitter.instruction("add x8, x8, x2");                                      // advance offset by result length
     emitter.instruction("str x8, [x6]");                                        // store updated concat_off
 
     // -- restore frame and return --
-    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #144]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #160");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// ARM64 implementation of the `__rt_number_format` runtime helper.
+/// x86_64 implementation of the `__rt_number_format` runtime helper.
+///
+/// Mirrors the AArch64 implementation: renders the raw fixed-point string with
+/// snprintf, then re-emits it into the concat buffer inserting the thousands
+/// separator string between 3-digit groups and translating the snprintf decimal
+/// point into the configured decimal-separator string. Both separators are full
+/// `(ptr, len)` strings; a length of 0 inserts nothing.
+///
+/// Stack frame layout (x86_64): `[rbp-120..-73]` snprintf buffer, `[rbp-72..-68]`
+/// mini format string, `[rbp-64]` raw length, `[rbp-56]` decimals, `[rbp-48]`
+/// dec-separator ptr, `[rbp-40]` dec-separator len, `[rbp-128]` thousands ptr,
+/// `[rbp-136]` thousands len.
 fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: number_format ---");
@@ -188,10 +213,12 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve the concat-buffer destination cursor across the local formatting and copy loops
     emitter.instruction("push r12");                                            // preserve the concat-buffer start pointer for the final x86_64 string return pair
     emitter.instruction("push r13");                                            // preserve the concat-offset symbol address across the local formatting and copy loops
-    emitter.instruction("sub rsp, 104");                                        // reserve local storage; bumped 96→104 so the four 8-byte saves above + this sub leave rsp 0-mod-16 before the SysV snprintf call below
+    emitter.instruction("sub rsp, 120");                                        // reserve local storage; 120 keeps the four 8-byte saves above + this sub 0-mod-16 before the SysV snprintf call below
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // preserve the requested decimal count across the intermediate formatting and copy loops
-    emitter.instruction("mov QWORD PTR [rbp - 48], rsi");                       // preserve the decimal-separator byte across the intermediate formatting and copy loops
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // preserve the thousands-separator byte across the intermediate formatting and copy loops
+    emitter.instruction("mov QWORD PTR [rbp - 48], rsi");                       // preserve the decimal-separator pointer across the intermediate formatting and copy loops
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // preserve the decimal-separator length across the intermediate formatting and copy loops
+    emitter.instruction("mov QWORD PTR [rbp - 128], rcx");                      // preserve the thousands-separator pointer across the intermediate formatting and copy loops
+    emitter.instruction("mov QWORD PTR [rbp - 136], r8");                       // preserve the thousands-separator length across the intermediate formatting and copy loops
     emitter.instruction("mov BYTE PTR [rbp - 72], 37");                         // seed the mini format string with the leading '%' introducer
     emitter.instruction("mov BYTE PTR [rbp - 71], 46");                         // append the '.' precision introducer to the mini format string
     emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the requested decimal count before converting it into the single supported ASCII precision digit
@@ -199,12 +226,12 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [rbp - 70], r8b");                        // append the ASCII precision digit to the mini format string
     emitter.instruction("mov BYTE PTR [rbp - 69], 102");                        // append the trailing 'f' format type so snprintf renders a fixed-point decimal string
     emitter.instruction("mov BYTE PTR [rbp - 68], 0");                          // null-terminate the mini format string before handing it to snprintf
-    emitter.instruction("lea rdi, [rbp - 120]");                                // point snprintf at the fixed local raw-decimal buffer that will be post-processed for thousands separators
+    emitter.instruction("lea rdi, [rbp - 120]");                                // point snprintf at the fixed local raw-decimal buffer that will be post-processed for separators
     emitter.instruction("mov esi, 48");                                         // bound the raw-decimal buffer to 48 bytes before the variadic snprintf call
     emitter.instruction("lea rdx, [rbp - 72]");                                 // pass the mini format string to snprintf as the fixed-point format pointer
     emitter.instruction("mov eax, 1");                                          // advertise one live SIMD variadic register because the formatted number is passed in xmm0 on SysV x86_64
     emitter.bl_c("snprintf");                                                   // render the raw fixed-point decimal string into the local snprintf buffer
-    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // preserve the raw snprintf byte count before the thousands-separator pass consumes caller-saved registers
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // preserve the raw snprintf byte count before the separator pass consumes caller-saved registers
     crate::codegen::abi::emit_symbol_address(emitter, "r13", "_concat_off");
     emitter.instruction("mov r8, QWORD PTR [r13]");                             // load the current concat-buffer write cursor before appending the formatted output
     crate::codegen::abi::emit_symbol_address(emitter, "r9", "_concat_buf");
@@ -251,11 +278,19 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_nf_no_sep_linux_x86_64");                      // skip separator insertion before the first emitted integer digit
     emitter.instruction("test r8, r8");                                         // has the current thousands group been exhausted exactly at this copy position?
     emitter.instruction("jnz __rt_nf_no_sep_linux_x86_64");                     // skip separator insertion until the current thousands group has been exhausted
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the configured thousands-separator byte before deciding whether to emit it
-    emitter.instruction("test r9, r9");                                         // is thousands grouping disabled because the configured separator byte is zero?
+    emitter.instruction("mov r9, QWORD PTR [rbp - 136]");                       // reload the configured thousands-separator length before deciding whether to emit it
+    emitter.instruction("test r9, r9");                                         // is thousands grouping disabled because the configured separator is empty?
     emitter.instruction("jz __rt_nf_no_sep_reset_linux_x86_64");                // skip emitting a separator when the caller requested no thousands separator
-    emitter.instruction("mov BYTE PTR [rbx], r9b");                             // append the configured thousands-separator byte to the concat buffer
-    emitter.instruction("add rbx, 1");                                          // advance the concat-buffer destination cursor after inserting one thousands separator byte
+    emitter.instruction("mov r10, QWORD PTR [rbp - 128]");                      // reload the configured thousands-separator pointer before copying its bytes
+    emitter.instruction("xor eax, eax");                                        // start the thousands-separator byte index at zero
+    emitter.label("__rt_nf_sep_copy_linux_x86_64");
+    emitter.instruction("cmp rax, r9");                                         // have all thousands-separator bytes been written?
+    emitter.instruction("jge __rt_nf_no_sep_reset_linux_x86_64");               // resume copying digits once the separator string is fully emitted
+    emitter.instruction("movzx edx, BYTE PTR [r10 + rax]");                     // load the next thousands-separator byte
+    emitter.instruction("mov BYTE PTR [rbx], dl");                              // append the thousands-separator byte to the concat buffer
+    emitter.instruction("add rbx, 1");                                          // advance the concat-buffer destination cursor after one separator byte
+    emitter.instruction("add rax, 1");                                          // advance the thousands-separator byte index
+    emitter.instruction("jmp __rt_nf_sep_copy_linux_x86_64");                   // continue copying the thousands-separator bytes
     emitter.label("__rt_nf_no_sep_reset_linux_x86_64");
     emitter.instruction("mov r8, 3");                                           // reset the remaining width of the next thousands group after crossing a group boundary
 
@@ -274,14 +309,25 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_nf_done_linux_x86_64");                        // finish once the full decimal part has been copied or omitted
     emitter.instruction("movzx eax, BYTE PTR [r11]");                           // load the next raw decimal-part byte before checking whether it is the snprintf decimal point
     emitter.instruction("add r11, 1");                                          // advance the raw formatted cursor after loading one decimal-part byte
+    emitter.instruction("sub rcx, 1");                                          // decrement the remaining raw decimal-part byte count after consuming one byte
     emitter.instruction("cmp al, 46");                                          // is the current decimal-part byte the '.' decimal-point separator emitted by snprintf?
     emitter.instruction("jne __rt_nf_store_dec_linux_x86_64");                  // copy non-decimal-point bytes directly into the concat buffer without translation
-    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the configured decimal-separator byte before replacing the snprintf decimal point
-    emitter.instruction("mov eax, r9d");                                        // replace the raw snprintf decimal-point byte with the configured decimal-separator byte
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the configured decimal-separator length before replacing the snprintf decimal point
+    emitter.instruction("test r9, r9");                                         // is the configured decimal separator empty?
+    emitter.instruction("jz __rt_nf_copy_dec_linux_x86_64");                    // empty decimal separator → write nothing and continue the decimal part
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the configured decimal-separator pointer before copying its bytes
+    emitter.instruction("xor eax, eax");                                        // start the decimal-separator byte index at zero
+    emitter.label("__rt_nf_dec_sep_copy_linux_x86_64");
+    emitter.instruction("cmp rax, r9");                                         // have all decimal-separator bytes been written?
+    emitter.instruction("jge __rt_nf_copy_dec_linux_x86_64");                   // resume copying the decimal part once the separator string is fully emitted
+    emitter.instruction("movzx edx, BYTE PTR [r10 + rax]");                     // load the next decimal-separator byte
+    emitter.instruction("mov BYTE PTR [rbx], dl");                              // append the decimal-separator byte to the concat buffer
+    emitter.instruction("add rbx, 1");                                          // advance the concat-buffer destination cursor after one separator byte
+    emitter.instruction("add rax, 1");                                          // advance the decimal-separator byte index
+    emitter.instruction("jmp __rt_nf_dec_sep_copy_linux_x86_64");               // continue copying the decimal-separator bytes
     emitter.label("__rt_nf_store_dec_linux_x86_64");
-    emitter.instruction("mov BYTE PTR [rbx], al");                              // append the current decimal-part byte to the concat buffer after any separator translation
+    emitter.instruction("mov BYTE PTR [rbx], al");                              // append the current decimal-part digit to the concat buffer
     emitter.instruction("add rbx, 1");                                          // advance the concat-buffer destination cursor after copying one decimal-part byte
-    emitter.instruction("sub rcx, 1");                                          // decrement the remaining raw decimal-part byte count after copying one byte
     emitter.instruction("jmp __rt_nf_copy_dec_linux_x86_64");                   // continue copying the decimal part until every remaining raw byte has been emitted
 
     emitter.label("__rt_nf_done_linux_x86_64");
@@ -291,7 +337,7 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [r13]");                             // reload the old concat-buffer write cursor before publishing the formatted-string append
     emitter.instruction("add r8, rdx");                                         // advance the concat-buffer write cursor by the emitted formatted-string length
     emitter.instruction("mov QWORD PTR [r13], r8");                             // publish the updated concat-buffer write cursor after appending the formatted number
-    emitter.instruction("add rsp, 104");                                        // release the local raw-buffer and mini-format scratch space before restoring callee-saved registers
+    emitter.instruction("add rsp, 120");                                        // release the local raw-buffer and mini-format scratch space before restoring callee-saved registers
     emitter.instruction("pop r13");                                             // restore the saved concat-offset symbol register after the x86_64 number_format() helper finishes
     emitter.instruction("pop r12");                                             // restore the saved concat-buffer start register after the x86_64 number_format() helper finishes
     emitter.instruction("pop rbx");                                             // restore the saved concat-buffer destination cursor register after the x86_64 number_format() helper finishes
