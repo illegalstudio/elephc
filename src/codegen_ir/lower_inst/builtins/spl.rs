@@ -16,6 +16,7 @@ use crate::codegen::{
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::names::function_symbol;
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -245,6 +246,55 @@ pub(super) fn lower_iterator_to_array(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `iterator_apply()` for a static zero-argument user-function callback.
+pub(super) fn lower_iterator_apply(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "iterator_apply", 2, 3)?;
+    if inst.operands.len() > 2 {
+        return Err(CodegenIrError::unsupported(
+            "iterator_apply EIR callback argument arrays",
+        ));
+    }
+    let source = expect_operand(inst, 0)?;
+    let callback = expect_operand(inst, 1)?;
+    let callback_name = static_string_operand(ctx, callback)?.ok_or_else(|| {
+        CodegenIrError::unsupported("iterator_apply EIR dynamic callback")
+    })?;
+    let callback_function = ctx.callable_function_by_name(&callback_name).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "iterator_apply callback {} without emitted EIR function",
+            callback_name
+        ))
+    })?;
+    if !callback_function.params.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "iterator_apply callback {} with {} params",
+            callback_name,
+            callback_function.params.len()
+        )));
+    }
+    let callback_label = function_symbol(&callback_function.name);
+    let callback_return_ty = callback_function.return_php_type.codegen_repr();
+    let source_ty = ctx.value_php_type(source)?.codegen_repr();
+
+    ctx.load_value_to_result(source)?;
+    match source_ty {
+        PhpType::Iterable => emit_apply_loaded_iterable(ctx, &callback_label, &callback_return_ty)?,
+        PhpType::Object(_) => {
+            emit_apply_loaded_traversable_object(ctx, &callback_label, &callback_return_ty)?
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "iterator_apply for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Loads the single object operand into the canonical integer result register.
 fn load_object_operand(
     ctx: &mut FunctionContext<'_>,
@@ -261,6 +311,33 @@ fn load_object_operand(
             other
         ))),
     }
+}
+
+/// Returns a string literal operand when EIR preserved it as a `ConstStr`.
+fn static_string_operand(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<String>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    let (Op::ConstStr, Some(Immediate::Data(data))) = (inst_ref.op, inst_ref.immediate.as_ref()) else {
+        return Ok(None);
+    };
+    let value = ctx
+        .module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
+    Ok(Some(value.clone()))
 }
 
 /// Reads the runtime length header from the loaded indexed array or hash pointer.
@@ -550,6 +627,114 @@ fn emit_count_loaded_traversable_object(ctx: &mut FunctionContext<'_>) -> Result
     emit_count_loaded_iterator_object(ctx)?;
 
     ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Dispatches an `iterable` pointer to object traversal for `iterator_apply()`.
+fn emit_apply_loaded_iterable(
+    ctx: &mut FunctionContext<'_>,
+    callback_label: &str,
+    callback_return_ty: &PhpType,
+) -> Result<()> {
+    let object_case = ctx.next_label("iterator_apply_iterable_object");
+    let done = ctx.next_label("iterator_apply_iterable_done");
+
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // is the iterable a Traversable object?
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // dispatch object iterables through Iterator protocol
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // is the iterable a Traversable object?
+            ctx.emitter.instruction(&format!("je {}", object_case));            // dispatch object iterables through Iterator protocol
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+
+    ctx.emitter.label(&object_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_apply_loaded_traversable_object(ctx, callback_label, callback_return_ty)?;
+
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Applies a callback to a loaded Traversable object by probing IteratorAggregate first.
+fn emit_apply_loaded_traversable_object(
+    ctx: &mut FunctionContext<'_>,
+    callback_label: &str,
+    callback_return_ty: &PhpType,
+) -> Result<()> {
+    let direct_case = ctx.next_label("iterator_apply_object_iterator");
+    let aggregate_case = ctx.next_label("iterator_apply_object_aggregate");
+    let done = ctx.next_label("iterator_apply_object_done");
+
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_branch_if_saved_receiver_implements(ctx, "Iterator", &direct_case)?;
+    emit_branch_if_saved_receiver_implements(ctx, "IteratorAggregate", &aggregate_case)?;
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+
+    ctx.emitter.label(&direct_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_apply_loaded_iterator_object(ctx, callback_label, callback_return_ty)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&aggregate_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    move_result_to_receiver_arg(ctx);
+    iterators::emit_interface_dispatch_call(ctx, "IteratorAggregate", "getiterator", None)?;
+    emit_apply_loaded_iterator_object(ctx, callback_label, callback_return_ty)?;
+
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Drives Iterator and invokes the static callback once for each valid position.
+fn emit_apply_loaded_iterator_object(
+    ctx: &mut FunctionContext<'_>,
+    callback_label: &str,
+    callback_return_ty: &PhpType,
+) -> Result<()> {
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    ctx.emitter.instruction(&format!(
+        "mov {}, {}",
+        receiver_reg,
+        abi::int_result_reg(ctx.emitter)
+    )); // preserve iterator_apply()'s receiver while initializing the count slot
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.emitter.instruction(&format!(
+        "mov {}, {}",
+        abi::int_result_reg(ctx.emitter),
+        receiver_reg
+    )); // restore iterator_apply()'s receiver for the Iterator loop
+
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    reload_saved_iterator_receiver(ctx);
+    iterators::emit_interface_dispatch_call(ctx, "Iterator", "rewind", None)?;
+
+    let loop_start = ctx.next_label("iterator_apply_start");
+    let loop_end = ctx.next_label("iterator_apply_end");
+    ctx.emitter.label(&loop_start);
+
+    reload_saved_iterator_receiver(ctx);
+    iterators::emit_interface_dispatch_call(ctx, "Iterator", "valid", None)?;
+    emit_branch_if_invalid_iterator(ctx, &loop_end);
+
+    abi::emit_call_label(ctx.emitter, callback_label);
+    emit_increment_saved_apply_count(ctx);
+    emit_branch_if_callback_result_false(ctx, callback_return_ty, &loop_end)?;
+
+    reload_saved_iterator_receiver(ctx);
+    iterators::emit_interface_dispatch_call(ctx, "Iterator", "next", None)?;
+    abi::emit_jump(ctx.emitter, &loop_start);
+
+    ctx.emitter.label(&loop_end);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     Ok(())
 }
 
@@ -1035,6 +1220,55 @@ fn emit_increment_saved_count(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("add QWORD PTR [rsp + 16], 1");             // count this valid iterator position beneath the receiver slot
         }
     }
+}
+
+/// Increments the saved iterator_apply callback-invocation count beneath the receiver slot.
+fn emit_increment_saved_apply_count(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp, #16]");                       // load iterator_apply()'s callback count beneath the receiver slot
+            ctx.emitter.instruction("add x9, x9, #1");                          // count this callback invocation before testing its result
+            ctx.emitter.instruction("str x9, [sp, #16]");                       // persist the updated iterator_apply() callback count
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("add QWORD PTR [rsp + 16], 1");             // count this callback invocation beneath the receiver slot
+        }
+    }
+}
+
+/// Branches to `loop_end` when the just-returned iterator_apply callback result is falsy.
+fn emit_branch_if_callback_result_false(
+    ctx: &mut FunctionContext<'_>,
+    callback_return_ty: &PhpType,
+    loop_end: &str,
+) -> Result<()> {
+    match callback_return_ty.codegen_repr() {
+        PhpType::Bool | PhpType::Int => {}
+        PhpType::Float => predicates::emit_float_result_nonzero_bool(ctx),
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "iterator_apply callback return PHP type {:?}",
+                other
+            )))
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // did the iterator_apply callback request iteration stop?
+            ctx.emitter.instruction(&format!("b.eq {}", loop_end));             // stop before next() when the callback result is falsy
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the iterator_apply callback request iteration stop?
+            ctx.emitter.instruction(&format!("je {}", loop_end));               // stop before next() when the callback result is falsy
+        }
+    }
+    Ok(())
 }
 
 /// Evaluates lowered operands in source order and discards their results.
