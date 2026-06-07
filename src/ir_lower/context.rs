@@ -483,6 +483,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             let previous = self.load_local(name, span);
             crate::ir_lower::ownership::release_if_owned(self, previous, span);
         }
+        // A first syntactic store inside a main loop can still overwrite a prior
+        // runtime iteration's value. Main cleanup locals are zero-initialized, so
+        // the first iteration safely releases an empty slot.
+        if self.in_main
+            && !uses_global
+            && previous_kind == LocalKind::PhpLocal
+            && previous_slot.is_none()
+            && !self.loop_stack.is_empty()
+            && Ownership::php_type_needs_lifetime_tracking(&php_type)
+        {
+            let previous = self.load_local(name, span);
+            crate::ir_lower::ownership::release_if_owned(self, previous, span);
+        }
         let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
             && !transfer_callable_source_to_store
         {
@@ -709,6 +722,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew
+                    | Op::Call
+                    | Op::FunctionVariantCall
+                    | Op::RuntimeCall
+                    | Op::ExternCall
+                    | Op::MethodCall
+                    | Op::NullsafeMethodCall
+                    | Op::StaticMethodCall
+                    | Op::ClosureCall
+                    | Op::ExprCall
+                    | Op::PipeCall
+                    | Op::IteratorMethodCall
+                    | Op::SplRuntimeCall
+                    | Op::FiberRuntimeCall
             )
         )
     }
@@ -921,7 +947,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "array_column" | "iterator_to_array" | "strpos" | "strrpos"
+        "array_column" | "explode" | "iterator_to_array" | "strpos" | "strrpos"
     )
 }
 

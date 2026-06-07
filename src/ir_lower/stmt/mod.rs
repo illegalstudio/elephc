@@ -1464,7 +1464,36 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value: Option<&Expr>, span: S
         emit_null_value(ctx, Some(span))
     };
     let value = coerce_to_return_type(ctx, value, Some(span));
+    let value = acquire_borrowed_return_value(ctx, value, span);
     terminate_return(ctx, Some(value.value));
+}
+
+/// Acquires return values read from heap containers before local cleanup runs.
+fn acquire_borrowed_return_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.value_is_owning_temporary(value) {
+        return value;
+    }
+    let php_type = ctx.builder.value_php_type(value.value);
+    if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
+        return value;
+    }
+    if !matches!(
+        ctx.builder.value_defining_op(value.value),
+        Some(
+            Op::ArrayGet
+                | Op::HashGet
+                | Op::PropGet
+                | Op::DynamicPropGet
+                | Op::NullsafePropGet
+        )
+    ) {
+        return value;
+    }
+    crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
 }
 
 /// Terminates with a return after running active finally bodies from inner to outer.

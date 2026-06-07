@@ -98,6 +98,46 @@ echo "done";
     );
 }
 
+/// Verifies `explode()` arrays and copied string elements are released at function exit.
+#[test]
+fn parity_explode_parser_releases_arrays_and_elements() {
+    assert_backend_gc_clean(
+        "explode_parser_releases_arrays_and_elements",
+        r#"<?php
+function parse_once(string $raw): void {
+    $lines = explode("\r\n", $raw);
+    $parts = explode(" ", $lines[0]);
+    $method = $parts[0];
+    $path = $parts[1];
+}
+
+for ($i = 0; $i < 3; $i++) {
+    parse_once("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+}
+echo "done";
+"#,
+    );
+}
+
+/// Verifies array elements returned from local containers survive function cleanup.
+#[test]
+fn parity_explode_returned_element_survives_cleanup() {
+    assert_backend_gc_clean(
+        "explode_returned_element_survives_cleanup",
+        r#"<?php
+function parse($data): string {
+    $parts = explode(",", $data);
+    return $parts[0];
+}
+
+for ($i = 0; $i < 3; $i++) {
+    $r = parse("a,b,c");
+}
+echo $r;
+"#,
+    );
+}
+
 /// Verifies later indexed-array foreach states do not clobber source pointers at large frame offsets.
 #[test]
 fn parity_repeated_indexed_foreach() {
