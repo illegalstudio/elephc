@@ -47,12 +47,59 @@ pub(super) fn apply_stmts(stmts: Vec<Stmt>, defines: &HashSet<String>) -> Vec<St
     result
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::Stmt;
+    use crate::span::Span;
+
+    /// Builds a `for` header whose init slot holds an `ifdef` — a position the parser
+    /// cannot currently produce — and verifies `rewrite_stmt_kind` (reached via the for
+    /// header) resolves the ifdef against `defines` instead of hitting `unreachable!()`.
+    #[test]
+    fn for_header_ifdef_resolves_active_branch_without_panic() {
+        let span = Span::new(1, 1);
+        let ifdef = Stmt::new(
+            StmtKind::IfDef {
+                symbol: "FEATURE".to_string(),
+                then_body: vec![Stmt::new(StmtKind::Break(0), span)],
+                else_body: Some(vec![Stmt::new(StmtKind::Continue(0), span)]),
+            },
+            span,
+        );
+        let for_stmt = Stmt::new(
+            StmtKind::For {
+                init: Some(Box::new(ifdef)),
+                condition: None,
+                update: None,
+                body: Vec::new(),
+            },
+            span,
+        );
+
+        let mut defines = HashSet::new();
+        defines.insert("FEATURE".to_string());
+        let result = apply_stmts(vec![for_stmt], &defines);
+
+        let StmtKind::For { init: Some(init), .. } = &result[0].kind else {
+            panic!("expected a For statement with an init slot");
+        };
+        let StmtKind::Synthetic(stmts) = &init.kind else {
+            panic!("expected the ifdef init to be flattened into a Synthetic block");
+        };
+        assert!(
+            matches!(stmts.as_slice(), [Stmt { kind: StmtKind::Break(0), .. }]),
+            "expected the active (then) branch to be selected"
+        );
+    }
+}
+
 /// Rewrites a single `StmtKind` by applying `ifdef` conditions and recursively processing child bodies.
 ///
 /// For each variant, expressions are rewritten via `rewrite_expr` and nested statement lists are
 /// rewritten via `apply_stmts`. Branchless variants (declarations, breaks, etc.) are returned unchanged.
-/// `IfDef` variants should not reach this function — they are handled in `apply_stmts` before this
-/// is called; the `unreachable!` on line 385 enforces this invariant.
+/// `IfDef` variants are normally flattened in `apply_stmts` before this is called; if one still
+/// reaches here it is resolved against `defines` defensively rather than panicking.
 fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
     match kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(apply_stmts(stmts, defines)),
@@ -393,7 +440,22 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         StmtKind::ExternGlobalDecl { name, c_type } => {
             StmtKind::ExternGlobalDecl { name, c_type }
         }
-        StmtKind::IfDef { .. } => unreachable!("ifdefs are flattened in apply_stmts"),
+        StmtKind::IfDef {
+            symbol,
+            then_body,
+            else_body,
+        } => {
+            // Defense-in-depth: `apply_stmts` normally flattens ifdefs before this runs,
+            // so this arm is unreachable today. If a future caller routes an ifdef here
+            // (e.g. a `for` header), resolve it against `defines` like `apply_stmts` does
+            // rather than panicking, so the invariant fails soft instead of crashing.
+            let selected = if defines.contains(&symbol) {
+                then_body
+            } else {
+                else_body.unwrap_or_default()
+            };
+            StmtKind::Synthetic(apply_stmts(selected, defines))
+        }
         StmtKind::NamespaceDecl { name } => StmtKind::NamespaceDecl { name },
         StmtKind::NamespaceBlock { name, body } => StmtKind::NamespaceBlock {
             name,
