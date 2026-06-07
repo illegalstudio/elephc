@@ -76,11 +76,14 @@ pub(super) fn check_builtin(
             }
         }
         "in_array" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "in_array() takes exactly 2 arguments"));
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(span, "in_array() takes 2 or 3 arguments"));
             }
             checker.infer_type(&args[0], env)?;
             let arr_ty = checker.infer_type(&args[1], env)?;
+            if args.len() == 3 {
+                checker.infer_type(&args[2], env)?;
+            }
             if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,
@@ -257,14 +260,17 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Bool))
         }
         "array_search" => {
-            if args.len() != 2 {
+            if args.len() < 2 || args.len() > 3 {
                 return Err(CompileError::new(
                     span,
-                    "array_search() takes exactly 2 arguments",
+                    "array_search() takes 2 or 3 arguments",
                 ));
             }
             checker.infer_type(&args[0], env)?;
             let arr_ty = checker.infer_type(&args[1], env)?;
+            if args.len() == 3 {
+                checker.infer_type(&args[2], env)?;
+            }
             if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,

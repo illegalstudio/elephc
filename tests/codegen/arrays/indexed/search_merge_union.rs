@@ -182,3 +182,41 @@ echo implode("|", $m);
         out.stderr
     );
 }
+
+/// Regression (H10): in_array()/array_search() accept the optional `$strict` flag instead of
+/// failing to compile. elephc's element comparison is value/byte-exact, so it already yields strict
+/// semantics for a needle whose type matches the array element type (the common case). Uses string
+/// and integer arrays for in_array and an integer array for array_search (array_search on
+/// string-element arrays is a separate pre-existing gap).
+#[test]
+fn test_in_array_and_array_search_accept_strict_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$nums = [1, 2, 3];
+$strs = ["a", "b", "c"];
+$vals = [10, 20, 30];
+echo in_array(3, $nums, true) ? "1" : "0";
+echo in_array(9, $nums, true) ? "1" : "0";
+echo in_array("b", $strs, true) ? "1" : "0";
+echo "|";
+echo array_search(20, $vals, true);
+echo array_search(99, $vals, true) === false ? "F" : "?";
+"#,
+    );
+    assert_eq!(out, "101|1F");
+}
+
+/// Regression (H10): a non-literal `$strict` argument is still evaluated for its side effects, even
+/// though elephc's same-type comparison does not depend on the flag value. The side-effecting call
+/// must run exactly once before the search result is produced.
+#[test]
+fn test_in_array_strict_argument_side_effect_evaluated() {
+    let out = compile_and_run(
+        r#"<?php
+function strictFlag() { echo "S"; return true; }
+$r = in_array(2, [1, 2, 3], strictFlag());
+echo $r ? "Y" : "N";
+"#,
+    );
+    assert_eq!(out, "SY");
+}

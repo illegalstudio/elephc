@@ -70,7 +70,7 @@ fn test_error_array_sum_wrong_args() {
 fn test_error_array_search_wrong_args() {
     expect_error(
         "<?php $a = [1]; array_search($a);",
-        "array_search() takes exactly 2 arguments",
+        "array_search() takes 2 or 3 arguments",
     );
 }
 
@@ -140,7 +140,7 @@ fn test_error_array_pop_wrong_args() {
 /// Verifies that error in array wrong args.
 #[test]
 fn test_error_in_array_wrong_args() {
-    expect_error("<?php in_array(1);", "in_array() takes exactly 2 arguments");
+    expect_error("<?php in_array(1);", "in_array() takes 2 or 3 arguments");
 }
 
 /// Verifies that error array keys wrong args.
