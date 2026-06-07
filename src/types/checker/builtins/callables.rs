@@ -128,17 +128,27 @@ fn dummy_arg_for_array_scalar_elem(arr_ty: &PhpType, span: crate::span::Span) ->
 
 /// Returns true when a multi-array `array_map()` callback is a supported form.
 ///
-/// The bounded multi-array path supports a named function (`StringLiteral`) or a closure
-/// literal — including capturing closures and arrow functions, which are lowered through
-/// the same N-visible-argument wrapper environment used by the single-array path. Callback
-/// forms that select a callable indirectly (a callable variable, first-class callable,
-/// `[obj, method]` array, or runtime-string name) are deferred to a later increment and
-/// rejected with a clear diagnostic.
-fn array_map_multi_callback_supported(callback: &Expr) -> bool {
-    matches!(
-        &callback.kind,
-        ExprKind::StringLiteral(_) | ExprKind::Closure { .. }
-    )
+/// The bounded multi-array path supports a named function (`StringLiteral`), a closure
+/// literal (capturing closures and arrow functions included, lowered through the same
+/// N-visible-argument wrapper environment used by the single-array path), or a variable
+/// that holds a closure (a closure descriptor carries its own captures, so it is invoked
+/// directly). Callback forms that select a callable indirectly in another way (a callable
+/// `[obj, method]` array, a runtime-string name, or a first-class callable) are deferred to
+/// a later increment and rejected with a clear diagnostic.
+fn array_map_multi_callback_supported(checker: &Checker, callback: &Expr) -> bool {
+    match &callback.kind {
+        ExprKind::StringLiteral(_) | ExprKind::Closure { .. } => true,
+        // A variable is accepted only when it is known to hold a closure (not an
+        // `[obj, method]` array, a string function name, or a first-class callable),
+        // because those other variable forms are materialized through different dispatch
+        // paths the two-array runtime does not yet drive.
+        ExprKind::Variable(name) => {
+            checker.closure_return_types.contains_key(name)
+                && !checker.callable_array_targets.contains_key(name)
+                && !checker.first_class_callable_targets.contains_key(name)
+        }
+        _ => false,
+    }
 }
 
 /// Type-checks the multi-array form `array_map($callback, $a, $b, ...)`.
@@ -168,10 +178,10 @@ fn check_array_map_multi(
             "array_map(null, ...) array zipping is not yet supported",
         ));
     }
-    if !array_map_multi_callback_supported(&args[0]) {
+    if !array_map_multi_callback_supported(checker, &args[0]) {
         return Err(CompileError::new(
             args[0].span,
-            "array_map() with multiple arrays currently supports a named function or a closure as the callback",
+            "array_map() with multiple arrays currently supports a named function, a closure, or a variable holding a closure as the callback",
         ));
     }
     let mut elem_tys = Vec::new();

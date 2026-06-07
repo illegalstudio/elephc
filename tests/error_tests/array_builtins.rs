@@ -398,14 +398,15 @@ fn test_error_array_map_multi_non_integer_arrays() {
     );
 }
 
-/// Verifies that the multi-array form rejects an indirect callable-variable callback with a clear
-/// diagnostic (the bounded H11 increment supports named functions and closure literals — including
-/// capturing closures — but not callbacks selected through a variable).
+/// Verifies that the multi-array form rejects an `[obj, method]` callable-array variable callback
+/// with a clear diagnostic. The bounded H11 increment supports named functions, closure literals
+/// (capturing included), and variables holding a closure — but not callable-array variables, which
+/// are materialized through a different dispatch path.
 #[test]
-fn test_error_array_map_multi_indirect_callback() {
+fn test_error_array_map_multi_callable_array_variable() {
     expect_error(
-        r#"<?php $cb = fn($a, $b) => $a + $b; array_map($cb, [1], [2]);"#,
-        "array_map() with multiple arrays currently supports a named function or a closure",
+        r#"<?php class C { function add($a, $b) { return $a + $b; } } $o = new C(); $cb = [$o, "add"]; array_map($cb, [1], [2]);"#,
+        "array_map() with multiple arrays currently supports a named function, a closure, or a variable holding a closure",
     );
 }
 

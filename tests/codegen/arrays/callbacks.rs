@@ -121,6 +121,37 @@ echo implode(",", $r);
     assert_eq!(out, "8,12");
 }
 
+/// Verifies the multi-array form supports a variable holding a closure as the callback (H11
+/// increment 3). The closure is assigned to `$cb` and then passed indirectly.
+#[test]
+fn test_array_map_two_arrays_closure_variable_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = fn($a, $b) => $a + $b;
+$r = array_map($cb, [1, 2, 3], [10, 20, 30]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "11,22,33");
+}
+
+/// Verifies a variable holding a *capturing* closure carries its captured value through the
+/// two-array map even after the captured variable is reassigned (capture-by-value at closure
+/// creation time), exercising the descriptor-backed capture path (H11 increment 3).
+#[test]
+fn test_array_map_two_arrays_capturing_closure_variable_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$base = 100;
+$cb = fn($a, $b) => $a + $b + $base;
+$base = 999;
+$r = array_map($cb, [1, 2], [10, 20]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "111,122");
+}
+
 // Tests `array_map` with a typed builtin callback (`strlen`) applied to string values,
 // verifying mixed-type result handling in array_map codegen.
 /// Verifies that array map string values to ints.
