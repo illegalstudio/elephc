@@ -304,13 +304,39 @@ fn run_tool(name: &str, cmd: &mut Command) {
 }
 
 /// Returns the macOS SDK path by running `xcrun --show-sdk-path`.
-/// Returns an empty string if the command fails.
+///
+/// Exits with an actionable diagnostic when no SDK path can be resolved (xcrun missing,
+/// or returning empty output because the Xcode Command Line Tools are not installed /
+/// `xcode-select` points at a bad directory) instead of passing an empty `-syslibroot`
+/// argument to `ld`, which fails with a cryptic `ld: -syslibroot missing <path>`.
 fn macos_sdk_path() -> String {
-    Command::new("xcrun")
+    let resolved = Command::new("xcrun")
         .args(["--show-sdk-path"])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    match validate_macos_sdk_path(&resolved) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("{}", message);
+            process::exit(1);
+        }
+    }
+}
+
+/// Validates a resolved macOS SDK path, returning the trimmed path or an actionable
+/// error message when `xcrun` produced no path. Kept pure (no IO/exit) so the
+/// empty-path diagnostic can be unit-tested.
+fn validate_macos_sdk_path(resolved: &str) -> Result<String, String> {
+    let trimmed = resolved.trim();
+    if trimmed.is_empty() {
+        return Err(
+            "Could not locate the macOS SDK. Install the Xcode Command Line Tools \
+             (run: xcode-select --install) and make sure `xcrun --show-sdk-path` prints a valid path."
+                .to_string(),
+        );
+    }
+    Ok(trimmed.to_string())
 }
 
 /// Returns common Homebrew library directories used for optional native deps on macOS.
@@ -337,5 +363,26 @@ fn macos_sdk_version() -> String {
             }
         }
         Err(_) => "15.0".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies an empty or whitespace-only SDK path (xcrun missing or misconfigured)
+    /// yields an actionable Xcode Command Line Tools hint instead of being silently
+    /// passed to `ld` as an empty `-syslibroot` argument.
+    #[test]
+    fn empty_sdk_path_produces_actionable_error() {
+        let err = validate_macos_sdk_path("   ").expect_err("empty path must error");
+        assert!(err.contains("xcode-select --install"), "got: {err}");
+    }
+
+    /// Verifies a real SDK path is returned trimmed and otherwise unchanged.
+    #[test]
+    fn valid_sdk_path_is_returned_trimmed() {
+        let ok = validate_macos_sdk_path("  /Library/Dev/MacOSX.sdk\n").expect("valid path");
+        assert_eq!(ok, "/Library/Dev/MacOSX.sdk");
     }
 }
