@@ -10,6 +10,7 @@
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
+use crate::span::Span;
 
 use super::names::{
     resolve_constant_name, resolve_function_name, resolve_special_or_class_name,
@@ -72,18 +73,22 @@ pub(super) fn resolve_expr(
         },
         ExprKind::FunctionCall { name, args } => {
             let function_name = resolve_function_name(name, current_namespace, imports, symbols);
-            ExprKind::FunctionCall {
-                name: resolved_name(function_name.clone()),
-                args: rewrite_callback_literal_args(
-                    &function_name,
-                    args,
-                    current_namespace,
-                    imports,
-                    symbols,
-                )
-                .into_iter()
-                .map(|arg| resolve_expr(&arg, current_namespace, imports, symbols))
-                .collect(),
+            let resolved_args: Vec<Expr> = rewrite_callback_literal_args(
+                &function_name,
+                args,
+                current_namespace,
+                imports,
+                symbols,
+            )
+            .into_iter()
+            .map(|arg| resolve_expr(&arg, current_namespace, imports, symbols))
+            .collect();
+            match fold_variadic_array_set_call(&function_name, &resolved_args, expr.span) {
+                Some(folded) => folded,
+                None => ExprKind::FunctionCall {
+                    name: resolved_name(function_name.clone()),
+                    args: resolved_args,
+                },
             }
         }
         ExprKind::ArrayLiteral(values) => ExprKind::ArrayLiteral(
@@ -377,6 +382,48 @@ pub(super) fn resolve_expr(
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)
+}
+
+/// Left-folds a variadic call to one of PHP's left-associative array set/merge builtins
+/// (`array_merge`, `array_diff`, `array_intersect`, `array_diff_key`, `array_intersect_key`) with
+/// more than two arguments into nested two-argument calls — e.g. `array_merge(a, b, c)` becomes
+/// `array_merge(array_merge(a, b), c)`. Each of these builtins is left-associative
+/// (`a ∪ b ∪ c`, `a \ (b ∪ c)`, `a ∩ b ∩ c`), so the rewrite is semantics-preserving and lets the
+/// existing two-argument codegen handle the variadic forms without a dedicated N-ary runtime.
+///
+/// Returns `None` (leaving the call unchanged) when the function is not one of these builtins, when
+/// there are two or fewer arguments, or when any argument is a spread (whose count is not known
+/// statically). `args` must already be name-resolved; `span` is reused for the synthesized calls.
+fn fold_variadic_array_set_call(
+    function_name: &str,
+    args: &[Expr],
+    span: Span,
+) -> Option<ExprKind> {
+    const FOLDABLE: &[&str] = &[
+        "array_merge",
+        "array_diff",
+        "array_intersect",
+        "array_diff_key",
+        "array_intersect_key",
+    ];
+    let key = php_symbol_key(function_name.trim_start_matches('\\'));
+    if !FOLDABLE.iter().any(|candidate| php_symbol_key(candidate) == key) {
+        return None;
+    }
+    if args.len() <= 2 || args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+        return None;
+    }
+    let mut folded = ExprKind::FunctionCall {
+        name: resolved_name(function_name.to_string()),
+        args: vec![args[0].clone(), args[1].clone()],
+    };
+    for arg in &args[2..] {
+        folded = ExprKind::FunctionCall {
+            name: resolved_name(function_name.to_string()),
+            args: vec![Expr::new(folded, span), arg.clone()],
+        };
+    }
+    Some(folded)
 }
 
 /// Resolves the target of an instanceof expression.

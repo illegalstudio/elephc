@@ -136,3 +136,40 @@ echo $saved[0] . "|" . $saved[1];
     );
     assert_eq!(out, "5|6");
 }
+
+/// Regression (H9): array_merge() with three and four arguments. The name resolver desugars the
+/// variadic call into nested two-argument merges (left-associative), so it no longer fails to
+/// compile and produces the fully concatenated, reindexed result.
+#[test]
+fn test_array_merge_variadic_three_and_four_args() {
+    let out = compile_and_run(
+        r#"<?php
+$m3 = array_merge([1, 2], [3], [4, 5]);
+echo implode(",", $m3);
+echo "|";
+$m4 = array_merge([1], [2], [3], [4]);
+echo implode("-", $m4);
+"#,
+    );
+    assert_eq!(out, "1,2,3,4,5|1-2-3-4");
+}
+
+/// Regression (H9): array_diff()/array_intersect() with three arguments. The variadic desugar nests
+/// the left-associative set operations (`a \ (b ∪ c)`, `a ∩ b ∩ c`). Values are checked key-agnostic
+/// via array_values()+sort() because elephc reindexes diff/intersect results (a separate pre-existing
+/// key-preservation gap, not part of this fix).
+#[test]
+fn test_array_diff_and_intersect_variadic_three_args() {
+    let out = compile_and_run(
+        r#"<?php
+$d = array_values(array_diff([1, 2, 3, 4], [2], [4]));
+sort($d);
+echo implode(",", $d);
+echo "|";
+$i = array_values(array_intersect([1, 2, 3, 4], [2, 3, 4], [3, 4, 5]));
+sort($i);
+echo implode(",", $i);
+"#,
+    );
+    assert_eq!(out, "1,3|3,4");
+}
