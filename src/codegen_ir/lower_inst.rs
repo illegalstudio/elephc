@@ -3602,10 +3602,17 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         .class_infos
         .get(impl_class)
         .ok_or_else(|| CodegenIrError::unsupported(format!("static method implementation on unknown class {}", impl_class)))?;
-    let callee_sig = impl_info
-        .static_methods
-        .get(&method_key)
-        .ok_or_else(|| CodegenIrError::unsupported(format!("static method call to unknown method {}", target)))?;
+    let Some(callee_sig) = impl_info.static_methods.get(&method_key) else {
+        if is_lexical_instance_static_receiver(receiver_label)
+            && receiver_info.methods.contains_key(&method_key)
+        {
+            return lower_lexical_instance_static_method_call(ctx, inst, receiver.as_str(), method_name);
+        }
+        return Err(CodegenIrError::unsupported(format!(
+            "static method call to unknown method {}",
+            target
+        )));
+    };
     if inst.operands.len() != callee_sig.params.len() {
         return Err(CodegenIrError::unsupported(format!(
             "static method call to {} with {} operands for {} params",
@@ -3650,6 +3657,45 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
         ctx.store_result_value(result)?;
     }
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Lowers `self::method()` or `parent::method()` when it targets an instance method.
+fn lower_lexical_instance_static_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver: &str,
+    method_name: &str,
+) -> Result<()> {
+    let this_slot = ctx.local_slot_by_name("this").ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "lexical instance method static call without this in {}",
+            ctx.function.name
+        ))
+    })?;
+    let mut target = resolve_method_call_target(ctx, receiver, method_name, inst.operands.len() + 1)?;
+    target.dynamic_slot = None;
+    let receiver_ty = PhpType::Object(receiver.to_string());
+    let mut param_types = Vec::with_capacity(target.params.len() + 1);
+    param_types.push(receiver_ty.clone());
+    param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
+    let mut ref_params = Vec::with_capacity(target.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(target.ref_params.iter().copied());
+    let call_args = materialize_method_call_args_with_receiver_local_and_refs(
+        ctx,
+        this_slot,
+        &receiver_ty,
+        &inst.operands,
+        &param_types,
+        &ref_params,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    store_call_result(ctx, inst, &target.return_ty)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -3765,6 +3811,11 @@ fn resolve_static_method_receiver(ctx: &FunctionContext<'_>, receiver: &str) -> 
 /// Returns true for the late-bound static receiver spelling.
 fn is_late_bound_static_receiver(receiver: &str) -> bool {
     receiver.trim_start_matches('\\') == "static"
+}
+
+/// Returns true when PHP static-call syntax should bind an instance method lexically.
+fn is_lexical_instance_static_receiver(receiver: &str) -> bool {
+    matches!(receiver.trim_start_matches('\\'), "self" | "parent")
 }
 
 /// Returns the class name encoded in the current EIR class-method function name.
@@ -4119,6 +4170,59 @@ fn emit_loaded_indexed_array_to_mixed(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+}
+
+/// Loads method call arguments for lexical `self::`/`parent::` instance calls using local `this`.
+fn materialize_method_call_args_with_receiver_local_and_refs(
+    ctx: &mut FunctionContext<'_>,
+    receiver_slot: LocalSlotId,
+    receiver_ty: &PhpType,
+    operands: &[ValueId],
+    param_types: &[PhpType],
+    ref_params: &[bool],
+) -> Result<CallArgMaterialization> {
+    if operands.len() + 1 != param_types.len() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "lexical instance call materialization received {} operands for {} params",
+            operands.len(),
+            param_types.len()
+        )));
+    }
+    if ref_params.len() != param_types.len() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "lexical instance call materialization received {} ref flags for {} params",
+            ref_params.len(),
+            param_types.len()
+        )));
+    }
+    let visible_param_types = &param_types[1..];
+    let visible_ref_params = &ref_params[1..];
+    let mut ref_writebacks = plan_ref_arg_writebacks(ctx, operands, visible_param_types, visible_ref_params)?;
+    emit_ref_arg_temp_cells(ctx, &mut ref_writebacks)?;
+    let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
+    ctx.load_local_to_result(receiver_slot)?;
+    abi::emit_push_result_value(ctx.emitter, receiver_ty);
+    let mut arg_temp_bytes = call_arg_temp_slot_size(&abi_param_types[0]);
+    for (index, (value, param_ty)) in operands.iter().zip(visible_param_types.iter()).enumerate() {
+        if visible_ref_params[index] {
+            materialize_ref_arg_address(ctx, *value, index, arg_temp_bytes, &ref_writebacks)?;
+            abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
+        } else {
+            ctx.load_value_to_result(*value)?;
+            let source_ty = ctx.raw_value_php_type(*value)?;
+            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            abi::emit_push_result_value(ctx.emitter, &push_ty);
+        }
+        arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[index + 1]);
+    }
+    Ok(CallArgMaterialization {
+        overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
+        ref_writebacks,
+        cleanup_slots: Vec::new(),
+        cleanup_bytes: 0,
+    })
 }
 
 /// Loads method call arguments with by-reference parameter support for local operands.

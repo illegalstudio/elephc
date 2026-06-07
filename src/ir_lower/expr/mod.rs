@@ -6520,7 +6520,9 @@ fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let sig = static_method_implementation_signature(ctx, receiver, method).cloned();
+    let sig = static_method_implementation_signature(ctx, receiver, method)
+        .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
+        .cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let name = format!("{}::{}", receiver_name(receiver), method);
     let data = ctx.intern_string(&name);
@@ -6620,6 +6622,20 @@ fn static_method_implementation_signature<'a>(
     ctx.classes
         .get(impl_class)
         .and_then(|class_info| class_info.static_methods.get(&key))
+}
+
+/// Returns the instance-method signature used by `self::method()` or `parent::method()`.
+fn lexical_instance_static_call_signature<'a>(
+    ctx: &'a LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> Option<&'a FunctionSig> {
+    if !matches!(receiver, StaticReceiver::Self_ | StaticReceiver::Parent) {
+        return None;
+    }
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let key = php_symbol_key(method);
+    class_method_signature(ctx, &class_name, &key)
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
