@@ -31,6 +31,21 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Test-only constructor over raw bytes.
+    ///
+    /// The public `new` takes `&str` (always valid UTF-8), so it cannot exercise the
+    /// malformed-byte handling in `peek`/`advance`. This builds a cursor directly over
+    /// arbitrary bytes for those tests.
+    #[cfg(test)]
+    fn from_bytes(bytes: &'a [u8]) -> Self {
+        Self {
+            bytes,
+            pos: 0,
+            line: 1,
+            col: 1,
+        }
+    }
+
     /// Returns the current source position as a one-based `Span` (line, column).
     ///
     /// Used to attach source locations to tokens for diagnostics.
@@ -48,11 +63,13 @@ impl<'a> Cursor<'a> {
         if b.is_ascii() {
             Some(b as char)
         } else {
-            // Fallback for non-ASCII (rare in PHP source)
+            // Decode the next full UTF-8 codepoint. On a malformed byte yield the U+FFFD
+            // replacement char rather than None, so callers always observe a character
+            // while bytes remain and a scan loop can never spin on a non-advancing None.
             std::str::from_utf8(&self.bytes[self.pos..])
-                .ok()?
-                .chars()
-                .next()
+                .ok()
+                .and_then(|s| s.chars().next())
+                .or(Some('\u{FFFD}'))
         }
     }
 
@@ -69,10 +86,22 @@ impl<'a> Cursor<'a> {
             self.pos += 1;
             b as char
         } else {
-            let s = std::str::from_utf8(&self.bytes[self.pos..]).ok()?;
-            let ch = s.chars().next()?;
-            self.pos += ch.len_utf8();
-            ch
+            match std::str::from_utf8(&self.bytes[self.pos..])
+                .ok()
+                .and_then(|s| s.chars().next())
+            {
+                Some(ch) => {
+                    self.pos += ch.len_utf8();
+                    ch
+                }
+                None => {
+                    // Malformed byte: consume exactly one byte and report U+FFFD so the
+                    // cursor always makes forward progress instead of returning a
+                    // non-advancing None that a scan loop could spin on.
+                    self.pos += 1;
+                    '\u{FFFD}'
+                }
+            }
         };
         if ch == '\n' {
             self.line += 1;
@@ -93,5 +122,40 @@ impl<'a> Cursor<'a> {
     /// The slice is guaranteed to be valid UTF-8 (panics if byte range is malformed).
     pub fn remaining(&self) -> &'a str {
         std::str::from_utf8(&self.bytes[self.pos..]).unwrap_or("")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies `advance` makes forward progress on a malformed UTF-8 byte (yields the
+    /// U+FFFD replacement char and consumes exactly one byte) so a scan loop can never
+    /// spin on a non-advancing `None` — the latent hang class is removed at the source.
+    #[test]
+    fn advance_makes_progress_on_malformed_utf8() {
+        let mut cursor = Cursor::from_bytes(&[0xff, b'a']);
+        assert_eq!(cursor.advance(), Some('\u{FFFD}'));
+        assert_eq!(cursor.advance(), Some('a'));
+        assert_eq!(cursor.advance(), None);
+        assert!(cursor.is_eof());
+    }
+
+    /// Verifies `peek` never returns `None` on a malformed byte while bytes remain, so a
+    /// `while let Some(_) = peek()` loop also terminates via progress instead of hanging.
+    #[test]
+    fn peek_yields_replacement_on_malformed_utf8() {
+        let cursor = Cursor::from_bytes(&[0xff]);
+        assert_eq!(cursor.peek(), Some('\u{FFFD}'));
+        assert!(!cursor.is_eof());
+    }
+
+    /// Verifies a valid multi-byte UTF-8 codepoint is still decoded whole and advances by
+    /// its byte length, so the malformed-byte handling does not corrupt valid input.
+    #[test]
+    fn advance_decodes_valid_multibyte_codepoint() {
+        let mut cursor = Cursor::from_bytes("é".as_bytes());
+        assert_eq!(cursor.advance(), Some('é'));
+        assert!(cursor.is_eof());
     }
 }
