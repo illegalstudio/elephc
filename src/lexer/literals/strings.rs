@@ -440,59 +440,111 @@ pub(in crate::lexer) fn scan_heredoc(
     }
 
     let mut content = String::new();
+    let mut at_line_start = true;
     loop {
         if cursor.is_eof() {
             return Err(CompileError::new(span, "Unterminated heredoc/nowdoc"));
         }
 
-        let remaining = cursor.remaining();
-
-        let mut ws_count = 0;
-        for b in remaining.bytes() {
-            if b == b' ' || b == b'\t' {
-                ws_count += 1;
-            } else {
-                break;
-            }
-        }
-
-        let after_ws = &remaining[ws_count..];
-        if after_ws.starts_with(&label) {
-            let after_label = &after_ws[label.len()..];
-            if after_label.is_empty()
-                || after_label.starts_with(';')
-                || after_label.starts_with('\n')
-                || after_label.starts_with('\r')
-            {
-                for _ in 0..ws_count {
-                    cursor.advance();
-                }
-                for _ in 0..label.len() {
-                    cursor.advance();
-                }
-
-                if content.ends_with('\n') {
-                    content.pop();
-                    if content.ends_with('\r') {
-                        content.pop();
+        // The closing label is only recognized at the start of a line (optionally indented),
+        // so a label appearing mid-line is treated as body content.
+        if at_line_start {
+            let remaining = cursor.remaining();
+            let ws_count = remaining
+                .bytes()
+                .take_while(|&b| b == b' ' || b == b'\t')
+                .count();
+            let after_ws = &remaining[ws_count..];
+            if after_ws.starts_with(&label) {
+                let after_label = &after_ws[label.len()..];
+                // PHP closes the heredoc when the label is followed by end-of-input or any
+                // character that cannot continue an identifier (`;`, `)`, `,`, `.`, space,
+                // `[`, newline, ...) — but not by another identifier char (e.g. `EOTX`).
+                let closes = after_label
+                    .chars()
+                    .next()
+                    .map_or(true, |c| !is_ident_continue(c));
+                if closes {
+                    for _ in 0..ws_count + label.len() {
+                        cursor.advance();
                     }
-                }
 
-                if is_nowdoc {
-                    return Ok(vec![(Token::StringLiteral(content), span)]);
-                }
+                    if content.ends_with('\n') {
+                        content.pop();
+                        if content.ends_with('\r') {
+                            content.pop();
+                        }
+                    }
 
-                let mut chars = content.chars().peekable();
-                let mut input = CharsEscapeInput { chars: &mut chars };
-                return interpolate(&mut input, span, None, MissingEscape::Literal);
+                    // PHP 7.3+ flexible heredoc/nowdoc: strip the closing marker's
+                    // indentation from every body line before interpolation.
+                    let content = strip_heredoc_indentation(&content, ws_count, span)?;
+
+                    if is_nowdoc {
+                        return Ok(vec![(Token::StringLiteral(content), span)]);
+                    }
+
+                    let mut chars = content.chars().peekable();
+                    let mut input = CharsEscapeInput { chars: &mut chars };
+                    return interpolate(&mut input, span, None, MissingEscape::Literal);
+                }
             }
         }
 
         match cursor.advance() {
-            Some(ch) => push_literal_char(ch, &mut content),
+            Some(ch) => {
+                at_line_start = ch == '\n';
+                push_literal_char(ch, &mut content);
+            }
             None => return Err(CompileError::new(span, "Unterminated heredoc/nowdoc")),
         }
     }
+}
+
+/// Strips the closing marker's indentation (`indent` leading space/tab characters) from
+/// every line of a PHP 7.3+ flexible heredoc/nowdoc body.
+///
+/// A non-blank line indented by fewer than `indent` whitespace characters is a PHP
+/// "Invalid body indentation level" error. Blank lines keep whatever they had (after
+/// removing up to `indent` leading whitespace). `\r` line endings are preserved.
+fn strip_heredoc_indentation(
+    content: &str,
+    indent: usize,
+    span: Span,
+) -> Result<String, CompileError> {
+    if indent == 0 {
+        return Ok(content.to_string());
+    }
+    let mut result = String::new();
+    for (i, line) in content.split('\n').enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        let (body, carriage_return) = match line.strip_suffix('\r') {
+            Some(stripped) => (stripped, "\r"),
+            None => (line, ""),
+        };
+        let mut removed = 0;
+        let mut rest = body;
+        while removed < indent {
+            match rest.chars().next() {
+                Some(c) if c == ' ' || c == '\t' => {
+                    rest = &rest[1..];
+                    removed += 1;
+                }
+                _ => break,
+            }
+        }
+        if removed < indent && !rest.is_empty() {
+            return Err(CompileError::new(
+                span,
+                "Invalid heredoc body indentation level",
+            ));
+        }
+        result.push_str(rest);
+        result.push_str(carriage_return);
+    }
+    Ok(result)
 }
 
 /// Controls how a bare backslash at end of input is treated inside double-quoted strings.

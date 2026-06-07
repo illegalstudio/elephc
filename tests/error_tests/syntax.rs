@@ -36,6 +36,16 @@ fn test_error_unterminated_interpolation_offset() {
     expect_error("<?php $a = [1]; echo \"$a[0\";", "Unterminated array offset");
 }
 
+/// Verifies a flexible heredoc whose body line is indented less than the closing marker
+/// is reported as an invalid body indentation level (PHP 7.3+).
+#[test]
+fn test_error_heredoc_invalid_indentation() {
+    expect_error(
+        "<?php echo <<<EOT\n    indented\n  under\n    EOT;\n",
+        "Invalid heredoc body indentation level",
+    );
+}
+
 /// Verifies the error diagnostic for invalid unicode string escape.
 #[test]
 fn test_error_invalid_unicode_string_escape() {

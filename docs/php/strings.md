@@ -74,6 +74,30 @@ This is line 2
 EOT;
 ```
 
+The closing label closes the heredoc when it is at the start of a line and followed by any
+non-identifier character, so a heredoc can be used as an expression — for example as a
+function argument or in a concatenation:
+
+```php
+<?php
+echo strtoupper(<<<EOT
+hello
+EOT) . "!";
+```
+
+PHP 7.3+ flexible (indented) heredocs are supported: the closing marker may be indented,
+and that indentation is stripped from every body line.
+
+```php
+<?php
+function describe(): string {
+    return <<<EOT
+        line one
+        line two
+        EOT;   // -> "line one\nline two"
+}
+```
+
 ## Nowdoc strings
 
 Multi-line without escape processing (like single-quoted):
