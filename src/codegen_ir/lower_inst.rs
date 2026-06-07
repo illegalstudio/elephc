@@ -1917,7 +1917,11 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
+    if let Some(slot) = target.dynamic_slot {
+        emit_dynamic_instance_method_call(ctx, slot);
+    } else {
+        abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
+    }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)?;
@@ -2015,7 +2019,11 @@ fn lower_nullable_receiver_method_call(
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
+    if let Some(slot) = target.dynamic_slot {
+        emit_dynamic_instance_method_call(ctx, slot);
+    } else {
+        abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
+    }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)?;
@@ -2734,6 +2742,7 @@ fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 struct MethodCallTarget {
     impl_class: String,
     method_key: String,
+    dynamic_slot: Option<usize>,
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
@@ -2795,7 +2804,9 @@ fn resolve_method_call_target(
         .get(&method_key)
         .cloned()
         .unwrap_or_else(|| normalized.to_string());
-    if !class_method_already_emitted(ctx, &impl_class, &method_key, false) {
+    let dynamic_slot = class_info.vtable_slots.get(&method_key).copied();
+    let has_direct_body = class_method_already_emitted(ctx, &impl_class, &method_key, false);
+    if !has_direct_body && dynamic_slot.is_none() {
         return Err(CodegenIrError::unsupported(format!(
             "method call to {}::{} without an emitted EIR method body",
             impl_class, method_name
@@ -2804,6 +2815,7 @@ fn resolve_method_call_target(
     Ok(MethodCallTarget {
         impl_class,
         method_key,
+        dynamic_slot: if has_direct_body { None } else { dynamic_slot },
         params: callee_sig
             .params
             .iter()
@@ -2812,6 +2824,29 @@ fn resolve_method_call_target(
         ref_params: callee_sig.ref_params.clone(),
         return_ty: callee_sig.return_type.clone(),
     })
+}
+
+/// Emits a runtime vtable dispatch for an instance method whose concrete override is late-bound.
+fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, slot: usize) {
+    let class_id_reg = abi::temp_int_reg(ctx.emitter.target);
+    let dispatch_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        class_id_reg,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        0,
+    );
+    abi::emit_symbol_address(ctx.emitter, dispatch_reg, "_class_vtable_ptrs");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_reg, dispatch_reg, class_id_reg)); // load the class-specific instance-vtable pointer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_reg, dispatch_reg, class_id_reg)); // load the class-specific instance-vtable pointer
+        }
+    }
+    abi::emit_load_from_address(ctx.emitter, dispatch_reg, dispatch_reg, slot * 8);
+    abi::emit_call_reg(ctx.emitter, dispatch_reg);
 }
 
 /// Returns true when the current EIR module includes the target class method body.

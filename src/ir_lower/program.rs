@@ -391,9 +391,12 @@ fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
                 Op::ObjectNew => {
                     if let Some(class_name) = class_data_name(module, inst) {
                         let construct_key = php_method_key("__construct");
-                        if is_supported_builtin_spl_method(class_name, &construct_key) {
-                            methods.push((class_name.to_string(), construct_key));
-                        }
+                        push_supported_builtin_spl_method_for_receiver(
+                            &mut methods,
+                            module,
+                            class_name,
+                            &construct_key,
+                        );
                         push_builtin_spl_metadata_methods(&mut methods, module, class_name);
                     }
                 }
@@ -580,6 +583,14 @@ fn required_builtin_spl_metadata_methods(class_name: &str) -> &'static [&'static
             "valid",
             "getInnerIterator",
         ],
+        "FilterIterator" => &[
+            "current",
+            "key",
+            "next",
+            "rewind",
+            "valid",
+            "getInnerIterator",
+        ],
         "AppendIterator" => &[
             "current",
             "key",
@@ -744,6 +755,7 @@ fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
         ),
         "NoRewindIterator" => matches!(method_key, "__construct" | "rewind"),
         "InfiniteIterator" => matches!(method_key, "__construct" | "next"),
+        "FilterIterator" => matches!(method_key, "__construct" | "rewind" | "next"),
         "AppendIterator" => matches!(
             method_key,
             "__construct"
