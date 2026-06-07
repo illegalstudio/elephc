@@ -7044,7 +7044,10 @@ fn lower_buffer_new(
 
 /// Lowers `::class`.
 fn lower_class_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, expr: &Expr) -> LoweredValue {
-    let name = receiver_name(receiver);
+    let name = match receiver {
+        StaticReceiver::Static => receiver_name(receiver),
+        _ => static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver)),
+    };
     let data = ctx.intern_class_name(&name);
     ctx.emit_value(
         Op::ConstClassName,
@@ -7101,16 +7104,31 @@ fn scoped_constant_receiver_name(ctx: &LoweringContext<'_, '_>, receiver: &Stati
 
 /// Lowers `new self`, `new static`, or `new parent`.
 fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, args: &[Expr], expr: &Expr) -> LoweredValue {
-    for arg in args {
-        lower_expr(ctx, arg);
+    if matches!(receiver, StaticReceiver::Static) {
+        let fallback_class = ctx.current_class.clone().unwrap_or_else(|| receiver_name(receiver));
+        let class_name = lower_class_constant(ctx, receiver, expr);
+        let mut operands = vec![class_name.value];
+        operands.extend(lower_args(ctx, args));
+        let metadata = format!("{}|{}", fallback_class, fallback_class);
+        let data = ctx.intern_class_name(&metadata);
+        return ctx.emit_value(
+            Op::DynamicObjectNew,
+            operands,
+            Some(Immediate::Data(data)),
+            PhpType::Object(fallback_class),
+            Op::DynamicObjectNew.default_effects(),
+            Some(expr.span),
+        );
     }
-    let name = receiver_name(receiver);
+    let name = static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
+    let sig = constructor_signature(ctx, &Name::from(name.clone())).cloned();
+    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let data = ctx.intern_class_name(&name);
     ctx.emit_value(
         Op::ObjectNew,
-        Vec::new(),
+        operands,
         Some(Immediate::Data(data)),
-        fallback_expr_type(expr),
+        PhpType::Object(name),
         Op::ObjectNew.default_effects(),
         Some(expr.span),
     )

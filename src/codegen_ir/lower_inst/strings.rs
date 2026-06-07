@@ -21,6 +21,8 @@ use super::{
 };
 use crate::codegen_ir::{CodegenIrError, Result};
 
+const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
+
 /// Lowers a string constant by materializing its data-section pointer and byte length.
 pub(super) fn lower_const_str(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data_id = expect_data(inst)?;
@@ -34,11 +36,90 @@ pub(super) fn lower_const_str(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 /// Lowers a `::class` constant by materializing the interned class-name string.
 pub(super) fn lower_const_class_name(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data_id = expect_data(inst)?;
+    let class_name = ctx
+        .module
+        .data
+        .class_names
+        .get(data_id.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("class data", data_id.as_raw()))?
+        .clone();
+    if class_name == "static" {
+        lower_late_static_class_name(ctx)?;
+        return store_if_result(ctx, inst);
+    }
     let (label, len) = ctx.intern_class_name_data(data_id)?;
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
     store_if_result(ctx, inst)
+}
+
+/// Lowers `static::class` by resolving the forwarded called-class id at runtime.
+fn lower_late_static_class_name(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_late_static_class_name_arm64(ctx),
+        Arch::X86_64 => lower_late_static_class_name_x86_64(ctx),
+    }
+}
+
+/// Emits the AArch64 class-id table lookup for `static::class`.
+fn lower_late_static_class_name_arm64(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let missing = ctx.next_label("static_class_missing");
+    let done = ctx.next_label("static_class_done");
+    emit_late_static_class_id_to_reg(ctx, "x12")?;
+    abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_name_count", 0);
+    ctx.emitter.instruction("cmp x12, x10");                                    // reject called-class ids outside the emitted class-name table
+    ctx.emitter.instruction(&format!("b.hs {}", missing));                      // use an empty class name when metadata is unavailable
+    abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
+    ctx.emitter.instruction("lsl x12, x12, #4");                                // convert class id to a 16-byte class-name table offset
+    ctx.emitter.instruction("add x11, x11, x12");                               // select the class-name table row for the called class
+    ctx.emitter.instruction("ldr x1, [x11]");                                   // load the called class name pointer into the string result
+    ctx.emitter.instruction("ldr x2, [x11, #8]");                               // load the called class name length into the string result
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the missing-metadata fallback
+    ctx.emitter.label(&missing);
+    abi::emit_symbol_address(ctx.emitter, "x1", "_class_name_missing");
+    ctx.emitter.instruction("mov x2, #0");                                      // missing metadata stringifies to an empty class name
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits the x86_64 class-id table lookup for `static::class`.
+fn lower_late_static_class_name_x86_64(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let missing = ctx.next_label("static_class_missing");
+    let done = ctx.next_label("static_class_done");
+    emit_late_static_class_id_to_reg(ctx, "r8")?;
+    abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_class_name_count", 0);
+    ctx.emitter.instruction("cmp r8, r9");                                      // reject called-class ids outside the emitted class-name table
+    ctx.emitter.instruction(&format!("jae {}", missing));                       // use an empty class name when metadata is unavailable
+    abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
+    ctx.emitter.instruction("shl r8, 4");                                       // convert class id to a 16-byte class-name table offset
+    ctx.emitter.instruction("add r10, r8");                                     // select the class-name table row for the called class
+    ctx.emitter.instruction("mov rax, QWORD PTR [r10]");                        // load the called class name pointer into the string result
+    ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                    // load the called class name length into the string result
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the missing-metadata fallback
+    ctx.emitter.label(&missing);
+    abi::emit_symbol_address(ctx.emitter, "rax", "_class_name_missing");
+    ctx.emitter.instruction("mov rdx, 0");                                      // missing metadata stringifies to an empty class name
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Loads the late-static class id from the hidden static frame slot or `$this`.
+fn emit_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) -> Result<()> {
+    if let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) {
+        let offset = ctx.local_offset(slot)?;
+        abi::load_at_offset(ctx.emitter, reg, offset);
+        return Ok(());
+    }
+    if let Some(slot) = ctx.local_slot_by_name("this") {
+        let offset = ctx.local_offset(slot)?;
+        abi::load_at_offset(ctx.emitter, reg, offset);
+        abi::emit_load_from_address(ctx.emitter, reg, reg, 0);
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(
+        "static::class without a forwarded called-class id",
+    ))
 }
 
 /// Lowers a string concatenation by loading both string pairs into `__rt_concat`'s ABI.
