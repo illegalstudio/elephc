@@ -24,8 +24,9 @@ use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::super::context::FunctionContext;
 use super::{
-    cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes, expect_data, expect_operand,
-    iterators, load_value_to_first_int_arg, materialize_direct_call_args, store_if_result,
+    callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes, expect_data,
+    expect_operand, iterators, load_value_to_first_int_arg, materialize_direct_call_args,
+    store_if_result,
 };
 use crate::codegen_ir::fibers;
 use crate::codegen_ir::literal_defaults::{
@@ -75,6 +76,9 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     if reflection::is_reflection_owner_class(&class_name) {
         return reflection::lower_reflection_owner_new(ctx, inst, &class_name);
+    }
+    if class_name == "CallbackFilterIterator" {
+        return lower_callback_filter_iterator_new(ctx, inst, &class_name);
     }
     if class_name == "IteratorIterator" {
         return lower_iterator_iterator_new(ctx, inst);
@@ -173,6 +177,138 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
             &param_types,
         )?;
     }
+    Ok(())
+}
+
+/// Lowers `new CallbackFilterIterator($iterator, $callback)` with callable-array capture.
+fn lower_callback_filter_iterator_new(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+) -> Result<()> {
+    if inst.operands.len() != 2 {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} constructor with {} EIR operands",
+            class_name,
+            inst.operands.len()
+        )));
+    }
+    let source = expect_operand(inst, 0)?;
+    let callback = expect_operand(inst, 1)?;
+    let (class_id, property_count, uninitialized_marker_offsets, property_defaults, callback_env_offset) = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get(class_name)
+            .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", class_name)))?;
+        if class_info.allow_dynamic_properties {
+            return Err(CodegenIrError::unsupported(format!(
+                "object allocation requiring dynamic properties for {}",
+                class_name
+            )));
+        }
+        if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
+            return Err(CodegenIrError::unsupported(format!(
+                "object allocation requiring interface method symbols not emitted by EIR for {}",
+                class_name
+            )));
+        }
+        (
+            class_info.class_id,
+            class_info.properties.len(),
+            uninitialized_property_marker_offsets(class_info),
+            collect_property_defaults(class_info, inst)?,
+            class_info.property_offsets.get("callbackEnv").copied(),
+        )
+    };
+    let inner_slot = resolve_property_slot_for_class(ctx, class_name, "inner", inst)?;
+    let callback_slot = resolve_property_slot_for_class(ctx, class_name, "callback", inst)?;
+    emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        &uninitialized_marker_offsets,
+    )?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
+    ctx.store_result_value(result)?;
+    emit_property_defaults(ctx, result, &property_defaults)?;
+    if let Some(offset) = callback_env_offset {
+        emit_zero_pointer_property(ctx, result, offset)?;
+    }
+    emit_callback_filter_source_property(ctx, source, result, &inner_slot, inst)?;
+    emit_callback_filter_callback_property(ctx, callback, result, &callback_slot, inst)
+}
+
+/// Stores CallbackFilterIterator::$inner from a constructor source operand.
+fn emit_callback_filter_source_property(
+    ctx: &mut FunctionContext<'_>,
+    source: ValueId,
+    target: ValueId,
+    slot: &PropertySlot,
+    inst: &Instruction,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(source)?;
+    ensure_property_value_supported(ctx, slot, source, &value_ty, inst)?;
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(target, base_reg)?;
+    emit_property_store(ctx, source, slot, base_reg)
+}
+
+/// Stores CallbackFilterIterator::$callback, converting callable arrays to descriptors.
+fn emit_callback_filter_callback_property(
+    ctx: &mut FunctionContext<'_>,
+    callback: ValueId,
+    target: ValueId,
+    slot: &PropertySlot,
+    inst: &Instruction,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(callback)?;
+    match value_ty.codegen_repr() {
+        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Mixed | PhpType::Str) => {
+            callables::emit_runtime_callable_array_descriptor_value(
+                ctx,
+                callback,
+                "callback_filter_constructor",
+            )?;
+            emit_store_result_to_pointer_property(ctx, target, slot.offset)
+        }
+        _ => {
+            ensure_property_value_supported(ctx, slot, callback, &value_ty, inst)?;
+            let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+            ctx.load_value_to_reg(target, base_reg)?;
+            emit_property_store(ctx, callback, slot, base_reg)
+        }
+    }
+}
+
+/// Stores the current single-register result into one pointer-sized object property.
+fn emit_store_result_to_pointer_property(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    offset: usize,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    ctx.load_value_to_reg(target, base_reg)?;
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, base_reg, offset);
+    abi::emit_store_zero_to_address(ctx.emitter, base_reg, offset + 8);
+    Ok(())
+}
+
+/// Initializes one pointer-sized object property to null.
+fn emit_zero_pointer_property(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    offset: usize,
+) -> Result<()> {
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(target, base_reg)?;
+    abi::emit_store_zero_to_address(ctx.emitter, base_reg, offset);
+    abi::emit_store_zero_to_address(ctx.emitter, base_reg, offset + 8);
     Ok(())
 }
 

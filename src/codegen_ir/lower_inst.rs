@@ -1884,6 +1884,9 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     if let Some(intrinsic) = generator_intrinsic(&class_name, &method_name) {
         return lower_generator_intrinsic(ctx, inst, intrinsic);
     }
+    if let Some(intrinsic) = callback_filter_intrinsic(&class_name, &method_name) {
+        return lower_callback_filter_accept_intrinsic(ctx, inst, intrinsic);
+    }
     if is_fiber_start_call(&class_name, &method_name) {
         return lower_fiber_start(ctx, inst, object);
     }
@@ -2137,6 +2140,57 @@ fn generator_intrinsic(class_name: &str, method_name: &str) -> Option<IntrinsicC
         return None;
     }
     IntrinsicCall::instance_method("Generator", method_name)
+}
+
+/// Returns the descriptor-backed intrinsic for SPL callback-filter accept trampolines.
+fn callback_filter_intrinsic(class_name: &str, method_name: &str) -> Option<IntrinsicCall> {
+    let intrinsic = IntrinsicCall::instance_method(class_name.trim_start_matches('\\'), method_name)?;
+    if intrinsic.kind() == IntrinsicCallKind::CallbackFilterAccept {
+        Some(intrinsic)
+    } else {
+        None
+    }
+}
+
+/// Lowers `CallbackFilterIterator::__elephcAcceptCallback()` through its stored descriptor.
+fn lower_callback_filter_accept_intrinsic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    intrinsic: IntrinsicCall,
+) -> Result<()> {
+    if inst.operands.len() != 4 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{}::{} received {} operands for callback-filter accept",
+            intrinsic.class_name(),
+            intrinsic.method_key(),
+            inst.operands.len()
+        )));
+    }
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(intrinsic.class_name())
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "missing {} metadata for callback-filter accept",
+                intrinsic.class_name()
+            ))
+        })?;
+    let callback_offset = class_info
+        .property_offsets
+        .get("callback")
+        .copied()
+        .ok_or_else(|| CodegenIrError::missing_entry("property callback", 0))?;
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    ctx.load_value_to_reg(inst.operands[0], descriptor_reg)?;
+    abi::emit_load_from_address(ctx.emitter, descriptor_reg, descriptor_reg, callback_offset);
+    callables::emit_descriptor_reg_invoker_call_with_args(
+        ctx,
+        inst,
+        descriptor_reg,
+        &inst.operands[1..],
+        "callback_filter_accept",
+    )
 }
 
 /// Lowers built-in `Generator` methods to their runtime helpers.

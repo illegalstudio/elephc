@@ -430,6 +430,110 @@ fn lower_runtime_string_callable_array_descriptor_invoke(
     Ok(())
 }
 
+/// Materializes a callable descriptor selected from a runtime callable-array value.
+pub(super) fn emit_runtime_callable_array_descriptor_value(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+) -> Result<()> {
+    match ctx.value_php_type(callable)?.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            emit_mixed_callable_array_descriptor_value(ctx, callable, op_name)
+        }
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => {
+            emit_string_callable_array_descriptor_value(ctx, callable, op_name)
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for callable-array PHP type {:?}",
+            op_name, other
+        ))),
+    }
+}
+
+/// Selects a callable descriptor from a mixed callable-array value.
+fn emit_mixed_callable_array_descriptor_value(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+) -> Result<()> {
+    let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
+    let static_cases = runtime_static_method_descriptor_cases(ctx);
+    if instance_targets.is_empty() && static_cases.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for runtime mixed callable array with no descriptor targets",
+            op_name
+        )));
+    }
+
+    emit_mixed_callable_array_selector_slots(ctx, callable)?;
+    let done_label = ctx.next_label("callable_array_descriptor_done");
+    let miss_label = ctx.next_label(&format!("{}_callable_array_missing", op_name));
+    for target in &instance_targets {
+        let next_label = ctx.next_label("callable_array_instance_next");
+        emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
+        emit_runtime_array_instance_descriptor_value(ctx, target)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_label);
+    }
+    for case in &static_cases {
+        let next_label = ctx.next_label("callable_array_static_next");
+        emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
+        abi::emit_symbol_address(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &case.case.descriptor_label,
+        );
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    ctx.emitter.label(&miss_label);
+    emit_runtime_callable_array_no_match_abort(ctx);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
+    Ok(())
+}
+
+/// Selects a callable descriptor from a string-only static callable-array value.
+fn emit_string_callable_array_descriptor_value(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+) -> Result<()> {
+    let static_cases = runtime_static_method_descriptor_cases(ctx);
+    if static_cases.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for runtime string callable array with no static targets",
+            op_name
+        )));
+    }
+
+    emit_string_callable_array_selector_slots(ctx, callable)?;
+    let done_label = ctx.next_label("callable_array_descriptor_done");
+    let miss_label = ctx.next_label(&format!("{}_callable_array_missing", op_name));
+    for case in &static_cases {
+        let next_label = ctx.next_label("callable_array_static_next");
+        emit_branch_if_string_static_case_mismatch(ctx, case, &next_label);
+        abi::emit_symbol_address(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &case.case.descriptor_label,
+        );
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    ctx.emitter.label(&miss_label);
+    emit_runtime_callable_array_no_match_abort(ctx);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, STRING_SELECTOR_BYTES);
+    Ok(())
+}
+
 /// Collects public instance methods for runtime descriptor selection.
 fn runtime_array_instance_method_targets_for_descriptor(
     ctx: &FunctionContext<'_>,
@@ -873,6 +977,40 @@ fn emit_runtime_array_instance_descriptor_invoke(
     )
 }
 
+/// Builds a receiver-captured descriptor for a matched runtime instance method.
+fn emit_runtime_array_instance_descriptor_value(
+    ctx: &mut FunctionContext<'_>,
+    target: &RuntimeArrayInstanceMethodTarget,
+) -> Result<()> {
+    let receiver_ty = PhpType::Object(target.class_name.clone());
+    let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
+    let entry_label = emit_instance_method_descriptor_entry_wrapper(
+        ctx,
+        &target.impl_class,
+        &target.method_key,
+        &target.sig,
+    )?;
+    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &target.sig, &captures);
+    let php_name = format!("{}::{}", target.class_name, target.method_name);
+    let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+        ctx.data,
+        &entry_label,
+        Some(&php_name),
+        callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
+        Some(&target.sig),
+        &captures,
+        &[],
+        callable_descriptor::CallableDescriptorInvocation::method(
+            callable_descriptor::CallableDescriptorShape::InstanceMethod,
+            Some(target.class_name.clone()),
+            target.method_name.as_str(),
+        ),
+        Some(&invoker_label),
+    );
+    emit_runtime_descriptor_with_saved_receiver_capture(ctx, &descriptor_label, &receiver_ty);
+    Ok(())
+}
+
 /// Invokes a matched static-method descriptor through the prebuilt argument container.
 fn emit_static_descriptor_case_invoke(
     ctx: &mut FunctionContext<'_>,
@@ -989,8 +1127,19 @@ fn lower_descriptor_invoker_call_with_args(
     op_name: &str,
 ) -> Result<()> {
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
-    let invoker_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(callable, descriptor_reg)?;
+    emit_descriptor_reg_invoker_call_with_args(ctx, inst, descriptor_reg, visible_args, op_name)
+}
+
+/// Calls a loaded descriptor through its uniform invoker using visible EIR arguments.
+pub(super) fn emit_descriptor_reg_invoker_call_with_args(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    descriptor_reg: &str,
+    visible_args: &[ValueId],
+    op_name: &str,
+) -> Result<()> {
+    let invoker_reg = abi::symbol_scratch_reg(ctx.emitter);
     callable_descriptor::emit_load_invoker_from_descriptor(ctx.emitter, invoker_reg, descriptor_reg);
     let ready_label = descriptor_invoker_ready_label(ctx, op_name);
     emit_branch_if_invoker_present(ctx, invoker_reg, &ready_label);
