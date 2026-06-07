@@ -111,6 +111,7 @@ enum IteratorApplyCallback {
     DescriptorCallableArray {
         callable: ValueId,
         arg_container: Option<ValueId>,
+        release_runtime_descriptor: bool,
     },
 }
 
@@ -276,7 +277,7 @@ pub(super) fn lower_iterator_to_array(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `iterator_apply()` for zero-argument user-function callbacks.
+/// Lowers `iterator_apply()` over supported Traversable sources and callback forms.
 pub(super) fn lower_iterator_apply(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -316,12 +317,20 @@ fn emit_apply_callback_state(
             abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
             Ok(())
         }
-        IteratorApplyCallback::DescriptorCallableArray { callable, .. } => {
-            callables::emit_runtime_mixed_instance_callable_array_descriptor_value(
-                ctx,
-                *callable,
-                "iterator_apply",
-            )?;
+        IteratorApplyCallback::DescriptorCallableArray {
+            callable,
+            release_runtime_descriptor,
+            ..
+        } => {
+            if *release_runtime_descriptor {
+                callables::emit_runtime_mixed_instance_callable_array_descriptor_value(
+                    ctx,
+                    *callable,
+                    "iterator_apply",
+                )?;
+            } else {
+                callables::emit_runtime_callable_array_descriptor_value(ctx, *callable, "iterator_apply")?;
+            }
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             Ok(())
         }
@@ -335,8 +344,15 @@ fn release_apply_callback_state(ctx: &mut FunctionContext<'_>, callback: &Iterat
         IteratorApplyCallback::DynamicString { .. } => {
             abi::emit_release_temporary_stack(ctx.emitter, 16);
         }
-        IteratorApplyCallback::DescriptorCallableArray { .. } => {
-            emit_release_saved_apply_descriptor(ctx);
+        IteratorApplyCallback::DescriptorCallableArray {
+            release_runtime_descriptor,
+            ..
+        } => {
+            if *release_runtime_descriptor {
+                emit_release_saved_apply_descriptor(ctx);
+            } else {
+                abi::emit_release_temporary_stack(ctx.emitter, 16);
+            }
         }
         IteratorApplyCallback::StaticUserFunction { .. } => {}
     }
@@ -416,6 +432,14 @@ fn iterator_apply_callback(
             Ok(IteratorApplyCallback::DescriptorCallableArray {
                 callable: callback,
                 arg_container: iterator_apply_arg_container(ctx, inst)?,
+                release_runtime_descriptor: true,
+            })
+        }
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => {
+            Ok(IteratorApplyCallback::DescriptorCallableArray {
+                callable: callback,
+                arg_container: iterator_apply_arg_container(ctx, inst)?,
+                release_runtime_descriptor: false,
             })
         }
         other => Err(CodegenIrError::unsupported(format!(
