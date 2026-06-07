@@ -29,7 +29,8 @@ use super::super::context::FunctionContext;
 use super::{
     callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes, expect_data,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
-    materialize_direct_call_args_with_refs, store_if_result,
+    materialize_direct_call_args_with_refs, resolve_method_call_target, store_call_result,
+    store_if_result,
 };
 use crate::codegen_ir::fibers;
 use crate::codegen_ir::literal_defaults::{
@@ -1545,6 +1546,9 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_get(ctx, inst, object, &property);
     }
+    if let Some(class_name) = magic_get_receiver_class(ctx, object, &property)? {
+        return lower_magic_get_prop(ctx, inst, object, &class_name, &property);
+    }
     if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
         return lower_allow_dynamic_prop_get(ctx, inst, object, &property, offset);
     }
@@ -1556,6 +1560,74 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     }
     emit_property_load(ctx, &slot, base_reg)?;
     store_if_result(ctx, inst)
+}
+
+/// Returns the receiver class when an undeclared property should route through `__get`.
+fn magic_get_receiver_class(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+) -> Result<Option<String>> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(None);
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.module.class_infos.get(normalized) else {
+        return Ok(None);
+    };
+    if class_info.properties.iter().any(|(name, _)| name == property) {
+        return Ok(None);
+    }
+    if class_info.methods.contains_key(&php_symbol_key("__get")) {
+        return Ok(Some(normalized.to_string()));
+    }
+    Ok(None)
+}
+
+/// Lowers a missing declared-property read by calling the class `__get` method.
+fn lower_magic_get_prop(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+) -> Result<()> {
+    let target = resolve_method_call_target(ctx, class_name, "__get", 2)?;
+    if target.ref_params.first().copied().unwrap_or(false) {
+        return Err(CodegenIrError::unsupported(format!(
+            "magic __get by-reference name parameter on {}",
+            class_name
+        )));
+    }
+    emit_magic_get_args(ctx, object, property)?;
+    if let Some(slot) = target.dynamic_slot {
+        super::emit_dynamic_instance_method_call(ctx, slot);
+    } else {
+        abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
+    }
+    store_call_result(ctx, inst, &target.return_ty)
+}
+
+/// Loads `$this` and the static property name into ABI registers for `__get`.
+fn emit_magic_get_args(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
+    let (label, len) = ctx.data.add_string(property.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(object, "x0")?;
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(object, "rdi")?;
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+    }
+    Ok(())
 }
 
 /// Lowers a named property read from a statically known stdClass receiver.

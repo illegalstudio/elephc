@@ -6302,6 +6302,13 @@ fn property_get_result_type(
         };
     }
     let Some((_, property_ty)) = class_info.properties.iter().find(|(name, _)| name == property) else {
+        if let Some(magic_ty) = magic_get_result_type(ctx, normalized) {
+            return if nullable {
+                nullable_result_type(magic_ty)
+            } else {
+                magic_ty
+            };
+        }
         if class_info.allow_dynamic_properties {
             return if nullable {
                 nullable_result_type(PhpType::Mixed)
@@ -6317,6 +6324,12 @@ fn property_get_result_type(
     } else {
         property_ty
     }
+}
+
+/// Returns the normalized return type for a class `__get` magic property hook.
+fn magic_get_result_type(ctx: &LoweringContext<'_, '_>, class_name: &str) -> Option<PhpType> {
+    class_method_signature(ctx, class_name, &php_symbol_key("__get"))
+        .map(|signature| normalize_value_php_type(signature.return_type.clone()))
 }
 
 /// Adds nullability to a result type without nesting existing union metadata.
