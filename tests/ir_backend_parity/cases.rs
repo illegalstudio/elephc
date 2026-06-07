@@ -150,6 +150,64 @@ if (is_null($v)) { echo "null"; } else { echo "not null"; }
     );
 }
 
+/// Verifies float array keys truncate to integer keys in indexed and hash-backed arrays.
+#[test]
+fn parity_float_array_keys_truncate_to_int() {
+    assert_backend_parity(
+        "float_array_keys_truncate_to_int",
+        r#"<?php
+$a = [0, 10, 20];
+$a[1.9] = 3;
+echo $a[1] . "|" . $a[1.2];
+echo "|";
+$b = [];
+$b[1.9] = 10;
+$b[1] = 20;
+echo $b[1.2];
+"#,
+        &[],
+    );
+}
+
+/// Verifies by-reference indexed-array append stores unboxed Mixed payloads and writes back growth.
+#[test]
+fn parity_ref_array_push_unboxes_mixed_value() {
+    assert_backend_parity(
+        "ref_array_push_unboxes_mixed_value",
+        r#"<?php
+function eir_append_ref(&$arr, $val) {
+    $arr[] = $val;
+}
+$x = [10, 20];
+eir_append_ref($x, 30);
+echo count($x) . "|" . $x[2];
+"#,
+        &[],
+    );
+}
+
+/// Verifies `array_push()` can mutate an array carried through a boxed Mixed parameter.
+#[test]
+fn parity_array_push_mixed_receiver_growth() {
+    assert_backend_parity(
+        "array_push_mixed_receiver_growth",
+        r#"<?php
+function eir_grow($arr) {
+    for ($i = 0; $i < 8; $i++) {
+        array_push($arr, $i);
+    }
+    return $arr;
+}
+$arr = [100];
+for ($j = 0; $j < 4; $j++) {
+    $arr = eir_grow($arr);
+}
+echo count($arr) . "|" . $arr[32];
+"#,
+        &[],
+    );
+}
+
 /// Verifies `explode()` arrays and copied string elements are released at function exit.
 #[test]
 fn parity_explode_parser_releases_arrays_and_elements() {

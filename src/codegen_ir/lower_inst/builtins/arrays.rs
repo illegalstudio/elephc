@@ -45,7 +45,15 @@ pub(super) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruct
 /// Lowers `array_push()` by appending one value and publishing the mutated array.
 pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_push", 2)?;
-    super::super::arrays::lower_array_push(ctx, inst)?;
+    let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        super::super::arrays::lower_mixed_array_append(ctx, inst)?;
+    } else {
+        super::super::arrays::lower_array_push(ctx, inst)?;
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),

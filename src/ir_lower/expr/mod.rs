@@ -2846,7 +2846,11 @@ fn lower_static_array_push(
     }
     let value = lower_expr(ctx, &args[1]);
     let (array_value, updated_ty, needs_storeback) =
-        super::stmt::prepare_indexed_array_local_write(ctx, array_value, value, expr.span);
+        if super::stmt::ref_bound_mixed_indexed_array_write(ctx, array_name, value) {
+            (array_value, Some(ctx.local_type(array_name)), true)
+        } else {
+            super::stmt::prepare_indexed_array_local_write(ctx, array_value, value, expr.span)
+        };
     ctx.emit_void(
         Op::ArrayPush,
         vec![array_value.value, value.value],
@@ -5335,7 +5339,10 @@ fn lower_array_access_from_value(
 ) -> LoweredValue {
     let mut index_value = lower_expr(ctx, index);
     let op = match array_value.ir_type {
-        IrType::Heap(IrHeapKind::Array) => Op::ArrayGet,
+        IrType::Heap(IrHeapKind::Array) => {
+            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+            Op::ArrayGet
+        }
         IrType::Heap(IrHeapKind::Hash) => Op::HashGet,
         IrType::Heap(IrHeapKind::Buffer) => Op::BufferGet,
         IrType::Str => {
@@ -7394,7 +7401,7 @@ fn coerce_to_int(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &
 }
 
 /// Coerces a value to integer storage using an explicit source span.
-fn coerce_to_int_at_span(
+pub(crate) fn coerce_to_int_at_span(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Option<crate::span::Span>,

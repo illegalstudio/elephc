@@ -574,6 +574,9 @@ fn lower_array_push_aarch64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?;
+    if array_push_value_needs_mixed_unbox(elem_ty, &value_ty) {
+        return lower_array_push_unboxed_mixed_aarch64(ctx, array, value, elem_ty);
+    }
     if array_push_value_needs_mixed_box(elem_ty, &value_ty) {
         return lower_mixed_array_push_aarch64(ctx, array, value, &value_ty);
     }
@@ -628,6 +631,9 @@ fn lower_array_push_x86_64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?;
+    if array_push_value_needs_mixed_unbox(elem_ty, &value_ty) {
+        return lower_array_push_unboxed_mixed_x86_64(ctx, array, value, elem_ty);
+    }
     if array_push_value_needs_mixed_box(elem_ty, &value_ty) {
         return lower_mixed_array_push_x86_64(ctx, array, value, &value_ty);
     }
@@ -678,6 +684,98 @@ fn lower_array_push_x86_64(
 fn array_push_value_needs_mixed_box(elem_ty: &PhpType, value_ty: &PhpType) -> bool {
     matches!(elem_ty.codegen_repr(), PhpType::Mixed)
         && !matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Returns true when a boxed Mixed value should be unboxed before a typed append.
+fn array_push_value_needs_mixed_unbox(elem_ty: &PhpType, value_ty: &PhpType) -> bool {
+    !matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Appends an unboxed Mixed payload into a typed indexed array on AArch64.
+fn lower_array_push_unboxed_mixed_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    value: ValueId,
+    elem_ty: &PhpType,
+) -> Result<()> {
+    ctx.load_value_to_reg(value, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match elem_ty.codegen_repr() {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+            ctx.emitter.instruction("mov x11, x1");                             // keep the unboxed scalar payload while loading the array receiver
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("mov x1, x11");                             // pass the unboxed scalar payload to the append helper
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
+        PhpType::Str => {
+            ctx.emitter.instruction("mov x11, x1");                             // keep the unboxed string pointer while loading the array receiver
+            ctx.emitter.instruction("mov x12, x2");                             // keep the unboxed string length while loading the array receiver
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("mov x1, x11");                             // pass the unboxed string pointer to the string append helper
+            ctx.emitter.instruction("mov x2, x12");                             // pass the unboxed string length to the string append helper
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the string append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+        }
+        other if other.is_refcounted() => {
+            ctx.emitter.instruction("mov x11, x1");                             // keep the unboxed heap payload while loading the array receiver
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("mov x1, x11");                             // pass the unboxed heap payload to the append helper
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the refcounted append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_push unboxed Mixed into PHP type {:?}",
+                other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Appends an unboxed Mixed payload into a typed indexed array on x86_64 targets.
+fn lower_array_push_unboxed_mixed_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    value: ValueId,
+    elem_ty: &PhpType,
+) -> Result<()> {
+    ctx.load_value_to_reg(value, "rax")?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match elem_ty.codegen_repr() {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+            ctx.emitter.instruction("mov r10, rdi");                            // keep the unboxed scalar payload while loading the array receiver
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rsi, r10");                            // pass the unboxed scalar payload to the append helper
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
+        PhpType::Str => {
+            ctx.emitter.instruction("mov r10, rdi");                            // keep the unboxed string pointer while loading the array receiver
+            ctx.emitter.instruction("mov r9, rdx");                             // keep the unboxed string length while loading the array receiver
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rsi, r10");                            // pass the unboxed string pointer to the string append helper
+            ctx.emitter.instruction("mov rdx, r9");                             // pass the unboxed string length to the string append helper
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the string append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+        }
+        other if other.is_refcounted() => {
+            ctx.emitter.instruction("mov r10, rdi");                            // keep the unboxed heap payload while loading the array receiver
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rsi, r10");                            // pass the unboxed heap payload to the append helper
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the refcounted append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_push unboxed Mixed into PHP type {:?}",
+                other
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Appends to an indexed array stored inside a boxed Mixed cell on AArch64.
@@ -1004,7 +1102,7 @@ fn convert_hash_union_result_to_mixed_if_needed(
     }
 }
 
-/// Returns the stack/local slot loaded by an array operand when it came from local storage.
+/// Returns the stack/local slot loaded by an array operand when it came from direct local storage.
 fn source_load_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
@@ -1018,7 +1116,7 @@ fn source_load_local_slot(
     let Some(inst_ref) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    if matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if inst_ref.op == Op::LoadLocal {
         if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
             return Ok(Some(slot));
         }

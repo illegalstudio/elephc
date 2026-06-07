@@ -15,7 +15,7 @@ use crate::ir::{
 use crate::ir_lower::context::{FinallyFrame, LoopFrame, LoweredValue, LoweringContext};
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
-    lower_callable_array_for_assignment, lower_closure_for_assignment, lower_expr,
+    coerce_to_int_at_span, lower_callable_array_for_assignment, lower_closure_for_assignment, lower_expr,
     static_callable_binding_for_expr, type_satisfies_array_access_for_ir,
 };
 use crate::names::php_symbol_key;
@@ -538,19 +538,22 @@ fn lower_array_assign(
     span: Span,
 ) {
     let array_value = ctx.load_local(array, Some(span));
-    let index = lower_expr(ctx, index);
+    let mut index_value = lower_expr(ctx, index);
     let value = lower_expr(ctx, value);
     let op = array_set_op(array_value.ir_type);
-    if op == Op::ArraySet && index.ir_type == IrType::Str {
-        lower_string_key_array_promotion(ctx, array, array_value, index, value, span);
+    if op == Op::ArraySet && index_value.ir_type == IrType::Str {
+        lower_string_key_array_promotion(ctx, array, array_value, index_value, value, span);
         return;
+    }
+    if op == Op::ArraySet {
+        index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
     }
     if op == Op::ArraySet {
         let (array_value, updated_ty, needs_storeback) =
             prepare_indexed_array_local_set(ctx, array_value, value, span);
         ctx.emit_void(
             op,
-            vec![array_value.value, index.value, value.value],
+            vec![array_value.value, index_value.value, value.value],
             None,
             op.default_effects(),
             Some(span),
@@ -558,7 +561,7 @@ fn lower_array_assign(
         finish_indexed_array_local_write(ctx, array, array_value, updated_ty, needs_storeback, span);
         return;
     }
-    ctx.emit_void(op, vec![array_value.value, index.value, value.value], None, op.default_effects(), Some(span));
+    ctx.emit_void(op, vec![array_value.value, index_value.value, value.value], None, op.default_effects(), Some(span));
 }
 
 /// Promotes an indexed local array to a Mixed-valued associative array for string-key writes.
@@ -639,8 +642,11 @@ fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr
         Op::RuntimeCall
     };
     if op == Op::ArrayPush {
-        let (array_value, updated_ty, needs_storeback) =
-            prepare_indexed_array_local_write(ctx, array_value, value, span);
+        let (array_value, updated_ty, needs_storeback) = if ref_bound_mixed_indexed_array_write(ctx, array, value) {
+            (array_value, Some(ctx.local_type(array)), true)
+        } else {
+            prepare_indexed_array_local_write(ctx, array_value, value, span)
+        };
         ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
         finish_indexed_array_local_write(ctx, array, array_value, updated_ty, needs_storeback, span);
         return;
@@ -731,6 +737,19 @@ pub(super) fn finish_indexed_array_local_write(
     } else {
         ctx.set_local_type(array, updated_ty);
     }
+}
+
+/// Returns true when a ref-bound indexed array should keep its caller-visible element type.
+pub(super) fn ref_bound_mixed_indexed_array_write(
+    ctx: &LoweringContext<'_, '_>,
+    array: &str,
+    value: LoweredValue,
+) -> bool {
+    ctx.is_ref_bound_local(array)
+        && matches!(
+            ctx.builder.value_php_type(value.value).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
 }
 
 /// Returns the refined array type after writing a value into an indexed array.
