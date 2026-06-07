@@ -627,6 +627,47 @@ echo $f->getReturn();
         compile_and_run_ir_backend("fiber_start_string_builtin", builtin_string),
         "null/5"
     );
+
+    let static_callable_array = r#"<?php
+class FiberStaticJob {
+    public static function run(string $value): string {
+        echo "static:" . $value;
+        return "done";
+    }
+}
+$f = new Fiber([FiberStaticJob::class, "run"]);
+$v = $f->start("go");
+echo "/";
+echo is_null($v) ? "null" : $v;
+echo "/";
+echo $f->getReturn();
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("fiber_start_static_callable_array", static_callable_array),
+        "static:go/null/done"
+    );
+
+    let instance_callable_array = r#"<?php
+class FiberArrayJob {
+    public function __construct(private string $prefix) {}
+
+    public function run(string $value): string {
+        echo $this->prefix . $value;
+        return $this->prefix . "done";
+    }
+}
+$job = new FiberArrayJob("array:");
+$f = new Fiber([$job, "run"]);
+$v = $f->start("go");
+echo "/";
+echo is_null($v) ? "null" : $v;
+echo "/";
+echo $f->getReturn();
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("fiber_start_instance_callable_array", instance_callable_array),
+        "array:go/null/array:done"
+    );
 }
 
 /// Verifies Fiber suspend and resume transfer boxed Mixed values across the boundary.

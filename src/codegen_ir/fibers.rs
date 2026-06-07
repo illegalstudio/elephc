@@ -96,7 +96,11 @@ fn callable_operand_uses_descriptor_invoker(
 ) -> bool {
     function
         .value(callable)
-        .is_some_and(|value| matches!(value.php_type.codegen_repr(), PhpType::Callable | PhpType::Str))
+        .is_some_and(|value| match value.php_type.codegen_repr() {
+            PhpType::Callable | PhpType::Str => true,
+            PhpType::Array(elem) => matches!(elem.codegen_repr(), PhpType::Mixed | PhpType::Str),
+            _ => false,
+        })
 }
 
 /// Builds a deferred Fiber wrapper description from the concrete EIR closure signature.

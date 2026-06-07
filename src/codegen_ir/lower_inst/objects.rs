@@ -948,6 +948,16 @@ fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
                 callable_arg,
                 "fiber_constructor",
             )?;
+        } else if matches!(
+            callable_ty,
+            PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Mixed | PhpType::Str)
+        ) {
+            callables::emit_runtime_callable_array_descriptor_value(
+                ctx,
+                callable,
+                "fiber_constructor",
+            )?;
+            move_fiber_callable_result_to_arg(ctx, callable_arg);
         } else {
             ctx.load_value_to_reg(callable, callable_arg)?;
         }
@@ -967,6 +977,15 @@ fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
     }
     abi::emit_call_label(ctx.emitter, "__rt_fiber_construct");
     store_if_result(ctx, inst)
+}
+
+/// Moves a descriptor materialized in the result register into Fiber constructor arg 1.
+fn move_fiber_callable_result_to_arg(ctx: &mut FunctionContext<'_>, callable_arg: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if result_reg == callable_arg {
+        return;
+    }
+    ctx.emitter.instruction(&format!("mov {}, {}", callable_arg, result_reg));  // pass selected callable descriptor to Fiber constructor
 }
 
 /// Lowers constrained runtime class-string object construction.
