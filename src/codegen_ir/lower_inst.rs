@@ -2047,6 +2047,7 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         if let Some(state) = fiber_state_predicate_method(&method_name) {
             return lower_mixed_fiber_state_predicate(ctx, inst, object, &method_name, state);
         }
+        return lower_mixed_method_call(ctx, inst, object, &method_name);
     }
     let PhpType::Object(class_name) = object_ty else {
         return Err(CodegenIrError::unsupported(format!(
@@ -2114,6 +2115,171 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     store_call_result(ctx, inst, &target.return_ty)?;
     emit_call_arg_temp_cleanups(ctx, &call_args);
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Lowers an instance-method call whose receiver is boxed as `Mixed`.
+fn lower_mixed_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+) -> Result<()> {
+    let candidates = mixed_method_candidates(ctx, method_name, inst.operands.len())?;
+    if candidates.is_empty() {
+        emit_method_call_on_null_fatal(ctx, method_name);
+        return Ok(());
+    }
+
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let no_match_label = ctx.next_label("mixed_method_no_match");
+    let done_label = ctx.next_label("mixed_method_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_method_{}",
+                label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_result(object)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &no_match_label);
+    emit_mixed_method_class_dispatch(ctx, receiver_reg, &candidates, &match_labels, &no_match_label);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        lower_mixed_method_candidate_call(ctx, inst, receiver_reg, candidate)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&no_match_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits one concrete class branch for a `Mixed` receiver method call.
+fn lower_mixed_method_candidate_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver_reg: &str,
+    candidate: &MixedMethodCandidate,
+) -> Result<()> {
+    let receiver_ty = PhpType::Object(candidate.class_name.clone());
+    let mut param_types = Vec::with_capacity(candidate.target.params.len() + 1);
+    param_types.push(receiver_ty.clone());
+    param_types.extend(candidate.target.params.iter().map(|param| param.codegen_repr()));
+    let mut ref_params = Vec::with_capacity(candidate.target.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(candidate.target.ref_params.iter().copied());
+    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+        ctx,
+        receiver_reg,
+        &receiver_ty,
+        &inst.operands,
+        &param_types,
+        &ref_params,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    if let Some(slot) = candidate.target.dynamic_slot {
+        emit_dynamic_instance_method_call(ctx, slot);
+    } else {
+        abi::emit_call_label(
+            ctx.emitter,
+            &method_symbol(&candidate.target.impl_class, &candidate.target.method_key),
+        );
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    store_call_result(ctx, inst, &candidate.target.return_ty)?;
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Collects concrete class-method candidates for a boxed `Mixed` receiver.
+fn mixed_method_candidates(
+    ctx: &FunctionContext<'_>,
+    method_name: &str,
+    operand_count: usize,
+) -> Result<Vec<MixedMethodCandidate>> {
+    let method_key = php_symbol_key(method_name);
+    let mut candidates = Vec::new();
+    for (class_name, class_info) in &ctx.module.class_infos {
+        let Some(signature) = class_info.methods.get(&method_key) else {
+            continue;
+        };
+        if signature.params.len() + 1 != operand_count {
+            continue;
+        }
+        let target = resolve_method_call_target(ctx, class_name, method_name, operand_count)?;
+        candidates.push(MixedMethodCandidate {
+            class_id: class_info.class_id,
+            class_name: class_name.clone(),
+            target,
+        });
+    }
+    candidates.sort_by_key(|candidate| candidate.class_id);
+    Ok(candidates)
+}
+
+/// Preserves the unboxed object payload or routes non-object `Mixed` receivers to fatal.
+fn emit_mixed_method_object_payload_or_fatal(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    no_match_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // require an object payload before method dispatch
+            ctx.emitter.instruction(&format!("b.ne {}", no_match_label));       // non-object Mixed receivers cannot call instance methods
+            ctx.emitter.instruction(&format!("mov {}, x1", receiver_reg));      // preserve the unboxed object payload across argument lowering
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // require an object payload before method dispatch
+            ctx.emitter.instruction(&format!("jne {}", no_match_label));        // non-object Mixed receivers cannot call instance methods
+            ctx.emitter.instruction(&format!("mov {}, rdi", receiver_reg));     // preserve the unboxed object payload across argument lowering
+        }
+    }
+}
+
+/// Emits class-id branches for every method candidate discovered for a `Mixed` receiver.
+fn emit_mixed_method_class_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    candidates: &[MixedMethodCandidate],
+    match_labels: &[String],
+    no_match_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x9, [{}]", receiver_reg));    // load the receiver class id for Mixed method dispatch
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp x9, x10");                         // compare the receiver class id against this method candidate
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // call this candidate when the runtime class id matches
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); // load the receiver class id for Mixed method dispatch
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp r11, r10");                        // compare the receiver class id against this method candidate
+                ctx.emitter.instruction(&format!("je {}", label));              // call this candidate when the runtime class id matches
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, no_match_label);
+}
+
+/// Returns a label-safe fragment for class names and method metadata keys.
+fn label_fragment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
 }
 
 /// Lowers an instance-method call through interface metadata.
@@ -3205,6 +3371,13 @@ struct MethodCallTarget {
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
+}
+
+/// Concrete runtime class branch available to a `Mixed` receiver method call.
+struct MixedMethodCandidate {
+    class_id: u64,
+    class_name: String,
+    target: MethodCallTarget,
 }
 
 /// Outgoing call argument state that must be cleaned up after the call returns.

@@ -4119,6 +4119,40 @@ echo $c->cmp(1, 3);
     assert_eq!(compile_and_run_ir_backend("mixed_method_spaceship", source), "1:-1");
 }
 
+/// Verifies mixed foreach values can dispatch inherited instance methods by runtime class.
+#[test]
+fn ir_backend_dispatches_mixed_receiver_method_on_sibling_objects() {
+    let source = r#"<?php
+abstract class Shape {
+    public int $sides;
+    public string $name;
+
+    public function describe() {
+        return $this->name . " has " . $this->sides . " sides";
+    }
+}
+
+class Triangle extends Shape {
+    public int $sides = 3;
+    public string $name = "triangle";
+}
+
+class Square extends Shape {
+    public int $sides = 4;
+    public string $name = "square";
+}
+
+foreach ([new Triangle(), new Square()] as $shape) {
+    echo $shape->describe();
+    echo "\n";
+}
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("mixed_receiver_inherited_method", source),
+        "triangle has 3 sides\nsquare has 4 sides\n"
+    );
+}
+
 /// Verifies explicit ownership ops emitted around string local slots.
 #[test]
 fn ir_backend_handles_string_ownership_ops() {

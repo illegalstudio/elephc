@@ -6211,7 +6211,7 @@ fn method_call_argument_signature(
     if method_is_fiber_start(ctx, object, method) {
         return crate::ir_lower::fibers::start_sig_for_expr(ctx, object_expr);
     }
-    method_signature(ctx, object, method).cloned()
+    method_signature(ctx, object, method)
 }
 
 /// Returns true when a method call targets PHP's built-in `Fiber::start()`.
@@ -6372,7 +6372,7 @@ fn lower_method_call_with_receiver(
 ) -> LoweredValue {
     let result_type = method_call_result_type(ctx, object.value, method, op, expr);
     let mut operands = vec![object.value];
-    let sig = method_signature(ctx, object.value, method).cloned();
+    let sig = method_signature(ctx, object.value, method);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(method);
@@ -6407,16 +6407,21 @@ fn release_owned_call_arg_temporaries(
 }
 
 /// Returns the checked signature for an instance method call when metadata is available.
-fn method_signature<'a>(
-    ctx: &'a LoweringContext<'_, '_>,
+fn method_signature(
+    ctx: &LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
     method: &str,
-) -> Option<&'a FunctionSig> {
+) -> Option<FunctionSig> {
     let object_ty = ctx.builder.value_php_type(object);
-    let (class_name, _) = singular_object_class(&object_ty)?;
-    let normalized = class_name.trim_start_matches('\\');
     let key = php_symbol_key(method);
-    class_method_signature(ctx, normalized, &key)
+    if let Some((class_name, _)) = singular_object_class(&object_ty) {
+        let normalized = class_name.trim_start_matches('\\');
+        return class_method_signature(ctx, normalized, &key).cloned();
+    }
+    if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+        return common_dynamic_method_signature(ctx, &key);
+    }
+    None
 }
 
 /// Returns a class/interface method signature, preferring the implementing class metadata.
@@ -6452,18 +6457,51 @@ fn method_call_result_type(
     expr: &Expr,
 ) -> PhpType {
     let object_ty = ctx.builder.value_php_type(object);
-    let Some((_, nullable)) = singular_object_class(&object_ty) else {
-        return fallback_expr_type(expr);
-    };
+    let nullable = singular_object_class(&object_ty)
+        .map(|(_, nullable)| nullable)
+        .unwrap_or(false);
     let Some(return_ty) = method_signature(ctx, object, method)
-        .map(|signature| normalize_value_php_type(signature.return_type.clone()))
+        .map(|signature| normalize_value_php_type(signature.return_type))
     else {
+        if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+            return PhpType::Mixed;
+        }
         return fallback_expr_type(expr);
     };
     if op == Op::NullsafeMethodCall && nullable {
         nullable_result_type(return_ty)
     } else {
         return_ty
+    }
+}
+
+/// Returns a common method signature for dynamic receivers when every candidate agrees.
+fn common_dynamic_method_signature(
+    ctx: &LoweringContext<'_, '_>,
+    method_key: &str,
+) -> Option<FunctionSig> {
+    let mut common = None;
+    for class_name in ctx.classes.keys() {
+        let Some(signature) = class_method_signature(ctx, class_name, method_key).cloned() else {
+            continue;
+        };
+        match common.as_ref() {
+            Some(existing) if existing != &signature => return None,
+            Some(_) => {}
+            None => common = Some(signature),
+        }
+    }
+    common
+}
+
+/// Returns true when an instance-method receiver has no single compile-time class.
+fn dynamic_method_receiver_needs_mixed_fallback(php_type: &PhpType) -> bool {
+    match php_type {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Mixed | PhpType::Object(_))),
+        _ => false,
     }
 }
 
