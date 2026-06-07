@@ -272,8 +272,23 @@ fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
             names.insert(class_name);
         }
     }
+    seed_builtin_reflection_class_names(module, &mut names);
     expand_class_dependencies(&mut names, &module.class_infos);
     names
+}
+
+/// Adds builtin reflection classes whose objects can be materialized by metadata helpers.
+fn seed_builtin_reflection_class_names(module: &Module, names: &mut HashSet<String>) {
+    for class_name in [
+        "ReflectionAttribute",
+        "ReflectionClass",
+        "ReflectionMethod",
+        "ReflectionProperty",
+    ] {
+        if module.class_infos.contains_key(class_name) {
+            names.insert(class_name.to_string());
+        }
+    }
 }
 
 /// Returns true when any EIR function is emitted through the generator bridge.
