@@ -184,7 +184,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
 | `array_rand()` | `array_rand($arr): int` | Pick one random key |
-| `array_map()` | `array_map($callback, $arr, ...$arrays): array` | Apply callback to each element. With two integer arrays it zips them element-wise (`array_map($cb, $a, $b)`), result length `max(len)`, padding the shorter with 0; the callback may be a named function, a closure (capturing closures included), or a variable holding a closure. |
+| `array_map()` | `array_map($callback, $arr, ...$arrays): array` | Apply callback to each element. Two same-typed arrays (both integer or both string) are zipped element-wise (`array_map($cb, $a, $b)`), result length `max(len)`, padding the shorter with `0` / `""`. For integer arrays the callback may be a named function, a closure (capturing included), or a variable holding a closure; for string arrays it must be a capture-less closure returning a string. |
 | `array_filter()` | `array_filter($arr, $callback, $mode = ARRAY_FILTER_USE_VALUE): array` | Filter where callback is truthy; mode selects value, key, or both callback args |
 | `array_reduce()` | `array_reduce($arr, $callback, $init): int` | Reduce to single value |
 | `array_walk()` | `array_walk($arr, $callback): void` | Call callback on each element |

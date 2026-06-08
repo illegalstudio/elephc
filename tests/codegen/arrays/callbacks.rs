@@ -174,6 +174,53 @@ echo implode(",", $r);
     assert_eq!(out, "111,122");
 }
 
+/// Verifies the multi-array form zips two STRING arrays element-wise through a capture-less
+/// closure that concatenates them, producing a new string list (H11 string elements).
+#[test]
+fn test_array_map_two_string_arrays_concat() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => $a . $b, ["x", "y", "z"], ["1", "2", "3"]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "x1,y2,z3");
+}
+
+/// Verifies a string-callback that also calls a string builtin on each element works over two
+/// string arrays (H11 string elements).
+#[test]
+fn test_array_map_two_string_arrays_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => strtoupper($a) . $b, ["a", "b"], ["!", "?"]);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "A!,B?");
+}
+
+/// Verifies that when the two string arrays differ in length, the result length is the maximum and
+/// the shorter array is padded with the empty string (PHP passes null, which is "" in string
+/// context) (H11 string elements).
+#[test]
+fn test_array_map_two_string_arrays_unequal_pads_empty() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_map(fn($a, $b) => $a . $b, ["p", "q", "r"], ["1", "2"]);
+echo implode(",", $r) . "|" . count($r);
+"#,
+    );
+    assert_eq!(out, "p1,q2,r|3");
+}
+
+// Note: a heap-clean test for the two-string-array form is intentionally omitted. Both the
+// single-array and two-array string forms of array_map leave the result array's persisted strings
+// live at program exit (and array *literal* sources leak as well) — a pre-existing array_map
+// string-result cleanup gap (array_merge, by contrast, frees its string results), not specific to
+// the two-array form. The output-correctness tests above cover this increment; the leak is tracked
+// as a separate follow-up.
+
 // Tests `array_map` with a typed builtin callback (`strlen`) applied to string values,
 // verifying mixed-type result handling in array_map codegen.
 /// Verifies that array map string values to ints.

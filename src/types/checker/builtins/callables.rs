@@ -151,15 +151,30 @@ fn array_map_multi_callback_supported(checker: &Checker, callback: &Expr) -> boo
     }
 }
 
+/// Returns true when a multi-array `array_map()` callback over string arrays is supported.
+///
+/// String arrays are restricted to a capture-less closure: the captured-closure wrapper path is
+/// not yet wired for string elements, and a named function's return type is not statically known
+/// here (it defaults to integer), so only a closure — whose string return type is inferred from
+/// its body — can be confirmed to produce the strings the runtime collects.
+fn array_map_multi_callback_non_capturing(callback: &Expr) -> bool {
+    matches!(
+        &callback.kind,
+        ExprKind::Closure { captures, capture_refs, .. }
+            if captures.is_empty() && capture_refs.is_empty()
+    )
+}
+
 /// Type-checks the multi-array form `array_map($callback, $a, $b, ...)`.
 ///
-/// Bounded multi-array support: exactly two input arrays whose elements use the integer
-/// codegen representation, with a named-function or closure callback (capturing closures
-/// included) that returns an integer-representable value. Shapes outside this subset (more
-/// than two arrays, non-integer arrays, indirect/exotic callbacks, string/float-returning
-/// callbacks, or the `array_map(null, ...)` zip form) are rejected with a clear
-/// "not yet supported" diagnostic so they fail at compile time rather than miscompiling.
-/// Returns `Array(Int)` to match the runtime, which collects 8-byte integer results.
+/// Bounded multi-array support: exactly two input arrays that share one scalar element type
+/// (both integer, or both string), with a callback that returns that same scalar type. Integer
+/// arrays accept any supported callback form (named function, closure including capturing, or a
+/// variable holding a closure); string arrays are restricted to a non-capturing callback. Shapes
+/// outside this subset (more than two arrays, mixed/other element types, float-returning callbacks,
+/// or the `array_map(null, ...)` zip form) are rejected with a clear "not yet supported" diagnostic
+/// so they fail at compile time rather than miscompiling. Returns `Array(elem)` for the shared
+/// element representation, matching the runtime that collects the results.
 fn check_array_map_multi(
     checker: &mut Checker,
     args: &[Expr],
@@ -178,23 +193,31 @@ fn check_array_map_multi(
             "array_map(null, ...) array zipping is not yet supported",
         ));
     }
-    if !array_map_multi_callback_supported(checker, &args[0]) {
-        return Err(CompileError::new(
-            args[0].span,
-            "array_map() with multiple arrays currently supports a named function, a closure, or a variable holding a closure as the callback",
-        ));
-    }
+    // Collect the input arrays' element types; all must share one scalar representation
+    // (every array integer, or every array string) because the runtime is chosen per element type.
     let mut elem_tys = Vec::new();
+    let mut shared_repr: Option<PhpType> = None;
     for arr_arg in &args[1..] {
         match checker.infer_type(arr_arg, env)? {
-            PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Int) => {
+            PhpType::Array(elem) => {
+                let repr = elem.codegen_repr();
+                if !matches!(repr, PhpType::Int | PhpType::Str) {
+                    return Err(CompileError::new(
+                        span,
+                        "array_map() with multiple arrays currently supports only integer or string arrays",
+                    ));
+                }
+                match &shared_repr {
+                    None => shared_repr = Some(repr),
+                    Some(existing) if existing != &repr => {
+                        return Err(CompileError::new(
+                            span,
+                            "array_map() with multiple arrays currently requires every array to share one scalar element type",
+                        ));
+                    }
+                    _ => {}
+                }
                 elem_tys.push((*elem).clone());
-            }
-            PhpType::Array(_) => {
-                return Err(CompileError::new(
-                    span,
-                    "array_map() with multiple arrays currently supports only integer-valued arrays",
-                ));
             }
             _ => {
                 return Err(CompileError::new(
@@ -204,6 +227,27 @@ fn check_array_map_multi(
             }
         }
     }
+    let elem_repr = shared_repr.unwrap_or(PhpType::Int);
+
+    // The callback gate depends on the element type: string arrays allow only a non-capturing
+    // callback; integer arrays additionally accept capturing closures and closure variables.
+    let callback_ok = if matches!(elem_repr, PhpType::Str) {
+        array_map_multi_callback_non_capturing(&args[0])
+    } else {
+        array_map_multi_callback_supported(checker, &args[0])
+    };
+    if !callback_ok {
+        let detail = if matches!(elem_repr, PhpType::Str) {
+            "with multiple string arrays requires a capture-less closure"
+        } else {
+            "with multiple arrays currently supports a named function, a closure, or a variable holding a closure"
+        };
+        return Err(CompileError::new(
+            args[0].span,
+            &format!("array_map() {detail} as the callback"),
+        ));
+    }
+
     let dummy_args: Vec<Expr> = elem_tys
         .iter()
         .map(|et| dummy_arg_for_array_scalar_elem(&PhpType::Array(Box::new(et.clone())), span))
@@ -216,13 +260,22 @@ fn check_array_map_multi(
         env,
         "array_map() callback",
     )?;
-    if matches!(callback_ret_ty.codegen_repr(), PhpType::Str | PhpType::Float) {
+    // The runtime collects the result through the result register chosen by the element type, so
+    // the callback must return that same scalar representation.
+    if callback_ret_ty.codegen_repr() != elem_repr {
+        let want = if matches!(elem_repr, PhpType::Str) {
+            "string"
+        } else {
+            "integer"
+        };
         return Err(CompileError::new(
             span,
-            "array_map() with multiple arrays currently supports only integer-returning callbacks",
+            &format!(
+                "array_map() with multiple {want} arrays currently requires a {want}-returning callback"
+            ),
         ));
     }
-    Ok(Some(PhpType::Array(Box::new(PhpType::Int))))
+    Ok(Some(PhpType::Array(Box::new(elem_repr))))
 }
 
 /// Checks object or array callable call and reports a compile error when it is invalid.

@@ -38,6 +38,7 @@ mod array_intersect_key;
 mod array_key_exists;
 mod array_map;
 mod array_map2;
+mod array_map2_str;
 mod array_map_mixed;
 mod array_map_str;
 mod array_merge;
@@ -198,6 +199,8 @@ pub use array_key_exists::emit_array_key_exists;
 pub use array_map::emit_array_map;
 /// Emit the two-input-array array map helper.
 pub use array_map2::emit_array_map2;
+/// Emit the two-input-array string array map helper.
+pub use array_map2_str::emit_array_map2_str;
 /// Emit mixed-result array map helper.
 pub use array_map_mixed::emit_array_map_mixed;
 /// Emit string-returning array map helpers.

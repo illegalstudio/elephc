@@ -265,18 +265,15 @@ pub fn emit(
 
 /// Emits the two-input-array form `array_map($callback, $a, $b)`.
 ///
-/// Bounded multi-array support (checker-gated): both arrays carry integer elements and the
-/// callback is a named function or a closure literal. Evaluates the callback then both
-/// arrays in PHP source order, preserving each on the temporary stack, then calls
-/// `__rt_array_map2`, which zips the two arrays (padding the shorter with 0) through the
-/// callback and collects the results into a new integer-keyed list.
+/// Bounded multi-array support (checker-gated): both arrays carry the same scalar element type
+/// (integer or string) and the callback is a named function or a closure.
 ///
-/// A non-capturing callback is invoked directly with two integer arguments. A capturing
-/// closure is lowered through a two-visible-argument wrapper environment (the wrapper
-/// machinery is N-visible-argument aware); `__rt_array_map2` always invokes the callback as
-/// `cb(elem0, elem1, env)`, so the same runtime serves both cases. The two array pointers
-/// live in their argument registers (`x1`/`x2`, `rsi`/`rdx`) across the environment build,
-/// which only clobbers the result and scratch registers. Returns `Some(PhpType::Array(Int))`.
+/// For integer arrays the callback is invoked directly with two integer arguments (non-capturing)
+/// or through a two-visible-argument wrapper environment (capturing closure), and `__rt_array_map2`
+/// collects integer results. For string arrays — restricted by the checker to a non-capturing
+/// callback — the closure's untyped params are specialized to `Str` and `__rt_array_map2_str` zips
+/// the two string arrays through the callback (padding the shorter with the empty string),
+/// collecting string results. Returns `Some(PhpType::Array(elem))` for the input element type.
 fn emit_two_array_map(
     callback: &Expr,
     arr0: &Expr,
@@ -286,6 +283,11 @@ fn emit_two_array_map(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("array_map() with two input arrays");
+    // The checker guarantees both arrays share one scalar element type (integer or string).
+    let elem_is_str = matches!(
+        crate::codegen::functions::infer_contextual_type(arr0, ctx),
+        PhpType::Array(inner) if matches!(inner.codegen_repr(), PhpType::Str)
+    );
     let call_reg = abi::nested_call_reg(emitter);
     let result_reg = abi::int_result_reg(emitter);
     let cb_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
@@ -311,6 +313,18 @@ fn emit_two_array_map(
         // -- non-capturing callback: invoke it directly with no environment --
         emitter.instruction(&format!("mov {}, {}", cb_arg_reg, call_reg));      // move the callback entry point into the first runtime argument register
         abi::emit_load_int_immediate(emitter, env_arg_reg, 0);                  // non-capturing callbacks need no capture environment
+        if elem_is_str {
+            // Specialize an untyped closure's params to Str so the closure reads each element as a
+            // string (ptr/len) rather than the default integer register, matching what the runtime
+            // passes; then collect string results.
+            specialize_inline_closure_params(
+                callback,
+                &[PhpType::Str, PhpType::Str],
+                ctx,
+            );
+            abi::emit_call_label(emitter, "__rt_array_map2_str");              // zip the two string arrays through the callback into a new string list
+            return Some(PhpType::Array(Box::new(PhpType::Str)));
+        }
         abi::emit_call_label(emitter, "__rt_array_map2");                       // zip the two arrays through the callback into a new integer list
         return Some(PhpType::Array(Box::new(PhpType::Int)));
     }

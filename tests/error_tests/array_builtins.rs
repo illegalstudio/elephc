@@ -388,13 +388,13 @@ fn test_error_array_map_null_zip_unsupported() {
     );
 }
 
-/// Verifies that the multi-array form rejects non-integer input arrays with a clear diagnostic
-/// (bounded H11 increment supports only integer-valued arrays).
+/// Verifies that the multi-array form rejects unsupported element types (here, float arrays) with a
+/// clear diagnostic (the bounded H11 increment supports integer or string arrays only).
 #[test]
-fn test_error_array_map_multi_non_integer_arrays() {
+fn test_error_array_map_multi_unsupported_element_type() {
     expect_error(
-        r#"<?php array_map(fn($a, $b) => $a, ["x"], ["y"]);"#,
-        "array_map() with multiple arrays currently supports only integer-valued arrays",
+        r#"<?php array_map(fn($a, $b) => $a, [1.5], [2.5]);"#,
+        "array_map() with multiple arrays currently supports only integer or string arrays",
     );
 }
 
@@ -407,6 +407,26 @@ fn test_error_array_map_multi_callable_array_variable() {
     expect_error(
         r#"<?php class C { function add($a, $b) { return $a + $b; } } $o = new C(); $cb = [$o, "add"]; array_map($cb, [1], [2]);"#,
         "array_map() with multiple arrays currently supports a named function, a closure, or a variable holding a closure",
+    );
+}
+
+/// Verifies that the two-STRING-array form rejects a capturing closure with a clear diagnostic
+/// (the string element path is restricted to a capture-less closure) (H11 string elements).
+#[test]
+fn test_error_array_map_two_string_arrays_capturing_closure() {
+    expect_error(
+        r#"<?php $p = "@"; array_map(fn($a, $b) => $p . $a . $b, ["a"], ["x"]);"#,
+        "array_map() with multiple string arrays requires a capture-less closure",
+    );
+}
+
+/// Verifies that the two-STRING-array form rejects a callback that does not return a string, since
+/// the runtime collects the results as strings (H11 string elements).
+#[test]
+fn test_error_array_map_two_string_arrays_non_string_callback() {
+    expect_error(
+        r#"<?php array_map(fn($a, $b) => 42, ["a"], ["x"]);"#,
+        "array_map() with multiple string arrays currently requires a string-returning callback",
     );
 }
 
