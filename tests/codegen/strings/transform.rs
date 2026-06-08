@@ -255,3 +255,40 @@ fn test_sprintf_zero_padded_int() {
     let out = compile_and_run(r#"<?php echo sprintf("%05d", 42);"#);
     assert_eq!(out, "00042");
 }
+
+/// Regression: a string builtin applied to a boxed `Mixed` value inside a concatenation must
+/// unbox the argument into the string ABI registers. Before the fix `strtoupper` read the stale
+/// left-hand concat operand (`"L:"`) instead of the Mixed argument, producing `"L:L:"`.
+#[test]
+fn test_strtoupper_of_mixed_in_concatenation() {
+    let out = compile_and_run(r#"<?php $j = json_decode('"widget"'); echo "L:" . strtoupper($j);"#);
+    assert_eq!(out, "L:WIDGET");
+}
+
+/// Regression: the same unboxing applies across string-transform builtins taking a `Mixed`
+/// argument (here `strtolower`, `strrev`, `ucfirst`), not just `strtoupper`.
+#[test]
+fn test_string_transforms_of_mixed_argument() {
+    let out = compile_and_run(
+        r#"<?php
+        $h = json_decode('"HELLO"');
+        $a = json_decode('"abc"');
+        echo strtolower($h), "|", strrev($a), "|", ucfirst($a);
+        "#,
+    );
+    assert_eq!(out, "hello|cba|Abc");
+}
+
+/// Regression: multi-argument string builtins must also unbox a `Mixed` string argument, whether
+/// it is the subject (`str_replace` arg 3), the haystack (`strpos`), or the source (`explode`) —
+/// not only the first argument. Before the fix these read stale string registers for a Mixed arg.
+#[test]
+fn test_multiarg_string_builtins_of_mixed_argument() {
+    let out = compile_and_run(
+        r#"<?php
+        $m = json_decode('"hello world"');
+        echo str_replace("o", "0", $m), "|", strpos($m, "world"), "|", implode(",", explode(" ", $m));
+        "#,
+    );
+    assert_eq!(out, "hell0 w0rld|6|hello,world");
+}

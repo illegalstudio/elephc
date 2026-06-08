@@ -46,7 +46,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("implode()");
     // implode($glue, $array)
-    emit_expr(&args[0], emitter, ctx, data);
+    super::args::emit_string_arg(&args[0], emitter, ctx, data);
     // -- save glue, evaluate array --
     let (glue_ptr_reg, glue_len_reg) = abi::string_result_regs(emitter);
     abi::emit_push_reg_pair(emitter, glue_ptr_reg, glue_len_reg);               // preserve the glue string while evaluating the indexed array argument

@@ -11,7 +11,6 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
 use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -40,7 +39,10 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("ctype_alpha()");
-    emit_expr(&args[0], emitter, ctx, data);
+    // Coerce the operand to a string in the string ABI registers via emit_string_arg, so a
+    // Mixed argument is cast through __rt_mixed_cast_string instead of leaving a boxed cell in
+    // the result register with stale string registers.
+    super::args::emit_string_arg(&args[0], emitter, ctx, data);
     let loop_label = ctx.next_label("ctype_loop");
     let next_label = ctx.next_label("ctype_next");
     let fail_label = ctx.next_label("ctype_fail");

@@ -88,13 +88,67 @@ fn test_nl2br() {
     assert_eq!(out, "line1<br />\nline2");
 }
 
-/// Verifies `wordwrap()` breaks a string at the specified column width (15) with "\n" delimiter.
+/// Verifies `wordwrap()` breaks at word boundaries (the last space at/after the width),
+/// matching PHP exactly rather than breaking mid-word at fixed column offsets.
 #[test]
 fn test_wordwrap() {
     let out = compile_and_run(
         r#"<?php echo wordwrap("The quick brown fox jumped over the lazy dog", 15, "\n");"#,
     );
-    assert!(out.contains('\n'));
+    assert_eq!(out, "The quick brown\nfox jumped over\nthe lazy dog");
+}
+
+/// Verifies `wordwrap()` with the default cut flag leaves a word longer than the width intact
+/// (PHP only breaks at spaces unless cut_long_words is set).
+#[test]
+fn test_wordwrap_long_word_not_cut() {
+    let out = compile_and_run(r#"<?php echo wordwrap("A verylongword here", 8, "\n");"#);
+    assert_eq!(out, "A\nverylongword\nhere");
+}
+
+/// Verifies `wordwrap()` with cut_long_words=true breaks an over-long word at the width.
+#[test]
+fn test_wordwrap_long_word_cut() {
+    let out = compile_and_run(r#"<?php echo wordwrap("A verylongword here", 8, "\n", true);"#);
+    assert_eq!(out, "A\nverylong\nword\nhere");
+}
+
+/// Verifies `wordwrap()` with cut_long_words=true chops a single space-free run into width-sized
+/// pieces (no trailing break on the final short piece).
+#[test]
+fn test_wordwrap_cut_single_run() {
+    let out = compile_and_run(r#"<?php echo wordwrap("abcdefghij", 4, "\n", true);"#);
+    assert_eq!(out, "abcd\nefgh\nij");
+}
+
+/// Verifies `wordwrap()` with cut_long_words=false (default) returns a space-free over-long word
+/// unchanged.
+#[test]
+fn test_wordwrap_no_cut_single_run() {
+    let out = compile_and_run(r#"<?php echo wordwrap("abcdefghij", 4, "\n");"#);
+    assert_eq!(out, "abcdefghij");
+}
+
+/// Verifies `wordwrap()` preserves existing newlines in the input and resets the line length at
+/// each one (a hard break does not count toward the next line's width).
+#[test]
+fn test_wordwrap_preserves_existing_newlines() {
+    let out = compile_and_run("<?php echo wordwrap(\"preserve\nnewlines here ok\", 10, \"\\n\");");
+    assert_eq!(out, "preserve\nnewlines\nhere ok");
+}
+
+/// Verifies `wordwrap()` accepts a multi-character break string and inserts it at each wrap point.
+#[test]
+fn test_wordwrap_multichar_break() {
+    let out = compile_and_run(r#"<?php echo wordwrap("aaa bbb ccc", 3, "<br>");"#);
+    assert_eq!(out, "aaa<br>bbb<br>ccc");
+}
+
+/// Verifies `wordwrap()` leaves a string shorter than the width untouched (no break inserted).
+#[test]
+fn test_wordwrap_under_width_unchanged() {
+    let out = compile_and_run(r#"<?php echo wordwrap("hello world", 20);"#);
+    assert_eq!(out, "hello world");
 }
 
 /// Verifies `bin2hex()` converts a binary string "AB" to its hexadecimal representation "4142".

@@ -11,7 +11,6 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
 use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -22,17 +21,20 @@ use crate::types::PhpType;
 /// - `args[0]`: input string to wrap
 /// - `args[1]` (optional): wrap width, defaults to 75
 /// - `args[2]` (optional): break string, defaults to `"\n"`
+/// - `args[3]` (optional): `cut_long_words` flag, defaults to `false`
 ///
 /// # Register layout (AArch64)
-/// - x0/x1: input string pointer/length (preserved across arg evaluation)
+/// - x1/x2: input string pointer/length (preserved across arg evaluation)
 /// - x3: wrap width
 /// - x4/x5: break string pointer/length
+/// - x6: `cut_long_words` flag (0/1)
 /// - calls `__rt_wordwrap` via ABI convention
 ///
 /// # Register layout (x86_64)
 /// - rax/rdx: input string pointer/length (preserved across arg evaluation)
 /// - rdi: wrap width
 /// - rcx/r8: break string pointer/length
+/// - r9: `cut_long_words` flag (0/1)
 /// - calls `__rt_wordwrap` via System V AMD64 ABI
 ///
 /// # Returns
@@ -45,7 +47,7 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("wordwrap()");
-    emit_expr(&args[0], emitter, ctx, data);
+    super::args::emit_string_arg(&args[0], emitter, ctx, data);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the input string while evaluating the width and optional break string
@@ -56,7 +58,7 @@ pub fn emit(
                 emitter.instruction("mov x3, #75");                             // default to the PHP wordwrap() width of 75 when omitted
             }
             if args.len() >= 3 {
-                emit_expr(&args[2], emitter, ctx, data);
+                super::args::emit_string_arg(&args[2], emitter, ctx, data);
                 emitter.instruction("mov x4, x1");                              // move the break-string pointer into the secondary runtime string-argument pair
                 emitter.instruction("mov x5, x2");                              // move the break-string length into the secondary runtime string-argument pair
             } else {
@@ -64,7 +66,13 @@ pub fn emit(
                 abi::emit_symbol_address(emitter, "x4", &label);                // materialize the default newline break string when the third argument is omitted
                 abi::emit_load_int_immediate(emitter, "x5", len as i64);        // materialize the default newline break-string length
             }
-            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the input string after evaluating the width and optional break string
+            if args.len() >= 4 {
+                super::args::emit_int_arg(&args[3], emitter, ctx, data);
+                emitter.instruction("mov x6, x0");                              // move the cut_long_words flag into the runtime argument register
+            } else {
+                emitter.instruction("mov x6, #0");                              // default cut_long_words to false when omitted
+            }
+            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the input string after evaluating the width, break, and cut flag
         }
         Arch::X86_64 => {
             abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the input string while evaluating the width and optional break string
@@ -75,13 +83,19 @@ pub fn emit(
                 emitter.instruction("mov rdi, 75");                             // default to the PHP wordwrap() width of 75 when omitted
             }
             if args.len() >= 3 {
-                emit_expr(&args[2], emitter, ctx, data);
+                super::args::emit_string_arg(&args[2], emitter, ctx, data);
                 emitter.instruction("mov rcx, rax");                            // move the break-string pointer into the secondary x86_64 runtime string-argument pair
                 emitter.instruction("mov r8, rdx");                             // move the break-string length into the secondary x86_64 runtime string-argument pair
             } else {
                 let (label, len) = data.add_string(b"\n");
                 abi::emit_symbol_address(emitter, "rcx", &label);               // materialize the default newline break string when the third argument is omitted
                 abi::emit_load_int_immediate(emitter, "r8", len as i64);        // materialize the default newline break-string length
+            }
+            if args.len() >= 4 {
+                super::args::emit_int_arg(&args[3], emitter, ctx, data);
+                emitter.instruction("mov r9, rax");                             // move the cut_long_words flag into the x86_64 runtime argument register
+            } else {
+                emitter.instruction("mov r9, 0");                               // default cut_long_words to false when omitted
             }
             abi::emit_pop_reg_pair(emitter, "rax", "rdx");                      // restore the input string into the primary x86_64 string-helper input registers
         }

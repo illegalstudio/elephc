@@ -179,7 +179,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_substr_replace` | Replace substring at offset | str + replacement + start + len | `x1`/`x2` |
 | `__rt_str_pad` | Pad string to length | str + len + pad_str + type | `x1`/`x2` |
 | `__rt_str_split` | Split into chunks | str + chunk_len | `x0` (array ptr) |
-| `__rt_wordwrap` | Wrap text at width | str + width + break | `x1`/`x2` |
+| `__rt_wordwrap` | Wrap text at word boundaries | str + width + break + cut | `x1`/`x2` |
 | `__rt_number_format` | Format number with separators | float + decimals + sep | `x1`/`x2` |
 | `__rt_hash` | Hash with algorithm | algo + data | `x1`/`x2` |
 | `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |
