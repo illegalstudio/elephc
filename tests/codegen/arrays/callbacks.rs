@@ -41,6 +41,28 @@ echo $b[0];
     assert_eq!(out, "11");
 }
 
+/// Regression: a non-capturing UNTYPED inline closure over a string array must receive each
+/// element as a string (pointer/length), not as an integer. Previously the untyped param defaulted
+/// to the integer register class, so `array_map(fn($s) => $s."!", ...)` read the string pointer as
+/// an int and printed garbage. The closure param is now specialized to the source element type.
+#[test]
+fn test_array_map_untyped_closure_over_string_array() {
+    let out = compile_and_run(
+        r#"<?php echo implode(",", array_map(fn($s) => $s . "!", ["a", "b", "c"]));"#,
+    );
+    assert_eq!(out, "a!,b!,c!");
+}
+
+/// Regression: the same fix lets an untyped closure call a string builtin on each element of a
+/// string array (`array_map(fn($s) => strtoupper($s), ...)`).
+#[test]
+fn test_array_map_untyped_closure_string_builtin() {
+    let out = compile_and_run(
+        r#"<?php echo implode("-", array_map(fn($s) => strtoupper($s), ["x", "y", "z"]));"#,
+    );
+    assert_eq!(out, "X-Y-Z");
+}
+
 /// Verifies the multi-array form `array_map($cb, $a, $b)` zips two integer arrays element-wise
 /// through a named user function, producing a new integer list (H11).
 #[test]

@@ -14,7 +14,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 use super::array_map_callback_returns_str::callback_returns_str;
 use super::callback_env;
@@ -220,6 +220,13 @@ pub fn emit(
     abi::emit_push_reg(emitter, result_reg);                                    // push the array pointer onto the temporary stack
 
     if captures.is_empty() {
+        // A non-capturing inline closure is invoked directly by the runtime, which passes the
+        // element in its element-typed register(s). An untyped closure param would otherwise be
+        // compiled for the integer register class and misread a string/non-int element, so
+        // specialize it to the source element type before the deferred closure is emitted (mirrors
+        // preg_replace_callback). The captured-closure path goes through a wrapper and is left
+        // unchanged here.
+        specialize_inline_closure_params(&args[0], std::slice::from_ref(&source_elem_ty), ctx);
         abi::emit_pop_reg(emitter, array_arg_reg);                               // pop the mapped array pointer into the second runtime argument register
         abi::emit_pop_reg(emitter, callback_arg_reg);                            // pop the callback address into the first runtime argument register
         abi::emit_load_int_immediate(emitter, env_arg_reg, 0);
@@ -322,6 +329,33 @@ fn emit_two_array_map(
     abi::emit_call_label(emitter, "__rt_array_map2");                           // zip the two arrays through the wrapper into a new integer list
     abi::emit_release_temporary_stack(emitter, wrapper.env_bytes);              // release the temporary capture environment after the runtime call
     Some(PhpType::Array(Box::new(PhpType::Int)))
+}
+
+/// Specializes an inline closure callback's untyped parameter types to the element types
+/// `array_map` passes at runtime.
+///
+/// An untyped closure parameter defaults to the integer register class; for a string (or other
+/// non-int) source array the runtime passes the element in a different register class (`x0`/`x1`
+/// pointer/length for strings), so the closure body must be compiled expecting the element type.
+/// Updates the most recently deferred inline closure's signature for each visible parameter,
+/// leaving user-declared parameter types untouched. No-op for non-closure callbacks or when no
+/// deferred closure is pending. Mirrors `preg_replace_callback`'s closure-parameter specialization.
+fn specialize_inline_closure_params(callback: &Expr, elem_tys: &[PhpType], ctx: &mut Context) {
+    if !matches!(callback.kind, ExprKind::Closure { .. }) {
+        return;
+    }
+    let Some(deferred) = ctx.deferred_closures.last_mut() else {
+        return;
+    };
+    for (i, elem_ty) in elem_tys.iter().enumerate() {
+        // Respect parameters the user annotated with an explicit type.
+        if deferred.sig.declared_params.get(i).copied().unwrap_or(true) {
+            continue;
+        }
+        if let Some((_, ty)) = deferred.sig.params.get_mut(i) {
+            *ty = elem_ty.clone();
+        }
+    }
 }
 
 /// Emits runtime-string callback selection through descriptor-backed `array_map()`.
