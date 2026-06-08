@@ -16,6 +16,23 @@ fn test_variable() {
     assert_eq!(t[1], Token::Variable("foo".into()));
 }
 
+/// Verifies a variable name with non-ASCII letters (PHP allows bytes 0x80-0xFF in
+/// identifiers) lexes as one `Variable` token instead of truncating at the first
+/// non-ASCII byte.
+#[test]
+fn test_unicode_variable() {
+    let t = tokens("<?php $café");
+    assert_eq!(t[1], Token::Variable("café".into()));
+}
+
+/// Verifies an identifier made of non-ASCII letters lexes as a single `Identifier`
+/// token instead of erroring as an unexpected character.
+#[test]
+fn test_unicode_identifier() {
+    let t = tokens("<?php 价格");
+    assert_eq!(t[1], Token::Identifier("价格".into()));
+}
+
 // --- Operators ---
 
 /// Verifies `{` and `}` tokenize as `LBrace` / `RBrace`.

@@ -502,6 +502,10 @@ fn parse_closure_params(
                 ));
             }
             *pos += 1;
+            // Allow a trailing comma before the closing paren (PHP 8.0+).
+            if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
+                break;
+            }
         }
         // PHP 8.0 closure-parameter attributes (`fn(#[X] $a) => …`).
         crate::parser::consume_attribute_lists(tokens, pos)?;
@@ -675,6 +679,13 @@ pub(super) fn parse_named_expr(
             Some(Token::Match) => {
                 *pos += 1;
                 "MATCH".to_string()
+            }
+            // PHP 8 allows semi-reserved keywords as static method / class-constant names
+            // (e.g. `Foo::self()`, `Foo::print`); `class` and `$var` are handled above.
+            Some(t) if crate::parser::keyword_name::bareword_name_from_token(t).is_some() => {
+                let member = crate::parser::keyword_name::bareword_name_from_token(t).unwrap();
+                *pos += 1;
+                member
             }
             _ => return Err(CompileError::new(span, "Expected member name after '::'")),
         };

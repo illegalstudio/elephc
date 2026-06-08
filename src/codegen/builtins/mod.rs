@@ -22,6 +22,8 @@ mod strings;
 mod system;
 mod types;
 
+pub(crate) use io::publish_tls_function_pointers;
+
 use super::context::Context;
 use super::data_section::DataSection;
 use super::emit::Emitter;

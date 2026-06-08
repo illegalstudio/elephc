@@ -672,6 +672,51 @@ pub(crate) fn emit_unbox_mixed_object_or_fatal(
     }
 }
 
+/// Unboxes a boxed Mixed receiver to a raw object pointer for dynamic dispatch.
+///
+/// Calls `__rt_mixed_unbox` (runtime tag in the int result register, payload in
+/// the secondary register) and fatals with `message` unless the tag is 6
+/// (object). On success the object pointer is promoted into the int result
+/// register. Used when a method is called on a `Mixed` / union receiver whose
+/// static type does not name a single class, so the value must be confirmed to
+/// be an object before its class id is read for dispatch.
+pub(crate) fn emit_unbox_mixed_object_strict_or_fatal(
+    message: &[u8],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    let (message_label, message_len) = data.add_string(message);
+    let ok_label = ctx.next_label("mixed_object_strict_ok");
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // inspect the boxed receiver before reading its class id
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #6");                                  // runtime tag 6 means the receiver is an object
+            emitter.instruction(&format!("b.eq {}", ok_label));                 // dispatch only for a real object payload
+            emit_fatal_message(emitter, &message_label, message_len);
+            emitter.label(&ok_label);
+            emitter.instruction("mov x0, x1");                                  // promote the unboxed object pointer into the AArch64 result register
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 6");                                  // runtime tag 6 means the receiver is an object
+            emitter.instruction(&format!("je {}", ok_label));                   // dispatch only for a real object payload
+            emit_fatal_message(emitter, &message_label, message_len);
+            emitter.label(&ok_label);
+            emitter.instruction("mov rax, rdi");                                // promote the unboxed object pointer into the SysV result register
+        }
+    }
+}
+
+/// Emits a fatal-error diagnostic with `message` and terminates the process.
+///
+/// Convenience wrapper that interns the message in the data section and delegates
+/// to `emit_fatal_message`. Used by callers outside this module (e.g. dynamic
+/// method dispatch) that need an unconditional fatal with a runtime message.
+pub(crate) fn emit_fatal_str(message: &str, emitter: &mut Emitter, data: &mut DataSection) {
+    let (message_label, message_len) = data.add_string(message.as_bytes());
+    emit_fatal_message(emitter, &message_label, message_len);
+}
+
 /// Emits a null-check branch on a Mixed-object unbox result for nullsafe flows.
 pub(super) fn emit_unbox_mixed_object_or_null_branch(null_label: &str, emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // inspect the boxed nullable object before member access

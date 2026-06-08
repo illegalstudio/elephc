@@ -52,13 +52,13 @@ pub fn emit(
             emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                // restore the format len
             emitter.instruction("add rsp, 16");                                 // release the scratch slot
             abi::emit_call_label(emitter, "__rt_vsprintf");                     // rax = formatted ptr, rdx = formatted len
-            emitter.instruction("mov rcx, rdx");                                // preserve the formatted byte count across the write syscall
+            emitter.instruction("mov r8, rdx");                                 // preserve the byte count in r8; the syscall instruction clobbers rcx
             emitter.instruction("mov rsi, rax");                                // formatted pointer → SysV write buffer register
-            emitter.instruction("mov rdx, rcx");                                // formatted length → SysV write byte-count register
+            emitter.instruction("mov rdx, r8");                                 // formatted length → SysV write byte-count register
             emitter.instruction("mov edi, 1");                                  // fd = stdout
             emitter.instruction("mov eax, 1");                                  // syscall 1 = write on Linux x86_64
             emitter.instruction("syscall");                                     // write the formatted bytes to stdout
-            emitter.instruction("mov rax, rcx");                                // return the byte count
+            emitter.instruction("mov rax, r8");                                 // return the byte count (rcx was destroyed by syscall)
         }
     }
     Some(PhpType::Int)

@@ -296,9 +296,18 @@ fn validate_object_property_access(
     Ok(())
 }
 
+/// Returns `true` if `ty` is the empty-array placeholder `Array(Never)` produced by an `[]` literal.
+///
+/// Such a property has no known element type yet, so the first concrete array assignment should
+/// adopt the assigned value's element type rather than stay pinned at `Never`.
+fn is_empty_array_placeholder(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Never))
+}
+
 /// Refines the inferred type of an object property after a write, for properties without declared types.
 ///
 /// For untyped `Int` or `Void` properties, replaces the type with the assigned value's type.
+/// For an `[]`-initialized property (`Array(Never)`), adopts the first concrete array assigned.
 /// For generic arrays, calls `Checker::specialize_generic_array_hint` to narrow the element type
 /// based on the assigned value. Only updates when the refined type differs from the current type.
 fn refine_object_property_type(
@@ -316,6 +325,14 @@ fn refine_object_property_type(
         {
             if !property_has_declared_type {
                 if matches!(prop.1, PhpType::Int | PhpType::Void) && prop.1 != *val_ty {
+                    prop.1 = val_ty.clone();
+                } else if is_empty_array_placeholder(&prop.1)
+                    && matches!(val_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                {
+                    // An `[]` initializer types the property as `Array(Never)`; the
+                    // first concrete array assignment fixes the element type, exactly
+                    // as a plain local reassignment overwrites its type. Without this,
+                    // the element type stays `Never` and codegen mis-emits later reads.
                     prop.1 = val_ty.clone();
                 } else {
                     let refined_ty = Checker::specialize_generic_array_hint(&prop.1, val_ty);

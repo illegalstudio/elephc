@@ -167,6 +167,38 @@ fn test_concat_with_newline() {
     assert_eq!(out, "hello\n");
 }
 
+/// Verifies that concatenating an array onto a string stringifies the array to the literal
+/// "Array" (matching PHP's array-to-string conversion) for both an array literal and an
+/// array-typed function result, instead of crashing by treating the array pointer as a string.
+#[test]
+fn test_concat_array_stringifies_to_array_literal() {
+    let out = compile_and_run(
+        r#"<?php
+function makeArr() { return [1, 2, 3]; }
+echo "a" . [4, 5];
+echo "|";
+echo "prefix" . makeArr();
+"#,
+    );
+    assert_eq!(out, "aArray|prefixArray");
+}
+
+/// Verifies that echoing an array stringifies to the literal "Array" (matching PHP), routing
+/// through the same string-coercion path as concatenation.
+#[test]
+fn test_echo_array_stringifies_to_array_literal() {
+    let out = compile_and_run("<?php $a = [1, 2, 3]; echo $a;");
+    assert_eq!(out, "Array");
+}
+
+/// Verifies that interpolating an array into a double-quoted string stringifies it to the
+/// literal "Array" (matching PHP) for both simple `$a` and complex `{$a}` interpolation.
+#[test]
+fn test_interpolated_array_stringifies_to_array_literal() {
+    let out = compile_and_run("<?php $a = [1, 2, 3]; echo \"v=$a|w={$a}\";");
+    assert_eq!(out, "v=Array|w=Array");
+}
+
 // --- Phase 3: Mixed-type concatenation ---
 
 /// Verifies concatenation of string literal and integer literal: "Value: " . 42 = "Value: 42".
@@ -320,6 +352,33 @@ fn test_constant_loose_eq_number_and_non_numeric_string_is_false() {
 fn test_constant_loose_eq_number_and_numeric_string_is_true() {
     let out = compile_and_run("<?php var_dump(10 == \"1e1\");");
     assert_eq!(out, "bool(true)\n");
+}
+
+/// Verifies runtime float comparisons against NaN match PHP: NaN is uncomparable, so `<`, `<=`,
+/// `>`, `>=`, `==` are all false and `!=` is true, while `<=>` yields 1 in every direction
+/// (including NaN<=>NaN). Operands come from `float`-returning calls so the optimizer cannot
+/// constant-fold them, exercising the runtime comparison codegen rather than the folder.
+#[test]
+fn test_runtime_nan_comparisons() {
+    let out = compile_and_run(
+        r#"<?php
+function nan_val(): float { return NAN; }
+function one_val(): float { return 1.0; }
+$nan = nan_val();
+$one = one_val();
+var_dump($nan < $one);
+var_dump($nan <= $one);
+var_dump($nan > $one);
+var_dump($nan >= $one);
+var_dump($nan == $one);
+var_dump($nan != $one);
+echo ($nan <=> $one), ($one <=> $nan), ($nan <=> $nan);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\n111"
+    );
 }
 
 /// Verifies runtime loose equality of two non-numeric strings compares by byte sequence.

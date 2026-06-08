@@ -235,6 +235,7 @@ pub fn emit_ftp(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd → first arg
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_attach_fd_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load runtime value
+    emitter.instruction("cbz x9, __rt_ftp_open_fail");                          // missing elephc-tls runtime means FTPS open fails closed
     emitter.instruction("blr x9");                                              // x0 = TLS handle or -1
     emitter.instruction("cmp x0, #0");                                          // compare runtime values for the next branch
     emitter.instruction("b.lt __rt_ftp_open_fail");                             // TLS handshake failed
@@ -294,6 +295,7 @@ pub fn emit_ftp(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // data fd → first arg
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_attach_fd_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load runtime value
+    emitter.instruction("cbz x9, __rt_ftp_open_fail");                          // missing elephc-tls runtime means FTPS open fails closed
     emitter.instruction("blr x9");                                              // x0 = TLS handle or -1
     emitter.instruction("cmp x0, #0");                                          // compare runtime values for the next branch
     emitter.instruction("b.lt __rt_ftp_open_fail");                             // data-channel TLS handshake failed
@@ -353,6 +355,8 @@ pub fn emit_ftp(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the ftp:// stream descriptor
 
     emitter.label("__rt_ftp_open_fail");
+    abi::emit_symbol_address(emitter, "x9", "_ftp_use_tls");
+    emitter.instruction("str xzr, [x9]");                                       // clear the one-shot AUTH-TLS flag after any open failure
     emitter.instruction("mov x0, #-1");                                         // -1 signals a failed ftp:// open
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the frame
@@ -555,6 +559,8 @@ fn emit_ftp_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call read");                                           // expect 234
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd → first arg
     emitter.instruction("mov r9, QWORD PTR [rip + _elephc_tls_attach_fd_fn]");  // prepare SysV call argument
+    emitter.instruction("test r9, r9");                                         // missing elephc-tls runtime means FTPS open fails closed
+    emitter.instruction("jz __rt_ftp_open_fail_x86");                           // return a failed stream when no TLS entry is available
     emitter.instruction("call r9");                                             // rax = TLS handle or -1
     emitter.instruction("cmp rax, 0");                                          // compare runtime values for the next branch
     emitter.instruction("jl __rt_ftp_open_fail_x86");                           // TLS handshake failed
@@ -613,6 +619,8 @@ fn emit_ftp_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_ftp_open_skip_data_tls_x");                    // branch when the checked value is zero or equal
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // data fd → first arg
     emitter.instruction("mov r9, QWORD PTR [rip + _elephc_tls_attach_fd_fn]");  // prepare SysV call argument
+    emitter.instruction("test r9, r9");                                         // missing elephc-tls runtime means FTPS open fails closed
+    emitter.instruction("jz __rt_ftp_open_fail_x86");                           // return a failed stream when no TLS entry is available
     emitter.instruction("call r9");                                             // rax = TLS handle or -1
     emitter.instruction("cmp rax, 0");                                          // compare runtime values for the next branch
     emitter.instruction("jl __rt_ftp_open_fail_x86");                           // data-channel TLS handshake failed
@@ -668,6 +676,7 @@ fn emit_ftp_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the ftp:// stream descriptor
 
     emitter.label("__rt_ftp_open_fail_x86");
+    emitter.instruction("mov QWORD PTR [rip + _ftp_use_tls], 0");               // clear the one-shot AUTH-TLS flag after any open failure
     emitter.instruction("mov rax, -1");                                         // -1 signals a failed ftp:// open
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

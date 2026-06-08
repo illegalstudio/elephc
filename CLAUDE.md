@@ -335,7 +335,7 @@ Adding or updating function docblocks must not change code behavior. Do not alte
 
 ### Assembly comment policy
 
-**Every `emitter.instruction(...)` call MUST have an inline `//` comment** explaining what the assembly instruction does. This is mandatory — the codebase is educational and every assembly line must be understandable by someone learning how compilers work.
+**Every `emitter.instruction(...)` call MUST have an inline `//` comment** explaining what the assembly instruction does. This is mandatory — the generated assembly is meant to be read, and every assembly line must be understandable by someone learning how compilers work.
 
 Rules:
 

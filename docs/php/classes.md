@@ -512,11 +512,66 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 `SortDirection` has two cases, `Ascending` and `Descending`, no backing value, and works with enum case identity, `SortDirection::cases()`, `enum_exists()`, type declarations, `match`, imports, and fully-qualified `\SortDirection` references.
 
 ## Magic methods
+- `__construct(...)` — runs at instantiation
+- `__destruct()` — runs when the object is released (see below)
 - `__toString()` — string coercion
 - `__get($name)` — reading undefined property
 - `__set($name, $value)` — writing undefined property
 - `__invoke(...$args)` — calling an object directly
 - `__call($name, $args)` — intercepting missing instance methods
+
+## Destructors (`__destruct`)
+
+A class may declare `public function __destruct(): void` to run cleanup when an
+object is released. elephc uses reference counting, so the destructor runs as
+soon as the last reference goes away — there is no separate garbage-collection
+delay. It fires when:
+
+- a local variable holding the object goes out of scope (including on early
+  `return` and during exception unwinding);
+- the variable is reassigned or `unset()`, releasing the previous object;
+- the object was the last element keeping a containing array or object alive;
+- the program ends, for objects still referenced by top-level variables.
+
+The destructor runs **before** the object's properties are released, so it can
+still read `$this` and its properties. This makes RAII-style cleanup natural:
+acquire a resource in `__construct`, release it in `__destruct`.
+
+```php
+<?php
+class TempFile
+{
+    private string $path;
+    public function __construct(string $path)
+    {
+        $this->path = $path;
+        file_put_contents($this->path, "scratch");
+    }
+    public function __destruct()
+    {
+        unlink($this->path);   // runs automatically when the object is released
+    }
+}
+```
+
+Rules and notes:
+
+- `__destruct` must be non-static and take no arguments. Any visibility is
+  allowed (PHP calls it regardless), so it may be `public`, `protected`, or
+  `private`.
+- A subclass without its own `__destruct` inherits its parent's.
+- Taking a temporary copy of `$this` inside the destructor is safe; the object
+  is not freed twice.
+- Objects that form a reference cycle (e.g. `$a->next = $b; $b->next = $a;`) are
+  reclaimed by the targeted cycle collector, and their destructors still run. The
+  collector is eager — it reclaims an unreachable island as soon as the last
+  outside reference drops — so for cyclic objects the destructor *timing* can
+  differ from PHP's deferred cycle collector, and the order among the cycle's
+  members is unspecified.
+- **Object resurrection is not supported**: storing `$this` somewhere that
+  outlives the destructor (so the object would survive) does not keep it alive —
+  the object is still freed once the destructor returns. Avoid retaining `$this`
+  past the end of `__destruct`.
 
 ## Attributes
 

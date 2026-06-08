@@ -9,6 +9,32 @@
 
 use super::*;
 
+/// Verifies that PHP 8 semi-reserved keywords are usable as member names end-to-end: an
+/// instance method (`self`), a static method (`new`), an instance method via `->parent()`,
+/// a property accessed as `->list`, and a class constant `FN` accessed via `::`. Mirrors PHP,
+/// which outputs "3|7|9|11|5".
+#[test]
+fn test_keyword_named_members() {
+    let out = compile_and_run(
+        r#"<?php
+class Widget {
+    public $list = 7;
+    const FN = 5;
+    public function self() { return 3; }
+    public function parent() { return 9; }
+    public static function new() { return 11; }
+}
+$w = new Widget();
+echo $w->self(), "|";
+echo $w->list, "|";
+echo $w->parent(), "|";
+echo Widget::new(), "|";
+echo Widget::FN;
+"#,
+    );
+    assert_eq!(out, "3|7|9|11|5");
+}
+
 /// Verifies that an empty class (no properties or methods) can be instantiated and
 /// emits the expected "ok" output, confirming object allocation works for minimal classes.
 #[test]

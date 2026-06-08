@@ -450,3 +450,35 @@ fn test_heredoc_escaped_dollar() {
     assert_eq!(out, "Price is $100");
 }
 
+/// Verifies a heredoc passed as a function argument closes when its label is immediately
+/// followed by `)` (PHP closes on any non-identifier char after the label).
+#[test]
+fn test_heredoc_closer_as_call_argument() {
+    let out = compile_and_run("<?php\nfunction f($s) { return $s; }\necho f(<<<EOT\nhello\nEOT);\n");
+    assert_eq!(out, "hello");
+}
+
+/// Verifies a heredoc whose label is followed by ` . "..."` closes and concatenates,
+/// covering closer terminators other than `;`/newline.
+#[test]
+fn test_heredoc_closer_followed_by_concat() {
+    let out = compile_and_run("<?php\necho <<<EOT\nhi\nEOT . \"!\";\n");
+    assert_eq!(out, "hi!");
+}
+
+/// Verifies PHP 7.3+ flexible-heredoc indentation: the closing marker's leading whitespace
+/// is stripped from every body line.
+#[test]
+fn test_heredoc_flexible_indentation() {
+    let out = compile_and_run("<?php\necho <<<EOT\n    line1\n    line2\n    EOT;\n");
+    assert_eq!(out, "line1\nline2");
+}
+
+/// Verifies the closing label is only recognized at the start of a line: a label appearing
+/// mid-line (`a EOT b`) is body content, not a closer.
+#[test]
+fn test_heredoc_label_substring_midline_not_closer() {
+    let out = compile_and_run("<?php\n$s = <<<EOT\na EOT b\nEOT;\necho $s;\n");
+    assert_eq!(out, "a EOT b");
+}
+

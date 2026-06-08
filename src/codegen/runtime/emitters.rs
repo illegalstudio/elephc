@@ -295,6 +295,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     objects::emit_mixed_array_get(emitter);
     objects::emit_mixed_array_set(emitter);
     objects::emit_new_by_name(emitter);
+    objects::emit_call_object_destructor(emitter);
     objects::emit_json_encode_stdclass(emitter);
 
     // Buffer runtime functions
@@ -431,6 +432,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_fd_write(emitter);
     io::emit_phar_write(emitter);
     io::emit_phar_read(emitter);
+    io::emit_file_get_contents_url(emitter);
     io::emit_fputcsv(emitter);
     io::emit_basename(emitter);
     io::emit_dirname(emitter);

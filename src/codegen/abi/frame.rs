@@ -19,6 +19,10 @@ use super::registers::{
 /// On AArch64: allocates `frame_size` bytes, saves x29/x30 in the footer, and establishes x29 as the frame pointer.
 /// On x86_64: pushes rbp, establishes rsp as the frame base, and reserves `frame_size - 16` bytes for locals.
 pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
+    debug_assert!(
+        frame_size >= 16,
+        "frame_size must reserve the 16-byte frame footer (x29/x30), got {frame_size}"
+    );
     emitter.comment("prologue");
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -53,6 +57,10 @@ pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
 /// On AArch64: restores x29/x30 from the footer and releases `frame_size` bytes.
 /// On x86_64: releases local bytes and pops rbp.
 pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
+    debug_assert!(
+        frame_size >= 16,
+        "frame_size must reserve the 16-byte frame footer (x29/x30), got {frame_size}"
+    );
     match emitter.target.arch {
         Arch::AArch64 => {
             let footer_offset = frame_size - 16;

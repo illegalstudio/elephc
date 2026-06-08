@@ -121,13 +121,17 @@ pub(crate) fn link_binary(
 ) {
     let actual_link_libs = effective_link_libs(extra_link_libs);
 
-    // The elephc-tls staticlib lives in `<target>/debug` alongside the test
-    // binaries; surface that path automatically when a program uses the
-    // https:// wrapper so callers do not have to thread it through. The
-    // Docker scripts override CARGO_TARGET_DIR to point at a shared volume,
-    // so honour that envvar before falling back to the in-tree target/.
-    let needs_elephc_tls = actual_link_libs.iter().any(|l| *l == "elephc_tls");
-    let elephc_tls_dir = match std::env::var("CARGO_TARGET_DIR") {
+    // The elephc-tls and elephc-pdo bridge staticlibs both live in
+    // `<target>/debug` alongside the test binaries; surface that directory on the
+    // linker search path automatically whenever a compiled program links either
+    // bridge, so PDO tests get the same robust, absolute `-L` as TLS instead of
+    // depending on a cwd-relative lookup. The Docker scripts override
+    // CARGO_TARGET_DIR to point at a shared volume, so honour that envvar before
+    // falling back to the in-tree target/.
+    let needs_bridge_staticlib = actual_link_libs
+        .iter()
+        .any(|l| *l == "elephc_tls" || *l == "elephc_pdo");
+    let bridge_staticlib_dir = match std::env::var("CARGO_TARGET_DIR") {
         Ok(dir) if !dir.is_empty() => format!("{}/debug", dir),
         _ => format!("{}/target/debug", env!("CARGO_MANIFEST_DIR")),
     };
@@ -147,8 +151,8 @@ pub(crate) fn link_binary(
                 get_sdk_version(),
                 get_sdk_version(),
             ]);
-            if needs_elephc_tls {
-                ld_cmd.arg(format!("-L{}", elephc_tls_dir));
+            if needs_bridge_staticlib {
+                ld_cmd.arg(format!("-L{}", bridge_staticlib_dir));
             }
             for path in extra_link_paths {
                 ld_cmd.arg(format!("-L{}", path));
@@ -159,8 +163,18 @@ pub(crate) fn link_binary(
             for framework in extra_frameworks {
                 ld_cmd.args(["-framework", framework]);
             }
-            let ld_status = ld_cmd.status().expect("failed to run linker");
-            assert!(ld_status.success(), "linker failed");
+            // The PostgreSQL driver in the PDO bridge pulls in `whoami`, which
+            // references CoreFoundation / SystemConfiguration on macOS.
+            if actual_link_libs.iter().any(|lib| *lib == "elephc_pdo") {
+                ld_cmd.args(["-framework", "CoreFoundation"]);
+                ld_cmd.args(["-framework", "SystemConfiguration"]);
+            }
+            let ld_out = ld_cmd.output().expect("failed to run linker");
+            assert!(
+                ld_out.status.success(),
+                "linker failed:\n{}",
+                String::from_utf8_lossy(&ld_out.stderr)
+            );
         }
         Platform::Linux => {
             let mut ld_cmd = Command::new(gcc_cmd());
@@ -173,8 +187,8 @@ pub(crate) fn link_binary(
             if !actual_link_libs.is_empty() {
                 ld_cmd.arg("-Wl,--no-as-needed");
             }
-            if needs_elephc_tls {
-                ld_cmd.arg(format!("-L{}", elephc_tls_dir));
+            if needs_bridge_staticlib {
+                ld_cmd.arg(format!("-L{}", bridge_staticlib_dir));
             }
             for path in extra_link_paths {
                 ld_cmd.arg(format!("-L{}", path));
@@ -187,13 +201,17 @@ pub(crate) fn link_binary(
             }
             // Math and POSIX regex libraries needed on Linux
             ld_cmd.args(["-lm", "-lpthread"]);
-            if needs_elephc_tls {
-                // rustls + ring + std::net pull in the dynamic loader for
-                // address resolution and the libc unwinder.
+            // rustls (elephc-tls) and the elephc-pdo bridge staticlib (PDO)
+            // both pull in the dynamic loader for the libc unwinder on Linux.
+            if needs_bridge_staticlib {
                 ld_cmd.arg("-ldl");
             }
-            let ld_status = ld_cmd.status().expect("failed to run linker");
-            assert!(ld_status.success(), "linker failed");
+            let ld_out = ld_cmd.output().expect("failed to run linker");
+            assert!(
+                ld_out.status.success(),
+                "linker failed:\n{}",
+                String::from_utf8_lossy(&ld_out.stderr)
+            );
         }
     }
 }

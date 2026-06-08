@@ -666,3 +666,54 @@ fn test_parse_dunder_function_magic_constant() {
         &ExprKind::MagicConstant(MagicConstant::Function)
     );
 }
+
+#[test]
+// Verifies that a trailing comma after the last call argument (PHP 7.3+) is accepted:
+// `<?php greet(1, 2,);` parses to a `FunctionCall` with exactly two arguments.
+/// Verifies that a trailing comma in a call argument list parses.
+fn test_parse_trailing_comma_in_call_args() {
+    let stmts = parse_source("<?php greet(1, 2,);");
+    if let StmtKind::ExprStmt(expr) = &stmts[0].kind {
+        if let ExprKind::FunctionCall { name, args } = &expr.kind {
+            assert_eq!(name.as_str(), "greet");
+            assert_eq!(args.len(), 2);
+        } else {
+            panic!("expected FunctionCall, got {:?}", expr.kind);
+        }
+    } else {
+        panic!("expected ExprStmt");
+    }
+}
+
+#[test]
+// Verifies that a trailing comma after the last parameter (PHP 8.0+) is accepted:
+// `<?php function foo($a, $b,) {}` parses to a `FunctionDecl` with two parameters.
+/// Verifies that a trailing comma in a parameter list parses.
+fn test_parse_trailing_comma_in_param_list() {
+    let stmts = parse_source("<?php function foo($a, $b,) { return $a; }");
+    if let StmtKind::FunctionDecl { name, params, .. } = &stmts[0].kind {
+        assert_eq!(name, "foo");
+        let param_names: Vec<&str> = params.iter().map(|(n, _, _, _)| n.as_str()).collect();
+        assert_eq!(param_names, &["a", "b"]);
+    } else {
+        panic!("expected FunctionDecl");
+    }
+}
+
+#[test]
+// Verifies that a single trailing comma after one argument is accepted:
+// `<?php greet(1,);` parses to a `FunctionCall` with exactly one argument.
+/// Verifies that a single-argument trailing comma in a call parses.
+fn test_parse_single_arg_trailing_comma_in_call() {
+    let stmts = parse_source("<?php greet(1,);");
+    if let StmtKind::ExprStmt(expr) = &stmts[0].kind {
+        if let ExprKind::FunctionCall { name, args } = &expr.kind {
+            assert_eq!(name.as_str(), "greet");
+            assert_eq!(args.len(), 1);
+        } else {
+            panic!("expected FunctionCall, got {:?}", expr.kind);
+        }
+    } else {
+        panic!("expected ExprStmt");
+    }
+}

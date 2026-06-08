@@ -160,13 +160,33 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `settype()`     | `settype($var, $type): bool` | Changes variable type in place |
 
 
+### Type narrowing
+
+Inside an `if` (or `if`/`elseif`*/`else` chain) guarded by a type predicate on a variable, that variable is narrowed to the tested type within the matching branch(es), so it can be used as that type without an explicit cast. `is_int()`, `is_float()`, `is_string()`, and `is_bool()` (and their aliases) narrow to the matching scalar, and `$x instanceof SomeClass` narrows to that class — including calling its methods. Each subsequent `elseif`, and the `else` branch, see the complement of all previous guards. The statements *after* the whole construct also see the complement when the chain is exhaustive by divergence — there is no `else` and *every* clause body always diverges (`return`, `throw`, `exit()`, `die()`, or a call to a `: never` function) — because reaching them means every guard was false. A leading `!` flips the then/else branches.
+
+```php
+function describe($x): string {        // $x may be int or a Point across call sites
+    if (is_int($x)) {
+        return "int " . ($x + 1);      // $x is int here
+    }
+    return "point " . $x->label();     // $x is the object here
+}
+```
+
+Narrowing is not tracked across a reassignment of the variable inside the branch.
+
+Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
+
+
 ### Known incompatibilities with PHP
 
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
-- Integer `+`, `-`, and `*` overflow promotes to `double` for both constant-folded and non-folded runtime scalar arithmetic.
+- Integer `+`, `-`, and `*` overflow promotes to `float` only for **constant-folded** arithmetic (compile-time-constant operands), matching PHP. At **runtime**, `int op int` has the static type `int`, so an overflowing operation does **not** promote to `float`: the result is clamped toward the 64-bit integer boundary and `is_float()` stays `false`, whereas PHP returns a `float`. Promoting at runtime would require boxing every arithmetic result, which elephc's unboxed scalar representation avoids. For the same reason, `intval()`/`(int)` of an integer-valued string near the 64-bit boundary (e.g. `intval("9223372036854775807")`) is lossy.
+- Converting an array to a string (via `.` concatenation, `echo`, or string interpolation) yields the literal `"Array"`, matching PHP's value, but elephc does not emit PHP's `E_WARNING` "Array to string conversion".
 - Scalar loose comparison (`==`, `!=`) follows PHP-style bool truthiness, null-vs-empty-string, numeric-string, and non-numeric string byte-comparison rules for constant-folded literals and non-folded runtime scalar operands.
 - `??=` is checked against typed assignment storage for variables, object properties, static properties, and non-append array elements. For concrete local variable types, the fallback must keep the same type or be a literal `null`.
 - Plain array numeric casts (`(int)$array`, `(float)$array`) follow elephc's existing array cast semantics (return the element count rather than PHP's `0`/`1`). Direct `iterable` numeric casts use PHP's empty/non-empty `0`/`1` semantics.
+- `__destruct` runs when an object's refcount reaches zero (scope exit, reassignment, `unset`, program end), matching PHP's timing, but **object resurrection is not supported**: re-storing `$this` so the object would outlive the destructor does not keep it alive — the object is still freed once `__destruct` returns.
 ### Filesystem functions not implemented
 
 These standard PHP filesystem functions are intentionally absent from elephc because they have no meaningful semantics in a compiled native binary:

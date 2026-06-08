@@ -1,2 +1,3 @@
 settings.local.json
 worktrees/
+scheduled_tasks.lock

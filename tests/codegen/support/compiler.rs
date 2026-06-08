@@ -53,6 +53,7 @@ pub(crate) fn compile_source_to_asm_with_defines(
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::pdo_prelude::inject_if_used(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
@@ -61,6 +62,10 @@ pub(crate) fn compile_source_to_asm_with_defines(
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let requires_elephc_tls = check_result
+        .required_libraries
+        .iter()
+        .any(|lib| lib == "elephc_tls");
     let (user_asm, runtime_asm) = elephc::codegen::generate(
         &optimized,
         &check_result.global_env,
@@ -79,6 +84,7 @@ pub(crate) fn compile_source_to_asm_with_defines(
         gc_stats,
         heap_debug,
         target(),
+        requires_elephc_tls,
     );
     let runtime_features =
         elephc::codegen::runtime_features_for_program_and_classes(&optimized, &check_result.classes);

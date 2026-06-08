@@ -162,6 +162,7 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // discard the string-lookup out slots
     emitter.instruction("ldr x2, [sp], #16");                                   // restore port
     emitter.instruction("ldp x0, x1, [sp], #16");                               // restore host_ptr/host_len
+    emitter.instruction("cbz x9, __rt_https_open_fail");                        // missing elephc-tls runtime means HTTPS open fails closed
     emitter.instruction("blr x9");                                              // open the TLS session, x0 = handle
     emitter.instruction("cmp x0, #0");                                          // did the TLS handshake fail?
     emitter.instruction("b.lt __rt_https_open_fail");                           // negative handle means TLS connect failed
@@ -392,6 +393,8 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_https_open_have_fn_x");
 
     // -- connect(host, host_len, port, cafile_ptr, cafile_len) — through r9 --
+    emitter.instruction("test r9, r9");                                         // missing elephc-tls runtime means HTTPS open fails closed
+    emitter.instruction("jz __rt_https_open_fail_x86");                         // return a failed HTTPS stream when no TLS entry is available
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // arg 0 = host pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // arg 1 = host length
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // arg 2 = port (rcx/r8 hold cafile args)

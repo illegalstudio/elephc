@@ -272,6 +272,30 @@ impl Checker {
         }
     }
 
+    /// Returns the single distinct object class in a union receiver, ignoring any
+    /// non-object members (scalars, `void`).
+    ///
+    /// Returns `None` when the type is not a union, or the union has zero or more
+    /// than one distinct object class. Used to allow regular `->` method calls on
+    /// unions such as `Foo|false`: codegen dispatches on the runtime class id and
+    /// faults like PHP when the value is not an object, so the checker only needs
+    /// the single object class to surface the method's return type.
+    pub(crate) fn union_single_object_class(&self, obj_ty: &PhpType) -> Option<String> {
+        let PhpType::Union(members) = obj_ty else {
+            return None;
+        };
+        let mut found: Option<String> = None;
+        for member in members {
+            if let PhpType::Object(name) = member {
+                match &found {
+                    Some(existing) if existing != name => return None,
+                    _ => found = Some(name.clone()),
+                }
+            }
+        }
+        found
+    }
+
     /// Infers the type of a static property access (`Foo::$prop`).
     ///
     /// Resolves the static receiver (named, `self::`, `static::`, `parent::`)

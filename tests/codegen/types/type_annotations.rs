@@ -275,6 +275,88 @@ fn test_union_typed_parameter_accepts_multiple_types() {
     assert_eq!(out, "integer:1|string:ok");
 }
 
+/// Regression: an untyped parameter called from distinct sites with incompatible types
+/// (`int` then `string`) must be inferred as a union (`Mixed` at the ABI) so each argument
+/// keeps its own runtime type. Before the fix `f(5)` reported "other" because the integer
+/// argument was coerced to a string at the call site to match the last-seen parameter type.
+#[test]
+fn test_untyped_parameter_heterogeneous_calls_infer_union() {
+    let out = compile_and_run(
+        "<?php
+        function f($x): string { return is_int($x) ? \"int\" : \"other\"; }
+        echo f(5), \"|\", f(\"s\");
+        ",
+    );
+    assert_eq!(out, "int|other");
+}
+
+/// Regression: each argument to a heterogeneously-called untyped parameter keeps its own
+/// runtime type. `gettype` reports `integer` for the int call and `string` for the string call;
+/// before the fix the integer argument was coerced to a string, so both reported `string`.
+#[test]
+fn test_untyped_parameter_heterogeneous_calls_keep_runtime_type() {
+    let out = compile_and_run(
+        "<?php
+        function f($x): string { return gettype($x); }
+        echo f(5), \"|\", f(\"hello\");
+        ",
+    );
+    assert_eq!(out, "integer|string");
+}
+
+/// Regression: a `string` argument to a heterogeneously-called untyped parameter is still a
+/// real string at runtime, so `is_string`/`strlen` see it correctly rather than a boxed int.
+#[test]
+fn test_untyped_parameter_heterogeneous_calls_preserve_string_value() {
+    let out = compile_and_run(
+        "<?php
+        function f($x): int { return is_string($x) ? strlen($x) : -1; }
+        echo f(\"abc\"), \"|\", f(5);
+        ",
+    );
+    assert_eq!(out, "3|-1");
+}
+
+/// Regression: untyped parameters called only with integers keep the `Int` fallback rather
+/// than widening to a union, so existing int-only inference (and `is_int`) is preserved.
+#[test]
+fn test_untyped_parameter_homogeneous_int_calls_stay_int() {
+    let out = compile_and_run(
+        "<?php
+        function f($x): string { return is_int($x) ? \"i\" : \"n\"; }
+        echo f(1), f(2), f(3);
+        ",
+    );
+    assert_eq!(out, "iii");
+}
+
+/// Regression: the same heterogeneous-call union inference applies to instance method
+/// parameters, so each argument to a method called with incompatible types keeps its runtime
+/// type. Before the fix the method parameter was specialized to the last-seen type.
+#[test]
+fn test_untyped_method_parameter_heterogeneous_calls_keep_runtime_type() {
+    let out = compile_and_run(
+        "<?php
+        class C { public function t($x): string { return gettype($x); } }
+        $c = new C();
+        echo $c->t(5), \"|\", $c->t(\"hello\");
+        ",
+    );
+    assert_eq!(out, "integer|string");
+}
+
+/// Regression: heterogeneous-call union inference also applies to static method parameters.
+#[test]
+fn test_untyped_static_method_parameter_heterogeneous_calls_keep_runtime_type() {
+    let out = compile_and_run(
+        "<?php
+        class C { public static function t($x): string { return gettype($x); } }
+        echo C::t(5), \"|\", C::t(\"hello\");
+        ",
+    );
+    assert_eq!(out, "integer|string");
+}
+
 /// Verifies a nullable return type `?int` boxes an integer result and a `null` result,
 /// with `is_null()` correctly identifying the null case at runtime.
 #[test]

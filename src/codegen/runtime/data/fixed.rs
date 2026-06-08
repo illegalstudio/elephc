@@ -460,6 +460,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // the http_stream lowering when context options can override the
     // default method.
     out.push_str(".comm _http_req_scratch, 8192, 3\n");
+    out.push_str(".comm _fgc_url_addr, 512, 3\n");
+    out.push_str(".comm _fgc_url_retr, 2048, 3\n");
+    out.push_str(".globl _fgc_url_slash\n_fgc_url_slash:\n    .ascii \"/\"\n");
     out.push_str(".comm _https_resp_buf, 1048576, 3\n");
     out.push_str(".comm _fsockopen_addr, 512, 3\n");
     // _user_wrappers: USER_WRAPPER_REGISTRATIONS_CAP = 64 scheme→class

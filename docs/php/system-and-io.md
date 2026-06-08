@@ -144,7 +144,7 @@ wrappers are documented in [Streams](streams.md).
 
 | Function | Signature | Description |
 |---|---|---|
-| `file_get_contents()` | `file_get_contents($filename): string\|false` | Read entire file, or `false` if the file cannot be opened |
+| `file_get_contents()` | `file_get_contents($filename): string\|false` | Read an entire file, or `false` if it cannot be opened. A literal `phar://` URL is decoded at compile time; non-literal `phar://` is read at runtime for uncompressed entries. Literal and runtime-string `http://`, `https://`, `ftp://`, and `ftps://` URLs open the matching wrapper, read the whole body, and return it (`false` on a failed open). |
 | `file_put_contents()` | `file_put_contents($filename, $data): int` | Write file |
 | `file()` | `file($filename): array` | Read into array of lines |
 | `file_exists()` | `file_exists($filename): bool` | Check exists |

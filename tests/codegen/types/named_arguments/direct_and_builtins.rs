@@ -214,6 +214,41 @@ echo ":" . str_repeat(times: times_arg(), string: string_arg());
     assert_eq!(out, "ts:hahaha");
 }
 
+/// Verifies that a trailing comma after the last call argument (PHP 7.3+) and after the last
+/// parameter (PHP 8.0+) is accepted across every call/declaration surface — top-level function,
+/// method, static method, `new`, and closure — by summing values; outputs "11" (3+2+2+2+2).
+#[test]
+fn test_trailing_comma_across_call_surfaces() {
+    let out = compile_and_run(
+        r#"<?php
+function add($a, $b,) {
+    return $a + $b;
+}
+class Calc {
+    public function sum($a, $b,) {
+        return $a + $b;
+    }
+    public static function smul($a, $b,) {
+        return $a * $b;
+    }
+}
+class Pair {
+    public $total;
+    public function __construct($a, $b,) {
+        $this->total = $a + $b;
+    }
+}
+$c = new Calc();
+$p = new Pair(1, 1,);
+$mul = function ($a, $b,) {
+    return $a * $b;
+};
+echo add(1, 2,) + $c->sum(1, 1,) + Calc::smul(1, 2,) + $p->total + $mul(1, 2,);
+"#,
+    );
+    assert_eq!(out, "11");
+}
+
 /// Verifies that a spread argument is evaluated exactly once when followed by named arguments;
 /// `str_repeat(...args(), times: times_arg())` outputs "xt:hahaha" (x printed once from args, t from times_arg).
 #[test]

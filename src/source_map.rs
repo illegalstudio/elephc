@@ -66,12 +66,44 @@ pub fn write_source_map(
 }
 
 /// Escapes a string for use inside a JSON value: backslashes, quotes, and control
-/// characters are prefixed with backslashes so the result is valid JSON text.
+/// characters are escaped so the result is valid JSON text (RFC 8259 §7). All control
+/// characters below 0x20 are escaped — `\b`/`\f`/`\n`/`\r`/`\t` use their short forms,
+/// any other control char uses a `\u00XX` sequence.
 fn escape_json(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
+    let mut out = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies control characters below 0x20 are escaped per RFC 8259: backspace/form-feed
+    /// use their short forms and other control chars (vertical tab, ESC) use `\u00XX`, so a
+    /// path containing such bytes still produces valid JSON instead of raw control bytes.
+    #[test]
+    fn escapes_control_characters() {
+        let escaped = escape_json("a\u{08}b\u{0c}c\u{0b}d\u{1b}e");
+        assert_eq!(escaped, "a\\bb\\fc\\u000bd\\u001be");
+    }
+
+    /// Verifies the previously handled cases (backslash, quote, newline, tab) still escape.
+    #[test]
+    fn escapes_quotes_backslashes_and_whitespace() {
+        let escaped = escape_json("a\\b\"c\nd\te");
+        assert_eq!(escaped, "a\\\\b\\\"c\\nd\\te");
+    }
 }

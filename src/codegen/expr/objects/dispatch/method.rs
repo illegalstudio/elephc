@@ -128,6 +128,16 @@ pub(in crate::codegen::expr::objects) fn emit_method_call(
     let class_name = match functions::singular_object_class(&obj_ty) {
         Some(cn) => cn.to_string(),
         None => {
+            // No single static class. When the receiver could be an object at
+            // runtime (a `Mixed` value, or a union of object classes), dispatch
+            // on the runtime class id instead of giving up.
+            let method_key = php_symbol_key(method);
+            let candidates = dynamic_dispatch_candidates(&obj_ty, &method_key, ctx);
+            if !candidates.is_empty() {
+                return emit_dynamic_method_call(
+                    object, method, args, &candidates, emitter, ctx, data,
+                );
+            }
             emitter.comment("WARNING: method call on non-object");
             return PhpType::Int;
         }
@@ -195,6 +205,151 @@ pub(in crate::codegen::expr::objects) fn emit_method_call(
         emitter,
         ctx,
     )
+}
+
+/// Collects the candidate classes for a dynamic method call whose receiver type
+/// does not name a single class.
+///
+/// For a `Mixed` receiver every class that defines `method_key` is a candidate;
+/// for a union, the object members that define it are. Returns `(class_name,
+/// class_id)` pairs sorted by class id (and de-duplicated) so the emitted dispatch
+/// chain is deterministic.
+fn dynamic_dispatch_candidates(
+    obj_ty: &PhpType,
+    method_key: &str,
+    ctx: &Context,
+) -> Vec<(String, u64)> {
+    // A class is a usable candidate only when it declares the method and that
+    // method is a normal vtable method, not an intrinsic. Intrinsic methods
+    // (e.g. SPL containers) carry their own argument shapes and special lowering,
+    // so a single shared argument layout cannot serve them — including them would
+    // corrupt the call. Their classes are excluded; a `Mixed` value holding such
+    // an object faults cleanly as "undefined method" rather than miscompiling.
+    let dispatchable = |name: &str| -> bool {
+        ctx.classes
+            .get(name)
+            .is_some_and(|info| info.methods.contains_key(method_key))
+            && IntrinsicCall::instance_method(name, method_key).is_none()
+    };
+    let mut out: Vec<(String, u64)> = Vec::new();
+    match obj_ty {
+        PhpType::Mixed => {
+            for (name, info) in &ctx.classes {
+                if dispatchable(name) {
+                    out.push((name.clone(), info.class_id));
+                }
+            }
+        }
+        PhpType::Union(members) => {
+            for member in members {
+                if let PhpType::Object(name) = member {
+                    if dispatchable(name) {
+                        if let Some(info) = ctx.classes.get(name) {
+                            out.push((name.clone(), info.class_id));
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out.sort_by_key(|(_, id)| *id);
+    out.dedup_by_key(|(_, id)| *id);
+    out
+}
+
+/// Lowers a method call on a receiver whose static type does not name a single
+/// class by dispatching on the receiver's runtime class id.
+///
+/// The receiver is evaluated once and unboxed to an object pointer (fataling if
+/// the runtime value is not an object). Arguments are laid out once using the
+/// first candidate's signature. For each candidate class the runtime class id is
+/// compared and, on a match, the call is lowered through the normal static
+/// dispatch path for that class (only one branch runs, so the saved receiver and
+/// argument temporaries are consumed exactly once). An unmatched class id fatals.
+/// Returns the first candidate's return type; same-named methods are expected to
+/// share a return representation.
+fn emit_dynamic_method_call(
+    object: &Expr,
+    method: &str,
+    args: &[Expr],
+    candidates: &[(String, u64)],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment(&format!("dynamic ->{}() dispatch on runtime class id", method));
+    let method_key = php_symbol_key(method);
+
+    let _ = emit_expr(object, emitter, ctx, data);
+    let on_non_object = format!(
+        "Fatal error: Call to a member function {}() on a non-object\n",
+        method
+    );
+    super::super::emit_unbox_mixed_object_strict_or_fatal(
+        on_non_object.as_bytes(),
+        emitter,
+        ctx,
+        data,
+    );
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // save the object receiver below later argument temporaries
+
+    let sig = ctx
+        .classes
+        .get(&candidates[0].0)
+        .and_then(|class_info| class_info.methods.get(&method_key))
+        .cloned();
+    let emitted_args = eval_and_push_args(args, sig.as_ref(), emitter, ctx, data);
+    let arg_types = emitted_args.arg_types;
+    let source_temp_bytes = emitted_args.source_temp_bytes;
+
+    let arg_temp_bytes = pushed_arg_temp_bytes(&arg_types) + source_temp_bytes;
+    let recv_reg = abi::symbol_scratch_reg(emitter);
+    let class_id_reg = abi::secondary_scratch_reg(emitter);
+    let imm_reg = abi::tertiary_scratch_reg(emitter);
+    abi::emit_load_temporary_stack_slot(emitter, recv_reg, arg_temp_bytes);     // peek the saved object receiver beneath the argument temporaries
+    abi::emit_load_from_address(emitter, class_id_reg, recv_reg, 0);            // load the runtime class id from the object header
+
+    let done = ctx.next_label("dyn_dispatch_done");
+    let mut ret_ty = PhpType::Mixed;
+    for (index, (class_name, class_id)) in candidates.iter().enumerate() {
+        let next = ctx.next_label("dyn_dispatch_next");
+        abi::emit_load_int_immediate(emitter, imm_reg, *class_id as i64);
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("cmp {}, {}", class_id_reg, imm_reg)); // compare the runtime class id with this candidate class
+                emitter.instruction(&format!("b.ne {}", next));                 // try the next candidate when the class id differs
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("cmp {}, {}", class_id_reg, imm_reg)); // compare the runtime class id with this candidate class
+                emitter.instruction(&format!("jne {}", next));                  // try the next candidate when the class id differs
+            }
+        }
+        let branch_ret = emit_method_call_with_saved_receiver_below_args(
+            class_name,
+            &method_key,
+            &arg_types,
+            source_temp_bytes,
+            emitter,
+            ctx,
+        );
+        if index == 0 {
+            ret_ty = branch_ret;
+        }
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("b {}", done));                    // the matched candidate handled the call
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("jmp {}", done));                  // the matched candidate handled the call
+            }
+        }
+        emitter.label(&next);
+    }
+    let undefined = format!("Fatal error: Call to undefined method {}()\n", method);
+    super::super::emit_fatal_str(&undefined, emitter, data);
+    emitter.label(&done);
+    ret_ty
 }
 
 /// Constructs a synthetic `FunctionSig` for `Fiber::start` calls where argument

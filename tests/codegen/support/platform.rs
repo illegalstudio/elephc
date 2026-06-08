@@ -86,6 +86,9 @@ pub(crate) fn default_link_paths() -> Vec<String> {
             }
         }
     }
+    // The elephc-tls / elephc-pdo bridge staticlib directory is added directly by
+    // `link_binary` (an absolute, manifest-anchored `-L` keyed on the program
+    // actually linking a bridge), so it does not need to be threaded through here.
     paths
 }
 

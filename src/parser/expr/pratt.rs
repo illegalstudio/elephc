@@ -411,8 +411,8 @@ enum ObjectMember {
 /// Handles three forms:
 /// - Static identifier: `->foo`
 /// - Dynamic expression in braces: `->{$expr}`
-/// - PHP 7+ reserved keywords allowed as member names: `throw`, `yield`, `match`,
-///   `print`, `echo`, `return`
+/// - PHP 8 semi-reserved keywords as member names: any keyword (e.g. `->self`, `->parent`,
+///   `->static`, `->class`, `->list`, `->print`) is accepted via the shared bareword mapper.
 ///
 /// Returns `ObjectMember::Named` for identifiers and keywords, or
 /// `ObjectMember::Dynamic` for brace-enclosed expressions.
@@ -426,56 +426,31 @@ fn parse_object_member(
     arrow_span: Span,
     nullsafe: bool,
 ) -> Result<ObjectMember, CompileError> {
-    match tokens.get(*pos).map(|(token, _)| token) {
-        Some(Token::Identifier(name)) => {
-            let name = name.clone();
-            *pos += 1;
-            Ok(ObjectMember::Named(name))
+    if let Some((Token::LBrace, _)) = tokens.get(*pos) {
+        *pos += 1;
+        let property = parse_expr(tokens, pos)?;
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::RBrace {
+            return Err(CompileError::new(arrow_span, "Expected '}'"));
         }
-        Some(Token::LBrace) => {
-            *pos += 1;
-            let property = parse_expr(tokens, pos)?;
-            if *pos >= tokens.len() || tokens[*pos].0 != Token::RBrace {
-                return Err(CompileError::new(arrow_span, "Expected '}'"));
-            }
-            *pos += 1;
-            Ok(ObjectMember::Dynamic(property))
-        }
-        // PHP 7+ allows reserved keywords as method/property names after `->`.
-        // Keep the whitelist to the keywords already accepted by static property parsing.
-        Some(Token::Throw) => {
-            *pos += 1;
-            Ok(ObjectMember::Named("throw".to_string()))
-        }
-        Some(Token::Yield) => {
-            *pos += 1;
-            Ok(ObjectMember::Named("yield".to_string()))
-        }
-        Some(Token::Match) => {
-            *pos += 1;
-            Ok(ObjectMember::Named("match".to_string()))
-        }
-        Some(Token::Print) => {
-            *pos += 1;
-            Ok(ObjectMember::Named("print".to_string()))
-        }
-        Some(Token::Echo) => {
-            *pos += 1;
-            Ok(ObjectMember::Named("echo".to_string()))
-        }
-        Some(Token::Return) => {
-            *pos += 1;
-            Ok(ObjectMember::Named("return".to_string()))
-        }
-        _ => Err(CompileError::new(
-            arrow_span,
-            if nullsafe {
-                "Expected property or method name after '?->'"
-            } else {
-                "Expected property or method name after '->'"
-            },
-        )),
+        *pos += 1;
+        return Ok(ObjectMember::Dynamic(property));
     }
+    // PHP 8 allows identifiers and any semi-reserved keyword as a member name after `->`/`?->`.
+    if let Some(name) = tokens
+        .get(*pos)
+        .and_then(|(token, _)| crate::parser::keyword_name::bareword_name_from_token(token))
+    {
+        *pos += 1;
+        return Ok(ObjectMember::Named(name));
+    }
+    Err(CompileError::new(
+        arrow_span,
+        if nullsafe {
+            "Expected property or method name after '?->'"
+        } else {
+            "Expected property or method name after '->'"
+        },
+    ))
 }
 
 /// Represents the specific assignment operator encountered during parsing.

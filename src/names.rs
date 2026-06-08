@@ -191,9 +191,11 @@ pub fn php_symbol_key(name: &str) -> String {
 
 /// Returns an assembly-safe mangled form of a fully-qualified name.
 ///
-/// Replaces non-alphanumeric characters: `_` → `_u_`, `\` → `_N_`. Alphanumeric
-/// characters and digits are preserved. Panics on unsupported characters.
-/// Used to produce valid assembly labels from PHP FQNs.
+/// ASCII letters and digits are preserved; `_` → `_u_` and `\` → `_N_`. Any other
+/// character (including the non-ASCII bytes PHP permits in identifiers) is escaped as
+/// one `_xNN_` group per UTF-8 byte. The `_x` prefix cannot collide with the `_u_`/`_N_`
+/// escapes, so the mapping stays injective. Total by construction — never panics — so
+/// an unusual symbol name can never crash the compiler.
 pub fn mangle_fqn(name: &str) -> String {
     let mut mangled = String::new();
     for ch in name.chars() {
@@ -201,10 +203,49 @@ pub fn mangle_fqn(name: &str) -> String {
             'A'..='Z' | 'a'..='z' | '0'..='9' => mangled.push(ch),
             '_' => mangled.push_str("_u_"),
             '\\' => mangled.push_str("_N_"),
-            _ => panic!("unsupported symbol character in mangled name: {}", ch),
+            other => {
+                let mut buf = [0u8; 4];
+                for byte in other.encode_utf8(&mut buf).bytes() {
+                    mangled.push_str(&format!("_x{:02x}_", byte));
+                }
+            }
         }
     }
     mangled
+}
+
+#[cfg(test)]
+mod mangle_tests {
+    use super::*;
+
+    /// Verifies the existing `_u_`/`_N_` escapes for underscore and namespace separator
+    /// are preserved unchanged by the mangling.
+    #[test]
+    fn mangle_fqn_preserves_existing_escapes() {
+        assert_eq!(mangle_fqn("foo"), "foo");
+        assert_eq!(mangle_fqn("foo_bar"), "foo_u_bar");
+        assert_eq!(mangle_fqn("A\\B"), "A_N_B");
+    }
+
+    /// Verifies a non-ASCII identifier (legal in PHP) mangles into a valid assembly label
+    /// instead of panicking, so unsupported characters can never crash the compiler.
+    #[test]
+    fn mangle_fqn_escapes_non_ascii_without_panicking() {
+        let mangled = mangle_fqn("价格");
+        assert!(
+            mangled.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "mangled name must be an assembler-safe label, got {mangled}"
+        );
+    }
+
+    /// Verifies distinct names mangle to distinct labels, so escaping does not collapse
+    /// different symbols onto the same assembly label.
+    #[test]
+    fn mangle_fqn_distinguishes_distinct_names() {
+        assert_ne!(mangle_fqn("价"), mangle_fqn("格"));
+        assert_ne!(mangle_fqn("价"), mangle_fqn("a"));
+        assert_ne!(mangle_fqn("a_b"), mangle_fqn("a\\b"));
+    }
 }
 
 /// Returns the global function symbol label for a given PHP function name.

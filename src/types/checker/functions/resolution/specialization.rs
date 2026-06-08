@@ -220,26 +220,40 @@ impl Checker {
                     .get(seen_idx)
                     .copied()
                     .unwrap_or(false)
-                && param_types[seen_idx].1 == PhpType::Int
-                && should_replace_int_fallback_param(&actual_ty)
+                && !matches!(
+                    actual_ty,
+                    PhpType::Void | PhpType::Never | PhpType::Callable
+                )
             {
-                param_types[seen_idx].1 = actual_ty;
-                changed = true;
+                let key = (name.to_string(), seen_idx);
+                let seen = self.param_specialization_seen.contains(&key);
+                if param_types[seen_idx].1 == PhpType::Int && !seen {
+                    // Discard the `Int` fallback exactly once: adopt the type of the
+                    // first call so an all-`Str` (etc.) parameter is not polluted by
+                    // unioning the fallback. The seen set marks the discard so a real
+                    // later int call still widens instead of re-adopting.
+                    self.param_specialization_seen.insert(key);
+                    if param_types[seen_idx].1 != actual_ty {
+                        param_types[seen_idx].1 = actual_ty.clone();
+                        changed = true;
+                    }
+                } else {
+                    // Widen to the union so heterogeneous call sites become `Mixed`
+                    // rather than a single (wrong) type. A no-op for an already-`Mixed`
+                    // or patched parameter (so e.g. `Generator::send`'s value stays
+                    // `Mixed`).
+                    let widened = Self::union_param_type(&param_types[seen_idx].1, &actual_ty);
+                    if param_types[seen_idx].1 != widened {
+                        param_types[seen_idx].1 = widened;
+                        changed = true;
+                    }
+                }
             }
             seen_idx += 1;
         }
 
         Ok(changed.then_some(param_types))
     }
-}
-
-/// Returns true if an undeclared parameter with `Int` fallback type should be replaced
-/// with the actual argument type during call-site specialization.
-///
-/// Types that should NOT trigger replacement: `Int`, `Bool`, `Void`.
-/// All other types trigger replacement of the `Int` fallback.
-fn should_replace_int_fallback_param(actual_ty: &PhpType) -> bool {
-    !matches!(actual_ty, PhpType::Int | PhpType::Bool | PhpType::Void)
 }
 
 /// Returns true when a call argument is an array whose elements are callable descriptors.

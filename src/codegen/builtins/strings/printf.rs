@@ -140,13 +140,13 @@ pub fn emit(
             emitter.instruction("mov x0, x2");                                  // return char count
         }
         Arch::X86_64 => {
-            emitter.instruction("mov rcx, rdx");                                // preserve the formatted byte count across the x86_64 write syscall sequence
+            emitter.instruction("mov r8, rdx");                                 // preserve the byte count in r8; the syscall instruction clobbers rcx
             emitter.instruction("mov rsi, rax");                                // move the formatted string pointer into the SysV write buffer register
-            emitter.instruction("mov rdx, rcx");                                // move the formatted string length into the SysV write byte-count register
+            emitter.instruction("mov rdx, r8");                                 // move the formatted string length into the SysV write byte-count register
             emitter.instruction("mov edi, 1");                                  // fd = stdout for the Linux x86_64 write syscall
             emitter.instruction("mov eax, 1");                                  // syscall 1 = write on Linux x86_64
             emitter.instruction("syscall");                                     // write the formatted bytes to stdout through the Linux x86_64 syscall ABI
-            emitter.instruction("mov rax, rcx");                                // return the number of bytes written in the primary x86_64 integer result register
+            emitter.instruction("mov rax, r8");                                 // return the byte count (rcx was destroyed by syscall)
         }
     }
 

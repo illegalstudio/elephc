@@ -36,10 +36,30 @@ echo 'It\'s here';   // prints: It's here
 
 ## String interpolation
 
+Double-quoted strings and heredocs interpolate variables. Both the simple and complex
+syntaxes are supported:
+
 ```php
 <?php
 $name = "World";
-echo "Hello, $name\n";
+echo "Hello, $name\n";          // simple: $variable
+
+$user = ["name" => "Ada", "age" => 36];
+echo "Name: $user[name]\n";     // simple: one $var[offset] (bareword key, no quotes)
+
+class Point { public int $x = 1; }
+$p = new Point();
+echo "x = $p->x\n";             // simple: one $var->prop
+
+echo "Sum: {$user['age']}\n";   // complex: {$expr} allows full expressions
+```
+
+Variable and identifier names may contain non-ASCII letters, matching PHP:
+
+```php
+<?php
+$café = "espresso";
+echo "Order: $café\n";
 ```
 
 ## Heredoc strings
@@ -52,6 +72,30 @@ echo <<<EOT
 Hello World
 This is line 2
 EOT;
+```
+
+The closing label closes the heredoc when it is at the start of a line and followed by any
+non-identifier character, so a heredoc can be used as an expression — for example as a
+function argument or in a concatenation:
+
+```php
+<?php
+echo strtoupper(<<<EOT
+hello
+EOT) . "!";
+```
+
+PHP 7.3+ flexible (indented) heredocs are supported: the closing marker may be indented,
+and that indentation is stripped from every body line.
+
+```php
+<?php
+function describe(): string {
+    return <<<EOT
+        line one
+        line two
+        EOT;   // -> "line one\nline two"
+}
 ```
 
 ## Nowdoc strings

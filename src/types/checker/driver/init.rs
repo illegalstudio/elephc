@@ -75,6 +75,7 @@ impl Checker {
             callable_sigs: HashMap::new(),
             callable_param_names: HashSet::new(),
             callable_param_sigs: HashMap::new(),
+            param_specialization_seen: HashSet::new(),
             callable_return_sigs: HashMap::new(),
             callable_array_return_sigs: HashMap::new(),
             callable_captures: HashMap::new(),

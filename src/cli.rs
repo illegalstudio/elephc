@@ -79,10 +79,14 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             emit_source_map = true;
         } else if arg == "--define" {
             i += 1;
-            defines.insert(required_value(args, i, "Missing symbol after --define"));
+            let symbol = required_value(args, i, "Missing symbol after --define");
+            if let Err(message) = validate_define_symbol(&symbol) {
+                fail(message);
+            }
+            defines.insert(symbol);
         } else if let Some(symbol) = arg.strip_prefix("--define=") {
-            if symbol.is_empty() {
-                fail("Invalid --define: symbol cannot be empty");
+            if let Err(message) = validate_define_symbol(symbol) {
+                fail(message);
             }
             defines.insert(symbol.to_string());
         } else if arg == "--link" || arg == "-l" {
@@ -176,9 +180,38 @@ fn required_value(args: &[String], index: usize, message: &str) -> String {
     }
 }
 
+/// Validates an ifdef symbol supplied via `--define`, rejecting an empty symbol.
+///
+/// Kept pure (no IO/exit) so both the `--define SYMBOL` and `--define=SYMBOL` forms
+/// can share one consistent rule and the rejection can be unit-tested.
+fn validate_define_symbol(symbol: &str) -> Result<(), &'static str> {
+    if symbol.is_empty() {
+        return Err("Invalid --define: symbol cannot be empty");
+    }
+    Ok(())
+}
+
 /// Prints a message to stderr and exits the process with code 1.
 /// Never returns.
 fn fail(message: &str) -> ! {
     eprintln!("{}", message);
     process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies an empty `--define` symbol is rejected, matching the `--define=` form,
+    /// so the two spellings no longer behave inconsistently.
+    #[test]
+    fn empty_define_symbol_is_rejected() {
+        assert!(validate_define_symbol("").is_err());
+    }
+
+    /// Verifies a normal `--define` symbol is accepted.
+    #[test]
+    fn non_empty_define_symbol_is_accepted() {
+        assert!(validate_define_symbol("FEATURE").is_ok());
+    }
 }

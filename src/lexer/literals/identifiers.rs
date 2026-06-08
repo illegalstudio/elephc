@@ -12,6 +12,19 @@ use super::super::cursor::Cursor;
 use super::super::token::Token;
 use crate::errors::CompileError;
 
+/// Returns true if `c` may start a PHP identifier: an ASCII letter, `_`, or any
+/// non-ASCII character. PHP allows identifier bytes 0x80-0xFF, so names like `$café`
+/// and `function 价格()` are valid; a non-ASCII codepoint encodes to such bytes.
+pub(in crate::lexer) fn is_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()
+}
+
+/// Returns true if `c` may continue a PHP identifier: an ASCII alphanumeric, `_`, or any
+/// non-ASCII character. Matches PHP's `[a-zA-Z0-9_\x80-\xff]*` continuation class.
+pub(in crate::lexer) fn is_ident_continue(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii()
+}
+
 /// Scans a PHP variable (`$name`), consuming the leading `$` and collecting the
 /// identifier name. Returns `Token::This` for `$this`, or `Token::Variable(name)`
 /// otherwise. Leaves the cursor positioned after the last valid identifier character.
@@ -20,7 +33,7 @@ pub(in crate::lexer) fn scan_variable(cursor: &mut Cursor) -> Result<Token, Comp
     let mut name = String::new();
 
     while let Some(ch) = cursor.peek() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
+        if is_ident_continue(ch) {
             name.push(ch);
             cursor.advance();
         } else {
@@ -49,7 +62,7 @@ pub(in crate::lexer) fn scan_keyword(cursor: &mut Cursor) -> Result<Token, Compi
     let mut word = String::new();
 
     while let Some(ch) = cursor.peek() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
+        if is_ident_continue(ch) {
             word.push(ch);
             cursor.advance();
         } else {

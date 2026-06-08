@@ -231,16 +231,15 @@ pub(super) fn check_types_impl(
     apply_implicit_stringable_interfaces(&mut checker.classes);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
-    for ((stmt, initial_errors), final_errors) in program
-        .iter()
-        .zip(initial_top_level_errors.into_iter())
+    for (initial_errors, final_errors) in initial_top_level_errors
+        .into_iter()
         .zip(final_top_level_errors.into_iter())
     {
         if !final_errors.is_empty() {
             errors.extend(final_errors);
             continue;
         }
-        if !Checker::can_suppress_initial_top_level_errors(stmt, &initial_errors) {
+        if !Checker::can_suppress_initial_top_level_errors(&initial_errors) {
             errors.extend(initial_errors);
         }
     }

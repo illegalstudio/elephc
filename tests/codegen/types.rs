@@ -16,6 +16,8 @@ mod return_inference;
 mod enums;
 #[path = "types/type_annotations.rs"]
 mod type_annotations;
+#[path = "types/narrowing.rs"]
+mod narrowing;
 #[path = "types/named_arguments/mod.rs"]
 mod named_arguments;
 #[path = "types/examples.rs"]

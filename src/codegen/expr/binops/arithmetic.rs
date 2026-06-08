@@ -16,7 +16,7 @@ use super::target::{
     emit_float_binop, emit_promote_int_to_float, emit_set_bool_from_flags,
 };
 use super::super::{
-    coerce_null_to_zero, coerce_to_string, coerce_to_truthiness, emit_expr,
+    coerce_null_to_zero, coerce_to_string_releasing_owned, coerce_to_truthiness, emit_expr,
     expr_result_heap_ownership, string_result_is_owned_call_temp,
     string_result_uses_transient_concat_buffer, BinOp, Expr, PhpType,
 };
@@ -386,7 +386,13 @@ pub(super) fn emit_concat_binop(
     data: &mut DataSection,
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
-    coerce_to_string(emitter, ctx, data, &left_ty);
+    coerce_to_string_releasing_owned(
+        emitter,
+        ctx,
+        data,
+        &left_ty,
+        expr_result_heap_ownership(left) == HeapOwnership::Owned,
+    );
     let persisted_left = expr_result_heap_ownership(left) == HeapOwnership::NonHeap
         || string_result_uses_transient_concat_buffer(left);
     let release_left = persisted_left || string_result_is_owned_call_temp(left, ctx);
@@ -396,7 +402,13 @@ pub(super) fn emit_concat_binop(
     let (left_ptr_reg, left_len_reg) = abi::string_result_regs(emitter);
     abi::emit_push_reg_pair(emitter, left_ptr_reg, left_len_reg);
     let right_ty = emit_expr(right, emitter, ctx, data);
-    coerce_to_string(emitter, ctx, data, &right_ty);
+    coerce_to_string_releasing_owned(
+        emitter,
+        ctx,
+        data,
+        &right_ty,
+        expr_result_heap_ownership(right) == HeapOwnership::Owned,
+    );
     let release_right = string_result_is_owned_call_temp(right, ctx);
     let mut cleanup_operands = 0usize;
     match emitter.target.arch {

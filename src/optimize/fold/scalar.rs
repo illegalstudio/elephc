@@ -195,7 +195,10 @@ pub(in crate::optimize) fn compare_numeric(
 pub(in crate::optimize) fn spaceship_numeric(left: &Expr, right: &Expr) -> Option<i64> {
     let left = numeric_literal(left)?;
     let right = numeric_literal(right)?;
-    Some(if left < right {
+    Some(if left.is_nan() || right.is_nan() {
+        // NAN is uncomparable: PHP's `<=>` yields 1 whenever either operand is NAN.
+        1
+    } else if left < right {
         -1
     } else if left > right {
         1

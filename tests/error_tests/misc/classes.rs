@@ -853,3 +853,23 @@ fn test_error_concrete_property_redeclared_as_abstract() {
         "Cannot make concrete property abstract: Child::$value",
     );
 }
+
+/// Verifies that `class` is rejected as a class-constant name, even though other semi-reserved
+/// keywords are allowed (PHP reserves `class` for the `Foo::class` name fetch).
+#[test]
+fn test_error_const_named_class_is_rejected() {
+    expect_error(
+        "<?php class A { const class = 1; }",
+        "Cannot use 'class' as a class constant name",
+    );
+}
+
+/// Verifies that a non-name token (an operator) after `->` is still rejected even though
+/// semi-reserved keywords are now accepted as member names.
+#[test]
+fn test_error_operator_after_arrow_is_rejected() {
+    expect_error(
+        "<?php $o = 1; echo $o->+;",
+        "Expected property or method name after '->'",
+    );
+}

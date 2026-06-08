@@ -186,9 +186,17 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 ));
             }
             *pos += 1; // consume `const`
+            // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
+            // which is reserved for the `Foo::class` name fetch.
             let const_name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Identifier(n)) => {
-                    let n = n.clone();
+                Some(Token::Class) => {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Cannot use 'class' as a class constant name",
+                    ))
+                }
+                Some(t) if crate::parser::keyword_name::bareword_name_from_token(t).is_some() => {
+                    let n = crate::parser::keyword_name::bareword_name_from_token(t).unwrap();
                     *pos += 1;
                     n
                 }
@@ -477,13 +485,17 @@ fn parse_class_like_method(
     is_final: bool,
 ) -> Result<(ClassMethod, Vec<ClassProperty>), CompileError> {
     *pos += 1; // consume 'function'
-    let method_name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(n)) => {
-            let n = n.clone();
+    // PHP 8 allows identifiers and any semi-reserved keyword as a method name (e.g. `self`,
+    // `parent`, `static`, `list`, `print`).
+    let method_name = match tokens
+        .get(*pos)
+        .and_then(|(t, _)| crate::parser::keyword_name::bareword_name_from_token(t))
+    {
+        Some(n) => {
             *pos += 1;
             n
         }
-        _ => return Err(CompileError::new(span, "Expected method name")),
+        None => return Err(CompileError::new(span, "Expected method name")),
     };
 
     expect_token(
@@ -570,9 +582,17 @@ fn parse_interface_body(
         }
         if tokens[*pos].0 == Token::Const {
             *pos += 1; // consume `const`
+            // PHP 8 allows semi-reserved keywords as class-constant names, except `class`,
+            // which is reserved for the `Foo::class` name fetch.
             let const_name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Identifier(n)) => {
-                    let n = n.clone();
+                Some(Token::Class) => {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Cannot use 'class' as a class constant name",
+                    ))
+                }
+                Some(t) if crate::parser::keyword_name::bareword_name_from_token(t).is_some() => {
+                    let n = crate::parser::keyword_name::bareword_name_from_token(t).unwrap();
                     *pos += 1;
                     n
                 }

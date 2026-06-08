@@ -1255,6 +1255,97 @@ unlink("sgc_eof.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the optional `$length` and `$offset` arguments of
+/// `stream_get_contents()`: a finite `$length` caps the read (`Hello`); an
+/// `$offset >= 0` seeks before reading (`World` for length 5 from offset 7,
+/// `World!` for read-all from offset 7); a negative/omitted `$length` reads to
+/// EOF; and a capped read honors the current position after a prior `fread`
+/// (`llo`). Output matches PHP 8.5 byte-for-byte (verified via `php -r`).
+#[test]
+fn test_stream_get_contents_length_and_offset() {
+    let out = compile_and_run(
+        r#"<?php
+$m = fopen("php://memory", "r+");
+fwrite($m, "Hello, World!");
+rewind($m);
+echo "[" . stream_get_contents($m, 5) . "]";
+rewind($m);
+echo "[" . stream_get_contents($m, 5, 7) . "]";
+rewind($m);
+echo "[" . stream_get_contents($m, -1, 7) . "]";
+rewind($m);
+echo "[" . stream_get_contents($m) . "]";
+rewind($m);
+fread($m, 2);
+echo "[" . stream_get_contents($m, 3) . "]";
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "[Hello][World][World!][Hello, World!][llo]");
+}
+
+/// Verifies `stream_get_contents()` returns `false` when a positive offset
+/// fails through a user wrapper's `stream_seek`, matching PHP's failure result.
+#[test]
+fn test_stream_get_contents_offset_seek_failure_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+class NoSeekGetW {
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_seek(int $offset, int $whence): bool { return false; }
+    public function stream_read(int $n): string { return "abc"; }
+    public function stream_eof(): bool { return true; }
+}
+stream_wrapper_register("noseekget", "NoSeekGetW");
+$f = fopen("noseekget://x", "r");
+$r = stream_get_contents($f, null, 1);
+echo $r === false ? "false" : "got";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies finite `stream_get_contents()` on a user wrapper keeps reading
+/// smaller chunks until the requested length is filled without draining the
+/// rest of the wrapper stream.
+#[test]
+fn test_stream_get_contents_bounded_wrapper_read_fills_length() {
+    let out = compile_and_run(
+        r#"<?php
+class SlowW {
+    public $data; public $pos;
+    public function stream_open($p,$m,$o,&$op): bool { $this->data="abcdefghi"; $this->pos=0; return true; }
+    public function stream_read($n): string { $c=substr($this->data,$this->pos,min(2,$n)); $this->pos+=strlen($c); return $c; }
+    public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
+    public function stream_close(): void {}
+}
+stream_wrapper_register("slow","SlowW");
+$f=fopen("slow://x","r");
+echo stream_get_contents($f,5);
+echo "|" . stream_get_contents($f);
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "abcde|fghi");
+}
+
+/// Verifies a runtime-computed negative length follows PHP's read-all contract
+/// instead of being treated as a finite negative cap.
+#[test]
+fn test_stream_get_contents_runtime_negative_length_reads_all() {
+    let out = compile_and_run(
+        r#"<?php
+function neg_one(): int { return -1; }
+$m = fopen("php://memory", "r+");
+fwrite($m, "runtime-all");
+rewind($m);
+echo stream_get_contents($m, neg_one());
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "runtime-all");
+}
+
 /// Verifies compiled PHP output for stream copy to stream copies all bytes.
 #[test]
 fn test_stream_copy_to_stream_copies_all_bytes() {
@@ -1313,6 +1404,106 @@ unlink("scts_e_dst.txt");
     );
     assert_eq!(out, "0");
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the optional `$length` and `$offset` arguments of
+/// `stream_copy_to_stream()`: a finite `$length` caps the copy (`Hello`, 5
+/// bytes); an `$offset >= 0` seeks the source first (`World` for length 5 from
+/// offset 7); and a negative `$length` from an offset copies to EOF (`World!`,
+/// 6 bytes). Byte counts and contents match PHP 8.5 (verified via `php -r`).
+#[test]
+fn test_stream_copy_to_stream_length_and_offset() {
+    let out = compile_and_run(
+        r#"<?php
+$s = fopen("php://memory", "r+"); fwrite($s, "Hello, World!"); rewind($s);
+$d = fopen("php://memory", "r+");
+$n = stream_copy_to_stream($s, $d, 5);
+rewind($d);
+echo "[" . $n . ":" . stream_get_contents($d) . "]";
+
+$s2 = fopen("php://memory", "r+"); fwrite($s2, "Hello, World!"); rewind($s2);
+$d2 = fopen("php://memory", "r+");
+$n2 = stream_copy_to_stream($s2, $d2, 5, 7);
+rewind($d2);
+echo "[" . $n2 . ":" . stream_get_contents($d2) . "]";
+
+$s3 = fopen("php://memory", "r+"); fwrite($s3, "Hello, World!"); rewind($s3);
+$d3 = fopen("php://memory", "r+");
+$n3 = stream_copy_to_stream($s3, $d3, -1, 7);
+rewind($d3);
+echo "[" . $n3 . ":" . stream_get_contents($d3) . "]";
+"#,
+    );
+    assert_eq!(out, "[5:Hello][5:World][6:World!]");
+}
+
+/// Verifies `stream_copy_to_stream()` returns `false` when a positive offset
+/// fails through a user wrapper's `stream_seek`, matching PHP's failure result.
+#[test]
+fn test_stream_copy_to_stream_offset_seek_failure_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+class NoSeekCopyW {
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_seek(int $offset, int $whence): bool { return false; }
+    public function stream_read(int $n): string { return "abc"; }
+    public function stream_eof(): bool { return true; }
+}
+stream_wrapper_register("noseekcopy", "NoSeekCopyW");
+$src = fopen("noseekcopy://x", "r");
+$dst = fopen("php://memory", "r+");
+$n = stream_copy_to_stream($src, $dst, null, 1);
+echo $n === false ? "false" : "got";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies a runtime-computed negative length copies to EOF, matching PHP's
+/// default `-1` length semantics.
+#[test]
+fn test_stream_copy_to_stream_runtime_negative_length_copies_all() {
+    let out = compile_and_run(
+        r#"<?php
+function neg_one(): int { return -1; }
+$s = fopen("php://memory", "r+");
+$d = fopen("php://memory", "r+");
+fwrite($s, "copy-runtime-all");
+rewind($s);
+$n = stream_copy_to_stream($s, $d, neg_one());
+rewind($d);
+echo $n . ":" . stream_get_contents($d);
+fclose($s);
+fclose($d);
+"#,
+    );
+    assert_eq!(out, "16:copy-runtime-all");
+}
+
+/// Verifies finite `stream_copy_to_stream()` copies from a wrapper source that
+/// returns smaller chunks than requested.
+#[test]
+fn test_stream_copy_to_stream_bounded_wrapper_read_fills_length() {
+    let out = compile_and_run(
+        r#"<?php
+class SlowCopyW {
+    public $data; public $pos;
+    public function stream_open($p,$m,$o,&$op): bool { $this->data="abcdefghi"; $this->pos=0; return true; }
+    public function stream_read($n): string { $c=substr($this->data,$this->pos,2); $this->pos+=strlen($c); return $c; }
+    public function stream_eof(): bool { return $this->pos>=strlen($this->data); }
+    public function stream_close(): void {}
+}
+stream_wrapper_register("slowcopy","SlowCopyW");
+$src=fopen("slowcopy://x","r");
+$dst=fopen("php://memory","r+");
+$n=stream_copy_to_stream($src,$dst,5);
+rewind($dst);
+echo $n . ":" . stream_get_contents($dst);
+fclose($src);
+fclose($dst);
+"#,
+    );
+    assert_eq!(out, "5:abcde");
 }
 
 /// Verifies compiled PHP output for fopen php stdout writes to stdout.
@@ -2641,6 +2832,35 @@ fclose($f);
     assert_eq!(out, "contents fetched over ftp");
 }
 
+/// `file_get_contents($url)` routes a runtime `ftp://` URL through the FTP
+/// wrapper open path, then slurps the returned data connection.
+#[test]
+fn test_file_get_contents_dynamic_ftp_url() {
+    let _server = spawn_ftp_server(54966, b"dynamic contents fetched over ftp");
+    let out = compile_and_run(
+        r#"<?php
+$url = "ftp://127.0.0.1:54966/pub/file.txt";
+echo file_get_contents($url);
+"#,
+    );
+    assert_eq!(out, "dynamic contents fetched over ftp");
+}
+
+/// `file_get_contents($url)` routes a runtime `ftps://` URL through the FTP
+/// TLS path; an unreachable control port deterministically returns PHP false
+/// while still exercising TLS linkage and dynamic scheme dispatch.
+#[test]
+fn test_file_get_contents_dynamic_ftps_unreachable_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+$url = "ftps://127.0.0.1:1/pub/file.txt";
+$r = @file_get_contents($url);
+echo $r === false ? "false" : "got";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
 /// Verifies compiled PHP output for fopen ftp invalid url is false.
 #[test]
 fn test_fopen_ftp_invalid_url_is_false() {
@@ -2787,6 +3007,96 @@ fn twoway_find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
 }
 
+const TEST_HTTPS_CERT_PEM: &str = "\
+-----BEGIN CERTIFICATE-----
+MIIDDTCCAfWgAwIBAgIUYwEnFCptGtZ9bISKGHSDDyDeR78wDQYJKoZIhvcNAQEL
+BQAwFjEUMBIGA1UEAwwLZWxlcGhjLXRlc3QwHhcNMjYwNjAxMTQzMzMzWhcNMzYw
+NTI5MTQzMzMzWjAWMRQwEgYDVQQDDAtlbGVwaGMtdGVzdDCCASIwDQYJKoZIhvcN
+AQEBBQADggEPADCCAQoCggEBALEueBZ5lUAbSBPd5gj6DdreVaIUC1sTKaOtK32f
+gEgo8f+OvI7x0xZSB75t07Kz4luusaq1iYKegF61P8gI0ZpaNkj6uLVowj+Pu8/+
+AMPrr11i38P701YLNvcOf4QWOnoDlRsjyzR+w4XbQmeNRrT1yUwkUQf64rZ3OkrD
+tk4+VLizdj/eeoEXezGO/HzEY4vyFHA0ZC4GDT0yfjh77NOi7rY+7yr1DdbYzon/
+JkPw3fV25m7StGsgr/a3i4ghVXUze88XSAYHWANUMmyJc2kxX33EAWB30n5yy0DN
+ikN8emJqsRhpVU4MwlnD+5tPVBz9rgdXE8++I5i5uUvX65UCAwEAAaNTMFEwHQYD
+VR0OBBYEFKx0E1bLjEIQqIzIzj0qhgpMIg0WMB8GA1UdIwQYMBaAFKx0E1bLjEIQ
+qIzIzj0qhgpMIg0WMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEB
+AKeskQbHp//yz/LEJWqa2uCKB+05Uutg/yauByw2JGvFIdpGMXtOeFYh6PlbhVQL
+rijdbW0mI0W2slefK6xsCJxFGfQY3daL2pLgoJSU0nkW7WkZh0ao292letIR9vFR
+8cULtOtZZUSl8lq6Xt51mdUcCvAJgNctEI/+58YyDZBrUf0hKSjAQ2MGuZsHr8xT
+S5TYFmrdKicmU53hVXsNgsCDmqENsZqP99zgqikvcrd1qfJQ95N/7thuSJtBJydk
+IxMlsDmy7cFWp8ts9w+WvdxpGeZAs1M7I2N2SqTuHYVh3SJCrdA1rwtJZKTsctUJ
+rmggbINQyJdm1RdcppwbOqA=
+-----END CERTIFICATE-----
+";
+
+const TEST_HTTPS_KEY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCxLngWeZVAG0gT
+3eYI+g3a3lWiFAtbEymjrSt9n4BIKPH/jryO8dMWUge+bdOys+JbrrGqtYmCnoBe
+tT/ICNGaWjZI+ri1aMI/j7vP/gDD669dYt/D+9NWCzb3Dn+EFjp6A5UbI8s0fsOF
+20JnjUa09clMJFEH+uK2dzpKw7ZOPlS4s3Y/3nqBF3sxjvx8xGOL8hRwNGQuBg09
+Mn44e+zTou62Pu8q9Q3W2M6J/yZD8N31duZu0rRrIK/2t4uIIVV1M3vPF0gGB1gD
+VDJsiXNpMV99xAFgd9J+cstAzYpDfHpiarEYaVVODMJZw/ubT1Qc/a4HVxPPviOY
+ublL1+uVAgMBAAECggEAKW0fAMo+njWCvbplHXYxpRnU1cdv/ERXuQA1KfMQEE8a
+fdEGvzlFTHOzgc+17pNmel83BR3a3+JlSz9/gSqmrzsmdBvC8g9jU28sz22pCiXh
+46jJfs4zVGvc1xjZsa1s0LhjtWvCCC0XVAW22fVLMeZBwX7AP2hmd5ka1P47csF2
+aDIPRPuWWCMse7u/31bJIpLOTJwLe1KmOsrk8IaQcjPUYC+WCA84N3QUwVUMVXvR
+31bYy2s2fLZ/pO4EYCHJ2TDXuUSL4JYQ9ru7FPNWyGQo8cuTBexDWMiRb8qxFYNl
+U5pAJuk4Om2v3CqIgCLK2PQB/lPrJkcUPEN4P5SGgQKBgQDeZux9GFcYpwZKTAr2
+4rPU7ovCNTgAGyNh+5u/xaJ/6zNYDKH+EQujM35JhZR114nHYvigTzUj2VyTPMEq
+ncyYoG+7sj99QqMNqIXK+d22UeYWmbSw/jf1XDzC7UHWXASViw/kL1y/jP4NXSjf
+dAxSahyRnP+aYYNXAsmRWsV2YQKBgQDL8rUFs1nzX6WfHRQ5zzcPAF9XAGwkVKzQ
+OKHCHfyLN9sfCnJrSOd1DU3JEwWZ6Qzl+BwAavaqDHY8PsV0pMtKSfO77yDZVFeE
+ZdrJeQMv44DszZjZK/J9Vd7JDR+6Yg49+P4l438KrMsbIp/PaEe34ApgwfzU1LB5
+XOORMcPZtQKBgQCk7CAc1+rmbh19BQzwbca7dTYQi1R+x6EibOnfeRh60Zieh6es
+90jw+iOBM9yW0oHqaJtEjdgzQGGlEd2Q07m/yOFyh8kLA1pUq46jqUzfgbYlNlBH
+HA21FnQ8fKJg6pW/q4LaTMDzjwNqN5YytiTZDLUoygrFmeBCqt98uZpKoQKBgB7W
+5pSkGDf7AJpc1VAgi1zTW5dWUwPzYeZiieNGkYejvJinBcI/VfCXQGnlXHV3jiHA
+MMvHYOE53S8i9sy6lpr3L8n9UORMIqe8lybcC6VUK4yjUjeUs6hMMdIJEAEpDqpE
+Wnn0OqOsmVHTHINKa33cfPVAoDC2sLDJYQf1lH35AoGAd0pIqclrFb1a4Fbpq8TM
+jgOspoq2Sjj+5724t8sFeg7SRMdTkA/8M1t4FsY9TNhDSI2vi6cu9013EcfVGlUB
+MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
+6NdfPEjH08mFJU5npyEEa7Q=
+-----END PRIVATE KEY-----
+";
+
+/// Minimal one-shot HTTPS server for deterministic `https://` wrapper tests.
+fn spawn_https_server(port: u16, content: &'static [u8]) -> std::thread::JoinHandle<()> {
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", port)).expect("https test: bind port");
+    std::thread::spawn(move || {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut cert_reader = TEST_HTTPS_CERT_PEM.as_bytes();
+        let certs = rustls_pemfile::certs(&mut cert_reader)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("https test: parse cert");
+        let mut key_reader = TEST_HTTPS_KEY_PEM.as_bytes();
+        let key = rustls_pemfile::private_key(&mut key_reader)
+            .expect("https test: parse private key")
+            .expect("https test: private key present");
+        let config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("https test: build server config");
+
+        let (tcp, _) = listener.accept().expect("https test: accept");
+        tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("https test: set read timeout");
+        let conn =
+            rustls::ServerConnection::new(Arc::new(config)).expect("https test: new connection");
+        let mut tls = rustls::StreamOwned::new(conn, tcp);
+        let mut request = [0u8; 1024];
+        let _ = tls.read(&mut request);
+        let headers = format!("HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n", content.len());
+        tls.write_all(headers.as_bytes()).expect("https test: write headers");
+        tls.write_all(content).expect("https test: write body");
+        tls.flush().expect("https test: flush response");
+    })
+}
+
 /// Verifies compiled PHP output for fopen http method default is get.
 #[test]
 fn test_fopen_http_method_default_is_get() {
@@ -2903,6 +3213,93 @@ fclose($f);
     assert_eq!(out, "body delivered over http");
 }
 
+/// `file_get_contents("http://...")` opens the `http://` wrapper, slurps the
+/// whole response body (headers stripped) into an owned string, and returns it
+/// — equivalent to `fopen()` + `stream_get_contents()` + `fclose()` on the URL.
+/// The owned-heap copy (via `__rt_str_persist`) survives the concat below.
+#[test]
+fn test_file_get_contents_over_http() {
+    let _server = spawn_http_server(54973, b"fgc over http body");
+    let out = compile_and_run(
+        r#"<?php
+echo "[" . file_get_contents("http://127.0.0.1:54973/page.txt") . "]";
+"#,
+    );
+    assert_eq!(out, "[fgc over http body]");
+}
+
+/// `file_get_contents($url)` routes a runtime string beginning with `http://`
+/// through the HTTP wrapper instead of the plain filesystem reader.
+#[test]
+fn test_file_get_contents_dynamic_http_url() {
+    let _server = spawn_http_server(54974, b"dynamic fgc over http");
+    let out = compile_and_run(
+        r#"<?php
+$url = "http://127.0.0.1:54974/page.txt";
+echo "[" . file_get_contents($url) . "]";
+"#,
+    );
+    assert_eq!(out, "[dynamic fgc over http]");
+}
+
+/// `file_get_contents("https://...")` succeeds against a local TLS server,
+/// proving the literal HTTPS wrapper path returns an owned response body.
+#[test]
+fn test_file_get_contents_over_https_local_server() {
+    let _server = spawn_https_server(54975, b"fgc over local https");
+    let out = compile_and_run(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+echo "[" . file_get_contents("https://127.0.0.1:54975/page.txt") . "]";
+"#,
+    );
+    assert_eq!(out, "[fgc over local https]");
+}
+
+/// `file_get_contents($url)` also succeeds when the runtime string uses
+/// `https://`, covering the non-literal dynamic URL dispatcher.
+#[test]
+fn test_file_get_contents_dynamic_https_local_server() {
+    let _server = spawn_https_server(54976, b"dynamic fgc over local https");
+    let out = compile_and_run(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+$url = "https://127.0.0.1:54976/page.txt";
+echo "[" . file_get_contents($url) . "]";
+"#,
+    );
+    assert_eq!(out, "[dynamic fgc over local https]");
+}
+
+/// `file_get_contents($url)` routes a runtime `https://` URL through the HTTPS
+/// wrapper dispatcher. A bad cafile fails before network I/O, making the TLS
+/// path deterministic while still covering dynamic HTTPS linkage and parsing.
+#[test]
+fn test_file_get_contents_dynamic_https_cafile_bad_path_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "cafile", "/nonexistent/elephc/ca.pem");
+$url = "https://127.0.0.1:9/";
+$r = @file_get_contents($url);
+echo $r === false ? "false" : "got";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// `file_get_contents()` of an unreachable `http://` URL returns PHP `false`
+/// (the wrapper open fails, so the result boxes bool false).
+#[test]
+fn test_file_get_contents_over_http_failure_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+$r = file_get_contents("http://127.0.0.1:1/nope");
+echo $r === false ? "false" : "got";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
 /// Verifies compiled PHP output for fopen http follow location relative path.
 #[test]
 fn test_fopen_http_follow_location_relative_path() {
@@ -2995,6 +3392,28 @@ fn test_fopen_ftps_unreachable_host_is_false() {
     // without exploding the AUTH TLS dance.
     let out = compile_and_run(
         r#"<?php $f = @fopen("ftps://127.0.0.1:1/x", "r"); echo is_bool($f) ? "false" : "resource";"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// `file_get_contents("ftps://...")` reuses the ftps:// wrapper open plus the
+/// shared slurp path; an unreachable host fails the open so the result is PHP
+/// false. Also exercises the elephc-tls linkage the checker requires for ftps.
+#[test]
+fn test_file_get_contents_over_ftps_unreachable_is_false() {
+    let out = compile_and_run(
+        r#"<?php $r = @file_get_contents("ftps://127.0.0.1:1/x"); echo $r === false ? "false" : "got";"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// `file_get_contents("ftp://...")` over an unreachable host returns PHP false
+/// (the ftp:// wrapper open fails), completing the URL-scheme coverage next to
+/// the http:// success test.
+#[test]
+fn test_file_get_contents_over_ftp_unreachable_is_false() {
+    let out = compile_and_run(
+        r#"<?php $r = @file_get_contents("ftp://127.0.0.1:1/x"); echo $r === false ? "false" : "got";"#,
     );
     assert_eq!(out, "false");
 }
@@ -3138,6 +3557,36 @@ echo substr($body, 0, 15);
     assert_eq!(out, "<!doctype html>");
 }
 
+/// End-to-end smoke for `file_get_contents("https://...")` against a real
+/// HTTPS host. Ignored because it needs outbound network access and a currently
+/// trusted public certificate chain.
+#[test]
+#[ignore]
+fn test_file_get_contents_https_real_example_com() {
+    let out = compile_and_run(
+        r#"<?php
+$body = file_get_contents("https://example.com/");
+echo substr($body, 0, 15);
+"#,
+    );
+    assert_eq!(out, "<!doctype html>");
+}
+
+/// End-to-end smoke for dynamic `file_get_contents($url)` over HTTPS. Ignored
+/// for the same outbound-network reason as the fopen HTTPS smoke tests.
+#[test]
+#[ignore]
+fn test_file_get_contents_dynamic_https_real_example_com() {
+    let out = compile_and_run(
+        r#"<?php
+$url = "https://example.com/";
+$body = file_get_contents($url);
+echo substr($body, 0, 15);
+"#,
+    );
+    assert_eq!(out, "<!doctype html>");
+}
+
 /// End-to-end real-TLS handshake through `stream_socket_enable_crypto`: open a
 /// plain TCP socket to a real HTTPS host, promote it to TLS in place (SNI /
 /// cert-name taken from the `ssl.peer_name` context), then exchange an encrypted
@@ -3162,6 +3611,27 @@ echo ($ok ? "1" : "0") . "|" . $status;
     assert_eq!(out, "1|HTTP/1.1 200");
 }
 
+/// End-to-end real-TLS teardown through `stream_socket_enable_crypto(false)`.
+/// It upgrades a TCP socket to TLS, proves encrypted I/O works, then disables
+/// crypto and closes the descriptor. Ignored because it needs outbound network.
+#[test]
+#[ignore]
+fn test_stream_socket_enable_crypto_real_tls_disable_teardown() {
+    let out = compile_and_run(
+        r#"<?php
+stream_context_create(["ssl" => ["peer_name" => "example.com"]]);
+$fp = stream_socket_client("tcp://example.com:443");
+$enabled = stream_socket_enable_crypto($fp, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
+fwrite($fp, "GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n");
+$status = substr(fread($fp, 64), 0, 12);
+$disabled = stream_socket_enable_crypto($fp, false);
+fclose($fp);
+echo ($enabled ? "1" : "0") . "|" . $status . "|" . ($disabled ? "1" : "0");
+"#,
+    );
+    assert_eq!(out, "1|HTTP/1.1 200|1");
+}
+
 /// Minimal one-shot TCP server for the `fsockopen` codegen test. Binds the
 /// port immediately, then serves one client on a thread by writing `content`
 /// and closing the connection.
@@ -3174,6 +3644,43 @@ fn spawn_tcp_server(port: u16, content: &'static [u8]) -> std::thread::JoinHandl
         sock.write_all(content).unwrap();
         // Dropping the socket closes the connection so the client sees EOF.
     })
+}
+
+/// Minimal TCP server that writes two payload fragments with a pause between
+/// them, forcing clients that request more bytes than the first fragment to
+/// observe a short read before the rest of the payload arrives.
+fn spawn_chunked_tcp_server(
+    port: u16,
+    first: &'static [u8],
+    second: &'static [u8],
+) -> std::thread::JoinHandle<()> {
+    use std::io::Write;
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", port)).expect("tcp test: bind port");
+    std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().expect("tcp test: accept");
+        sock.write_all(first).unwrap();
+        sock.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        sock.write_all(second).unwrap();
+    })
+}
+
+/// Verifies finite `stream_get_contents()` loops across short socket reads
+/// until the requested length is filled, then leaves the remaining socket bytes
+/// available for the next read.
+#[test]
+fn test_stream_get_contents_bounded_socket_read_fills_length() {
+    let _server = spawn_chunked_tcp_server(54989, b"ab", b"cdefghi");
+    let out = compile_and_run(
+        r#"<?php
+$s = stream_socket_client("tcp://127.0.0.1:54989");
+echo stream_get_contents($s, 5);
+echo "|" . stream_get_contents($s);
+fclose($s);
+"#,
+    );
+    assert_eq!(out, "abcde|fghi");
 }
 
 /// Verifies compiled PHP output for fsockopen connects and reads.
@@ -3327,6 +3834,28 @@ fclose($m);
 "#,
     );
     assert_eq!(out, "bool");
+}
+
+/// `stream_socket_enable_crypto($s, false)` unwinds a live TLS session: the
+/// disable path reloads the fd and runs the shared `emit_tls_session_teardown`,
+/// which (because the prior enable installed a non-zero `_tls_sessions[fd]`
+/// handle) calls `_elephc_tls_close_fn` to send `close_notify` and zeroes the
+/// slot, then reports `true`. The contract pinned here is that the enable→disable
+/// sequence runs the real teardown branch without crashing and returns a `bool`
+/// `true`; a plain-stream read-back is intentionally not asserted because the
+/// `close_notify` record pollutes a degenerate `php://memory` backing buffer.
+#[test]
+fn test_stream_socket_enable_crypto_disable_tears_down_session() {
+    let out = compile_and_run(
+        r#"<?php
+$m = fopen("php://memory", "r+");
+$a = stream_socket_enable_crypto($m, true);
+$b = stream_socket_enable_crypto($m, false);
+echo (is_bool($a) && is_bool($b) && $b === true) ? "ok" : "bad";
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "ok");
 }
 
 /// Verifies that the shared signature accepts the fourth named `session_stream` arg.

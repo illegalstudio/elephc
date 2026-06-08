@@ -9,6 +9,14 @@
 
 use crate::support::*;
 
+/// Compiles a program whose source begins with a UTF-8 BOM (U+FEFF) before `<?php` and
+/// verifies it builds and runs end-to-end, matching editors that emit BOM-prefixed UTF-8.
+#[test]
+fn test_utf8_bom_prefixed_source_compiles_and_runs() {
+    let out = compile_and_run("\u{feff}<?php echo \"hi\";");
+    assert_eq!(out, "hi");
+}
+
 // --- IIFE (Immediately Invoked Function Expression) ---
 
 /// Compiles an IIFE that returns a string literal and verifies the value is echoed correctly.

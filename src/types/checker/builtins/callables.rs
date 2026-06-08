@@ -1059,6 +1059,18 @@ pub(super) fn check_builtin(
                     let ret_ty = checker.check_function_call(&cb_name, &spread_args, span, env)?;
                     return Ok(Some(ret_ty));
                 }
+                // A string-literal callback that matched no extern, builtin, user function,
+                // or fn_decl is an undefined function. Reject plain function-name callbacks
+                // here instead of falling through to the generic `Str` acceptance below
+                // (which returns Mixed and defers the unknown name to a dangling symbol /
+                // mangle escape at codegen). Strings containing "::" are static-method
+                // forms and keep their existing fall-through path.
+                if !cb_name.contains("::") {
+                    return Err(CompileError::new(
+                        args[0].span,
+                        &format!("Undefined function: {}", cb_name),
+                    ));
+                }
             }
             let arg_array_ty = checker.infer_type(&args[1], env)?;
             if call_user_func_array_arg_container_is_runtime_opaque(&arg_array_ty) {

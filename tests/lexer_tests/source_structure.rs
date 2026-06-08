@@ -16,6 +16,15 @@ fn test_open_tag() {
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
 }
 
+/// Verifies a leading UTF-8 BOM (U+FEFF) before `<?php` is stripped, so files saved by
+/// editors that emit BOM-prefixed UTF-8 still tokenize starting at `OpenTag`.
+#[test]
+fn test_utf8_bom_before_open_tag_is_stripped() {
+    let t = tokens("\u{feff}<?php echo \"hi\";");
+    assert_eq!(t[0], Token::OpenTag);
+    assert_eq!(t[1], Token::Echo);
+}
+
 /// Verifies `// ...` line comments are consumed and do not appear in the token stream.
 #[test]
 fn test_line_comment() {

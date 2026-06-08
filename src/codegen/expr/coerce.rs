@@ -34,6 +34,34 @@ pub fn coerce_to_string(
     data: &mut DataSection,
     ty: &PhpType,
 ) {
+    coerce_to_string_inner(emitter, ctx, data, ty, false);
+}
+
+/// Like [`coerce_to_string`], but when `release_owned_object` is set and `ty` is an object
+/// stringified via `__toString`, the owned object temporary is released after conversion.
+///
+/// Callers pass `true` only when the source expression produced an owned object temporary
+/// (e.g. `new C()` or a call result); a borrowed object (a variable or property) must pass
+/// `false` so its owner — not this coercion — releases it, avoiding a double free.
+pub fn coerce_to_string_releasing_owned(
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+    ty: &PhpType,
+    release_owned_object: bool,
+) {
+    coerce_to_string_inner(emitter, ctx, data, ty, release_owned_object);
+}
+
+/// Shared body of the string coercion. `release_owned_object` controls whether an owned
+/// object temporary that is stringified via `__toString` is released after conversion.
+fn coerce_to_string_inner(
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+    ty: &PhpType,
+    release_owned_object: bool,
+) {
     match ty {
         PhpType::Int => {
             // -- convert integer in x0 to string in x1/x2 --
@@ -87,8 +115,8 @@ pub fn coerce_to_string(
             // -- mixed strings dispatch on the boxed payload at runtime --
             abi::emit_call_label(emitter, "__rt_mixed_cast_string");            // cast the boxed mixed payload to string in the ABI string result registers
         }
-        PhpType::Iterable => {
-            // -- iterable values stringify to the literal "Array", matching PHP --
+        PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            // -- iterable and array values stringify to the literal "Array", matching PHP --
             let (label, len) = data.add_string(b"Array");
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_symbol_address(emitter, ptr_reg, &label);                 // materialize the literal "Array" address in the active string-pointer result register
@@ -107,6 +135,9 @@ pub fn coerce_to_string(
                 .get(class_name)
                 .is_some_and(|class_info| class_info.methods.contains_key("__tostring"))
             {
+                if release_owned_object {
+                    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));  // save the owned object temp below $this so it can be released after __toString borrows it
+                }
                 abi::emit_push_reg(emitter, abi::int_result_reg(emitter));      // push $this pointer for __toString dispatch using the active target ABI
                 super::objects::emit_method_call_with_pushed_args(
                     class_name,
@@ -115,18 +146,34 @@ pub fn coerce_to_string(
                     emitter,
                     ctx,
                 );
+                if release_owned_object {
+                    emit_release_saved_object_temp(emitter, ty);
+                }
             } else {
                 emit_missing_tostring_fatal(emitter, data, class_name);
             }
         }
         PhpType::Str
-        | PhpType::Array(_)
-        | PhpType::AssocArray { .. }
         | PhpType::Callable
         | PhpType::Buffer(_)
         | PhpType::Packed(_)
         | PhpType::Pointer(_) => {}
     }
+}
+
+/// Releases an owned object temporary that was just stringified via `__toString`.
+///
+/// On entry the produced string is in the string result registers, and the object pointer
+/// was saved on the temporary stack below the (already-popped) `$this` slot. The string
+/// result is preserved across the object decref, then restored, and the saved object slot
+/// is discarded — leaving the string result in place and the object temporary freed.
+fn emit_release_saved_object_temp(emitter: &mut Emitter, ty: &PhpType) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);                         // preserve the __toString result string across the object decref call
+    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16); // reload the saved owned object pointer from below the 16-byte string slot
+    abi::emit_decref_if_refcounted(emitter, ty);                                // release the owned object temporary now that __toString produced its string
+    abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);                          // restore the preserved __toString result string
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the saved owned object slot
 }
 
 /// Emit a fatal error and terminate when an object without `__toString()` is coerced to string.

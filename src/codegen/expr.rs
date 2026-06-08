@@ -38,7 +38,9 @@ pub(crate) use ownership::{
     expr_result_heap_ownership, string_result_is_owned_call_temp,
     string_result_uses_transient_concat_buffer,
 };
-pub use coerce::{coerce_null_to_zero, coerce_to_string, coerce_to_truthiness};
+pub use coerce::{
+    coerce_null_to_zero, coerce_to_string, coerce_to_string_releasing_owned, coerce_to_truthiness,
+};
 use helpers::{retain_borrowed_heap_arg, widen_codegen_type};
 
 /// Dispatches an expression AST node to the appropriate lowering module.

@@ -153,6 +153,22 @@ echo (2 <=> 3) + 2;
     assert_eq!(out, "11");
 }
 
+/// Verifies the spaceship operator folds NAN comparisons to PHP's result: NAN is uncomparable,
+/// so `<=>` yields 1 whenever either operand is NAN (`NAN <=> 1.0`, `1.0 <=> NAN`, `NAN <=> NAN`
+/// all give 1 in PHP). Ordinary ordering still folds correctly.
+#[test]
+fn test_constant_folding_spaceship_with_nan() {
+    let out = compile_and_run(
+        r#"<?php
+echo (NAN <=> 1.0), ",";
+echo (1.0 <=> NAN), ",";
+echo (NAN <=> NAN), ",";
+echo (1.0 <=> 2.0);
+"#,
+    );
+    assert_eq!(out, "1,1,1,-1");
+}
+
 /// Verifies that a literal int-cast from a string is folded, eliminating the
 /// `__rt_str_to_int` call from user assembly.
 #[test]

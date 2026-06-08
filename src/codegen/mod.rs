@@ -137,6 +137,13 @@ use program_usage::{
 
 /// Generates user-code assembly for the target.
 /// Returns the raw assembly string.
+/// Generates the user assembly object for a checked and optimized program.
+///
+/// The returned assembly contains user functions, class metadata, `_main`, and
+/// user-specific data, but not the shared cached runtime object. When
+/// `requires_elephc_tls` is true, `_main` publishes the TLS staticlib entry
+/// points before user code runs so dynamic URL helpers can call through them.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_user_asm(
     program: &Program,
     global_env: &TypeEnv,
@@ -155,6 +162,7 @@ pub fn generate_user_asm(
     gc_stats: bool,
     heap_debug: bool,
     target: Target,
+    requires_elephc_tls: bool,
 ) -> String {
     let mut emitter = Emitter::new(target);
     if target.arch == platform::Arch::X86_64 {
@@ -325,6 +333,7 @@ pub fn generate_user_asm(
         emitted_class_names.as_ref(),
         gc_stats,
         heap_debug,
+        requires_elephc_tls,
     )
 }
 
@@ -908,6 +917,7 @@ fn emitted_class_descends_from(
 /// Generates complete target assembly including runtime.
 /// Returns tuple of (user_asm, full_asm_with_runtime).
 #[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub fn generate(
     program: &Program,
     global_env: &TypeEnv,
@@ -926,6 +936,7 @@ pub fn generate(
     gc_stats: bool,
     heap_debug: bool,
     target: Target,
+    requires_elephc_tls: bool,
 ) -> (String, String) {
     let user_asm = generate_user_asm(
         program,
@@ -945,6 +956,7 @@ pub fn generate(
         gc_stats,
         heap_debug,
         target,
+        requires_elephc_tls,
     );
     let runtime_features = runtime_features_for_program_and_classes(program, classes);
     let runtime_asm = generate_runtime_with_features(heap_size, target, runtime_features);

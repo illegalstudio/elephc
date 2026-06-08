@@ -9,13 +9,15 @@
 //! - Null, type-tag, and string comparisons must follow PHP semantics before emitting boolean results.
 
 use crate::codegen::abi;
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
-use super::super::{coerce_to_string, coerce_to_truthiness, emit_expr};
+use super::super::{
+    coerce_to_string_releasing_owned, coerce_to_truthiness, emit_expr, expr_result_heap_ownership,
+};
 
 /// Emits a PHP cast expression (`(int)`, `(float)`, `(string)`, `(bool)`, `(array)`).
 ///
@@ -133,7 +135,13 @@ pub(in crate::codegen::expr) fn emit_cast(
             PhpType::Float
         }
         CastType::String => {
-            coerce_to_string(emitter, ctx, data, &src_ty);
+            coerce_to_string_releasing_owned(
+                emitter,
+                ctx,
+                data,
+                &src_ty,
+                expr_result_heap_ownership(expr) == HeapOwnership::Owned,
+            );
             PhpType::Str
         }
         CastType::Bool => {

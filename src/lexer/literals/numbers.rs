@@ -109,6 +109,8 @@ fn parse_decimal_int_or_float(cursor: &Cursor, digits: &str) -> Result<Token, Co
 /// alphanumeric characters remain. Returns `Token::IntLiteral` or `Token::FloatLiteral`.
 /// Handles PHP 7.4+ underscore numeric separators and legacy octal forms.
 pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
+    // Captured before consuming any prefix so empty-literal errors point at the literal start.
+    let start_span = cursor.span();
     if cursor.peek() == Some('0') {
         let remaining = cursor.remaining();
         if remaining.len() > 1 {
@@ -120,7 +122,7 @@ pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, Compil
                 let hex_str = scan_radix_digits(cursor, |c| c.is_ascii_hexdigit());
                 if hex_str.is_empty() {
                     return Err(CompileError::new(
-                        cursor.span(),
+                        start_span,
                         "Expected hex digits after '0x'",
                     ));
                 }
@@ -134,7 +136,7 @@ pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, Compil
                 let octal_str = scan_radix_digits(cursor, |c| c.is_ascii_digit() && c < '8');
                 if octal_str.is_empty() {
                     return Err(CompileError::new(
-                        cursor.span(),
+                        start_span,
                         "Expected octal digits after '0o'",
                     ));
                 }
@@ -148,7 +150,7 @@ pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, Compil
                 let bin_str = scan_radix_digits(cursor, |c| c == '0' || c == '1');
                 if bin_str.is_empty() {
                     return Err(CompileError::new(
-                        cursor.span(),
+                        start_span,
                         "Expected binary digits after '0b'",
                     ));
                 }

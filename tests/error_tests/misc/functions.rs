@@ -137,6 +137,17 @@ fn test_error_named_arguments_reject_unknown_parameter() {
     );
 }
 
+/// Verifies an unknown string-literal callback passed to `call_user_func_array` with a
+/// runtime-opaque (non-array-literal) second argument is rejected as an undefined function,
+/// instead of being accepted and deferring to a mangle panic / dangling symbol at codegen.
+#[test]
+fn test_error_call_user_func_array_unknown_string_callback() {
+    expect_error(
+        "<?php $args = [1, 2]; call_user_func_array(\"does_not_exist\", $args);",
+        "Undefined function: does_not_exist",
+    );
+}
+
 /// Verifies that positional arguments cannot follow named arguments in a call.
 #[test]
 fn test_error_named_arguments_reject_positional_after_named() {

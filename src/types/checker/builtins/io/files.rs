@@ -36,6 +36,18 @@ pub(super) fn check_builtin(
                     "file_get_contents() takes exactly 1 argument",
                 ));
             }
+            // A literal https:///ftps:// URL is read at run time over TLS.
+            // Non-literal paths route through the runtime URL dispatcher, so
+            // conservatively link elephc-tls because the scheme is unknown.
+            if let Some(crate::parser::ast::ExprKind::StringLiteral(url)) =
+                args.first().map(|a| &a.kind)
+            {
+                if url.starts_with("https://") || url.starts_with("ftps://") {
+                    checker.require_builtin_library("elephc_tls");
+                }
+            } else {
+                checker.require_builtin_library("elephc_tls");
+            }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Union(vec![PhpType::Str, PhpType::Bool])))
         }

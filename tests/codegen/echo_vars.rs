@@ -40,6 +40,30 @@ fn test_echo_escape_sequences() {
     assert_eq!(out, "a\tb\nc");
 }
 
+/// Verifies a variable whose name contains non-ASCII letters (PHP allows identifier
+/// bytes 0x80-0xFF) round-trips through the full pipeline and echoes its value.
+#[test]
+fn test_echo_unicode_variable() {
+    let out = compile_and_run("<?php $café = 7; echo $café;");
+    assert_eq!(out, "7");
+}
+
+/// Verifies a user function with a non-ASCII name is declared, mangled to a valid symbol,
+/// and called end-to-end.
+#[test]
+fn test_call_unicode_function_name() {
+    let out = compile_and_run("<?php function 价格() { return 5; } echo 价格();");
+    assert_eq!(out, "5");
+}
+
+/// Verifies a variable with non-ASCII letters interpolates inside a double-quoted string
+/// instead of being truncated at the first non-ASCII byte.
+#[test]
+fn test_echo_unicode_variable_interpolated() {
+    let out = compile_and_run("<?php $café = \"x\"; echo \"v=$café\";");
+    assert_eq!(out, "v=x");
+}
+
 // --- Phase 2: Variables and integers ---
 
 /// Compiles `<?php echo 42;` and asserts stdout is `"42"`.

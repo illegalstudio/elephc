@@ -261,12 +261,18 @@ fn test_error_stream_is_local_wrong_args() {
     );
 }
 
-/// Verifies the invalid-call diagnostic for error stream get contents wrong args.
+/// Verifies the invalid-call diagnostic for error stream get contents wrong args:
+/// both zero args and more than three args are rejected (the optional `$length`
+/// and `$offset` widened the arity to 1–3).
 #[test]
 fn test_error_stream_get_contents_wrong_args() {
     expect_error(
         "<?php stream_get_contents();",
-        "stream_get_contents() takes exactly 1 argument",
+        "stream_get_contents() takes 1 to 3 arguments",
+    );
+    expect_error(
+        "<?php stream_get_contents(STDIN, 1, 2, 3);",
+        "stream_get_contents() takes 1 to 3 arguments",
     );
 }
 
@@ -279,12 +285,26 @@ fn test_error_stream_get_contents_requires_resource_handle() {
     );
 }
 
+/// Verifies `stream_get_contents()` rejects non-integer length and offset
+/// arguments before codegen lowers them as raw integer registers.
+#[test]
+fn test_error_stream_get_contents_length_and_offset_must_be_ints() {
+    expect_error(
+        r#"<?php stream_get_contents(STDIN, "5");"#,
+        "stream_get_contents() length must be int or null",
+    );
+    expect_error(
+        r#"<?php stream_get_contents(STDIN, 5, "0");"#,
+        "stream_get_contents() offset must be int",
+    );
+}
+
 /// Verifies the invalid-call diagnostic for error stream copy to stream wrong args.
 #[test]
 fn test_error_stream_copy_to_stream_wrong_args() {
     expect_error(
         "<?php stream_copy_to_stream(STDIN);",
-        "stream_copy_to_stream() takes exactly 2 arguments",
+        "stream_copy_to_stream() takes 2 to 4 arguments",
     );
 }
 
@@ -294,6 +314,20 @@ fn test_error_stream_copy_to_stream_requires_resource_handles() {
     expect_error(
         "<?php stream_copy_to_stream(STDIN, 1);",
         "stream_copy_to_stream() expects resource, got int",
+    );
+}
+
+/// Verifies `stream_copy_to_stream()` rejects non-integer length and offset
+/// arguments before the bounded-copy lowering consumes them.
+#[test]
+fn test_error_stream_copy_to_stream_length_and_offset_must_be_ints() {
+    expect_error(
+        r#"<?php stream_copy_to_stream(STDIN, STDOUT, "5");"#,
+        "stream_copy_to_stream() length must be int or null",
+    );
+    expect_error(
+        r#"<?php stream_copy_to_stream(STDIN, STDOUT, 5, "0");"#,
+        "stream_copy_to_stream() offset must be int",
     );
 }
 

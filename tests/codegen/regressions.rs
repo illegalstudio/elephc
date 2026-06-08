@@ -23,3 +23,7 @@ mod string_memory;
 mod builtins_misc;
 #[path = "regressions/concat_buffer_args.rs"]
 mod concat_buffer_args;
+#[path = "regressions/param_inference.rs"]
+mod param_inference;
+#[path = "regressions/mixed_method_dispatch.rs"]
+mod mixed_method_dispatch;

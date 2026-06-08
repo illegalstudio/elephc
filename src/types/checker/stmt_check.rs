@@ -11,6 +11,7 @@
 
 mod assignments;
 mod control_flow;
+mod narrowing;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Stmt, StmtKind};

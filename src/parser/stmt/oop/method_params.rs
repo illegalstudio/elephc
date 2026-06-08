@@ -50,6 +50,10 @@ pub(super) fn parse_method_params(
                 &Token::Comma,
                 "Expected ',' between parameters",
             )?;
+            // Allow a trailing comma before the closing paren (PHP 8.0+).
+            if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
+                break;
+            }
         }
         // PHP 8.0 parameter attributes — also covers attributes preceding a
         // promoted-property modifier such as `#[Inject] public Foo $f`.

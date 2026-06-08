@@ -72,6 +72,12 @@ pub(crate) struct Checker {
     /// Tracks callable signatures inferred for user-function callable parameters,
     /// keyed by (function_name, param_name).
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Tracks which undeclared function parameters have already had their type
+    /// adopted from a real call site, keyed by (function_name, param_index). The
+    /// first such call adopts the actual argument type; later disagreeing calls
+    /// widen the parameter to `Mixed` (so e.g. a parameter called with both an int
+    /// and a string is `Mixed`, not collapsed to one type).
+    pub param_specialization_seen: HashSet<(String, usize)>,
     /// Tracks callable signatures inferred for user-function callable returns.
     pub callable_return_sigs: HashMap<String, FunctionSig>,
     /// Tracks callable element signatures inferred for user-function array returns.

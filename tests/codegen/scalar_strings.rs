@@ -135,6 +135,53 @@ fn test_intval_int_passthrough() {
     assert_eq!(out, "42");
 }
 
+/// Verifies that `intval()` of a large integer string above 2^53 is exact, not routed through
+/// `f64` (which would lose precision — e.g. `1234567890123456789` would become `...456768`).
+/// These strings are not constant-folded (intval-of-string is evaluated at runtime), so this
+/// exercises the `__rt_str_to_int` helper.
+#[test]
+fn test_intval_large_exact_integer_strings() {
+    let out = compile_and_run(
+        "<?php echo intval(\"9223372036854775805\"), \"|\", intval(\"1234567890123456789\"), \"|\", intval(\"9223372036854775000\"), \"|\", intval(\"-9223372036854775808\");",
+    );
+    assert_eq!(
+        out,
+        "9223372036854775805|1234567890123456789|9223372036854775000|-9223372036854775808"
+    );
+}
+
+/// Verifies that `intval()` of out-of-range integer strings clamps to PHP_INT_MAX/PHP_INT_MIN
+/// (matching PHP's `strtol`-style saturation), exercising the runtime `__rt_str_to_int` helper.
+#[test]
+fn test_intval_overflow_strings_clamp() {
+    let out = compile_and_run(
+        "<?php echo intval(\"99999999999999999999\"), \"|\", intval(\"-99999999999999999999\");",
+    );
+    assert_eq!(out, "9223372036854775807|-9223372036854775808");
+}
+
+/// Verifies that the `(int)` cast of a runtime (non-constant) large integer string is exact,
+/// sharing the `__rt_str_to_int` helper with `intval()` (the constant `(int)"..."` form folds
+/// separately at compile time, so this passes the string through a function to force runtime).
+#[test]
+fn test_int_cast_large_exact_integer_string_runtime() {
+    let out = compile_and_run(
+        "<?php function s($x): string { return $x; } echo (int) s(\"1234567890123456789\");",
+    );
+    assert_eq!(out, "1234567890123456789");
+}
+
+/// Verifies that `intval()` of float-form and partial numeric strings still matches PHP:
+/// `"1e3"` parses as the float 1000, `"3.14"` truncates to 3, `"12abc"` stops at the first
+/// non-digit, leading whitespace/sign are handled, and non-numeric strings yield 0.
+#[test]
+fn test_intval_float_form_and_partial_strings() {
+    let out = compile_and_run(
+        "<?php echo intval(\"1e3\"), \"|\", intval(\"3.14\"), \"|\", intval(\"12abc\"), \"|\", intval(\"  -5\"), \"|\", intval(\"abc\");",
+    );
+    assert_eq!(out, "1000|3|12|-5|0");
+}
+
 /// Compiles `<?php echo "before"; exit(0); echo "after";` and asserts stdout is `before`.
 /// Verifies `exit` stops execution and prevents output of subsequent statements.
 #[test]

@@ -580,12 +580,17 @@ pub(super) fn emit_spaceship_binop(
         Arch::AArch64 => {
             emitter.instruction("cset x0, gt");                                 // set x0 to 1 when left > right, else 0
             emitter.instruction("csinv x0, x0, xzr, ge");                       // keep 1 when left >= right, invert to -1 when left < right
+            if left_ty == PhpType::Float || right_ty == PhpType::Float {
+                emitter.instruction("mov w1, #1");                              // candidate spaceship result for an unordered (NaN) comparison
+                emitter.instruction("csel x0, x1, x0, vs");                     // PHP: NaN <=> x is 1 — pick 1 when fcmp was unordered
+            }
         }
         Arch::X86_64 => {
             let greater_label = ctx.next_label("spaceship_gt");
             let less_label = ctx.next_label("spaceship_lt");
             let done_label = ctx.next_label("spaceship_done");
             if left_ty == PhpType::Float || right_ty == PhpType::Float {
+                emitter.instruction(&format!("jp {}", greater_label));          // PHP: NaN <=> x is 1 — route unordered (parity) to the greater (1) branch
                 emitter.instruction(&format!("ja {}", greater_label));          // floats: jump to greater branch when unordered-above
                 emitter.instruction(&format!("jb {}", less_label));             // floats: jump to less branch when unordered-below
             } else {

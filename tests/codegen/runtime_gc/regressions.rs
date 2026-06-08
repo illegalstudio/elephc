@@ -96,6 +96,69 @@ echo "done";
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
+/// Regression: a temporary object implicitly stringified via `__toString` in `echo` must
+/// be released, not leaked. 100 iterations would accumulate 100 leaked objects otherwise.
+#[test]
+fn test_tostring_temp_object_released_on_echo() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class Greeter { public function __toString(): string { return "hi"; } }
+for ($i = 0; $i < 100; $i++) { echo new Greeter(); }
+echo "\n";
+"#,
+    );
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Regression: a temporary object stringified via `__toString` in a concatenation must be
+/// released.
+#[test]
+fn test_tostring_temp_object_released_on_concat() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class Greeter { public function __toString(): string { return "hi"; } }
+for ($i = 0; $i < 100; $i++) { $s = "x" . new Greeter(); }
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Regression: a temporary object cast to string via `(string)` must be released.
+#[test]
+fn test_tostring_temp_object_released_on_string_cast() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class Greeter { public function __toString(): string { return "hi"; } }
+for ($i = 0; $i < 100; $i++) { $s = (string) new Greeter(); }
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Guard: a variable-held object stringified via `__toString` is owned by the variable
+/// slot and must NOT be released by the coercion (otherwise it would be double-freed).
+#[test]
+fn test_tostring_variable_object_not_double_freed() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+class Greeter { public function __toString(): string { return "hi"; } }
+$g = new Greeter();
+for ($i = 0; $i < 100; $i++) { echo $g; }
+echo "\n";
+"#,
+    );
+    assert!(out.success, "program crashed (double free?): {}", out.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
 /// Regression test: creating assoc arrays via a factory function, pushing them
 /// into a numerically-indexed array, then iterating and accessing keys. Verifies
 /// that `make()` return values survive being stored and retrieved from a outer
@@ -787,4 +850,22 @@ run();
         "expected a clean heap, got: {}",
         out.stderr
     );
+}
+
+/// Regression test for the array-to-string echo fix: echoing an owned temporary array
+/// stringifies to "Array" and releases the temporary, keeping GC allocs and frees balanced
+/// (no leak from the discarded array, no premature/double free).
+#[test]
+fn test_echo_owned_temp_array_balances_gc_stats() {
+    let baseline = compile_and_run_with_gc_stats("<?php");
+    let out = compile_and_run_with_gc_stats("<?php echo [1, 2, 3];");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "Array");
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert!(
+        allocs - baseline_allocs >= 1,
+        "expected the temporary array to allocate at least once"
+    );
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
 }

@@ -34,6 +34,16 @@ fn test_emit_frame_helpers_small_frame() {
     );
 }
 
+/// Verifies the frame prologue rejects a frame too small to hold the x29/x30 footer
+/// (`frame_size < 16`) with a clear assertion message in debug builds, instead of
+/// underflowing the `frame_size - 16` footer-offset subtraction into a corrupt offset.
+#[test]
+#[should_panic(expected = "frame_size must reserve the 16-byte frame footer")]
+fn test_emit_frame_prologue_rejects_undersized_frame() {
+    let mut emitter = test_emitter();
+    emit_frame_prologue(&mut emitter, 8);
+}
+
 /// Tests that string return values (pointer in x1, length in x2) are preserved
 /// across function boundaries by storing them to the caller's stack frame at negative
 /// offsets and restoring them after the call. Uses offset 32 for both stores.

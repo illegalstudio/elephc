@@ -50,6 +50,58 @@ fn test_string_no_interpolation() {
     assert_eq!(out, "$x");
 }
 
+/// Verifies complex `{$var}` interpolation: the braces delimit the variable and are not
+/// emitted literally.
+#[test]
+fn test_string_interpolation_complex_simple_var() {
+    let out = compile_and_run(r#"<?php $b = "B"; echo "a{$b}c";"#);
+    assert_eq!(out, "aBc");
+}
+
+/// Verifies complex `{$arr[idx]}` interpolation evaluates the array access inside braces.
+#[test]
+fn test_string_interpolation_complex_array_access() {
+    let out = compile_and_run(r#"<?php $a = [1, 2, 3]; echo "x{$a[1]}y";"#);
+    assert_eq!(out, "x2y");
+}
+
+/// Verifies complex `{$obj->prop}` interpolation evaluates the property access inside braces.
+#[test]
+fn test_string_interpolation_complex_property() {
+    let out = compile_and_run(r#"<?php class C { public $x = 5; } $o = new C(); echo "{$o->x}";"#);
+    assert_eq!(out, "5");
+}
+
+/// Verifies simple `$arr[key]` interpolation with a bareword key (treated as a string key).
+#[test]
+fn test_string_interpolation_simple_array_bareword() {
+    let out = compile_and_run(r#"<?php $a = ["k" => "V"]; echo "X $a[k] Y";"#);
+    assert_eq!(out, "X V Y");
+}
+
+/// Verifies simple `$arr[int]` interpolation with an integer key.
+#[test]
+fn test_string_interpolation_simple_array_int() {
+    let out = compile_and_run(r#"<?php $a = [10, 20]; echo "$a[1]";"#);
+    assert_eq!(out, "20");
+}
+
+/// Verifies simple `$obj->prop` interpolation reads a single property.
+#[test]
+fn test_string_interpolation_simple_property() {
+    let out =
+        compile_and_run(r#"<?php class C { public $x = 5; } $o = new C(); echo "v=$o->x";"#);
+    assert_eq!(out, "v=5");
+}
+
+/// Verifies a `{` not followed by `$` stays a literal brace (PHP only treats `{$` as the
+/// start of complex interpolation).
+#[test]
+fn test_string_literal_brace_not_interpolation() {
+    let out = compile_and_run(r#"<?php echo "a{b}c";"#);
+    assert_eq!(out, "a{b}c");
+}
+
 /// Verifies `md5()` produces the correct hash for an empty string input.
 #[test]
 fn test_md5_empty() {

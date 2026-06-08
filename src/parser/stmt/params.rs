@@ -249,6 +249,10 @@ pub(super) fn parse_params(
                 &Token::Comma,
                 "Expected ',' between parameters",
             )?;
+            // Allow a trailing comma before the closing paren (PHP 8.0+).
+            if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
+                break;
+            }
         }
         // PHP 8.0 parameter attributes (`function f(#[Sensitive] $s)`).
         crate::parser::consume_attribute_lists(tokens, pos)?;

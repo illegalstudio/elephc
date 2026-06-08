@@ -35,10 +35,17 @@ pub(super) fn emit_set_bool_from_flags(emitter: &mut Emitter, cond: &str) {
 }
 
 /// Sets integer result (x0/rax) from float comparison flags.
+///
+/// Applies PHP's NaN (unordered) rule: every ordering/equality comparison against NaN is false
+/// except `!=`, which is true. After the conditional set, the unordered case (ARM64 `V`, x86_64
+/// parity flag) is forced to 0 for `==`/`<`/`>`/`<=`/`>=` and to 1 for `!=`.
 pub(super) fn emit_set_float_bool_from_flags(emitter: &mut Emitter, cond: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("cset x0, {}", cond));                 // set integer result to 1 if the float comparison condition matched
+            if cond != "ne" {
+                emitter.instruction("csel x0, xzr, x0, vs");                    // PHP: an unordered (NaN) ==, <, >, <=, >= is false — force 0 when fcmp was unordered
+            }
         }
         Arch::X86_64 => {
             let setcc = match cond {
@@ -51,6 +58,13 @@ pub(super) fn emit_set_float_bool_from_flags(emitter: &mut Emitter, cond: &str) 
                 _ => unreachable!("unsupported float comparison condition {cond}"),
             };
             emitter.instruction(&format!("{} al", setcc));                      // set the low result byte when the float comparison condition matched
+            if cond == "ne" {
+                emitter.instruction("setp cl");                                 // cl = 1 when ucomisd was unordered (a NaN operand)
+                emitter.instruction("or al, cl");                               // PHP: NaN != x is true — OR the unordered case into the not-equal result
+            } else {
+                emitter.instruction("setnp cl");                                // cl = 1 only when the comparison was ordered (no NaN operand)
+                emitter.instruction("and al, cl");                              // PHP: an unordered (NaN) comparison is false — mask out the unordered case
+            }
             emitter.instruction("movzx rax, al");                               // zero-extend the boolean byte into the integer result register
         }
     }

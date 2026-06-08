@@ -9,6 +9,48 @@
 
 use super::*;
 
+/// Parses `$obj->self()` and verifies a semi-reserved keyword (`self`) is accepted as a
+/// method name after `->`, producing a `MethodCall` with method "self" (PHP 8 semi-reserved).
+#[test]
+fn test_parse_keyword_method_call() {
+    let stmts = parse_source("<?php $obj->self();");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::MethodCall { method, .. } => assert_eq!(method, "self"),
+            other => panic!("Expected MethodCall, got {:?}", other),
+        },
+        _ => panic!("Expected ExprStmt"),
+    }
+}
+
+/// Parses `$obj->list` and verifies a semi-reserved keyword (`list`) is accepted as a
+/// property name after `->`, producing a `PropertyAccess` with property "list".
+#[test]
+fn test_parse_keyword_property_access() {
+    let stmts = parse_source("<?php echo $obj->list;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::PropertyAccess { property, .. } => assert_eq!(property, "list"),
+            other => panic!("Expected PropertyAccess, got {:?}", other),
+        },
+        _ => panic!("Expected Echo"),
+    }
+}
+
+/// Parses `Factory::new()` and verifies a semi-reserved keyword (`new`) is accepted as a
+/// static method name after `::`, producing a `StaticMethodCall` with method "new".
+#[test]
+fn test_parse_keyword_static_method_call() {
+    let stmts = parse_source("<?php Factory::new();");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::StaticMethodCall { method, .. } => assert_eq!(method, "new"),
+            other => panic!("Expected StaticMethodCall, got {:?}", other),
+        },
+        _ => panic!("Expected ExprStmt"),
+    }
+}
+
 /// Parses `$obj->run(1, 2)` and verifies `MethodCall` AST with correct method name,
 /// argument count, and object expression kind (Variable).
 #[test]
