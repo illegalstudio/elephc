@@ -649,6 +649,7 @@ fn test_array_fill_zero_start_scalar_stays_indexed() {
         r#"<?php $a = array_fill(0, 3, 9); echo count($a), ":", $a[0], $a[1], $a[2];"#,
     );
     assert_eq!(out, "3:999");
+}
 
 /// Verifies an un-annotated method returning an array can be stored in a local and indexed.
 /// Regression: the initial type-checking pass mis-typed the method's return before method
