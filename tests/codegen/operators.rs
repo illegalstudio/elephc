@@ -391,3 +391,66 @@ fn test_greater_equal() {
     let out = compile_and_run("<?php echo 1 >= 2;");
     assert_eq!(out, "");
 }
+
+// --- Audit T2/C1: NaN follows IEEE/PHP comparison rules on every target ---
+
+/// Regression (T2/C1): every ordered float comparison against NaN is false, except `!=`.
+/// x86_64 `ucomisd`+`setCC` set ZF/CF on unordered (so `==`/`<`/`<=` wrongly read true) and
+/// arm64 `cset lt`/`le` read the unordered N!=V as true; both must be guarded. Order:
+/// `==`, `!=`, `<`, `<=`, `>`, `>=` → only `!=` is true.
+#[test]
+fn test_nan_comparison_operators_follow_php() {
+    let out = compile_and_run(
+        r#"<?php
+$n = NAN; $o = 1.0;
+echo ($n == $o) ? "1" : "0", ($n != $o) ? "1" : "0", ($n < $o) ? "1" : "0",
+     ($n <= $o) ? "1" : "0", ($n > $o) ? "1" : "0", ($n >= $o) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "010000");
+}
+
+/// Regression (T2/C1): strict `NAN === NAN` is false and `NAN !== NAN` is true (PHP).
+/// x86_64 `sete`/`setne` after `ucomisd` misread the unordered compare without a parity guard.
+#[test]
+fn test_nan_strict_equality_follows_php() {
+    let out = compile_and_run(
+        r#"<?php $n = NAN; echo ($n === $n) ? "1" : "0", ($n !== $n) ? "1" : "0";"#,
+    );
+    assert_eq!(out, "01");
+}
+
+/// Regression (T2/C1): `(bool)NAN` is true and `empty(NAN)` is false (NaN is truthy in PHP).
+/// The x86_64 float truthiness/empty sinks needed a parity guard so NaN is not read as 0.0.
+#[test]
+fn test_nan_bool_cast_and_empty_float() {
+    let out = compile_and_run(
+        r#"<?php $n = NAN; echo ((bool)$n) ? "1" : "0", empty($n) ? "1" : "0";"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Regression (T2/C1): `(bool)` and `empty()` of a boxed Mixed NaN follow the same rules
+/// through the `__rt_mixed_cast_bool`/`__rt_mixed_is_empty` float arms.
+#[test]
+fn test_nan_bool_cast_and_empty_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$n = NAN;
+$arr = [$n, "x"];
+$m = $arr[0];
+echo ((bool)$m) ? "1" : "0", empty($m) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Regression (T2/C1): a NaN `match` subject matches no arm (PHP `match` uses `===`, and
+/// `NAN === anything` is false), so it falls through to `default`.
+#[test]
+fn test_nan_match_falls_through_to_default() {
+    let out = compile_and_run(
+        r#"<?php $n = NAN; echo match($n) { 1.0 => "one", default => "def" };"#,
+    );
+    assert_eq!(out, "def");
+}

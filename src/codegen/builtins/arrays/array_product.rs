@@ -35,15 +35,22 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("array_product()");
-    emit_expr(&args[0], emitter, ctx, data);
+    let arr_ty = emit_expr(&args[0], emitter, ctx, data);
+    // -- a float[] multiplies as IEEE doubles (result in d0/xmm0); everything else as int --
+    let (runtime, ret_ty) = match &arr_ty {
+        PhpType::Array(elem) if matches!(**elem, PhpType::Float) => {
+            ("__rt_array_product_float", PhpType::Float)
+        }
+        _ => ("__rt_array_product", PhpType::Int),
+    };
     if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("mov rdi, rax");                                    // move the source scalar indexed-array pointer into the first x86_64 runtime argument register
-        abi::emit_call_label(emitter, "__rt_array_product");                    // multiply the scalar indexed-array payloads through the x86_64 runtime helper
-        return Some(PhpType::Int);
+        emitter.instruction("mov rdi, rax");                                    // move the source indexed-array pointer into the first x86_64 runtime argument register
+        abi::emit_call_label(emitter, runtime);                                 // multiply the indexed-array payloads through the x86_64 runtime helper
+        return Some(ret_ty);
     }
 
     // -- call runtime to compute product of all array elements --
-    emitter.instruction("bl __rt_array_product");                               // call runtime: multiply array elements → x0=product
+    emitter.instruction(&format!("bl {}", runtime));                            // call runtime: multiply array elements → x0 (int) or d0 (float)
 
-    Some(PhpType::Int)
+    Some(ret_ty)
 }

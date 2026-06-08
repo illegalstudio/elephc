@@ -9,13 +9,15 @@
 //! - Effect summaries must account for globals, heap/runtime state, output, throws, and by-reference mutation.
 
 use super::*;
-use super::builtins::is_pure_non_throwing_builtin;
+use super::builtins::{is_pure_but_may_throw_builtin, is_pure_non_throwing_builtin};
 
 /// Looks up the effect for a named function call.
 ///
-/// Uses thread-local `ACTIVE_FUNCTION_EFFECTS` for user-defined functions. Falls back to
-/// `is_pure_non_throwing_builtin` for builtins; all other calls default to `Effect::PURE` with
-/// side effects and may-throw, conservatively modeling unknown behavior.
+/// Uses thread-local `ACTIVE_FUNCTION_EFFECTS` for user-defined functions. For builtins, falls
+/// back to the purity classifiers: `is_pure_non_throwing_builtin` → `Effect::PURE`, and
+/// `is_pure_but_may_throw_builtin` → pure but `may_throw` (so a bare-statement call is retained
+/// by DCE). All other calls default to `Effect::PURE` with side effects and may-throw,
+/// conservatively modeling unknown behavior.
 pub(in crate::optimize) fn function_call_effect(name: &str) -> Effect {
     ACTIVE_FUNCTION_EFFECTS.with(|slot| {
         slot.borrow()
@@ -25,6 +27,8 @@ pub(in crate::optimize) fn function_call_effect(name: &str) -> Effect {
     .unwrap_or_else(|| {
         if is_pure_non_throwing_builtin(name) {
             Effect::PURE
+        } else if is_pure_but_may_throw_builtin(name) {
+            Effect::PURE.with_may_throw()
         } else {
             Effect::PURE.with_side_effects().with_may_throw()
         }

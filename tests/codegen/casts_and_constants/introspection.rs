@@ -190,4 +190,22 @@ echo $x;
     assert_eq!(out, "3");
 }
 
+/// Verifies settype() coerces string and boxed Mixed sources per PHP cast rules (L2): a string
+/// or Mixed source was previously zeroed for "integer"/"float" and mis-handled for "bool".
+#[test]
+fn test_settype_string_and_mixed_sources() {
+    let out = compile_and_run(
+        r#"<?php
+$i = "42abc"; settype($i, "integer");
+$f = "3.14"; settype($f, "float");
+$b0 = "0";   settype($b0, "bool");
+$b1 = "hi";  settype($b1, "bool");
+$a = ["7.5", 1]; $m = $a[0]; settype($m, "float");
+$ok = $i === 42 && $f === 3.14 && $b0 === false && $b1 === true && $m === 7.5;
+echo $ok ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 // --- Missing type function tests ---

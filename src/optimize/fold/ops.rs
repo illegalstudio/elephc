@@ -151,13 +151,18 @@ fn fold_int_overflow_to_float(op: &BinOp, left: i64, right: i64) -> Option<ExprK
     result.is_finite().then_some(ExprKind::FloatLiteral(result))
 }
 
-/// Returns the integer modulus of two integer literals, or `None` if either operand is not an integer or if the divisor is zero.
+/// Returns the integer modulus of two integer literals, or `None` if either operand
+/// is not an integer or the divisor is zero (deferred to the runtime).
+///
+/// `x % -1` is special-cased to `0`: it is always zero in PHP, and computing it with
+/// `i64::%` overflows for `i64::MIN % -1` — which panics this debug build and traps
+/// (SIGFPE) at runtime — so folding it directly avoids both.
 fn try_fold_int_mod(left: &Expr, right: &Expr) -> Option<ExprKind> {
     let (left, right) = (int_literal(left)?, int_literal(right)?);
-    if right == 0 {
-        None
-    } else {
-        Some(ExprKind::IntLiteral(left % right))
+    match right {
+        0 => None,
+        -1 => Some(ExprKind::IntLiteral(0)),
+        _ => Some(ExprKind::IntLiteral(left % right)),
     }
 }
 

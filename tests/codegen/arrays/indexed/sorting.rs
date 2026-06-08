@@ -118,3 +118,84 @@ echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
     );
     assert_eq!(out, "date,cherry,banana,apple");
 }
+
+/// Verifies sort() orders a float array by numeric value, not by raw 64-bit
+/// bit-pattern. Negative and fractional values must order correctly (the old
+/// integer comparator placed negatives after positives).
+#[test]
+fn test_sort_float_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3.5, -1.2, 2.8, -9.9];
+sort($a);
+echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
+"#,
+    );
+    assert_eq!(out, "-9.9,-1.2,2.8,3.5");
+}
+
+/// Verifies rsort() orders a float array descending by numeric value.
+#[test]
+fn test_rsort_float_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3.5, -1.2, 2.8, -9.9];
+rsort($a);
+echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
+"#,
+    );
+    assert_eq!(out, "3.5,2.8,-1.2,-9.9");
+}
+
+/// Verifies the float sort order independently of float-to-string formatting,
+/// using value comparisons so a regression in the comparator is caught even if
+/// echo formatting changes.
+#[test]
+fn test_sort_float_array_order_is_numeric() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [3.5, -1.2, 2.8, -9.9];
+sort($a);
+echo ($a[0] == -9.9 && $a[1] == -1.2 && $a[2] == 2.8 && $a[3] == 3.5) ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Regression (H7): the sort builtins accept an optional SORT_* `$flags` argument instead of
+/// failing to compile. elephc routes by the array's element family, so SORT_STRING on a string
+/// array, SORT_NUMERIC on a numeric array, and SORT_REGULAR all sort correctly (a flag mismatched
+/// to the element type is not yet specialized). The asort() call exercises flag acceptance on a
+/// key-preserving sort.
+#[test]
+fn test_sort_builtins_accept_sort_flags() {
+    let out = compile_and_run(
+        r#"<?php
+$s = ["banana", "apple", "cherry"];
+sort($s, SORT_STRING);
+echo implode(",", $s);
+$n = [3, 1, 2];
+sort($n, SORT_NUMERIC);
+echo "|" . implode(",", $n);
+$r = [3, 1, 2];
+rsort($r, SORT_NUMERIC);
+echo "|" . implode(",", $r);
+$a = ["x" => 3, "y" => 1];
+asort($a, SORT_REGULAR);
+echo "|ok";
+"#,
+    );
+    assert_eq!(out, "apple,banana,cherry|1,2,3|3,2,1|ok");
+}
+
+/// Regression (H7): the SORT_* flag constants resolve to their PHP integer values when used as
+/// plain expressions (the codegen prescan materializes them alongside the checker registration).
+#[test]
+fn test_sort_flag_constants_have_php_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo SORT_REGULAR . "," . SORT_NUMERIC . "," . SORT_STRING . "," . SORT_NATURAL . "," . SORT_FLAG_CASE;
+"#,
+    );
+    assert_eq!(out, "0,1,2,6,8");
+}

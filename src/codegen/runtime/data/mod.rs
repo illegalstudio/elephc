@@ -28,3 +28,6 @@ pub(crate) const DIRNAME_LEVELS_MSG: &str =
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.
 pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
+/// Fatal error message when `str_split()` receives a `$length` argument less than 1 (PHP `ValueError`).
+pub(crate) const STR_SPLIT_LENGTH_MSG: &str =
+    "Fatal error: str_split(): Argument #2 ($length) must be greater than 0\n";

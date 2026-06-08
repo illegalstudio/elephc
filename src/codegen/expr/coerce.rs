@@ -178,6 +178,31 @@ fn emit_release_saved_object_temp(emitter: &mut Emitter, ty: &PhpType) {
     abi::emit_release_temporary_stack(emitter, 16);                             // discard the saved owned object slot
 }
 
+/// Coerce a numeric value into a float in the float result register (`d0`/`xmm0`), for math
+/// builtins that operate on doubles.
+///
+/// - `Float` → already in `d0`/`xmm0`, no-op.
+/// - `Mixed`/`Union` → `__rt_mixed_cast_float` unboxes the boxed payload to a float. The boxed
+///   cell pointer in the integer register is NOT a valid double, so it must be unboxed rather
+///   than bit-cast — running `scvtf`/`cvtsi2sd` on the pointer was the H1 audit bug.
+/// - everything else → treated as an integer in `x0`/`rax` and converted with `scvtf`/`cvtsi2sd`.
+pub fn coerce_to_float(emitter: &mut Emitter, ty: &PhpType) {
+    match ty {
+        PhpType::Float => {}
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(emitter, "__rt_mixed_cast_float");             // unbox the boxed numeric payload to a float in d0/xmm0
+        }
+        _ => match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("scvtf d0, x0");                            // convert the integer operand to a double
+            }
+            Arch::X86_64 => {
+                emitter.instruction("cvtsi2sd xmm0, rax");                      // convert the integer operand to a double
+            }
+        },
+    }
+}
+
 /// Emit a fatal error and terminate when an object without `__toString()` is coerced to string.
 ///
 /// Writes the error message to stderr using platform syscalls, then exits with code 1.

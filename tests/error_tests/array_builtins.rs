@@ -70,7 +70,7 @@ fn test_error_array_sum_wrong_args() {
 fn test_error_array_search_wrong_args() {
     expect_error(
         "<?php $a = [1]; array_search($a);",
-        "array_search() takes exactly 2 arguments",
+        "array_search() takes 2 or 3 arguments",
     );
 }
 
@@ -88,7 +88,17 @@ fn test_error_array_key_exists_wrong_args() {
 fn test_error_array_slice_wrong_args() {
     expect_error(
         "<?php $a = [1]; array_slice($a);",
-        "array_slice() takes 2 or 3 arguments",
+        "array_slice() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies array_slice() with preserve_keys=true on a non-scalar element array is rejected (M6):
+/// only int/float/bool element arrays are supported for the key-preserving associative result.
+#[test]
+fn test_error_array_slice_preserve_keys_string_array() {
+    expect_error(
+        r#"<?php $a = ["x", "y", "z"]; array_slice($a, 1, 2, true);"#,
+        "preserve_keys=true is only supported for arrays of int, float, or bool",
     );
 }
 
@@ -140,7 +150,7 @@ fn test_error_array_pop_wrong_args() {
 /// Verifies that error in array wrong args.
 #[test]
 fn test_error_in_array_wrong_args() {
-    expect_error("<?php in_array(1);", "in_array() takes exactly 2 arguments");
+    expect_error("<?php in_array(1);", "in_array() takes 2 or 3 arguments");
 }
 
 /// Verifies that error array keys wrong args.
@@ -164,13 +174,13 @@ fn test_error_array_values_wrong_args() {
 /// Verifies that error sort wrong args.
 #[test]
 fn test_error_sort_wrong_args() {
-    expect_error("<?php sort();", "sort() takes exactly 1 argument");
+    expect_error("<?php sort();", "sort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error rsort wrong args.
 #[test]
 fn test_error_rsort_wrong_args() {
-    expect_error("<?php rsort();", "rsort() takes exactly 1 argument");
+    expect_error("<?php rsort();", "rsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error isset wrong args.
@@ -314,25 +324,25 @@ fn test_error_array_rand_wrong_args() {
 /// Verifies that error asort wrong args.
 #[test]
 fn test_error_asort_wrong_args() {
-    expect_error("<?php asort();", "asort() takes exactly 1 argument");
+    expect_error("<?php asort();", "asort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error arsort wrong args.
 #[test]
 fn test_error_arsort_wrong_args() {
-    expect_error("<?php arsort();", "arsort() takes exactly 1 argument");
+    expect_error("<?php arsort();", "arsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error ksort wrong args.
 #[test]
 fn test_error_ksort_wrong_args() {
-    expect_error("<?php ksort();", "ksort() takes exactly 1 argument");
+    expect_error("<?php ksort();", "ksort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error krsort wrong args.
 #[test]
 fn test_error_krsort_wrong_args() {
-    expect_error("<?php krsort();", "krsort() takes exactly 1 argument");
+    expect_error("<?php krsort();", "krsort() takes 1 or 2 arguments");
 }
 
 /// Verifies that error natsort wrong args.
@@ -364,7 +374,59 @@ fn test_error_array_column_wrong_args() {
 fn test_error_array_map_wrong_args() {
     expect_error(
         r#"<?php array_map("fn");"#,
-        "array_map() takes exactly 2 arguments",
+        "array_map() takes at least 2 arguments",
+    );
+}
+
+/// Verifies that the `array_map(null, ...)` zip form reports a clear "not yet supported"
+/// diagnostic rather than miscompiling (bounded H11 increment).
+#[test]
+fn test_error_array_map_null_zip_unsupported() {
+    expect_error(
+        r#"<?php array_map(null, [1, 2], [3, 4]);"#,
+        "array_map(null, ...) array zipping is not yet supported",
+    );
+}
+
+/// Verifies that the multi-array form rejects unsupported element types (here, float arrays) with a
+/// clear diagnostic (the bounded H11 increment supports integer or string arrays only).
+#[test]
+fn test_error_array_map_multi_unsupported_element_type() {
+    expect_error(
+        r#"<?php array_map(fn($a, $b) => $a, [1.5], [2.5]);"#,
+        "array_map() with multiple arrays currently supports only integer or string arrays",
+    );
+}
+
+/// Verifies that the multi-array form rejects an `[obj, method]` callable-array variable callback
+/// with a clear diagnostic. The bounded H11 increment supports named functions, closure literals
+/// (capturing included), and variables holding a closure — but not callable-array variables, which
+/// are materialized through a different dispatch path.
+#[test]
+fn test_error_array_map_multi_callable_array_variable() {
+    expect_error(
+        r#"<?php class C { function add($a, $b) { return $a + $b; } } $o = new C(); $cb = [$o, "add"]; array_map($cb, [1], [2]);"#,
+        "array_map() with multiple arrays currently supports a named function, a closure, or a variable holding a closure",
+    );
+}
+
+/// Verifies that the two-STRING-array form rejects a capturing closure with a clear diagnostic
+/// (the string element path is restricted to a capture-less closure) (H11 string elements).
+#[test]
+fn test_error_array_map_two_string_arrays_capturing_closure() {
+    expect_error(
+        r#"<?php $p = "@"; array_map(fn($a, $b) => $p . $a . $b, ["a"], ["x"]);"#,
+        "array_map() with multiple string arrays requires a capture-less closure",
+    );
+}
+
+/// Verifies that the two-STRING-array form rejects a callback that does not return a string, since
+/// the runtime collects the results as strings (H11 string elements).
+#[test]
+fn test_error_array_map_two_string_arrays_non_string_callback() {
+    expect_error(
+        r#"<?php array_map(fn($a, $b) => 42, ["a"], ["x"]);"#,
+        "array_map() with multiple string arrays currently requires a string-returning callback",
     );
 }
 

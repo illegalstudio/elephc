@@ -10,6 +10,7 @@
 
 mod bootstrap;
 mod calls;
+mod diagnostics;
 mod frame;
 mod registers;
 mod symbols;
@@ -21,6 +22,7 @@ pub use bootstrap::{
     emit_copy_frame_pointer, emit_enable_heap_debug_flag, emit_exit,
     emit_store_process_args_to_globals,
 };
+pub use diagnostics::emit_fatal_to_stderr;
 pub use calls::{
     build_outgoing_arg_assignments_for_target, emit_call_label, emit_call_reg, emit_pop_reg,
     emit_pop_float_reg, emit_pop_reg_pair, emit_push_float_reg, emit_push_reg,

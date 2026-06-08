@@ -22,7 +22,7 @@ mod array_intersect_key;
 mod array_key_exists;
 pub(crate) mod array_keys;
 mod array_map;
-mod array_map_callback_returns_str;
+pub(crate) mod array_map_callback_returns_str;
 mod array_map_expr_is_str;
 mod array_merge;
 mod array_pad;

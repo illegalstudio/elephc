@@ -194,6 +194,9 @@ pub(super) fn emit_numeric_binop(
             emit_promote_int_to_float(emitter, left_float_reg, left_int_reg);
         }
         abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));
+        if *op == BinOp::Div {
+            emit_float_div_by_zero_guard(emitter, ctx, data);
+        }
         emit_float_binop(emitter, op);
         abi::emit_release_temporary_stack(emitter, 16);
         PhpType::Float
@@ -229,7 +232,7 @@ pub(super) fn emit_numeric_binop(
             BinOp::Div => {
                 emitter.instruction("sdiv x0, x1, x0");                         // x0 = left (x1) / right (x0) (signed division)
             }
-            BinOp::Mod => emit_int_mod(emitter, ctx, left_reg, result_reg),
+            BinOp::Mod => emit_int_mod(emitter, ctx, data, left_reg, result_reg),
             _ => unreachable!(),
         }
         PhpType::Int
@@ -542,10 +545,17 @@ fn coerce_numeric_mixed_to_int(emitter: &mut Emitter, ty: &PhpType) {
 }
 
 /// Emits signed integer modulo (left % right) with a divisor-is-zero guard.
-/// On ARM64 uses sdiv/msub; on x86_64 uses idiv. When the divisor is zero, PHP semantics
-/// mandate returning zero rather than triggering a divide-by-zero trap. The left_reg holds
-/// the left operand and result_reg (x0/rax) holds the right operand at entry.
-fn emit_int_mod(emitter: &mut Emitter, ctx: &mut Context, left_reg: &str, result_reg: &str) {
+/// On ARM64 uses sdiv/msub; on x86_64 uses idiv. When the divisor is zero, raises an
+/// uncatchable "modulo by zero" fatal and exits, matching PHP's DivisionByZeroError as closely
+/// as elephc can (elephc has no catchable runtime-error mechanism yet). The left_reg holds the
+/// left operand and result_reg (x0/rax) holds the right operand at entry.
+fn emit_int_mod(
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+    left_reg: &str,
+    result_reg: &str,
+) {
     let skip = ctx.next_label("mod_ok");
     let zero = ctx.next_label("mod_zero");
     match emitter.target.arch {
@@ -555,7 +565,7 @@ fn emit_int_mod(emitter: &mut Emitter, ctx: &mut Context, left_reg: &str, result
             emitter.instruction("msub x0, x2, x0, x1");                         // x0 = left - quotient*right (the remainder)
             emitter.instruction(&format!("b {skip}"));                          // skip the divisor-zero case
             emitter.label(&zero);
-            emitter.instruction("mov x0, #0");                                  // return 0 when the divisor was zero (PHP semantics)
+            abi::emit_fatal_to_stderr(emitter, data, b"Fatal error: modulo by zero\n");
             emitter.label(&skip);
         }
         Arch::X86_64 => {
@@ -568,8 +578,33 @@ fn emit_int_mod(emitter: &mut Emitter, ctx: &mut Context, left_reg: &str, result
             emitter.instruction(&format!("mov {}, rdx", result_reg));           // return the remainder in the result register
             emitter.instruction(&format!("jmp {}", skip));                      // skip the divisor-zero case
             emitter.label(&zero);
-            emitter.instruction(&format!("mov {}, 0", result_reg));             // return 0 when the divisor was zero (PHP semantics)
+            abi::emit_fatal_to_stderr(emitter, data, b"Fatal error: modulo by zero\n");
             emitter.label(&skip);
         }
     }
+}
+
+/// Emits a guard before a floating-point division that raises an uncatchable "division by zero"
+/// fatal when the divisor (in the float result register `d0`/`xmm0`) is exactly 0.0.
+///
+/// A NaN divisor is left alone (`x / NaN = NaN`, which PHP does not treat as a division-by-zero
+/// error), so on x86_64 a parity check skips the fatal for the unordered case. PHP raises a
+/// catchable DivisionByZeroError here; elephc emits an uncatchable fatal because it has no
+/// runtime-error exception mechanism yet.
+fn emit_float_div_by_zero_guard(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
+    let ok = ctx.next_label("fdiv_ok");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("fcmp d0, #0.0");                               // compare the divisor against 0.0
+            emitter.instruction(&format!("b.ne {}", ok));                       // skip the fatal when the divisor is non-zero (or NaN)
+        }
+        Arch::X86_64 => {
+            emitter.instruction("xorps xmm2, xmm2");                            // materialize 0.0 in a scratch register for the comparison
+            emitter.instruction("ucomisd xmm0, xmm2");                          // compare the divisor against 0.0 (sets PF when the divisor is NaN)
+            emitter.instruction(&format!("jne {}", ok));                        // skip the fatal when the divisor differs from 0.0
+            emitter.instruction(&format!("jp {}", ok));                         // skip the fatal when the divisor is NaN (unordered)
+        }
+    }
+    abi::emit_fatal_to_stderr(emitter, data, b"Fatal error: division by zero\n");
+    emitter.label(&ok);
 }

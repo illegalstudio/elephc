@@ -50,15 +50,15 @@ impl Checker {
         let mut current = self
             .classes
             .get(class_name)
-            .and_then(|class| class.parent.clone());
+            .and_then(|class| class.parent.as_deref());
         while let Some(parent_name) = current {
             if parent_name == ancestor_name {
                 return true;
             }
             current = self
                 .classes
-                .get(&parent_name)
-                .and_then(|class| class.parent.clone());
+                .get(parent_name)
+                .and_then(|class| class.parent.as_deref());
         }
         false
     }

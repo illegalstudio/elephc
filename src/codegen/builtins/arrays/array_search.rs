@@ -46,6 +46,15 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("array_search()");
 
+    // H10: evaluate the optional $strict flag for its side effects. elephc's element comparison is
+    // already value/byte-exact (strict semantics) when the needle type matches the array element
+    // type — the common case — so the flag value does not change that result; cross-type and Mixed
+    // strict comparison remain a separate refinement. Evaluated first so it cannot clobber the
+    // needle/array registers held across the search loop.
+    if args.len() >= 3 {
+        emit_expr(&args[2], emitter, ctx, data);
+    }
+
     // -- evaluate array (second arg) first to get its type --
     let arr_ty = emit_expr(&args[1], emitter, ctx, data);
 

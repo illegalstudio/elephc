@@ -12,15 +12,16 @@ use crate::codegen::abi;
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
 /// Emits code for PHP's `settype($var, $type)` builtin.
 ///
 /// Converts the variable named in `args[0]` to the type specified by the string literal in
-/// `args[1]`. Supports `"int"`/`"integer"`, `"float"`/`"double"`, `"string"`, and `"bool"`/`"boolean"`.
-/// Updates the variable's type in the context and always returns `true` (bool).
+/// `args[1]`. Supports `"int"`/`"integer"`, `"float"`/`"double"`, `"string"`, and `"bool"`/`"boolean"`,
+/// coercing string and boxed `Mixed`/`Union` sources per PHP cast rules (e.g. `"3.14"` → 3.14,
+/// `"0"` → false) rather than zeroing them. `"array"`/`"null"` and a non-literal type name are not
+/// yet supported (the variable is left unchanged). Updates the variable's type and returns `true`.
 ///
 /// # Arguments
 /// - `args[0]` must be a `Variable` expression naming the target variable.
@@ -50,6 +51,12 @@ pub fn emit(
                             abi::emit_float_result_to_int_result(emitter);      // truncate the floating-point source value into the active integer result register for the current target ABI
                         }
                         PhpType::Bool | PhpType::Int => {}
+                        PhpType::Str => {
+                            abi::emit_call_label(emitter, "__rt_str_to_int");   // parse a string source with PHP string-to-int cast rules
+                        }
+                        PhpType::Mixed | PhpType::Union(_) => {
+                            abi::emit_call_label(emitter, "__rt_mixed_cast_int"); // unbox a boxed source and coerce it to int per PHP casting
+                        }
                         _ => {
                             abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0); // coerce unsupported settype(..., \"integer\") sources to zero in the active integer result register
                         }
@@ -59,10 +66,11 @@ pub fn emit(
                 "float" | "double" => {
                     // -- convert value to float --
                     match &old_ty {
-                        PhpType::Float => {}
-                        _ => {
-                            abi::emit_int_result_to_float_result(emitter);      // convert the scalar settype(..., \"float\") source into the active floating-point result register
+                        PhpType::Str => {
+                            abi::emit_call_label(emitter, "__rt_str_to_number"); // parse a string source to a double via strtod (numeric flag ignored)
                         }
+                        // Float is a no-op; Mixed/Union unbox via __rt_mixed_cast_float; int/bool convert.
+                        _ => crate::codegen::expr::coerce_to_float(emitter, &old_ty),
                     }
                     PhpType::Float
                 }
@@ -71,19 +79,8 @@ pub fn emit(
                     PhpType::Str
                 }
                 "bool" | "boolean" => {
-                    // -- convert value to boolean --
-                    crate::codegen::expr::coerce_null_to_zero(emitter, &old_ty);
-                    match emitter.target.arch {
-                        Arch::X86_64 => {
-                            emitter.instruction("cmp rax, 0");                  // compare the coerced scalar source against zero before normalizing it into a boolean on x86_64
-                            emitter.instruction("setne al");                    // set the low byte when the coerced scalar source is truthy on x86_64
-                            emitter.instruction("movzx eax, al");               // widen the normalized boolean result back into the full x86_64 integer result register
-                        }
-                        Arch::AArch64 => {
-                            emitter.instruction("cmp x0, #0");                  // compare the coerced scalar source against zero before normalizing it into a boolean on AArch64
-                            emitter.instruction("cset x0, ne");                 // set the integer result register to 1 when the coerced scalar source is truthy on AArch64
-                        }
-                    }
+                    // -- convert value to boolean (PHP truthiness: handles strings "0"/"", floats, and boxed Mixed) --
+                    crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &old_ty);
                     PhpType::Bool
                 }
                 _ => old_ty.clone(),

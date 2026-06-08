@@ -32,8 +32,12 @@ pub(crate) mod preg_constants;
 mod result;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
+/// PHP `PHP_ROUND_HALF_*` mode constants for `round()`.
+pub(crate) mod round_constants;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
+/// PHP `SORT_*` flag constants for the sort builtins.
+pub(crate) mod sort_constants;
 pub(crate) mod stream_constants;
 /// Type checker diagnostics and warnings.
 mod warnings;
@@ -55,6 +59,17 @@ pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };
 pub use signatures::FunctionSig;
+
+/// Returns true when an `array_slice()` call requests key preservation via a literal `true` fourth
+/// argument. Shared by the type checker, codegen emitter, and codegen local-type inference so all
+/// three agree on the result shape (an integer-keyed associative array). A drift between callers
+/// would disagree on Array-vs-AssocArray storage, which is a heap-shape mismatch.
+pub(crate) fn array_slice_literal_preserve_keys(args: &[crate::parser::ast::Expr]) -> bool {
+    matches!(
+        args.get(3).map(|arg| &arg.kind),
+        Some(crate::parser::ast::ExprKind::BoolLiteral(true))
+    )
+}
 
 /// Type checks the program after name resolution. Returns `CheckResult` with type
 /// metadata, function/class/interface/enum info, warnings, required libraries, and the

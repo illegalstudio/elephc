@@ -10,7 +10,7 @@
 
 use super::{
     DIRNAME_LEVELS_MSG, PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG,
-    STR_REPEAT_TIMES_MSG,
+    STR_REPEAT_TIMES_MSG, STR_SPLIT_LENGTH_MSG,
 };
 use super::super::system;
 use crate::types::checker::builtins::supported_builtin_function_names;
@@ -75,6 +75,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(&format!(
         ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
         STR_REPEAT_TIMES_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _str_split_length_msg\n_str_split_length_msg:\n    .ascii {:?}\n",
+        STR_SPLIT_LENGTH_MSG
     ));
     for (label, message) in [
         ("_spl_dll_pop_empty_msg", "Can't pop from an empty datastructure"),

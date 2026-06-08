@@ -11,8 +11,8 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
-use crate::codegen::{abi, platform::Arch};
+use crate::codegen::expr::{coerce_to_float, emit_expr};
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -44,9 +44,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("rad2deg()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
-    if ty != PhpType::Float {
-        abi::emit_int_result_to_float_result(emitter);                          // normalize the radian input into the active floating-point result register before applying the conversion factor
-    }
+    coerce_to_float(emitter, &ty); // normalize int/Mixed inputs to a float in d0/xmm0
     // -- multiply by 180.0 / M_PI to convert radians to degrees --
     let label = data.add_float(180.0 / std::f64::consts::PI);
     match emitter.target.arch {

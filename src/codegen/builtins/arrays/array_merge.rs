@@ -49,23 +49,50 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("array_merge()");
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
-    let uses_refcounted_runtime =
-        matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
+    // Pick the merge helper from the element kind of EITHER argument: an empty `[]` first
+    // argument carries no element-type hint, so a common `$r = []; array_merge($r, $strs)`
+    // must still use the string path. String elements use 16-byte (ptr+len) slots; other
+    // refcounted elements (array/object/Mixed) are 8-byte heap pointers; the rest are scalar.
+    // Routing strings through the 8-byte merge would corrupt every element past the first.
+    let second_ty = crate::codegen::functions::infer_contextual_type(&args[1], ctx);
+    let is_str_array =
+        |t: &PhpType| matches!(t, PhpType::Array(inner) if matches!(**inner, PhpType::Str));
+    let is_refcounted_array =
+        |t: &PhpType| matches!(t, PhpType::Array(inner) if inner.is_refcounted());
+    let any_str = is_str_array(&arr_ty) || is_str_array(&second_ty);
+    let any_refcounted = is_refcounted_array(&arr_ty) || is_refcounted_array(&second_ty);
+    let merge_label = if any_str {
+        "__rt_array_merge_str"
+    } else if any_refcounted {
+        "__rt_array_merge_refcounted"
+    } else {
+        "__rt_array_merge"
+    };
+    let result_ty = if any_str {
+        PhpType::Array(Box::new(PhpType::Str))
+    } else {
+        [&arr_ty, &second_ty]
+            .into_iter()
+            .find_map(|t| match t {
+                PhpType::Array(inner) if inner.is_refcounted() => {
+                    Some(PhpType::Array(inner.clone()))
+                }
+                _ => None,
+            })
+            .or_else(|| match &arr_ty {
+                PhpType::Array(inner) => Some(PhpType::Array(inner.clone())),
+                _ => None,
+            })
+            .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int)))
+    };
     if emitter.target.arch == Arch::X86_64 {
-        abi::emit_push_reg(emitter, "rax");                                     // preserve the first scalar indexed-array pointer while evaluating the second merge operand
+        abi::emit_push_reg(emitter, "rax");                                     // preserve the first indexed-array pointer while evaluating the second merge operand
         emit_expr(&args[1], emitter, ctx, data);
-        emitter.instruction("mov rsi, rax");                                    // move the second scalar indexed-array pointer into the second x86_64 runtime argument register
-        abi::emit_pop_reg(emitter, "rdi");                                      // restore the first scalar indexed-array pointer into the first x86_64 runtime argument register
-        if uses_refcounted_runtime {
-            abi::emit_call_label(emitter, "__rt_array_merge_refcounted");       // merge the two refcounted indexed arrays through the x86_64 runtime helper
-        } else {
-            abi::emit_call_label(emitter, "__rt_array_merge");                  // merge the two scalar indexed arrays through the x86_64 runtime helper
-        }
+        emitter.instruction("mov rsi, rax");                                    // move the second indexed-array pointer into the second x86_64 runtime argument register
+        abi::emit_pop_reg(emitter, "rdi");                                      // restore the first indexed-array pointer into the first x86_64 runtime argument register
+        abi::emit_call_label(emitter, merge_label);                            // merge the two indexed arrays through the element-kind-appropriate x86_64 runtime helper
 
-        return match arr_ty {
-            PhpType::Array(inner) => Some(PhpType::Array(inner)),
-            _ => Some(PhpType::Array(Box::new(PhpType::Int))),
-        };
+        return Some(result_ty.clone());
     }
 
     // -- save first array, evaluate second array --
@@ -74,14 +101,7 @@ pub fn emit(
     // -- call runtime to merge two arrays --
     emitter.instruction("mov x1, x0");                                          // move second array pointer to x1
     emitter.instruction("ldr x0, [sp], #16");                                   // pop first array pointer into x0
-    if uses_refcounted_runtime {
-        emitter.instruction("bl __rt_array_merge_refcounted");                  // merge arrays while retaining borrowed heap elements
-    } else {
-        emitter.instruction("bl __rt_array_merge");                             // call runtime: merge arrays → x0=new array
-    }
+    emitter.instruction(&format!("bl {}", merge_label));                        // merge the two indexed arrays through the element-kind-appropriate runtime helper
 
-    match arr_ty {
-        PhpType::Array(inner) => Some(PhpType::Array(inner)),
-        _ => Some(PhpType::Array(Box::new(PhpType::Int))),
-    }
+    Some(result_ty)
 }

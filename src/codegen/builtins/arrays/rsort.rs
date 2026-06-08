@@ -48,6 +48,7 @@ pub fn emit(
     // -- sort the array in place, dispatching on the element family --
     let sort_runtime = match &arr_ty {
         PhpType::Array(elem) if matches!(**elem, PhpType::Str) => "__rt_rsort_str",
+        PhpType::Array(elem) if matches!(**elem, PhpType::Float) => "__rt_rsort_float",
         _ => "__rt_rsort_int",
     };
     abi::emit_call_label(emitter, sort_runtime); // sort the indexed array descending in place (string- or integer-aware)

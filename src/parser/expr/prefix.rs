@@ -405,8 +405,10 @@ fn parse_variable(
 
 /// Parses a grouped expression `(...)` or a type cast `(type) expr`. If `peek_cast` detects
 /// a cast, consumes the cast syntax and returns a `Cast` node with the target type and inner
-/// expression parsed at binding power 27. Otherwise parses as a grouped expression: consumes
-/// `(` and `)`, then checks for an immediate call (`inner(args)`) to support expression-call syntax.
+/// expression parsed at binding power 35 — the unary-operator level, so a cast binds tighter
+/// than `*`/`/`/`%` (bp 31) but looser than `**`, matching PHP (`(int)1.9 * 2` is `((int)1.9) * 2`).
+/// Otherwise parses as a grouped expression: consumes `(` and `)`, then checks for an immediate
+/// call (`inner(args)`) to support expression-call syntax.
 fn parse_group_or_cast(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -414,7 +416,7 @@ fn parse_group_or_cast(
 ) -> Result<Expr, CompileError> {
     if let Some(cast_ty) = peek_cast(tokens, *pos) {
         *pos += 3;
-        let inner = parse_expr_bp(tokens, pos, 27)?;
+        let inner = parse_expr_bp(tokens, pos, 35)?;
         return Ok(Expr::new(
             ExprKind::Cast {
                 target: cast_ty,
@@ -462,6 +464,9 @@ fn parse_array_literal(
     let mut is_assoc = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
+    // Tracks whether any integer key (explicit or implicit) has seeded the auto-increment cursor.
+    // PHP 8.3+ lets the first explicit integer key seed it even when negative.
+    let mut auto_key_seeded = false;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RBracket {
         if !first {
             if tokens[*pos].0 != Token::Comma {
@@ -493,15 +498,17 @@ fn parse_array_literal(
             is_assoc = true;
             *pos += 1;
             let value = parse_expr(tokens, pos)?;
-            update_next_auto_key_from_explicit_key(&expr, &mut next_auto_key);
+            update_next_auto_key_from_explicit_key(&expr, &mut next_auto_key, &mut auto_key_seeded);
             assoc_elems.push((expr, value));
         } else if is_assoc {
             let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
             assoc_elems.push((key, expr));
             next_auto_key += 1;
+            auto_key_seeded = true;
         } else {
             elems.push(expr);
             next_auto_key += 1;
+            auto_key_seeded = true;
         }
         first = false;
     }
@@ -532,11 +539,35 @@ fn promote_indexed_array_items_to_assoc(
     }
 }
 
+/// Extracts a statically known integer value from an array-key expression.
+///
+/// Handles a bare integer literal and a negated integer literal: `-5` parses as
+/// `Negate(IntLiteral(5))` (constant folding to `IntLiteral(-5)` only runs after parsing, but the
+/// auto-increment cursor is resolved here at parse time). Returns `None` for any non-integer or
+/// non-constant key, which therefore does not seed or advance the integer cursor.
+fn static_int_key_value(key: &Expr) -> Option<i64> {
+    match &key.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => Some(value.wrapping_neg()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Advances the automatic integer key cursor after a statically known integer key.
-fn update_next_auto_key_from_explicit_key(key: &Expr, next_auto_key: &mut i64) {
-    if let ExprKind::IntLiteral(value) = &key.kind {
-        if *value >= *next_auto_key {
-            *next_auto_key = *value + 1;
+///
+/// Matches PHP 8.3+ semantics: the first explicit integer key seeds the cursor even when it is
+/// negative, so `[-5 => "a", "b"]` places "b" at -4 (PHP < 8.3 reset the implicit key to 0).
+/// Once seeded, the cursor only ever moves forward (`value + 1` when `value` is at or past it),
+/// so a later smaller key does not lower it. A non-integer (string) key leaves the cursor
+/// untouched and unseeded, because string keys do not participate in integer auto-increment.
+fn update_next_auto_key_from_explicit_key(key: &Expr, next_auto_key: &mut i64, seeded: &mut bool) {
+    if let Some(value) = static_int_key_value(key) {
+        if !*seeded || value >= *next_auto_key {
+            *next_auto_key = value + 1;
         }
+        *seeded = true;
     }
 }

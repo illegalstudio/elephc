@@ -35,22 +35,44 @@ pub(super) fn emit_set_bool_from_flags(emitter: &mut Emitter, cond: &str) {
 }
 
 /// Sets integer result (x0/rax) from float comparison flags.
+///
+/// Float comparisons follow IEEE/PHP NaN rules: every ordered compare is false when either
+/// operand is NaN, except `!=` which is true. The naive integer condition codes get this
+/// wrong (arm64 `lt`/`le`, x86_64 `eq`/`ne`/`lt`/`le`), so this routes through NaN-aware
+/// conditions and an x86_64 parity guard.
 pub(super) fn emit_set_float_bool_from_flags(emitter: &mut Emitter, cond: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cset x0, {}", cond));                 // set integer result to 1 if the float comparison condition matched
+            // `fcmp` sets the flags to unordered (N=0,Z=0,C=1,V=1) when either operand is
+            // NaN. Integer `lt`/`le` read true there (N!=V), so `NAN < x`/`NAN <= x` would be
+            // true; the IEEE-aware `mi` (N set) and `ls` (C clear or Z set) are false on
+            // unordered. `eq`/`ne`/`gt`/`ge` are already correct.
+            let cset_cond = match cond {
+                "lt" => "mi",
+                "le" => "ls",
+                other => other,
+            };
+            emitter.instruction(&format!("cset x0, {}", cset_cond));            // set result to 1 when the NaN-aware float condition matched
         }
         Arch::X86_64 => {
-            let setcc = match cond {
-                "eq" => "sete",
-                "ne" => "setne",
-                "lt" => "setb",
-                "gt" => "seta",
-                "le" => "setbe",
-                "ge" => "setae",
+            // `ucomisd` sets ZF=CF=PF=1 for an unordered (NaN) compare, so `sete`/`setne`/
+            // `setb`/`setbe` misread NaN. PHP makes every NaN compare false except `!=`, so
+            // guard with the parity flag (PF, set on unordered). `seta`/`setae` (`>`/`>=`)
+            // are already false on unordered and need no guard.
+            let (setcc, guard) = match cond {
+                "eq" => ("sete", Some(("setnp", "and"))),
+                "ne" => ("setne", Some(("setp", "or"))),
+                "lt" => ("setb", Some(("setnp", "and"))),
+                "le" => ("setbe", Some(("setnp", "and"))),
+                "gt" => ("seta", None),
+                "ge" => ("setae", None),
                 _ => unreachable!("unsupported float comparison condition {cond}"),
             };
-            emitter.instruction(&format!("{} al", setcc));                      // set the low result byte when the float comparison condition matched
+            emitter.instruction(&format!("{} al", setcc));                      // set the comparison flag into the low result byte
+            if let Some((parity, combine)) = guard {
+                emitter.instruction(&format!("{} cl", parity));                 // capture the parity (NaN) flag for the unordered guard
+                emitter.instruction(&format!("{} al, cl", combine));            // fold the guard so NaN follows PHP's float compare rules
+            }
             emitter.instruction("movzx rax, al");                               // zero-extend the boolean byte into the integer result register
         }
     }

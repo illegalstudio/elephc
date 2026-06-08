@@ -175,12 +175,52 @@ fn test_modulo_normal() {
     assert_eq!(out, "0");
 }
 
-/// Verifies that modulo by zero returns 0 (no crash).
-/// Regression for issue #23 (modulo by zero).
+/// Verifies that modulo by zero raises an (uncatchable) fatal instead of the old silent 0,
+/// matching PHP's DivisionByZeroError as closely as elephc can. Regression for the M7 audit finding.
 #[test]
 fn test_modulo_by_zero() {
-    let out = compile_and_run("<?php echo 5 % 0;");
-    assert_eq!(out, "0");
+    let err = compile_and_run_expect_failure("<?php echo 5 % 0;");
+    assert!(
+        err.contains("modulo by zero"),
+        "modulo by zero should fatal, got: {err}"
+    );
+}
+
+/// Verifies modulo by a zero held in a variable (runtime path, not constant) also fatals.
+#[test]
+fn test_modulo_by_zero_runtime() {
+    let err = compile_and_run_expect_failure("<?php $d = 0; echo 5 % $d;");
+    assert!(
+        err.contains("modulo by zero"),
+        "modulo by a runtime zero should fatal, got: {err}"
+    );
+}
+
+/// Verifies that division by zero raises an (uncatchable) fatal instead of returning INF.
+#[test]
+fn test_division_by_zero() {
+    let err = compile_and_run_expect_failure("<?php echo 5 / 0;");
+    assert!(
+        err.contains("division by zero"),
+        "division by zero should fatal, got: {err}"
+    );
+}
+
+/// Verifies division by a zero held in a variable (runtime path) also fatals.
+#[test]
+fn test_division_by_zero_runtime() {
+    let err = compile_and_run_expect_failure("<?php $d = 0; echo 5 / $d;");
+    assert!(
+        err.contains("division by zero"),
+        "division by a runtime zero should fatal, got: {err}"
+    );
+}
+
+/// Verifies normal (non-zero) division still works after the div-by-zero guard.
+#[test]
+fn test_division_nonzero_unaffected() {
+    let out = compile_and_run("<?php echo 10 / 4;");
+    assert_eq!(out, "2.5");
 }
 
 /// Verifies normal modulo remainder: `7 % 3` returns 1.

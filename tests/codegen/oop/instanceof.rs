@@ -393,3 +393,29 @@ echo ($value instanceof $target) ? "T" : "F";
         out.stderr
     );
 }
+
+/// Verifies is_a()/is_subclass_of() resolve at runtime for a boxed Mixed receiver (H4): a
+/// heterogeneous array makes its elements Mixed, so the relation must be computed from the
+/// object's runtime class id, not folded to false. Covers exact class, subclass, interface,
+/// a non-object element, and is_subclass_of's proper-subclass (self-excluded) semantics.
+#[test]
+fn test_is_a_runtime_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Animal {}
+class Dog extends Animal {}
+interface Speaker {}
+class Parrot implements Speaker {}
+$t = [new Dog(), new Parrot(), 42, "x"];
+$ok = is_a($t[0], "Dog")
+   && is_a($t[0], "Animal")
+   && !is_a($t[0], "Speaker")
+   && is_a($t[1], "Speaker")
+   && !is_a($t[2], "Animal")
+   && is_subclass_of($t[0], "Animal")
+   && !is_subclass_of($t[0], "Dog");
+echo $ok ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}

@@ -24,7 +24,16 @@ fn test_error_ceil_wrong_args() {
 /// Verifies round() rejects missing argument. Input: `round()` with no args.
 #[test]
 fn test_error_round_wrong_args() {
-    expect_error("<?php round();", "round() takes 1 or 2 arguments");
+    expect_error("<?php round();", "round() takes 1 to 3 arguments");
+}
+
+/// Verifies round() rejects the not-yet-supported HALF_DOWN/HALF_ODD modes (M5).
+#[test]
+fn test_error_round_unsupported_mode() {
+    expect_error(
+        "<?php round(1.5, 0, PHP_ROUND_HALF_DOWN);",
+        "only PHP_ROUND_HALF_UP and PHP_ROUND_HALF_EVEN modes are supported",
+    );
 }
 
 /// Verifies sqrt() rejects excess positional arguments. Input: `sqrt(1, 2)`.
