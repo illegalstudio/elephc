@@ -479,6 +479,8 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — per-class PHP attribute metadata emitted from `ClassInfo`; current helper and Reflection APIs materialize supported static lookups during codegen instead of performing dynamic runtime class/member lookup
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual tables used for inherited instance-method dispatch
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used for late static binding
+- `_class_destruct_ptrs` — class_id-indexed `__destruct` method pointers (or `0`) consulted during object deep-free
+- `_classes_by_name`, `_classes_by_name_count` — case-insensitive class-name lookup table used by `new $variable()` instantiation
 - enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
 
 ### Global variables

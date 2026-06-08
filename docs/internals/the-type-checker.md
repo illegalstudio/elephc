@@ -343,6 +343,7 @@ pub struct ClassInfo {
     pub method_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
     pub property_attribute_names: HashMap<String, Vec<String>>,
     pub property_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
+    pub used_traits: Vec<String>,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
@@ -363,6 +364,8 @@ pub struct ClassInfo {
     pub method_decls: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
+    pub callable_method_return_sigs: HashMap<String, FunctionSig>,
+    pub callable_array_method_return_sigs: HashMap<String, FunctionSig>,
     pub method_visibilities: HashMap<String, Visibility>,
     pub final_methods: HashSet<String>,
     pub method_declaring_classes: HashMap<String, String>,
@@ -422,6 +425,8 @@ pub struct CheckResult {
     pub global_env: TypeEnv,                    // variable name → type
     pub functions: HashMap<String, FunctionSig>, // function name → signature
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>, // (function, param) → callable signature
+    pub callable_return_sigs: HashMap<String, FunctionSig>, // function → returned callable signature
+    pub callable_array_return_sigs: HashMap<String, FunctionSig>, // function → returned callable-array element signature
     pub interfaces: HashMap<String, InterfaceInfo>, // interface name → interface info
     pub classes: HashMap<String, ClassInfo>,     // class name → class info
     pub enums: HashMap<String, EnumInfo>,

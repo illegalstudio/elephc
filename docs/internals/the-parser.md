@@ -80,6 +80,7 @@ Things that have a value:
 | `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
 | `ConstRef(Name)` | `MAX_RETRIES`, `Config\PORT`, `\App\Config\PORT` | Reference to a user-defined constant |
 | `NewObject { class_name, args }` | `new Point(1, 2)`, `new App\Model\User()` | Object instantiation |
+| `NewDynamic { name_expr, args }` | `new $cls(1, 2)` | Object instantiation where the class name comes from a runtime string expression. Resolved through the runtime class table at codegen time (`__rt_new_by_name`). |
 | `NewScopedObject { receiver, args }` | `new self()`, `new static()`, `new parent()` | Object instantiation against a static receiver. Distinct from `NewObject` (which carries a fixed `Name`) so codegen can honour late static binding for `static`. |
 | `NewDynamicObject { class_name, fallback_class, required_parent, args }` | (internal) | Synthetic factory used by compiler-provided methods that construct an object from a runtime class-string while constraining it to a known parent class. Not produced from source syntax. |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
@@ -386,6 +387,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `fn` + `(` | Parse arrow function → `Closure` (with `is_arrow = true`) |
 | `static` + `function` / `fn` + `(` | Parse static closure → `Closure` (with `is_static = true`); the type checker rejects `$this` inside the body |
 | `new` + qualified name | Parse object instantiation → `NewObject` |
+| `new` + `$var` + `(` | Parse dynamic object instantiation → `NewDynamic` (class named by a runtime variable) |
 | `new` + `self` / `static` / `parent` + `(` | Parse scoped object instantiation → `NewScopedObject` |
 | `<receiver>::class` | Parse `MyClass::class`, `\App\C::class`, `self::class`, `parent::class`, `static::class` → `ClassConstant` |
 | `$this` | Return `This` node |

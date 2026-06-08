@@ -73,7 +73,7 @@ pub fn emit(
             emitter.instruction("sete cl");                                     // remember whether the value equals negative infinity
             emitter.instruction("or al, cl");                                   // combine the +/- infinity comparisons into one boolean byte
             emitter.instruction("movzx rax, al");                               // widen the infinity boolean byte into the canonical integer result register
-            emitter.instruction(&format!("jmp {}", done_label));               // skip the NaN false path after a real infinity check
+            emitter.instruction(&format!("jmp {}", done_label));                // skip the NaN false path after a real infinity check
             emitter.label(&not_inf_label);
             emitter.instruction("mov rax, 0");                                  // NaN is not infinite
             emitter.label(&done_label);

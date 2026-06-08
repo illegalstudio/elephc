@@ -26,11 +26,14 @@ On Linux, install your distro's standard native toolchain so `as`, `ld`, and the
 brew install illegalstudio/tap/elephc
 ```
 
-Verify the installation:
+Verify the installation by compiling a small program:
 
 ```bash
-elephc --version
+echo '<?php echo "ok\n";' > check.php
+elephc check.php && ./check
 ```
+
+This prints `ok` and confirms `elephc` can produce and run a native binary.
 
 ## From source
 

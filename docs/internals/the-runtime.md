@@ -212,7 +212,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (121 files)
+**Source:** `src/codegen/runtime/arrays/` (127 files)
 
 ### Core allocation
 
@@ -345,7 +345,7 @@ Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (35 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/` subdirectories)
+**Source:** `src/codegen/runtime/system/` (34 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/` subdirectories)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -444,9 +444,11 @@ All regex routines use PCRE2 through the PCRE2 POSIX-compatible wrapper (`pcre2_
 
 ## I/O routines
 
-**Source:** `src/codegen/runtime/io/` (30 files)
+**Source:** `src/codegen/runtime/io/` (108 files)
 
 These routines handle file and filesystem operations through target-aware libc/syscall helpers. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to C or OS APIs — `__rt_cstr` handles the primary buffer and also emits `__rt_cstr2` for routines that need a second simultaneous C string.
+
+The table below covers the file/filesystem core. The same directory also emits the larger stream/networking surface: stream contexts and metadata, stream filters and user-defined stream wrappers, TCP/Unix/IPv6 sockets, TLS/SSL helpers, FTP/HTTP transfer helpers, hostname/service resolution, and `var_dump`.
 
 | Routine | What it does |
 |---|---|
@@ -539,12 +541,14 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type.
 
 ## Object and stdClass routines
 
-**Source:** `src/codegen/runtime/objects/` (3 files)
+**Source:** `src/codegen/runtime/objects/` (6 files)
 
-These helpers support `stdClass`, `json_decode()` object results, and boxed Mixed property/index access. `stdClass` instances use a compact `[class_id][hash_ptr]` payload, with dynamic properties stored in a hash of boxed `Mixed` values.
+These helpers support `stdClass`, `json_decode()` object results, boxed Mixed property/index access, object destructor dispatch, and dynamic `new $name()` instantiation. `stdClass` instances use a compact `[class_id][hash_ptr]` payload, with dynamic properties stored in a hash of boxed `Mixed` values.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
+| `__rt_new_by_name` | Instantiate a class by its textual name through the `_classes_by_name` table (case-insensitive `__rt_strcasecmp` lookup), allocating and zeroing the object payload | class name string | object pointer, or 0 (null) on miss |
+| `__rt_call_object_destructor` | Look up the object's `__destruct` in the class_id-indexed `_class_destruct_ptrs` table and invoke it with `$this` borrowed before storage is released; guarded against re-entry | object pointer | — |
 | `__rt_stdclass_new` | Allocate an empty stdClass object with hash-backed dynamic property storage | stdClass class id from runtime data | object pointer |
 | `__rt_stdclass_from_hash` | Wrap a decoded JSON object hash in a stdClass instance | hash pointer | object pointer |
 | `__rt_stdclass_get` | Read a dynamic property and return a boxed Mixed value, or Mixed(null) when missing | object pointer + property string | boxed `mixed` payload |
@@ -745,6 +749,8 @@ Additionally, the runtime emits static data tables:
 - `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — emitted class-level PHP attribute metadata. The current PHP-facing helpers and Reflection owner constructors materialize their results from the same `ClassInfo` metadata during codegen, rather than doing dynamic runtime class/member lookup.
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual-method tables used by inheritance dispatch through `class_id`
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used by late static binding
+- `_class_destruct_ptrs` — class_id-indexed `__destruct` method pointers (or `0`) consulted by `__rt_call_object_destructor` during object deep-free
+- `_classes_by_name`, `_classes_by_name_count` — case-insensitive `name -> (class_id, object size)` lookup table used by `__rt_new_by_name` for `new $variable()`
 - `static_property_symbol(...)`-derived `.comm` slots — 16-byte storage slots for effective declaring static properties, shared by inherited static properties until a subclass redeclares the property
 - `enum_case_symbol(...)`-derived `.comm` slots — singleton backing storage for enum cases emitted from user program metadata
 

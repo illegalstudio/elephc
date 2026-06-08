@@ -618,7 +618,7 @@ assembly. The DSN prefix (`sqlite:` / `pgsql:` / `mysql:`) selects the driver at
 `open()`. The prelude is injected only when a program references PDO, so non-PDO
 binaries never link the bridge.
 
-- [x] `crates/elephc-sqlite` bridge staticlib over bundled SQLite (`libsqlite3-sys`), C-ABI handle tables for connections/statements, `-1` sentinels, unit-tested in-memory round-trips
+- [x] `crates/elephc-pdo` bridge staticlib over bundled SQLite (`libsqlite3-sys`), C-ABI handle tables for connections/statements, `-1` sentinels, unit-tested in-memory round-trips
 - [x] `PDO::__construct` (`sqlite:` / `sqlite::memory:` DSN, `PDOException` on failure), `exec`, `query`, `prepare`, `lastInsertId`, `beginTransaction` / `commit` / `rollBack`, `errorCode`, `errorInfo`
 - [x] `PDOStatement::execute` (positional `?` and named `:name` binds with int/float/string/null/bool typing), `fetch`, `fetchAll`, `fetchColumn`, `rowCount`, `columnCount`
 - [x] `PDOStatement::bindValue` / `bindParam` (binds the current value) and `setFetchMode` with a stored default fetch mode; `reset` keeps bindings while a fresh `execute($params)` rebinds; positional `?` and named `:name` placeholders may be mixed in one statement
@@ -632,6 +632,10 @@ binaries never link the bridge.
 - [ ] `FETCH_CLASS` / `FETCH_INTO`, statement-level error-mode propagation, and persistent connections
 - [ ] Dynamic property assignment so `FETCH_OBJ` materializes a stdClass directly instead of via a JSON round-trip
 - [ ] Binary/BLOB values with embedded NUL bytes (the text bridge path is NUL-terminated)
+
+### Type checker
+
+- [x] Flow-sensitive type-guard narrowing — `if` / `elseif` / `else` chains guarded by `is_int()` / `is_float()` / `is_string()` / `is_bool()` (and the `is_integer` / `is_long` / `is_double` aliases) or `$var instanceof Class` narrow the guarded variable inside the matching branch, with an optional leading `!`, complement accumulation across the chain and `else`, and post-`if` narrowing when every branch diverges (`return` / `throw` / `exit` / `die` / `never`-returning calls); union members are filtered to the guarded type and `Mixed` is refined to it, while concrete non-union types are left unchanged (`src/types/checker/stmt_check/narrowing.rs`, tested in `tests/codegen/types/narrowing.rs`)
 
 ## v0.24.x — EIR introduction and register allocation
 

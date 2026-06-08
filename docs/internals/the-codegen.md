@@ -230,7 +230,7 @@ variant into one of the focused lowering paths below:
 | `ArrayLiteral`, `ArrayLiteralAssoc`, `ArrayAccess`, `Spread`, `Match` | Indexed-array, associative-array, unpacking, string-indexing, and match-expression helpers |
 | `FunctionCall`, `NamedArg`, `ClosureCall`, `ExprCall`, `Closure`, `FirstClassCallable` | Shared call-argument planner, closure wrappers, and callable dispatch helpers |
 | `ConstRef`, `ClassConstant`, `ScopedConstantAccess`, `MagicConstant` | Compile-time constant and class-constant loading. `MagicConstant` should already be lowered by the frontend before codegen. |
-| `NewObject`, `NewScopedObject`, `NewDynamicObject`, `PropertyAccess`, `DynamicPropertyAccess`, `NullsafePropertyAccess`, `NullsafeDynamicPropertyAccess`, `StaticPropertyAccess`, `MethodCall`, `NullsafeMethodCall`, `StaticMethodCall` | Object allocation (including the internal runtime-class-string factory `NewDynamicObject`), property/member access, nullsafe chain lowering, vtable dispatch, and late-static-binding helpers |
+| `NewObject`, `NewDynamic`, `NewScopedObject`, `NewDynamicObject`, `PropertyAccess`, `DynamicPropertyAccess`, `NullsafePropertyAccess`, `NullsafeDynamicPropertyAccess`, `StaticPropertyAccess`, `MethodCall`, `NullsafeMethodCall`, `StaticMethodCall` | Object allocation (including `new $var()` via `NewDynamic` and the internal runtime-class-string factory `NewDynamicObject`), property/member access, nullsafe chain lowering, vtable dispatch, and late-static-binding helpers |
 | `PtrCast`, `BufferNew`, `Yield`, `YieldFrom` | Pointer/buffer extensions and generator state-machine lowering |
 
 ### Intrinsic Calls
@@ -645,7 +645,7 @@ declaration, include, or extension paths:
 | Variants | Lowering path |
 |---|---|
 | `Echo`, `ExprStmt`, `Throw`, `Synthetic` | Direct statement helpers, expression dispatch, exception throw, or already-lowered statement sequences |
-| `Assign`, `TypedAssign`, `ArrayAssign`, `NestedArrayAssign`, `ArrayPush`, `ListUnpack`, `PropertyAssign`, `StaticPropertyAssign`, `PropertyArrayPush`, `PropertyArrayAssign`, `StaticPropertyArrayPush`, `StaticPropertyArrayAssign` | Local/global/static storage, array storage, destructuring, and property storage helpers |
+| `Assign`, `RefAssign`, `TypedAssign`, `ArrayAssign`, `NestedArrayAssign`, `ArrayPush`, `ListUnpack`, `PropertyAssign`, `StaticPropertyAssign`, `PropertyArrayPush`, `PropertyArrayAssign`, `StaticPropertyArrayPush`, `StaticPropertyArrayAssign` | Local/global/static storage, reference aliasing, array storage, destructuring, and property storage helpers |
 | `If`, `IfDef`, `While`, `DoWhile`, `For`, `Foreach`, `Switch`, `Try`, `Break`, `Continue`, `Return` | Branching, compile-time conditional lowering, loops, foreach dispatch, switch lowering, exception/finally control flow, loop exits, and return epilogues |
 | `Include`, `IncludeOnceMark`, `IncludeOnceGuard`, `FunctionVariantGroup`, `FunctionVariantMark` | Resolver-produced include guards and include-loaded function variant activation |
 | `NamespaceDecl`, `NamespaceBlock`, `UseDecl`, `ConstDecl` | Mostly frontend/name-resolution artifacts; constants remain available through the codegen context |
