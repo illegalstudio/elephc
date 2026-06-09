@@ -336,6 +336,13 @@ pub(super) fn check_builtin(
             // Pure timing-safe byte comparison — no crypto library required.
             Ok(Some(PhpType::Bool))
         }
+        "hash_algos" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(span, "hash_algos() takes no arguments"));
+            }
+            // Returns the supported-algorithm name list; pure, no crypto library.
+            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+        }
         "sscanf" => {
             if args.len() < 2 {
                 return Err(CompileError::new(span, "sscanf() takes at least 2 arguments"));

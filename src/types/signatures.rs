@@ -79,7 +79,7 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
-        | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" => Some(fixed(&[])),
+        | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" | "hash_algos" => Some(fixed(&[])),
 
         "strlen" | "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "grapheme_strrev" | "addslashes" | "stripslashes" | "nl2br" | "bin2hex"
@@ -696,6 +696,11 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Str, PhpType::Str],
             PhpType::Bool,
+        )),
+        "hash_algos" => Some(typed_first_class_builtin_sig(
+            name,
+            &[],
+            PhpType::Array(Box::new(PhpType::Str)),
         )),
         "array_keys" | "array_values" | "array_reverse" | "array_unique" | "array_rand" => {
             Some(typed_first_class_builtin_sig(

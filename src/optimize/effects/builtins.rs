@@ -106,6 +106,7 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "str_starts_with"
             | "str_ends_with"
             | "hash_equals"
+            | "hash_algos"
             | "ord"
             | "chr"
             | "nl2br"

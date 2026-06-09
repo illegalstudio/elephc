@@ -91,6 +91,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // explicit byte length (3 / 4) so elephc_crypto_hash never reads the NUL.
     out.push_str(".globl _md5_algo_name\n_md5_algo_name:\n    .asciz \"md5\"\n");
     out.push_str(".globl _sha1_algo_name\n_sha1_algo_name:\n    .asciz \"sha1\"\n");
+    // Labelled name constants (`_hash_algo_N`) for hash_algos(): __rt_hash_algos_list
+    // pushes each as a string element. The list is the single source of truth in
+    // runtime::strings::hash_algos::HASH_ALGOS (kept in lockstep with elephc-crypto).
+    for (i, name) in crate::codegen::runtime::strings::hash_algos::HASH_ALGOS
+        .iter()
+        .enumerate()
+    {
+        out.push_str(&format!(
+            ".globl _hash_algo_{i}\n_hash_algo_{i}:\n    .asciz \"{name}\"\n"
+        ));
+    }
     for (label, message) in [
         ("_spl_dll_pop_empty_msg", "Can't pop from an empty datastructure"),
         ("_spl_dll_shift_empty_msg", "Can't shift from an empty datastructure"),

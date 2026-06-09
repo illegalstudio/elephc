@@ -260,6 +260,24 @@ fn hash_equals_timing_safe_compare() {
     assert_eq!(compile_and_run(r#"<?php echo hash_equals("x","") ? "T" : "F";"#), "F");
 }
 
+/// Verifies hash_algos() returns the supported-algorithm set: representative
+/// members are present, an unsupported PHP algo is absent, and — the key drift
+/// guard — every advertised name is actually hashable by hash() (would throw a
+/// ValueError if a name were not in the crate's make() table).
+#[test]
+fn hash_algos_lists_supported_and_each_is_hashable() {
+    assert_eq!(compile_and_run(r#"<?php echo in_array("sha256", hash_algos()) ? "1" : "0";"#), "1");
+    assert_eq!(compile_and_run(r#"<?php echo in_array("crc32c", hash_algos()) ? "1" : "0";"#), "1");
+    assert_eq!(compile_and_run(r#"<?php echo in_array("whirlpool", hash_algos()) ? "1" : "0";"#), "1");
+    // tiger is a documented gap — must NOT be advertised
+    assert_eq!(compile_and_run(r#"<?php echo in_array("tiger128,3", hash_algos()) ? "1" : "0";"#), "0");
+    // Every advertised algorithm must hash without throwing.
+    assert_eq!(
+        compile_and_run(r#"<?php $ok = 1; foreach (hash_algos() as $a) { if (hash($a, "x") === "") $ok = 0; } echo $ok;"#),
+        "1"
+    );
+}
+
 /// Verifies `hash()` resolves through PHP's case-insensitive and namespaced builtin lookup.
 #[test]
 fn hash_is_case_insensitive_and_namespaced() {
