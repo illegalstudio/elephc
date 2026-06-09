@@ -194,10 +194,15 @@ where
     Box::new(DigestState { inner: Box::new(D::new()), block })
 }
 
+/// CRC-32C (CRC-32/ISCSI, Castagnoli) = PHP "crc32c"; big-endian hex.
+fn crc32c(data: &[u8]) -> Vec<u8> {
+    static C: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISCSI);
+    C.checksum(data).to_be_bytes().to_vec()
+}
+
 /// Resolves a PHP hash() algorithm name to a freshly initialized `HashState`,
 /// or `None` if the algorithm is unsupported (caller maps to PHP ValueError).
 pub fn make(name: &str) -> Option<Box<dyn HashState>> {
-    use blake2::{Blake2b512, Blake2s256};
     use ripemd::{Ripemd128, Ripemd160, Ripemd256, Ripemd320};
     use sha2::{Sha224, Sha256, Sha384, Sha512, Sha512_224, Sha512_256};
     use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
@@ -221,10 +226,9 @@ pub fn make(name: &str) -> Option<Box<dyn HashState>> {
         "ripemd256" => digest_state::<Ripemd256>(64),
         "ripemd320" => digest_state::<Ripemd320>(64),
         "whirlpool" => digest_state::<whirlpool::Whirlpool>(64),
-        "blake2b512" => digest_state::<Blake2b512>(128),
-        "blake2s256" => digest_state::<Blake2s256>(64),
         "crc32" => buf(4, crc32_bzip2),
         "crc32b" => buf(4, crc32b),
+        "crc32c" => buf(4, crc32c),
         "adler32" => buf(4, adler32),
         "fnv132" => buf(4, fnv132),
         "fnv1a32" => buf(4, fnv1a32),

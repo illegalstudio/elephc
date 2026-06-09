@@ -31,6 +31,7 @@ fn hash_hex(algo: &str, data: &[u8]) -> Option<String> {
     Some(out[..n as usize].iter().map(|b| format!("{:02x}", b)).collect())
 }
 
+/// Verifies one-shot crypto digests against published NIST/RFC known-answer vectors.
 #[test]
 fn crypto_one_shot_known_vectors() {
     assert_eq!(hash_hex("md5", b"").unwrap(), "d41d8cd98f00b204e9800998ecf8427e");
@@ -52,30 +53,37 @@ fn crypto_one_shot_known_vectors() {
     assert_eq!(hash_hex("ripemd160", b"abc").unwrap(), "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc");
 }
 
+/// Verifies that an unrecognized algorithm name causes the ABI to return -1 (PHP ValueError path).
 #[test]
 fn unknown_algorithm_returns_negative() {
     assert!(hash_hex("tiger", b"abc").is_none());
     assert!(hash_hex("not-a-hash", b"abc").is_none());
 }
 
+/// Verifies non-crypto checksum digests byte-for-byte against PHP 8.4 golden values (input "abc").
 #[test]
 fn non_crypto_checksum_vectors_match_php() {
     // Golden values produced by `php -r 'echo hash($algo, "abc");'` (PHP 8.4).
     assert_eq!(hash_hex("crc32", b"abc").unwrap(), "73bb8c64");
     assert_eq!(hash_hex("crc32b", b"abc").unwrap(), "352441c2");
+    assert_eq!(hash_hex("crc32c", b"abc").unwrap(), "364b3fb7");
     assert_eq!(hash_hex("adler32", b"abc").unwrap(), "024d0127");
     assert_eq!(hash_hex("fnv132", b"abc").unwrap(), "439c2f4b");
     assert_eq!(hash_hex("fnv1a32", b"abc").unwrap(), "1a47e90b");
     assert_eq!(hash_hex("fnv164", b"abc").unwrap(), "d8dcca186bafadcb");
     assert_eq!(hash_hex("fnv1a64", b"abc").unwrap(), "e71fa2190541574b");
     assert_eq!(hash_hex("joaat", b"abc").unwrap(), "ed131f5b");
+    // Standard CRC-32C check value: hash("crc32c", "123456789") == "e3069283" in PHP 8.4.
+    assert_eq!(hash_hex("crc32c", b"123456789").unwrap(), "e3069283");
 }
 
+/// Verifies non-crypto checksum digests for the empty string against PHP 8.4 golden values.
 #[test]
 fn non_crypto_checksum_empty_string_vectors_match_php() {
     // PHP 8.4 `hash($algo, "")` golden values.
     assert_eq!(hash_hex("crc32", b"").unwrap(), "00000000");
     assert_eq!(hash_hex("crc32b", b"").unwrap(), "00000000");
+    assert_eq!(hash_hex("crc32c", b"").unwrap(), "00000000");
     assert_eq!(hash_hex("adler32", b"").unwrap(), "00000001");
     assert_eq!(hash_hex("fnv132", b"").unwrap(), "811c9dc5");
     assert_eq!(hash_hex("fnv1a32", b"").unwrap(), "811c9dc5");
@@ -84,6 +92,7 @@ fn non_crypto_checksum_empty_string_vectors_match_php() {
     assert_eq!(hash_hex("joaat", b"").unwrap(), "00000000");
 }
 
+/// Verifies that every supported algorithm produces a raw digest of the documented byte length.
 #[test]
 fn all_algorithms_produce_correct_digest_length() {
     // (algorithm name, raw digest size in bytes)
@@ -93,8 +102,8 @@ fn all_algorithms_produce_correct_digest_length() {
         ("sha512/224", 28), ("sha512/256", 32),
         ("sha3-224", 28), ("sha3-256", 32), ("sha3-384", 48), ("sha3-512", 64),
         ("ripemd128", 16), ("ripemd160", 20), ("ripemd256", 32), ("ripemd320", 40),
-        ("whirlpool", 64), ("blake2b512", 64), ("blake2s256", 32),
-        ("crc32", 4), ("crc32b", 4), ("adler32", 4),
+        ("whirlpool", 64),
+        ("crc32", 4), ("crc32b", 4), ("crc32c", 4), ("adler32", 4),
         ("fnv132", 4), ("fnv1a32", 4), ("fnv164", 8), ("fnv1a64", 8), ("joaat", 4),
     ];
     for (algo, len) in cases {
@@ -120,6 +129,7 @@ fn hmac_hex(algo: &str, key: &[u8], data: &[u8]) -> Option<String> {
     Some(out[..n as usize].iter().map(|b| format!("{:02x}", b)).collect())
 }
 
+/// Verifies one-shot HMAC digests against PHP 8.4 golden values and RFC 4231 vectors.
 #[test]
 fn hmac_matches_php_golden() {
     // PHP hash_hmac($algo,$data,$key); helper takes (algo, key, data).
@@ -149,6 +159,7 @@ fn hmac_matches_php_golden() {
     );
 }
 
+/// Verifies that HMAC rejects non-crypto checksums (block_size==0) and unknown algorithms.
 #[test]
 fn hmac_rejects_checksums_and_unknown() {
     // crc32b and adler32 are rejected because they are non-crypto checksums
@@ -169,6 +180,7 @@ fn finalize_hex(ctx: *mut c_void) -> String {
     out[..n as usize].iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+/// Verifies that feeding data incrementally via update() produces the same digest as one-shot hash().
 #[test]
 fn incremental_matches_one_shot() {
     let ctx = unsafe { elephc_crypto_init(b"sha256".as_ptr(), 6) };
@@ -180,6 +192,7 @@ fn incremental_matches_one_shot() {
     assert_eq!(finalize_hex(ctx), hash_hex("sha256", b"abc").unwrap());
 }
 
+/// Verifies that cloning a context mid-stream produces a fully independent copy that diverges correctly.
 #[test]
 fn clone_produces_independent_state() {
     let ctx = unsafe { elephc_crypto_init(b"sha256".as_ptr(), 6) };
@@ -198,6 +211,7 @@ fn clone_produces_independent_state() {
     assert_ne!(h1, h2, "clone must be independent of the original");
 }
 
+/// Verifies that incremental HMAC streaming via init_hmac/update/final matches the one-shot HMAC ABI.
 #[test]
 fn incremental_hmac_matches_one_shot() {
     let key = b"Jefe";
@@ -213,12 +227,14 @@ fn incremental_hmac_matches_one_shot() {
     );
 }
 
+/// Verifies that init() returns null for an unrecognized algorithm name.
 #[test]
 fn init_unknown_algorithm_returns_null() {
     let ctx = unsafe { elephc_crypto_init(b"tiger".as_ptr(), 5) };
     assert!(ctx.is_null());
 }
 
+/// Verifies that init_hmac() returns null for non-crypto checksums (PHP rejects HMAC over checksums).
 #[test]
 fn init_hmac_rejects_checksum_returns_null() {
     // PHP rejects hash_init(..., HASH_HMAC) over non-crypto checksums.
@@ -227,6 +243,7 @@ fn init_hmac_rejects_checksum_returns_null() {
     assert!(ctx.is_null());
 }
 
+/// Verifies that free() on an unfinalized context does not leak or double-free (Miri/valgrind-clean).
 #[test]
 fn free_releases_unfinalized_context() {
     let ctx = unsafe { elephc_crypto_init(b"sha256".as_ptr(), 6) };
@@ -234,6 +251,7 @@ fn free_releases_unfinalized_context() {
     unsafe { elephc_crypto_free(ctx) }; // must not leak/double-free
 }
 
+/// Verifies that final() on a null context handle returns -1 without crashing.
 #[test]
 fn final_on_null_context_returns_negative() {
     let mut out = [0u8; 64];
@@ -241,6 +259,7 @@ fn final_on_null_context_returns_negative() {
     assert_eq!(n, -1);
 }
 
+/// Verifies that cloning an HMAC streaming context produces an independent copy that diverges correctly.
 #[test]
 fn hmac_clone_produces_independent_state() {
     let key = b"Jefe";

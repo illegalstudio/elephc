@@ -36,15 +36,17 @@ Mirrors `elephc-tls`: `crate-type = ["staticlib", "rlib"]`, one `src/lib.rs` (sp
 
 ### Dependencies (pure-Rust, musl-friendly)
 
-`digest` (for `DynDigest` + `box_clone`), `md-5`, `md2`, `md4`, `sha1`, `sha2`, `sha3`, `ripemd`, `whirlpool`, `blake2`, plus the small non-crypto crates `crc32fast` (crc32b), `crc` (the non-`b` crc32 variant), `adler`, `fnv`. No `hmac` crate dependency for the dynamic path (see below).
+`digest` (for `DynDigest` + `box_clone`), `md-5`, `md2`, `md4`, `sha1`, `sha2`, `sha3`, `ripemd`, `whirlpool`, plus the small non-crypto crates `crc32fast` (crc32b), `crc` (the non-`b` crc32 variant and crc32c), `adler2`. No `hmac` crate dependency for the dynamic path (see below).
 
 ### Algorithm table (single source of truth)
 
 A map `name → (constructor: fn() -> Box<dyn DynDigest>, output_size, block_size)`.
 
 **Covered:**
-- crypto: `md2`, `md4`, `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`, `sha512/224`, `sha512/256`, `sha3-224`, `sha3-256`, `sha3-384`, `sha3-512`, `ripemd128`, `ripemd160`, `ripemd256`, `ripemd320`, `whirlpool`, `blake2b-512`, `blake2s-256`
-- non-crypto: `crc32`, `crc32b`, `adler32`, `fnv1a32`, `fnv1a64`, `fnv132`, `fnv164`, `joaat`
+- crypto: `md2`, `md4`, `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`, `sha512/224`, `sha512/256`, `sha3-224`, `sha3-256`, `sha3-384`, `sha3-512`, `ripemd128`, `ripemd160`, `ripemd256`, `ripemd320`, `whirlpool`
+- non-crypto: `crc32`, `crc32b`, `crc32c`, `adler32`, `fnv1a32`, `fnv1a64`, `fnv132`, `fnv164`, `joaat`
+
+  Note: `blake2` (`blake2b-512`, `blake2s-256`) is **not** in PHP's `hash_algos()` and is intentionally excluded from elephc-crypto's algorithm table. It is not a gap — it is simply outside PHP's supported set.
 
   **crc32 vs crc32b:** PHP exposes two distinct CRC-32 variants with different polynomials/reflection. `crc32b` (CRC-32/ISO-HDLC, reflected) is what `crc32fast` computes and what PHP's `crc32()` *function* returns; `crc32` (PHP's non-`b` `hash()` algorithm) is a different variant and needs the `crc` crate with the matching parameterization. Both must be cross-checked against `php -r 'echo hash("crc32", ...);'` / `hash("crc32b", ...)` to match byte-for-byte. The existing `__rt_crc32` (used by `crc32()` and phar entry checksums) already computes the `crc32b` value and stays as-is.
 
