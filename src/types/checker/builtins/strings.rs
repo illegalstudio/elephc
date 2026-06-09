@@ -343,6 +343,46 @@ pub(super) fn check_builtin(
             // Returns the supported-algorithm name list; pure, no crypto library.
             Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
         }
+        "hash_init" => {
+            // HASH_HMAC streaming mode (flags/key) is not supported; use hash_hmac().
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "hash_init() flags/HASH_HMAC streaming mode is not supported; use hash_hmac() for HMAC",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            checker.require_builtin_library("elephc_crypto");
+            Ok(Some(PhpType::Mixed))
+        }
+        "hash_update" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(span, "hash_update() takes exactly 2 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            checker.require_builtin_library("elephc_crypto");
+            Ok(Some(PhpType::Bool))
+        }
+        "hash_final" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(span, "hash_final() takes 1 or 2 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            checker.require_builtin_library("elephc_crypto");
+            Ok(Some(PhpType::Str))
+        }
+        "hash_copy" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "hash_copy() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            checker.require_builtin_library("elephc_crypto");
+            Ok(Some(PhpType::Mixed))
+        }
         "sscanf" => {
             if args.len() < 2 {
                 return Err(CompileError::new(span, "sscanf() takes at least 2 arguments"));

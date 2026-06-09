@@ -296,6 +296,36 @@ fn hash_file_hashes_contents_and_false_on_missing() {
     );
 }
 
+/// Verifies incremental hashing: hash_init/update/final equals the one-shot
+/// digest, the $binary flag is honored, and hash_copy() produces an independent
+/// context that diverges from the original after the clone point.
+#[test]
+fn hash_context_incremental_copy_and_final() {
+    assert_eq!(
+        compile_and_run(r#"<?php $c = hash_init("sha256"); hash_update($c, "ab"); hash_update($c, "c"); echo hash_final($c);"#),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    assert_eq!(
+        compile_and_run(r#"<?php $c = hash_init("sha256"); hash_update($c, "abc"); echo strlen(hash_final($c, true));"#),
+        "32"
+    );
+    // hash_copy independence: original continues to "abc", the clone to "aXY".
+    assert_eq!(
+        compile_and_run(r#"<?php $h = hash_init("sha256"); hash_update($h, "a"); $h2 = hash_copy($h); hash_update($h, "bc"); hash_update($h2, "XY"); echo hash_final($h), "|", hash_final($h2);"#),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad|8411259f736c55dc19cfc1728693503c8e571d2d9ac272bb674636e956f2e49d"
+    );
+}
+
+/// Verifies hash_init() throws a catchable \ValueError (with PHP's hash_init
+/// message) for an unknown algorithm.
+#[test]
+fn hash_init_unknown_algorithm_throws_value_error() {
+    assert_eq!(
+        compile_and_run(r#"<?php try { hash_init("definitely-not-an-algo"); } catch (\ValueError $e) { echo $e->getMessage(); }"#),
+        "hash_init(): Argument #1 ($algo) must be a valid hashing algorithm"
+    );
+}
+
 /// Verifies `hash()` resolves through PHP's case-insensitive and namespaced builtin lookup.
 #[test]
 fn hash_is_case_insensitive_and_namespaced() {

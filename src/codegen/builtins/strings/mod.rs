@@ -31,6 +31,7 @@ mod format_args;
 mod grapheme_strrev;
 mod hash;
 mod hash_algos;
+mod hash_context;
 mod hash_equals;
 mod hash_hmac;
 pub(crate) mod hash_crypto;
@@ -171,6 +172,10 @@ pub fn emit(
         "hash_algos" => hash_algos::emit(name, args, emitter, ctx, data),
         "hash_equals" => hash_equals::emit(name, args, emitter, ctx, data),
         "hash_hmac" => hash_hmac::emit(name, args, emitter, ctx, data),
+        "hash_init" => hash_context::emit_init(name, args, emitter, ctx, data),
+        "hash_update" => hash_context::emit_update(name, args, emitter, ctx, data),
+        "hash_final" => hash_context::emit_final(name, args, emitter, ctx, data),
+        "hash_copy" => hash_context::emit_copy(name, args, emitter, ctx, data),
         "sscanf" => sscanf::emit(name, args, emitter, ctx, data),
         _ => None,
     }

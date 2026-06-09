@@ -241,6 +241,10 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             vec![bool_lit(false)],
         )),
         "hash_file" => Some(optional(&["algo", "filename", "binary"], 2, vec![bool_lit(false)])),
+        "hash_init" => Some(optional(&["algo", "flags", "key"], 1, vec![int_lit(0), string_lit("")])),
+        "hash_update" => Some(fixed(&["context", "data"])),
+        "hash_final" => Some(optional(&["context", "binary"], 1, vec![bool_lit(false)])),
+        "hash_copy" => Some(fixed(&["context"])),
         "md5" | "sha1" => Some(optional(&["string", "binary"], 1, vec![bool_lit(false)])),
         "crc32" => Some(fixed(&["string"])),
         "number_format" => Some(optional(

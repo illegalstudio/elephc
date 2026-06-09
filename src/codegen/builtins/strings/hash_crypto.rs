@@ -40,6 +40,10 @@ pub(crate) fn publish_elephc_crypto_function_pointers(emitter: &mut Emitter) {
     const ENTRIES: &[(&str, &str)] = &[
         ("elephc_crypto_hash", "_elephc_crypto_hash_fn"),
         ("elephc_crypto_hmac", "_elephc_crypto_hmac_fn"),
+        ("elephc_crypto_init", "_elephc_crypto_init_fn"),
+        ("elephc_crypto_update", "_elephc_crypto_update_fn"),
+        ("elephc_crypto_final", "_elephc_crypto_final_fn"),
+        ("elephc_crypto_clone", "_elephc_crypto_clone_fn"),
     ];
     match emitter.target.arch {
         Arch::AArch64 => {
