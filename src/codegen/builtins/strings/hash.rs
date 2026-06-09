@@ -19,11 +19,11 @@ use crate::types::PhpType;
 
 /// Emits a PHP `hash($algo, $data, $binary = false)` call as a runtime helper invocation.
 ///
-/// The algorithm string is evaluated first and preserved on the stack while the
-/// optional `$binary` flag is evaluated, coerced to a 0/1 integer, and preserved
-/// in turn; the data string is evaluated last. Before the `__rt_hash` call the
-/// arguments are materialised in the runtime ABI registers (algo ptr/len, data
-/// ptr/len, and the binary flag in AArch64 `x5` / x86_64 `r10`). The
+/// The algorithm and data strings are evaluated first, in PHP source order
+/// (`$algo` then `$data`), and preserved on the stack while the optional
+/// `$binary` flag is evaluated and coerced to a 0/1 integer. Before the
+/// `__rt_hash` call the arguments are materialised in the runtime ABI registers
+/// (algo ptr/len, data ptr/len, and the binary flag in AArch64 `x5` / x86_64 `r10`). The
 /// `elephc_crypto_hash` entry point is published into its runtime fn-pointer slot
 /// immediately before the call so only hashing programs link `-lelephc_crypto`.
 ///
@@ -54,24 +54,22 @@ pub fn emit(
     emit_expr(&args[0], emitter, ctx, data);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the algorithm string while evaluating the binary flag and data string
-            emit_binary_flag(args, 2, emitter, ctx, data);
-            emitter.instruction("str x0, [sp, #-16]!");                         // preserve the 0/1 binary flag while evaluating the data string expression
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the algorithm string while evaluating the data string and binary flag
             emit_expr(&args[1], emitter, ctx, data);
-            emitter.instruction("mov x3, x1");                                  // move the data string pointer into the secondary runtime argument register pair on AArch64
-            emitter.instruction("mov x4, x2");                                  // move the data string length into the secondary runtime argument register pair on AArch64
-            emitter.instruction("ldr x5, [sp], #16");                           // restore the binary flag into its runtime argument register on AArch64
-            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the algorithm string after evaluating the data string expression
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the data string (PHP evaluates $data before $binary)
+            emit_binary_flag(args, 2, emitter, ctx, data);
+            emitter.instruction("mov x5, x0");                                  // move the 0/1 binary flag into its runtime argument register on AArch64
+            emitter.instruction("ldp x3, x4, [sp], #16");                       // restore the data string into the secondary runtime argument register pair
+            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the algorithm string into the primary runtime argument register pair
         }
         Arch::X86_64 => {
-            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the algorithm string ptr/len while evaluating the binary flag and data string on x86_64
-            emit_binary_flag(args, 2, emitter, ctx, data);
-            abi::emit_push_reg(emitter, "rax");                                 // preserve the 0/1 binary flag while evaluating the data string expression
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the algorithm string ptr/len while evaluating the data string and binary flag
             emit_expr(&args[1], emitter, ctx, data);
-            emitter.instruction("mov rdi, rax");                                // move the data string pointer into the secondary x86_64 runtime argument register
-            emitter.instruction("mov rsi, rdx");                                // move the data string length into the secondary x86_64 runtime argument register
-            abi::emit_pop_reg(emitter, "r10");                                  // restore the binary flag into its runtime argument register on x86_64
-            abi::emit_pop_reg_pair(emitter, "rax", "rdx");                      // restore the algorithm string ptr/len after evaluating the data string expression
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the data string (PHP evaluates $data before $binary)
+            emit_binary_flag(args, 2, emitter, ctx, data);
+            emitter.instruction("mov r10, rax");                                // move the 0/1 binary flag into its runtime argument register on x86_64
+            abi::emit_pop_reg_pair(emitter, "rdi", "rsi");                      // restore the data string into the secondary x86_64 runtime argument registers
+            abi::emit_pop_reg_pair(emitter, "rax", "rdx");                      // restore the algorithm string ptr/len into the primary runtime argument registers
         }
     }
     hash_crypto::publish_elephc_crypto_function_pointers(emitter);

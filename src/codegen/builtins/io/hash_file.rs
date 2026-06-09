@@ -42,43 +42,51 @@ pub fn emit(
     emit_expr(&args[0], emitter, ctx, data);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the algorithm string while reading the file
-            emit_binary_flag(args, emitter, ctx, data);
-            emitter.instruction("str x0, [sp, #-16]!");                         // preserve the 0/1 binary flag while reading the file
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the algorithm string (evaluated first)
             emit_expr(&args[1], emitter, ctx, data);
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the filename string (PHP evaluates $filename before $binary)
+            emit_binary_flag(args, emitter, ctx, data);
+            emitter.instruction("str x0, [sp, #-16]!");                         // preserve the binary flag; all three args are now evaluated in source order
+            emitter.instruction("ldp x1, x2, [sp, #16]");                       // reload the filename into the reader's string registers
             abi::emit_call_label(emitter, "__rt_file_get_contents_maybe_url");   // read the file → x1=ptr, x2=len (null on failure)
             emitter.instruction(&format!("cbz x1, {}", fail));                  // a null pointer means the file could not be read → PHP false
             emitter.instruction("mov x3, x1");                                  // move the file bytes pointer into the hash data register pair
             emitter.instruction("mov x4, x2");                                  // move the file bytes length into the hash data register pair
-            emitter.instruction("ldr x5, [sp], #16");                           // restore the binary flag into its hash argument register
-            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the algorithm string into the algorithm register pair
+            emitter.instruction("ldr x5, [sp]");                                // restore the binary flag into its hash argument register
+            emitter.instruction("ldp x1, x2, [sp, #32]");                       // restore the algorithm string into the algorithm register pair
+            emitter.instruction("add sp, sp, #48");                             // discard the preserved algorithm, filename, and binary slots
             hash_crypto::publish_elephc_crypto_function_pointers(emitter);
             abi::emit_call_label(emitter, "__rt_hash");                         // hash the file bytes → x1=ptr, x2=len of the digest string
             abi::emit_call_label(emitter, "__rt_str_persist");                  // copy the digest to owned heap so the boxed string survives buffer reuse
             emitter.instruction(&format!("b {}", done));                        // the digest string is ready to box
             emitter.label(&fail);
-            emitter.instruction("add sp, sp, #32");                             // discard the preserved algorithm string and binary flag
+            emitter.instruction("add sp, sp, #48");                             // discard the preserved algorithm, filename, and binary slots
             emitter.instruction("mov x1, #0");                                  // null string pointer → boxed PHP false
             emitter.label(&done);
         }
         Arch::X86_64 => {
-            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the algorithm string while reading the file
-            emit_binary_flag(args, emitter, ctx, data);
-            abi::emit_push_reg(emitter, "rax");                                 // preserve the 0/1 binary flag while reading the file
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the algorithm string (evaluated first)
             emit_expr(&args[1], emitter, ctx, data);
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the filename string (PHP evaluates $filename before $binary)
+            emit_binary_flag(args, emitter, ctx, data);
+            abi::emit_push_reg(emitter, "rax");                                 // preserve the binary flag; all three args are now evaluated in source order
+            emitter.instruction("mov rax, QWORD PTR [rsp + 16]");               // reload the filename pointer into the reader's string register
+            emitter.instruction("mov rdx, QWORD PTR [rsp + 24]");               // reload the filename length into the reader's string register
             abi::emit_call_label(emitter, "__rt_file_get_contents_maybe_url");   // read the file → rax=ptr, rdx=len (null on failure)
             emitter.instruction("test rax, rax");                               // a null pointer means the file could not be read → PHP false
             emitter.instruction(&format!("jz {}", fail));                       // box false when the read failed
             emitter.instruction("mov rdi, rax");                                // move the file bytes pointer into the hash data register
             emitter.instruction("mov rsi, rdx");                                // move the file bytes length into the hash data register
-            abi::emit_pop_reg(emitter, "r10");                                  // restore the binary flag into its hash argument register
-            abi::emit_pop_reg_pair(emitter, "rax", "rdx");                      // restore the algorithm string into the algorithm register pair
+            emitter.instruction("mov r10, QWORD PTR [rsp]");                    // restore the binary flag into its hash argument register
+            emitter.instruction("mov rax, QWORD PTR [rsp + 32]");               // restore the algorithm string pointer
+            emitter.instruction("mov rdx, QWORD PTR [rsp + 40]");               // restore the algorithm string length
+            emitter.instruction("add rsp, 48");                                 // discard the preserved algorithm, filename, and binary slots
             hash_crypto::publish_elephc_crypto_function_pointers(emitter);
             abi::emit_call_label(emitter, "__rt_hash");                         // hash the file bytes → rax=ptr, rdx=len of the digest string
             abi::emit_call_label(emitter, "__rt_str_persist");                  // copy the digest to owned heap so the boxed string survives buffer reuse
             emitter.instruction(&format!("jmp {}", done));                      // the digest string is ready to box
             emitter.label(&fail);
-            emitter.instruction("add rsp, 32");                                 // discard the preserved algorithm string and binary flag
+            emitter.instruction("add rsp, 48");                                 // discard the preserved algorithm, filename, and binary slots
             emitter.instruction("xor eax, eax");                                // null string pointer → boxed PHP false
             emitter.label(&done);
         }

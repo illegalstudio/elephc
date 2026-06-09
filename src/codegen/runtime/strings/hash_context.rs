@@ -16,6 +16,11 @@
 //!   formats the digest through the shared `__rt_digest_to_string` (hex or raw).
 //! - An unknown algorithm in `hash_init` throws the same catchable `\ValueError`
 //!   as `hash()`.
+//! - Sharp edge of the no-auto-free resource model: reusing a context after
+//!   `hash_final()` — a second `hash_final()`, or a `hash_update()`/`hash_copy()`
+//!   on an already-finalized handle — is undefined. PHP throws "Supplied resource
+//!   is not a valid Hash Context resource"; elephc instead passes the freed handle
+//!   straight to the crate. Finalize each context exactly once.
 
 use crate::codegen::abi;
 use crate::codegen::builtins::hash_crypto;
@@ -147,7 +152,12 @@ fn emit_hash_final(emitter: &mut Emitter) {
             emitter.instruction("mov x1, sp");                                  // C ABI out = the 64-byte stack digest buffer
             abi::emit_symbol_address(emitter, "x9", "_elephc_crypto_final_fn");
             emitter.instruction("ldr x9, [x9]");                                // load the elephc_crypto_final entry pointer
+            emitter.instruction("cbz x9, __rt_hash_final_empty");               // missing runtime → empty digest (defensive; slot published at call sites)
             emitter.instruction("blr x9");                                      // finalize+free the context, x0 = raw digest length
+            emitter.instruction("b __rt_hash_final_len");                       // proceed with the real digest length
+            emitter.label("__rt_hash_final_empty");
+            emitter.instruction("mov x0, #0");                                  // empty digest length when the runtime is unavailable
+            emitter.label("__rt_hash_final_len");
             emitter.instruction("mov x1, x0");                                  // digest length → __rt_digest_to_string length
             emitter.instruction("mov x0, sp");                                  // digest pointer = the stack buffer base
             emitter.instruction("ldr x2, [sp, #72]");                           // reload the binary flag
@@ -164,7 +174,13 @@ fn emit_hash_final(emitter: &mut Emitter) {
             emitter.instruction("mov rsi, rbp");                                // compute the digest buffer address
             emitter.instruction("sub rsi, 80");                                 // C ABI out = a 64-byte buffer within the frame
             emitter.instruction("mov r9, QWORD PTR [rip + _elephc_crypto_final_fn]"); // load the elephc_crypto_final entry pointer
+            emitter.instruction("test r9, r9");                                 // missing runtime → empty digest (defensive; slot published at call sites)
+            emitter.instruction("jz __rt_hash_final_empty_x86");                // skip the call when the runtime is unavailable
             emitter.instruction("call r9");                                     // finalize+free the context, rax = raw digest length
+            emitter.instruction("jmp __rt_hash_final_len_x86");                 // proceed with the real digest length
+            emitter.label("__rt_hash_final_empty_x86");
+            emitter.instruction("xor eax, eax");                                // empty digest length when the runtime is unavailable
+            emitter.label("__rt_hash_final_len_x86");
             emitter.instruction("mov rsi, rax");                                // digest length → __rt_digest_to_string length
             emitter.instruction("mov rdi, rbp");                                // compute the digest buffer address again
             emitter.instruction("sub rdi, 80");                                 // digest pointer = the same 64-byte buffer

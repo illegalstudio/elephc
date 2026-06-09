@@ -326,6 +326,14 @@ fn hash_init_unknown_algorithm_throws_value_error() {
     );
 }
 
+// NOTE: the source-evaluation-order fix in `hash()`/`hash_file()` (evaluate
+// $data/$filename before $binary) is only OBSERVABLE when two or more arguments
+// have side effects — and that exact shape currently hits a separate, pre-existing
+// stack-corruption bug where a string argument pushed across multiple nested
+// function-call argument evaluations is clobbered (see the project notes). A
+// regression test is intentionally omitted until that bug is fixed; the order fix
+// was verified manually (`hash(m("A",..), m("B",..), m("C",..))` now prints "ABC").
+
 /// Verifies `hash()` resolves through PHP's case-insensitive and namespaced builtin lookup.
 #[test]
 fn hash_is_case_insensitive_and_namespaced() {
