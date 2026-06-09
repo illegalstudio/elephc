@@ -158,3 +158,103 @@ fn hmac_rejects_checksums_and_unknown() {
     // tiger is rejected because it is an unknown algorithm (make() returns None).
     assert!(hmac_hex("tiger", b"key", b"abc").is_none());
 }
+
+use std::os::raw::c_void;
+
+/// Finalizes a context via the C ABI and returns the lowercase hex digest.
+fn finalize_hex(ctx: *mut c_void) -> String {
+    let mut out = [0u8; 64];
+    let n = unsafe { elephc_crypto_final(ctx, out.as_mut_ptr()) };
+    assert!(n >= 0);
+    out[..n as usize].iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+#[test]
+fn incremental_matches_one_shot() {
+    let ctx = unsafe { elephc_crypto_init(b"sha256".as_ptr(), 6) };
+    assert!(!ctx.is_null());
+    unsafe {
+        elephc_crypto_update(ctx, b"ab".as_ptr(), 2);
+        elephc_crypto_update(ctx, b"c".as_ptr(), 1);
+    }
+    assert_eq!(finalize_hex(ctx), hash_hex("sha256", b"abc").unwrap());
+}
+
+#[test]
+fn clone_produces_independent_state() {
+    let ctx = unsafe { elephc_crypto_init(b"sha256".as_ptr(), 6) };
+    unsafe { elephc_crypto_update(ctx, b"a".as_ptr(), 1); }
+    let ctx2 = unsafe { elephc_crypto_clone(ctx) };
+    assert!(!ctx2.is_null());
+    // Diverge after cloning: ctx -> "abc", ctx2 -> "aXY".
+    unsafe {
+        elephc_crypto_update(ctx, b"bc".as_ptr(), 2);
+        elephc_crypto_update(ctx2, b"XY".as_ptr(), 2);
+    }
+    let h1 = finalize_hex(ctx);
+    let h2 = finalize_hex(ctx2);
+    assert_eq!(h1, hash_hex("sha256", b"abc").unwrap());
+    assert_eq!(h2, hash_hex("sha256", b"aXY").unwrap());
+    assert_ne!(h1, h2, "clone must be independent of the original");
+}
+
+#[test]
+fn incremental_hmac_matches_one_shot() {
+    let key = b"Jefe";
+    let ctx = unsafe { elephc_crypto_init_hmac(b"sha256".as_ptr(), 6, key.as_ptr(), key.len()) };
+    assert!(!ctx.is_null());
+    unsafe {
+        elephc_crypto_update(ctx, b"what do ya ".as_ptr(), 11);
+        elephc_crypto_update(ctx, b"want for nothing?".as_ptr(), 17);
+    }
+    assert_eq!(
+        finalize_hex(ctx),
+        hmac_hex("sha256", key, b"what do ya want for nothing?").unwrap()
+    );
+}
+
+#[test]
+fn init_unknown_algorithm_returns_null() {
+    let ctx = unsafe { elephc_crypto_init(b"tiger".as_ptr(), 5) };
+    assert!(ctx.is_null());
+}
+
+#[test]
+fn init_hmac_rejects_checksum_returns_null() {
+    // PHP rejects hash_init(..., HASH_HMAC) over non-crypto checksums.
+    let key = b"key";
+    let ctx = unsafe { elephc_crypto_init_hmac(b"crc32b".as_ptr(), 6, key.as_ptr(), key.len()) };
+    assert!(ctx.is_null());
+}
+
+#[test]
+fn free_releases_unfinalized_context() {
+    let ctx = unsafe { elephc_crypto_init(b"sha256".as_ptr(), 6) };
+    unsafe { elephc_crypto_update(ctx, b"abc".as_ptr(), 3); }
+    unsafe { elephc_crypto_free(ctx) }; // must not leak/double-free
+}
+
+#[test]
+fn final_on_null_context_returns_negative() {
+    let mut out = [0u8; 64];
+    let n = unsafe { elephc_crypto_final(std::ptr::null_mut(), out.as_mut_ptr()) };
+    assert_eq!(n, -1);
+}
+
+#[test]
+fn hmac_clone_produces_independent_state() {
+    let key = b"Jefe";
+    let ctx = unsafe { elephc_crypto_init_hmac(b"sha256".as_ptr(), 6, key.as_ptr(), key.len()) };
+    unsafe { elephc_crypto_update(ctx, b"what do ya ".as_ptr(), 11); }
+    let ctx2 = unsafe { elephc_crypto_clone(ctx) };
+    assert!(!ctx2.is_null());
+    unsafe {
+        elephc_crypto_update(ctx, b"want for nothing?".as_ptr(), 17);
+        elephc_crypto_update(ctx2, b"DIFFERENT".as_ptr(), 9);
+    }
+    let h1 = finalize_hex(ctx);
+    let h2 = finalize_hex(ctx2);
+    assert_eq!(h1, hmac_hex("sha256", key, b"what do ya want for nothing?").unwrap());
+    assert_eq!(h2, hmac_hex("sha256", key, b"what do ya DIFFERENT").unwrap());
+    assert_ne!(h1, h2);
+}
