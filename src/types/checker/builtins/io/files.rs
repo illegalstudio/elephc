@@ -51,6 +51,19 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Union(vec![PhpType::Str, PhpType::Bool])))
         }
+        "hash_file" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(span, "hash_file() takes 2 or 3 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            // hash_file() reads the file then hashes through elephc-crypto (full
+            // algorithm set, raw $binary output, catchable ValueError); returns
+            // the digest string or false when the file cannot be read.
+            checker.require_builtin_library("elephc_crypto");
+            Ok(Some(PhpType::Union(vec![PhpType::Str, PhpType::Bool])))
+        }
         "file_put_contents" => {
             if args.len() != 2 {
                 return Err(CompileError::new(
@@ -65,7 +78,7 @@ pub(super) fn check_builtin(
                 args.first().map(|a| &a.kind)
             {
                 if url.starts_with("phar://") {
-                    checker.require_linux_builtin_library("crypto");
+                    checker.require_builtin_library("elephc_crypto");
                 }
             }
             for arg in args {

@@ -160,14 +160,8 @@ impl Emitter {
     pub fn bl_c(&mut self, func: &str) {
         match (self.platform, self.target.arch) {
             (Platform::MacOS, Arch::AArch64) => self.instruction(&format!("bl _{}", func)),
-            (Platform::Linux, Arch::AArch64) => {
-                let remapped = self.target.remap_c_symbol(func);
-                self.instruction(&format!("bl {}", remapped));
-            }
-            (Platform::Linux, Arch::X86_64) => {
-                let remapped = self.target.remap_c_symbol(func);
-                self.instruction(&format!("call {}", remapped));
-            }
+            (Platform::Linux, Arch::AArch64) => self.instruction(&format!("bl {}", func)),
+            (Platform::Linux, Arch::X86_64) => self.instruction(&format!("call {}", func)),
             (Platform::MacOS, Arch::X86_64) => {
                 panic!("C symbol calls are not implemented yet for target macos-x86_64");
             }

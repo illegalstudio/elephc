@@ -108,7 +108,7 @@ mod tests {
     #[test]
     /// "bl _snprintf" becomes "bl snprintf" (known C symbol, underscore stripped).
     /// "bl __rt_itoa" returns None (runtime internal, not a C symbol).
-    /// "bl _sin" becomes "bl sin". "bl _CC_MD5" becomes "bl MD5" (CommonCrypto remap).
+    /// "bl _sin" becomes "bl sin".
     fn test_transform_c_call() {
         assert_eq!(
             transform_c_call("bl _snprintf"),
@@ -116,7 +116,6 @@ mod tests {
         );
         assert_eq!(transform_c_call("bl __rt_itoa"), None);
         assert_eq!(transform_c_call("bl _sin"), Some("bl sin".to_string()));
-        assert_eq!(transform_c_call("bl _CC_MD5"), Some("bl MD5".to_string()));
     }
 
     #[test]

@@ -1,37 +1,43 @@
 //! Purpose:
-//! Emits the `__rt_hash`, `__rt_hash_try_sha` runtime helper assembly for generic hash algorithm dispatch.
-//! Keeps PHP byte-string pointer/length behavior and target-specific ABI variants in one focused emitter.
+//! Emits the `__rt_hash` runtime helper that routes PHP `hash()` through the
+//! elephc-crypto staticlib. Keeps PHP byte-string pointer/length behavior and
+//! target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::strings`.
 //!
 //! Key details:
-//! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - `__rt_hash` calls `elephc_crypto_hash` indirectly through the
+//!   `_elephc_crypto_hash_fn` slot (published at the call site), so the shared
+//!   runtime never names elephc-crypto and non-hashing programs do not link it.
+//! - An unknown algorithm (slot null or a -1 return) throws a catchable
+//!   `\ValueError` through the shared clamp-style stamping sequence.
+//! - The raw digest is formatted into a PHP string by the shared
+//!   `__rt_digest_to_string` helper (see `digest_to_string.rs`), which `md5()`
+//!   and `sha1()` reuse through the same register contract.
 
+use crate::codegen::abi;
+use crate::codegen::builtins::hash_crypto;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::runtime::data::HASH_UNKNOWN_ALGO_MSG;
 
 /// Emits the `__rt_hash` runtime helper for the `hash()` built-in.
 ///
-/// Dispatches to the correct CommonCrypto digest (MD5, SHA1, SHA256) based on
-/// the algorithm name passed in x1/x2 (pointer/length). On x86_64 Linux, delegates
-/// to `emit_hash_linux_x86_64`. On ARM64, falls through to the native implementation.
+/// Input registers:
+///   AArch64: x1/x2 = algorithm name ptr/len, x3/x4 = data ptr/len,
+///            x5 = binary flag (0 = hex output, non-zero = raw bytes).
+///   x86_64:  rax/rdx = algorithm name ptr/len, rdi/rsi = data ptr/len,
+///            r10 = binary flag.
 ///
-/// Input registers (ARM64 calling convention):
-///   x1 = algorithm name string pointer
-///   x2 = algorithm name string length
-///   x3 = data string pointer
-///   x4 = data string length
+/// Output registers (PHP string ptr/len pair):
+///   AArch64: x1 = ptr, x2 = len.
+///   x86_64:  rax = ptr, rdx = len.
 ///
-/// Output registers:
-///   x1 = pointer to hex string in `_concat_buf`
-///   x2 = hex string length
-///
-/// Supports: `"md5"` (16 bytes → 32 hex chars), `"sha1"` (20 bytes → 40 hex chars),
-/// `"sha256"` (32 bytes → 64 hex chars). Unknown algorithm returns an empty string
-/// (zero-length slice at the current concat buffer offset).
-///
-/// The frame pointer (x29) and link register (x30) are saved and restored.
+/// Marshals the C ABI for `elephc_crypto_hash(name,name_len,data,data_len,out)`,
+/// calls it indirectly through `_elephc_crypto_hash_fn`, throws a `\ValueError`
+/// when the slot is null or the call returns -1, and otherwise formats the raw
+/// digest through `__rt_digest_to_string`. Saves and restores fp/lr (rbp).
 pub fn emit_hash(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_linux_x86_64(emitter);
@@ -41,223 +47,103 @@ pub fn emit_hash(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash ---");
     emitter.label_global("__rt_hash");
-    emitter.instruction("sub sp, sp, #96");                                     // allocate stack frame (32 bytes hash + state)
+
+    // -- set up frame: [sp,#0..64)=digest buffer, [sp,#64]=binary flag, [sp,#80]=fp/lr --
+    emitter.instruction("sub sp, sp, #96");                                     // allocate 64B digest buffer + flag slot + saved fp/lr (16-byte aligned)
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // set frame pointer
-    emitter.instruction("stp x3, x4, [sp, #64]");                               // save data ptr/len
+    emitter.instruction("str x5, [sp, #64]");                                   // save the binary flag across the clobbering C call
 
-    // -- check algorithm name --
-    // Compare first char to dispatch quickly
-    emitter.instruction("ldrb w9, [x1]");                                       // load first char of algo name
+    // -- marshal the C ABI for elephc_crypto_hash(name,name_len,data,data_len,out) --
+    emitter.instruction("mov x6, x1");                                          // stash algorithm name pointer before the argument shuffle
+    emitter.instruction("mov x7, x2");                                          // stash algorithm name length before the argument shuffle
+    emitter.instruction("mov x0, x6");                                          // C arg0 = algorithm name pointer
+    emitter.instruction("mov x1, x7");                                          // C arg1 = algorithm name length
+    emitter.instruction("mov x2, x3");                                          // C arg2 = data pointer
+    emitter.instruction("mov x3, x4");                                          // C arg3 = data length
+    emitter.instruction("add x4, sp, #0");                                      // C arg4 = stack-backed 64-byte raw-digest output buffer
 
-    // -- check for "md5" (len=3, starts with 'm') --
-    emitter.instruction("cmp w9, #109");                                        // 'm'?
-    emitter.instruction("b.ne __rt_hash_try_sha");                              // no → try sha*
-    emitter.instruction("ldp x0, x1, [sp, #64]");                               // x0=data ptr, x1 unused
-    emitter.instruction("ldr x0, [sp, #64]");                                   // x0 = data ptr
-    emitter.instruction("ldr x1, [sp, #72]");                                   // w1 = data len
-    emitter.instruction("mov w1, w1");                                          // truncate to 32-bit CC_LONG
-    emitter.instruction("add x2, sp, #0");                                      // output buffer
-    emitter.bl_c("CC_MD5");                                          // call CommonCrypto MD5
-    emitter.instruction("mov x5, #16");                                         // hash size = 16 bytes
-    emitter.instruction("b __rt_hash_hex");                                     // convert to hex
+    // -- call elephc_crypto_hash indirectly through the published slot --
+    abi::emit_symbol_address(emitter, "x9", "_elephc_crypto_hash_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the published elephc_crypto_hash function pointer
+    emitter.instruction("cbz x9, __rt_hash_unknown");                           // null slot means the program never linked elephc-crypto → unknown algo
+    abi::emit_call_reg(emitter, "x9");                                          // compute the raw digest into the stack buffer; x0 = digest length or -1
 
-    // -- check for "sha1" or "sha256" --
-    emitter.label("__rt_hash_try_sha");
-    emitter.instruction("cmp w9, #115");                                        // 's'?
-    emitter.instruction("b.ne __rt_hash_unknown");                              // no → unknown algo
+    // -- handle an unknown algorithm (-1) before formatting --
+    emitter.instruction("cmp x0, #0");                                          // did elephc_crypto_hash reject the algorithm name?
+    emitter.instruction("b.lt __rt_hash_unknown");                              // a negative length means the algorithm is unknown
 
-    // Disambiguate sha1 vs sha256 by length
-    emitter.instruction("cmp x2, #4");                                          // algo len == 4 → "sha1"
-    emitter.instruction("b.eq __rt_hash_sha1");                                 // yes
-    // Otherwise assume sha256
-    emitter.instruction("ldr x0, [sp, #64]");                                   // x0 = data ptr
-    emitter.instruction("ldr x1, [sp, #72]");                                   // data len
-    emitter.instruction("mov w1, w1");                                          // truncate to CC_LONG
-    emitter.instruction("add x2, sp, #0");                                      // output buffer (32 bytes)
-    emitter.bl_c("CC_SHA256");                                       // call CommonCrypto SHA256
-    emitter.instruction("mov x5, #32");                                         // hash size = 32 bytes
-    emitter.instruction("b __rt_hash_hex");                                     // convert to hex
+    // -- format the raw digest into a PHP string --
+    emitter.instruction("mov x1, x0");                                          // digest length argument for the shared formatter
+    emitter.instruction("add x0, sp, #0");                                      // raw digest pointer argument for the shared formatter
+    emitter.instruction("ldr x2, [sp, #64]");                                   // reload the binary flag for the shared formatter
+    emitter.instruction("bl __rt_digest_to_string");                            // turn (ptr,len,flag) into a _concat_buf string in x1/x2
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the helper frame
+    emitter.instruction("ret");                                                 // return the PHP string ptr/len in x1/x2
 
-    emitter.label("__rt_hash_sha1");
-    emitter.instruction("ldr x0, [sp, #64]");                                   // x0 = data ptr
-    emitter.instruction("ldr x1, [sp, #72]");                                   // data len
-    emitter.instruction("mov w1, w1");                                          // truncate to CC_LONG
-    emitter.instruction("add x2, sp, #0");                                      // output buffer (20 bytes)
-    emitter.bl_c("CC_SHA1");                                         // call CommonCrypto SHA1
-    emitter.instruction("mov x5, #20");                                         // hash size = 20 bytes
-    emitter.instruction("b __rt_hash_hex");                                     // convert to hex
-
-    // -- unknown algorithm: return empty string --
+    // -- unknown algorithm: throw a catchable \ValueError --
     emitter.label("__rt_hash_unknown");
-    emitter.instruction("mov x2, #0");                                          // empty result
-    emitter.instruction("b __rt_hash_done");                                    // skip hex conversion
-
-    // -- convert raw hash bytes to hex string --
-    emitter.label("__rt_hash_hex");
-    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    crate::codegen::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // destination pointer
-    emitter.instruction("mov x10, x9");                                         // save result start
-    emitter.instruction("add x11, sp, #0");                                     // source = raw hash bytes
-    emitter.instruction("mov x12, x5");                                         // bytes to convert
-
-    emitter.label("__rt_hash_hex_loop");
-    emitter.instruction("cbz x12, __rt_hash_hex_done");                         // all bytes converted
-    emitter.instruction("ldrb w13, [x11], #1");                                 // load byte, advance
-    emitter.instruction("sub x12, x12, #1");                                    // decrement counter
-    // -- high nibble --
-    emitter.instruction("lsr w14, w13, #4");                                    // extract high 4 bits
-    emitter.instruction("cmp w14, #10");                                        // >= 10?
-    emitter.instruction("b.ge __rt_hash_hi_af");                                // yes → a-f
-    emitter.instruction("add w14, w14, #48");                                   // 0-9 → '0'-'9'
-    emitter.instruction("b __rt_hash_hi_st");                                   // store
-    emitter.label("__rt_hash_hi_af");
-    emitter.instruction("add w14, w14, #87");                                   // 10-15 → 'a'-'f'
-    emitter.label("__rt_hash_hi_st");
-    emitter.instruction("strb w14, [x9], #1");                                  // write high hex char
-    // -- low nibble --
-    emitter.instruction("and w14, w13, #0xf");                                  // extract low 4 bits
-    emitter.instruction("cmp w14, #10");                                        // >= 10?
-    emitter.instruction("b.ge __rt_hash_lo_af");                                // yes → a-f
-    emitter.instruction("add w14, w14, #48");                                   // 0-9 → '0'-'9'
-    emitter.instruction("b __rt_hash_lo_st");                                   // store
-    emitter.label("__rt_hash_lo_af");
-    emitter.instruction("add w14, w14, #87");                                   // 10-15 → 'a'-'f'
-    emitter.label("__rt_hash_lo_st");
-    emitter.instruction("strb w14, [x9], #1");                                  // write low hex char
-    emitter.instruction("b __rt_hash_hex_loop");                                // next byte
-
-    emitter.label("__rt_hash_hex_done");
-    emitter.instruction("mov x1, x10");                                         // result pointer
-    emitter.instruction("sub x2, x9, x10");                                     // result length
-    emitter.instruction("ldr x8, [x6]");                                        // reload offset
-    emitter.instruction("add x8, x8, x2");                                      // advance
-    emitter.instruction("str x8, [x6]");                                        // store updated offset
-
-    emitter.label("__rt_hash_done");
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame
-    emitter.instruction("add sp, sp, #96");                                     // deallocate
-    emitter.instruction("ret");                                                 // return
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address before throwing
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the helper frame before throwing
+    hash_crypto::emit_throw_unknown_algorithm_value_error(
+        emitter,
+        "_hash_unknown_algo_msg",
+        HASH_UNKNOWN_ALGO_MSG.len(),
+    );
 }
 
 /// Emits the x86_64 Linux variant of the `__rt_hash` runtime helper.
 ///
-/// Receives arguments in the System V AMD64 ABI registers:
-///   rdi = data string pointer
-///   rsi = data string length
-///   rdx = algorithm name length
-///   rax = algorithm name pointer
-///
-/// Output registers:
-///   rax = pointer to hex string in `_concat_buf`
-///   rdx = hex string length
-///
-/// Dispatches to CC_MD5, CC_SHA1, or CC_SHA256 via CommonCrypto based on the
-/// algorithm name. Unknown algorithm returns an empty string (zero-length slice
-/// at the current concat buffer offset). Frame pointer (rbp) is preserved.
+/// See [`emit_hash`] for the register contract. Receives the binary flag in r10
+/// (the 5th C argument register r8 is reserved for the output buffer), saves it
+/// to the stack across the C call, calls `elephc_crypto_hash` indirectly, throws
+/// a `\ValueError` on a null slot or -1 return, and otherwise formats the raw
+/// digest through `__rt_digest_to_string`. Preserves rbp.
 fn emit_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash ---");
     emitter.label_global("__rt_hash");
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving aligned digest scratch space for hash()
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base so hash() can preserve the data string and raw digest buffer across helper calls
-    emitter.instruction("sub rsp, 96");                                         // reserve aligned stack space for a 32-byte raw digest buffer plus saved data ptr/len scratch
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the data string pointer while hash() inspects the algorithm name and dispatches to the correct digest helper
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the data string length while hash() inspects the algorithm name and dispatches to the correct digest helper
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving the digest scratch space
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the digest buffer and saved flag
+    emitter.instruction("sub rsp, 96");                                         // reserve a 64-byte raw-digest buffer plus saved-flag scratch (16-byte aligned)
+    emitter.instruction("mov QWORD PTR [rbp - 72], r10");                       // save the binary flag across the clobbering C call
 
-    // -- check algorithm name --
-    emitter.instruction("movzx ecx, BYTE PTR [rax]");                           // load the first algorithm-name byte so hash() can dispatch quickly between md5/sha1/sha256
-    emitter.instruction("cmp cl, 109");                                         // does the algorithm name begin with 'm', which this runtime treats as the md5() family?
-    emitter.instruction("jne __rt_hash_try_sha_linux_x86_64");                  // continue to the sha* dispatch when the algorithm does not start with 'm'
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the data string pointer before invoking the MD5 C helper
-    emitter.instruction("mov esi, DWORD PTR [rbp - 16]");                       // reload the data string length in the 32-bit size expected by the MD5 C helper
-    emitter.instruction("lea rdx, [rbp - 64]");                                 // pass a stack-backed 16-byte output buffer as the MD5 digest destination
-    emitter.bl_c("CC_MD5");                                                     // compute the raw MD5 digest bytes for hash(\"md5\", ...)
-    emitter.instruction("mov rsi, 16");                                         // record the raw digest size so the shared hexadecimal conversion path formats 16 bytes for md5
-    emitter.instruction("jmp __rt_hash_hex_linux_x86_64");                      // convert the raw md5 digest bytes to lowercase hexadecimal through the shared formatting path
+    // -- marshal the C ABI for elephc_crypto_hash(name,name_len,data,data_len,out) --
+    emitter.instruction("mov r8, rdi");                                         // stash the data pointer before rdi is overwritten by the algorithm name
+    emitter.instruction("mov r9, rsi");                                         // stash the data length before rsi is overwritten by the algorithm name length
+    emitter.instruction("mov rdi, rax");                                        // C arg0 = algorithm name pointer
+    emitter.instruction("mov rsi, rdx");                                        // C arg1 = algorithm name length
+    emitter.instruction("mov rdx, r8");                                         // C arg2 = data pointer
+    emitter.instruction("mov rcx, r9");                                         // C arg3 = data length
+    emitter.instruction("lea r8, [rbp - 64]");                                  // C arg4 = stack-backed 64-byte raw-digest output buffer
 
-    emitter.label("__rt_hash_try_sha_linux_x86_64");
-    emitter.instruction("cmp cl, 115");                                         // does the algorithm name begin with 's', which this runtime treats as the sha* family?
-    emitter.instruction("jne __rt_hash_unknown_linux_x86_64");                  // return an empty string when the requested algorithm is outside the currently supported md5/sha1/sha256 set
-    emitter.instruction("cmp rdx, 4");                                          // is the algorithm-name length exactly 4, which this runtime treats as sha1?
-    emitter.instruction("je __rt_hash_sha1_linux_x86_64");                      // dispatch to the SHA1 helper when the algorithm name is four bytes long
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the data string pointer before invoking the SHA256 C helper
-    emitter.instruction("mov esi, DWORD PTR [rbp - 16]");                       // reload the data string length in the 32-bit size expected by the SHA256 C helper
-    emitter.instruction("lea rdx, [rbp - 64]");                                 // pass a stack-backed 32-byte output buffer as the SHA256 digest destination
-    emitter.bl_c("CC_SHA256");                                                  // compute the raw SHA256 digest bytes for hash(\"sha256\", ...)
-    emitter.instruction("mov rsi, 32");                                         // record the raw digest size so the shared hexadecimal conversion path formats 32 bytes for sha256
-    emitter.instruction("jmp __rt_hash_hex_linux_x86_64");                      // convert the raw sha256 digest bytes to lowercase hexadecimal through the shared formatting path
+    // -- call elephc_crypto_hash indirectly through the published slot --
+    emitter.instruction("mov r9, QWORD PTR [rip + _elephc_crypto_hash_fn]");    // load the published elephc_crypto_hash function pointer
+    emitter.instruction("test r9, r9");                                         // a null slot means the program never linked elephc-crypto → unknown algo
+    emitter.instruction("jz __rt_hash_unknown_linux_x86_64");                   // throw the unknown-algorithm ValueError when the slot is null
+    emitter.instruction("call r9");                                             // compute the raw digest into the stack buffer; rax = digest length or -1
 
-    emitter.label("__rt_hash_sha1_linux_x86_64");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the data string pointer before invoking the SHA1 C helper
-    emitter.instruction("mov esi, DWORD PTR [rbp - 16]");                       // reload the data string length in the 32-bit size expected by the SHA1 C helper
-    emitter.instruction("lea rdx, [rbp - 64]");                                 // pass a stack-backed 20-byte output buffer as the SHA1 digest destination
-    emitter.bl_c("CC_SHA1");                                                    // compute the raw SHA1 digest bytes for hash(\"sha1\", ...)
-    emitter.instruction("mov rsi, 20");                                         // record the raw digest size so the shared hexadecimal conversion path formats 20 bytes for sha1
-    emitter.instruction("jmp __rt_hash_hex_linux_x86_64");                      // convert the raw sha1 digest bytes to lowercase hexadecimal through the shared formatting path
+    // -- handle an unknown algorithm (-1) before formatting --
+    emitter.instruction("test rax, rax");                                       // did elephc_crypto_hash reject the algorithm name?
+    emitter.instruction("js __rt_hash_unknown_linux_x86_64");                   // a negative length means the algorithm is unknown
 
+    // -- format the raw digest into a PHP string --
+    emitter.instruction("mov rsi, rax");                                        // digest length argument for the shared formatter
+    emitter.instruction("lea rdi, [rbp - 64]");                                 // raw digest pointer argument for the shared formatter
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // reload the binary flag for the shared formatter
+    emitter.instruction("call __rt_digest_to_string");                          // turn (ptr,len,flag) into a _concat_buf string in rax/rdx
+    emitter.instruction("add rsp, 96");                                         // release the helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the PHP string ptr/len in rax/rdx
+
+    // -- unknown algorithm: throw a catchable \ValueError --
     emitter.label("__rt_hash_unknown_linux_x86_64");
-    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset so an unsupported algorithm can still return a valid empty string slice
-    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea rax, [r10 + r9]");                                 // return the current concat-buffer cursor as the start pointer of the empty result string for unsupported algorithms
-    emitter.instruction("xor rdx, rdx");                                        // return a zero-length string when the requested hash algorithm is unsupported
-    emitter.instruction("add rsp, 96");                                         // release the stack-backed digest scratch space before returning the empty string result
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the empty hash() result
-    emitter.instruction("ret");                                                 // return the empty string result for unsupported algorithms in the standard x86_64 string result registers
-
-    emitter.label("__rt_hash_hex_linux_x86_64");
-    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before formatting the raw digest bytes as lowercase hexadecimal
-    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea r11, [r10 + r9]");                                 // compute the concat-buffer destination pointer where the lowercase hexadecimal digest begins
-    emitter.instruction("mov r8, r11");                                         // preserve the concat-backed digest start pointer for the returned string value after the hex loop mutates the destination cursor
-    emitter.instruction("lea rcx, [rbp - 64]");                                 // seed the raw-digest source cursor with the local digest output buffer filled by the dispatched C helper
-
-    emitter.label("__rt_hash_hex_loop_linux_x86_64");
-    emitter.instruction("test rsi, rsi");                                       // stop once every raw digest byte selected by the algorithm dispatch has been formatted into lowercase hexadecimal
-    emitter.instruction("jz __rt_hash_hex_done_linux_x86_64");                  // finish once the full raw digest has been converted to lowercase hex characters
-    emitter.instruction("movzx edx, BYTE PTR [rcx]");                           // load one raw digest byte before splitting it into high and low hexadecimal nibbles
-    emitter.instruction("add rcx, 1");                                          // advance the raw-digest source cursor after consuming one digest byte
-    emitter.instruction("sub rsi, 1");                                          // decrement the remaining raw-digest byte count after consuming one digest byte
-    emitter.instruction("mov eax, edx");                                        // copy the raw digest byte before extracting its high hexadecimal nibble for lowercase formatting
-    emitter.instruction("shr al, 4");                                           // isolate the high nibble of the raw digest byte so it can be rendered as lowercase hexadecimal
-    emitter.instruction("cmp al, 10");                                          // does the high nibble require an alphabetic lowercase hexadecimal digit instead of a decimal digit?
-    emitter.instruction("jae __rt_hash_hi_af_linux_x86_64");                    // map nibble values 10-15 to 'a'-'f' for the high hexadecimal digit
-    emitter.instruction("add al, 48");                                          // map nibble values 0-9 to '0'-'9' for the high hexadecimal digit
-    emitter.instruction("jmp __rt_hash_hi_store_linux_x86_64");                 // skip the alphabetic-nibble mapping once the high digit has been converted
-
-    emitter.label("__rt_hash_hi_af_linux_x86_64");
-    emitter.instruction("add al, 87");                                          // map nibble values 10-15 to 'a'-'f' for the high hexadecimal digit
-
-    emitter.label("__rt_hash_hi_store_linux_x86_64");
-    emitter.instruction("mov BYTE PTR [r11], al");                              // store the high lowercase hexadecimal digit of the current digest byte into concat storage
-    emitter.instruction("add r11, 1");                                          // advance the concat-buffer destination cursor after emitting the high lowercase hexadecimal digit
-    emitter.instruction("mov eax, edx");                                        // reload the raw digest byte before extracting its low hexadecimal nibble for lowercase formatting
-    emitter.instruction("and al, 15");                                          // isolate the low nibble of the raw digest byte so it can be rendered as lowercase hexadecimal
-    emitter.instruction("cmp al, 10");                                          // does the low nibble require an alphabetic lowercase hexadecimal digit instead of a decimal digit?
-    emitter.instruction("jae __rt_hash_lo_af_linux_x86_64");                    // map nibble values 10-15 to 'a'-'f' for the low hexadecimal digit
-    emitter.instruction("add al, 48");                                          // map nibble values 0-9 to '0'-'9' for the low hexadecimal digit
-    emitter.instruction("jmp __rt_hash_lo_store_linux_x86_64");                 // skip the alphabetic-nibble mapping once the low digit has been converted
-
-    emitter.label("__rt_hash_lo_af_linux_x86_64");
-    emitter.instruction("add al, 87");                                          // map nibble values 10-15 to 'a'-'f' for the low hexadecimal digit
-
-    emitter.label("__rt_hash_lo_store_linux_x86_64");
-    emitter.instruction("mov BYTE PTR [r11], al");                              // store the low lowercase hexadecimal digit of the current digest byte into concat storage
-    emitter.instruction("add r11, 1");                                          // advance the concat-buffer destination cursor after emitting the low lowercase hexadecimal digit
-    emitter.instruction("jmp __rt_hash_hex_loop_linux_x86_64");                 // continue formatting the remaining raw digest bytes into lowercase hexadecimal
-
-    emitter.label("__rt_hash_hex_done_linux_x86_64");
-    emitter.instruction("mov rax, r8");                                         // return the concat-backed start pointer of the lowercase hexadecimal digest string produced by hash()
-    emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer destination cursor before computing the lowercase hexadecimal digest length
-    emitter.instruction("sub rdx, r8");                                         // compute the lowercase hexadecimal digest length as dest_end - dest_start for the returned x86_64 string value
-    emitter.instruction("mov rcx, QWORD PTR [rip + _concat_off]");              // reload the concat-buffer write offset before publishing the lowercase hexadecimal digest bytes that hash() appended
-    emitter.instruction("add rcx, rdx");                                        // advance the concat-buffer write offset by the produced lowercase hexadecimal digest length
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // persist the updated concat-buffer write offset after formatting the dispatched digest
-    emitter.instruction("add rsp, 96");                                         // release the stack-backed digest scratch space before returning the lowercase hexadecimal hash() result string
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the lowercase hexadecimal hash() result string
-    emitter.instruction("ret");                                                 // return the lowercase hexadecimal hash() result in the standard x86_64 string result registers
+    emitter.instruction("add rsp, 96");                                         // release the helper frame before throwing
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before throwing
+    hash_crypto::emit_throw_unknown_algorithm_value_error(
+        emitter,
+        "_hash_unknown_algo_msg",
+        HASH_UNKNOWN_ALGO_MSG.len(),
+    );
 }

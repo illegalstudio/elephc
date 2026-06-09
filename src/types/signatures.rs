@@ -79,7 +79,7 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
-        | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" => Some(fixed(&[])),
+        | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" | "hash_algos" => Some(fixed(&[])),
 
         "strlen" | "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "grapheme_strrev" | "addslashes" | "stripslashes" | "nl2br" | "bin2hex"
@@ -200,6 +200,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             Some(fixed(&["haystack", "needle"]))
         }
+        "hash_equals" => Some(fixed(&["known_string", "user_string"])),
         "str_replace" | "str_ireplace" => Some(optional(
             &["search", "replace", "subject", "count"],
             3,
@@ -233,7 +234,17 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "vfprintf" => Some(fixed(&["stream", "format", "values"])),
         "sscanf" => Some(variadic(&["string", "format"], "vars")),
         "fscanf" => Some(variadic(&["stream", "format"], "vars")),
-        "hash" => Some(fixed(&["algo", "data"])),
+        "hash" => Some(optional(&["algo", "data", "binary"], 2, vec![bool_lit(false)])),
+        "hash_hmac" => Some(optional(
+            &["algo", "data", "key", "binary"],
+            3,
+            vec![bool_lit(false)],
+        )),
+        "hash_file" => Some(optional(&["algo", "filename", "binary"], 2, vec![bool_lit(false)])),
+        "hash_init" => Some(optional(&["algo", "flags", "key"], 1, vec![int_lit(0), string_lit("")])),
+        "hash_update" => Some(fixed(&["context", "data"])),
+        "hash_final" => Some(optional(&["context", "binary"], 1, vec![bool_lit(false)])),
+        "hash_copy" => Some(fixed(&["context"])),
         "md5" | "sha1" => Some(optional(&["string", "binary"], 1, vec![bool_lit(false)])),
         "crc32" => Some(fixed(&["string"])),
         "number_format" => Some(optional(
@@ -674,7 +685,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         | "base64_decode" | "trim" | "ltrim" | "rtrim" | "chop" | "ucwords" | "substr"
         | "str_repeat" | "strstr" | "str_replace" | "str_ireplace" | "explode"
         | "implode" | "substr_replace" | "str_pad" | "str_split" | "wordwrap"
-        | "sprintf" | "hash" | "md5" | "sha1" | "crc32" | "number_format" | "chr" => {
+        | "sprintf" | "hash" | "hash_hmac" | "md5" | "sha1" | "crc32" | "number_format" | "chr" => {
             Some(typed_first_class_builtin_sig(
                 name,
                 &[PhpType::Str],
@@ -686,10 +697,15 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Str],
             PhpType::Int,
         )),
-        "str_contains" | "str_starts_with" | "str_ends_with" => Some(typed_first_class_builtin_sig(
+        "str_contains" | "str_starts_with" | "str_ends_with" | "hash_equals" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Str, PhpType::Str],
             PhpType::Bool,
+        )),
+        "hash_algos" => Some(typed_first_class_builtin_sig(
+            name,
+            &[],
+            PhpType::Array(Box::new(PhpType::Str)),
         )),
         "array_keys" | "array_values" | "array_reverse" | "array_unique" | "array_rand" => {
             Some(typed_first_class_builtin_sig(
@@ -765,7 +781,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Str],
             PhpType::Bool,
         )),
-        "file_get_contents" | "file" | "filesize" | "filemtime" | "fileatime"
+        "file_get_contents" | "hash_file" | "file" | "filesize" | "filemtime" | "fileatime"
         | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
         | "filetype" | "stat" | "lstat" | "basename" | "dirname" | "realpath"
         | "pathinfo" | "readlink" | "linkinfo" | "tempnam" => {

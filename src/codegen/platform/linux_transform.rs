@@ -339,21 +339,8 @@ pub(super) fn parse_syscall_mov(trimmed: &str) -> Option<u32> {
     num_str.parse::<u32>().ok()
 }
 
-/// Remaps macOS-specific CommonCrypto symbol names to their portable Linux equivalents.
-/// CC_MD5 → MD5, CC_SHA1 → SHA1, CC_SHA256 → SHA256.
-/// Other symbols are returned unchanged.
-#[allow(dead_code)]
-fn remap_symbol(name: &str) -> &str {
-    match name {
-        "CC_MD5" => "MD5",
-        "CC_SHA1" => "SHA1",
-        "CC_SHA256" => "SHA256",
-        _ => name,
-    }
-}
-
 /// Transforms a macOS `bl _Symbol` call to Linux syntax.
-/// Strips the leading underscore from known C symbols and remaps CryptoCommon symbols.
+/// Strips the leading underscore from known C symbols.
 /// Returns None if the line is not a macOS-style C function call.
 #[allow(dead_code)]
 pub(super) fn transform_c_call(trimmed: &str) -> Option<String> {
@@ -362,10 +349,6 @@ pub(super) fn transform_c_call(trimmed: &str) -> Option<String> {
         return None;
     }
     let func_name = rest.split_whitespace().next().unwrap_or(rest);
-    let remapped = remap_symbol(func_name);
-    if remapped != func_name {
-        return Some(format!("bl {}", remapped));
-    }
     if is_c_symbol(func_name) {
         return Some(format!("bl {}", rest));
     }

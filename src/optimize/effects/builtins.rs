@@ -105,6 +105,8 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "str_contains"
             | "str_starts_with"
             | "str_ends_with"
+            | "hash_equals"
+            | "hash_algos"
             | "ord"
             | "chr"
             | "nl2br"
@@ -121,7 +123,6 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "md5"
             | "sha1"
             | "crc32"
-            | "hash"
             | "base64_encode"
             | "base64_decode"
             | "bin2hex"
@@ -165,4 +166,8 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
     // Pointer memory helpers such as ptr_read16(), ptr_write16(),
     // ptr_read_string(), and ptr_write_string() are also intentionally absent:
     // raw memory reads/writes and null/length fatals must remain observable.
+    // hash() is intentionally NOT listed: an unknown algorithm name throws a
+    // catchable \ValueError, so DCE must not eliminate an unused hash() call.
+    // hash_hmac() is likewise NOT listed: an unknown algorithm or a non-crypto
+    // checksum throws a catchable \ValueError, so it must stay side-effecting.
 }

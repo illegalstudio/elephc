@@ -684,21 +684,6 @@ impl Target {
         emitter.instruction("svc #0");                                          // invoke the Linux kernel supervisor call
     }
 
-    /// Remaps CommonCrypto symbol names to their Linux OpenSSL equivalents on Linux.
-    ///
-    /// On macOS returns the name unchanged. On Linux maps `CC_MD5` → `MD5`,
-    /// `CC_SHA1` → `SHA1`, `CC_SHA256` → `SHA256`, and passes through all other names.
-    pub fn remap_c_symbol<'a>(&self, name: &'a str) -> &'a str {
-        match self.platform {
-            Platform::MacOS => name,
-            Platform::Linux => match name {
-                "CC_MD5" => "MD5",
-                "CC_SHA1" => "SHA1",
-                "CC_SHA256" => "SHA256",
-                _ => name,
-            },
-        }
-    }
 
     /// Returns the platform-mangled extern symbol name.
     ///

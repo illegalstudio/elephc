@@ -33,19 +33,7 @@ pub(crate) use callables::{
 };
 
 impl Checker {
-    /// Records that a Linux target requires the given shared library for this compilation.
-    ///
-    /// No-op on non-Linux targets. Prevents duplicate entries in `required_libraries`.
-    fn require_linux_builtin_library(&mut self, library: &str) {
-        if self.target_platform == crate::codegen::platform::Platform::Linux
-            && !self.required_libraries.iter().any(|lib| lib == library)
-        {
-            self.required_libraries.push(library.to_string());
-        }
-    }
-
-    /// Records an external link library required on every target (unlike
-    /// [`Self::require_linux_builtin_library`], which is Linux-only).
+    /// Records an external link library required on every target.
     fn require_builtin_library(&mut self, library: &str) {
         if !self.required_libraries.iter().any(|lib| lib == library) {
             self.required_libraries.push(library.to_string());

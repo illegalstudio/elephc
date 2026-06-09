@@ -141,6 +141,9 @@ fn emit_write(
             let tpl = build_phar_write_template(&entry);
             let (tpl_sym, tpl_len) = data.add_string(&tpl);
             let (path_sym, path_len) = data.add_string(archive.as_bytes());
+            // The phar signature is computed with elephc-crypto SHA1, so publish
+            // its entry pointers before __rt_phar_write_finalize runs at fclose().
+            crate::codegen::builtins::hash_crypto::publish_elephc_crypto_function_pointers(emitter);
             match emitter.target.arch {
                 Arch::AArch64 => {
                     abi::emit_symbol_address(emitter, "x9", &path_sym);
@@ -195,6 +198,9 @@ pub(crate) fn emit_file_put_contents_write(
     let tpl = build_phar_write_template(&entry);
     let (tpl_sym, tpl_len) = data.add_string(&tpl);
     let (path_sym, path_len) = data.add_string(archive.as_bytes());
+    // The phar signature is computed with elephc-crypto SHA1, so publish its
+    // entry pointers before the inline finalize signs the archive.
+    crate::codegen::builtins::hash_crypto::publish_elephc_crypto_function_pointers(emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(emitter, "x9", &path_sym);

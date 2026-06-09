@@ -9,8 +9,9 @@
 //! - Fixed symbols are cached across compilations, so only target-independent runtime data belongs here.
 
 use super::{
-    DIRNAME_LEVELS_MSG, PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG,
-    STR_REPEAT_TIMES_MSG,
+    DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
+    HASH_UNKNOWN_ALGO_MSG,
+    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
 use crate::types::checker::builtins::supported_builtin_function_names;
@@ -76,6 +77,36 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
         ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
         STR_REPEAT_TIMES_MSG
     ));
+    out.push_str(&format!(
+        ".globl _hash_unknown_algo_msg\n_hash_unknown_algo_msg:\n    .ascii {:?}\n",
+        HASH_UNKNOWN_ALGO_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _hash_hmac_unknown_algo_msg\n_hash_hmac_unknown_algo_msg:\n    .ascii {:?}\n",
+        HASH_HMAC_UNKNOWN_ALGO_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _hash_init_unknown_algo_msg\n_hash_init_unknown_algo_msg:\n    .ascii {:?}\n",
+        HASH_INIT_UNKNOWN_ALGO_MSG
+    ));
+    // Fixed algorithm-name constants for md5()/sha1(): both route through the
+    // same elephc_crypto_hash entry point as hash(), so __rt_md5 / __rt_sha1
+    // load these literal names into the algorithm-name register pair before
+    // reaching __rt_hash. NUL-terminated for safety, but the runtime passes the
+    // explicit byte length (3 / 4) so elephc_crypto_hash never reads the NUL.
+    out.push_str(".globl _md5_algo_name\n_md5_algo_name:\n    .asciz \"md5\"\n");
+    out.push_str(".globl _sha1_algo_name\n_sha1_algo_name:\n    .asciz \"sha1\"\n");
+    // Labelled name constants (`_hash_algo_N`) for hash_algos(): __rt_hash_algos_list
+    // pushes each as a string element. The list is the single source of truth in
+    // runtime::strings::hash_algos::HASH_ALGOS (kept in lockstep with elephc-crypto).
+    for (i, name) in crate::codegen::runtime::strings::hash_algos::HASH_ALGOS
+        .iter()
+        .enumerate()
+    {
+        out.push_str(&format!(
+            ".globl _hash_algo_{i}\n_hash_algo_{i}:\n    .asciz \"{name}\"\n"
+        ));
+    }
     for (label, message) in [
         ("_spl_dll_pop_empty_msg", "Can't pop from an empty datastructure"),
         ("_spl_dll_shift_empty_msg", "Can't shift from an empty datastructure"),
@@ -237,6 +268,21 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // pairs that the non-client-cert variants ignore. Same late-binding pattern.
     out.push_str(".comm _elephc_tls_attach_fd_client_cert_fn, 8, 3\n");
     out.push_str(".comm _elephc_tls_connect_client_cert_fn, 8, 3\n");
+    // _elephc_crypto_hash_fn: indirect pointer to elephc_crypto_hash, published
+    // only at a hash() call site so the shared runtime __rt_hash can call through
+    // it without the runtime itself naming elephc-crypto. Programs that never
+    // call hash() leave the slot null and do not pull in -lelephc_crypto.
+    out.push_str(".comm _elephc_crypto_hash_fn, 8, 3\n");
+    // _elephc_crypto_hmac_fn: indirect pointer to elephc_crypto_hmac, published
+    // only at a hash_hmac() call site so the shared runtime __rt_hash_hmac can call
+    // through it without the runtime itself naming elephc-crypto. Programs that never
+    // call hash_hmac() leave the slot null and do not pull in -lelephc_crypto.
+    out.push_str(".comm _elephc_crypto_hmac_fn, 8, 3\n");
+    // Incremental HashContext entry slots, published by hash_init/update/final/copy.
+    out.push_str(".comm _elephc_crypto_init_fn, 8, 3\n");
+    out.push_str(".comm _elephc_crypto_update_fn, 8, 3\n");
+    out.push_str(".comm _elephc_crypto_final_fn, 8, 3\n");
+    out.push_str(".comm _elephc_crypto_clone_fn, 8, 3\n");
     // _tls_sessions: per-fd TLS handle (i64 returned by
     // elephc_tls_attach_fd or 0 when the fd is plain TCP). Indexed by raw
     // fd up to 256; the runtime fread/fwrite/fclose paths consult this
