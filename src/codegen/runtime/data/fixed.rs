@@ -9,8 +9,8 @@
 //! - Fixed symbols are cached across compilations, so only target-independent runtime data belongs here.
 
 use super::{
-    DIRNAME_LEVELS_MSG, HASH_UNKNOWN_ALGO_MSG, PHP_UNAME_MODE_LEN_MSG,
-    PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
+    DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_UNKNOWN_ALGO_MSG,
+    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
 use crate::types::checker::builtins::supported_builtin_function_names;
@@ -79,6 +79,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(&format!(
         ".globl _hash_unknown_algo_msg\n_hash_unknown_algo_msg:\n    .ascii {:?}\n",
         HASH_UNKNOWN_ALGO_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _hash_hmac_unknown_algo_msg\n_hash_hmac_unknown_algo_msg:\n    .ascii {:?}\n",
+        HASH_HMAC_UNKNOWN_ALGO_MSG
     ));
     // Fixed algorithm-name constants for md5()/sha1(): both route through the
     // same elephc_crypto_hash entry point as hash(), so __rt_md5 / __rt_sha1
@@ -253,6 +257,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // it without the runtime itself naming elephc-crypto. Programs that never
     // call hash() leave the slot null and do not pull in -lelephc_crypto.
     out.push_str(".comm _elephc_crypto_hash_fn, 8, 3\n");
+    // _elephc_crypto_hmac_fn: indirect pointer to elephc_crypto_hmac, published
+    // only at a hash_hmac() call site so the shared runtime __rt_hash_hmac can call
+    // through it without the runtime itself naming elephc-crypto. Programs that never
+    // call hash_hmac() leave the slot null and do not pull in -lelephc_crypto.
+    out.push_str(".comm _elephc_crypto_hmac_fn, 8, 3\n");
     // _tls_sessions: per-fd TLS handle (i64 returned by
     // elephc_tls_attach_fd or 0 when the fd is plain TCP). Indexed by raw
     // fd up to 256; the runtime fread/fwrite/fclose paths consult this

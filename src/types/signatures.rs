@@ -234,6 +234,11 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "sscanf" => Some(variadic(&["string", "format"], "vars")),
         "fscanf" => Some(variadic(&["stream", "format"], "vars")),
         "hash" => Some(optional(&["algo", "data", "binary"], 2, vec![bool_lit(false)])),
+        "hash_hmac" => Some(optional(
+            &["algo", "data", "key", "binary"],
+            3,
+            vec![bool_lit(false)],
+        )),
         "md5" | "sha1" => Some(optional(&["string", "binary"], 1, vec![bool_lit(false)])),
         "crc32" => Some(fixed(&["string"])),
         "number_format" => Some(optional(
@@ -674,7 +679,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         | "base64_decode" | "trim" | "ltrim" | "rtrim" | "chop" | "ucwords" | "substr"
         | "str_repeat" | "strstr" | "str_replace" | "str_ireplace" | "explode"
         | "implode" | "substr_replace" | "str_pad" | "str_split" | "wordwrap"
-        | "sprintf" | "hash" | "md5" | "sha1" | "crc32" | "number_format" | "chr" => {
+        | "sprintf" | "hash" | "hash_hmac" | "md5" | "sha1" | "crc32" | "number_format" | "chr" => {
             Some(typed_first_class_builtin_sig(
                 name,
                 &[PhpType::Str],

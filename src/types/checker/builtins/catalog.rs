@@ -162,6 +162,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "glob",
     "grapheme_strrev",
     "hash",
+    "hash_hmac",
     "hex2bin",
     "html_entity_decode",
     "htmlentities",

@@ -1,36 +1,46 @@
 //! Purpose:
-//! Call-site and runtime support for routing PHP `hash()` through the elephc-crypto
-//! staticlib. Publishes the `elephc_crypto_hash` C entry point into its runtime
-//! function-pointer slot and emits the catchable `\ValueError` thrown on an unknown
-//! algorithm name.
+//! Call-site and runtime support for routing PHP `hash()` and `hash_hmac()`
+//! through the elephc-crypto staticlib. Publishes the `elephc_crypto_hash` and
+//! `elephc_crypto_hmac` C entry points into their runtime function-pointer slots
+//! and emits the catchable `\ValueError` thrown on an unknown algorithm name (or,
+//! for `hash_hmac()`, a non-cryptographic checksum).
 //!
 //! Called from:
-//! - `crate::codegen::builtins::strings::hash::emit()` (publishes the fn pointer
-//!   immediately before the `__rt_hash` call).
-//! - `crate::codegen::runtime::strings::hash::emit_hash()` (emits the inline
-//!   unknown-algorithm `\ValueError` throw shared between both arches).
+//! - `crate::codegen::builtins::strings::hash::emit()` and
+//!   `crate::codegen::builtins::strings::hash_hmac::emit()` (each publishes the
+//!   fn pointers immediately before its `__rt_hash`/`__rt_hash_hmac` call).
+//! - `crate::codegen::runtime::strings::hash::emit_hash()` and
+//!   `crate::codegen::runtime::strings::hash_hmac::emit_hash_hmac()` (emit the
+//!   inline unknown-algorithm `\ValueError` throw shared between both arches).
 //!
 //! Key details:
-//! - The fn pointer is published indirectly (mirroring the `_elephc_tls_*_fn`
-//!   pattern) so only programs that actually call `hash()` reference
-//!   `elephc_crypto_hash` and therefore pull in `-lelephc_crypto` at link time.
+//! - The fn pointers are published indirectly (mirroring the `_elephc_tls_*_fn`
+//!   pattern) so only programs that actually call `hash()`/`hash_hmac()` reference
+//!   the elephc-crypto entry points and therefore pull in `-lelephc_crypto` at
+//!   link time.
 //! - The `\ValueError` throw replicates the heap-object stamping sequence used by
-//!   `crate::codegen::builtins::math::clamp`. The message lives in the fixed
-//!   runtime data section as `_hash_unknown_algo_msg`, so the runtime emitter
-//!   references it by symbol instead of through a per-program `DataSection`.
+//!   `crate::codegen::builtins::math::clamp`. The messages live in the fixed
+//!   runtime data section as `_hash_unknown_algo_msg` / `_hash_hmac_unknown_algo_msg`,
+//!   so the runtime emitter references them by symbol instead of through a
+//!   per-program `DataSection`.
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, platform::Arch};
 
-/// Publishes the `elephc_crypto_hash` C entry point into its runtime
-/// function-pointer slot so `__rt_hash` can call through it.
+/// Publishes the `elephc_crypto_hash` and `elephc_crypto_hmac` C entry points
+/// into their runtime function-pointer slots so `__rt_hash` and `__rt_hash_hmac`
+/// can call through them.
 ///
-/// Mirrors `publish_tls_function_pointers`: it stamps the extern symbol address
-/// into `_elephc_crypto_hash_fn` for both supported architectures. Emitting this
-/// at the call site (rather than in the shared runtime) is what makes a program
-/// reference `elephc_crypto_hash`, so only hashing programs link `-lelephc_crypto`.
+/// Mirrors `publish_tls_function_pointers`: it stamps each extern symbol address
+/// into its slot (`_elephc_crypto_hash_fn` / `_elephc_crypto_hmac_fn`) for both
+/// supported architectures. Emitting this at the call site (rather than in the
+/// shared runtime) is what makes a program reference the elephc-crypto entry
+/// points, so only programs that call `hash()`/`hash_hmac()` link `-lelephc_crypto`.
 pub(crate) fn publish_elephc_crypto_function_pointers(emitter: &mut Emitter) {
-    const ENTRIES: &[(&str, &str)] = &[("elephc_crypto_hash", "_elephc_crypto_hash_fn")];
+    const ENTRIES: &[(&str, &str)] = &[
+        ("elephc_crypto_hash", "_elephc_crypto_hash_fn"),
+        ("elephc_crypto_hmac", "_elephc_crypto_hmac_fn"),
+    ];
     match emitter.target.arch {
         Arch::AArch64 => {
             for (c_name, slot) in ENTRIES {
@@ -50,14 +60,17 @@ pub(crate) fn publish_elephc_crypto_function_pointers(emitter: &mut Emitter) {
     }
 }
 
-/// Emits a catchable `\ValueError` for `hash()`'s unknown-algorithm path.
+/// Emits a catchable `\ValueError` for the unknown-algorithm paths of `hash()`
+/// and `hash_hmac()`.
 ///
-/// `message_symbol` names a fixed runtime data string (`_hash_unknown_algo_msg`)
-/// and `message_len` is its byte length. The emitted code does not return; it
-/// branches into `__rt_throw_current` after publishing the exception object into
-/// `_exc_value`. Replicates `clamp`'s `\ValueError` stamping sequence (heap kind 6
-/// object word, `_spl_value_error_class_id` at `[obj+0]`, message ptr/len at
-/// `[obj+8]`/`[obj+16]`, code 0 at `[obj+24]`).
+/// `message_symbol` names a fixed runtime data string (`_hash_unknown_algo_msg`
+/// for `hash()`, `_hash_hmac_unknown_algo_msg` for `hash_hmac()`) and
+/// `message_len` is its byte length, so both built-ins reuse one throw path.
+/// The emitted code does not return; it branches into `__rt_throw_current` after
+/// publishing the exception object into `_exc_value`. Replicates `clamp`'s
+/// `\ValueError` stamping sequence (heap kind 6 object word,
+/// `_spl_value_error_class_id` at `[obj+0]`, message ptr/len at `[obj+8]`/`[obj+16]`,
+/// code 0 at `[obj+24]`).
 pub(crate) fn emit_throw_unknown_algorithm_value_error(
     emitter: &mut Emitter,
     message_symbol: &str,

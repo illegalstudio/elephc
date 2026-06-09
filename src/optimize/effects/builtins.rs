@@ -166,4 +166,6 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
     // raw memory reads/writes and null/length fatals must remain observable.
     // hash() is intentionally NOT listed: an unknown algorithm name throws a
     // catchable \ValueError, so DCE must not eliminate an unused hash() call.
+    // hash_hmac() is likewise NOT listed: an unknown algorithm or a non-crypto
+    // checksum throws a catchable \ValueError, so it must stay side-effecting.
 }

@@ -222,6 +222,33 @@ fn hash_unknown_algorithm_throws_value_error() {
     );
 }
 
+/// Verifies `hash_hmac()` matches PHP's golden HMAC vectors for hex output,
+/// that the `$binary=true` raw form bin2hex round-trips to the hex form, and
+/// that the raw digest length matches the algorithm's digest size.
+#[test]
+fn hash_hmac_matches_php() {
+    assert_eq!(compile_and_run(r#"<?php echo hash_hmac("sha256","what do ya want for nothing?","Jefe");"#),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    assert_eq!(compile_and_run(r#"<?php echo hash_hmac("sha1","abc","key");"#),
+        "4fd0b215276ef12f2b3e4c8ecac2811498b656fc");
+    // sha512 has a 128-byte block (vs 64 for sha1/sha256), exercising that HMAC key-schedule path.
+    assert_eq!(compile_and_run(r#"<?php echo hash_hmac("sha512","abc","key");"#),
+        "3926a207c8c42b0c41792cbd3e1a1aaaf5f7a25704f62dfc939c4987dd7ce060009c5bb1c2447355b3216f10b537e9afa7b64a4e5391b0d631172d07939e087a");
+    assert_eq!(compile_and_run(r#"<?php echo bin2hex(hash_hmac("sha256","abc","key",true)) === hash_hmac("sha256","abc","key") ? "1" : "0";"#), "1");
+    assert_eq!(compile_and_run(r#"<?php echo strlen(hash_hmac("sha256","abc","key",true));"#), "32");
+}
+
+/// Verifies a non-cryptographic checksum algorithm (crc32b) throws a catchable
+/// `\ValueError` with PHP's cryptographic-algorithm message — HMAC rejects
+/// checksums like crc32/adler/fnv/joaat.
+#[test]
+fn hash_hmac_rejects_non_crypto_with_value_error() {
+    assert_eq!(
+        compile_and_run(r#"<?php try { hash_hmac("crc32b","d","k"); } catch (\ValueError $e) { echo $e->getMessage(); }"#),
+        "hash_hmac(): Argument #1 ($algo) must be a valid cryptographic hashing algorithm"
+    );
+}
+
 /// Verifies `hash()` resolves through PHP's case-insensitive and namespaced builtin lookup.
 #[test]
 fn hash_is_case_insensitive_and_namespaced() {

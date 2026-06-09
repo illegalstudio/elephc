@@ -93,6 +93,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_sha1(emitter);
     strings::emit_crc32(emitter);
     strings::emit_hash(emitter);
+    strings::emit_hash_hmac(emitter);
     strings::emit_digest_to_string(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);

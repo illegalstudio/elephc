@@ -310,6 +310,19 @@ pub(super) fn check_builtin(
             checker.require_builtin_library("elephc_crypto");
             Ok(Some(PhpType::Str))
         }
+        "hash_hmac" => {
+            if args.len() < 3 || args.len() > 4 {
+                return Err(CompileError::new(span, "hash_hmac() takes 3 or 4 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            // hash_hmac() routes through the elephc-crypto staticlib's
+            // elephc_crypto_hmac entry point (raw $binary output, catchable
+            // ValueError for unknown algo or non-crypto checksum) on every target.
+            checker.require_builtin_library("elephc_crypto");
+            Ok(Some(PhpType::Str))
+        }
         "sscanf" => {
             if args.len() < 2 {
                 return Err(CompileError::new(span, "sscanf() takes at least 2 arguments"));

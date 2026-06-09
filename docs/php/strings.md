@@ -177,6 +177,7 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `sha1()` | `sha1($str, $binary = false): string` | SHA1 hash — 40-char lowercase hex by default, or the raw 20 digest bytes when `$binary` is `true` |
 | `crc32()` | `crc32($str): int` | CRC-32 checksum (standard zlib/PHP polynomial), returned as a non-negative 32-bit integer |
 | `hash()` | `hash($algo, $data, $binary = false): string` | Hash `$data` with the named algorithm (md5, sha1, sha2 family, sha3 family, ripemd, crc32/crc32b, and more). Returns lowercase hex by default, or the raw digest bytes when `$binary` is `true`. An unknown algorithm throws `\ValueError`. |
+| `hash_hmac()` | `hash_hmac($algo, $data, $key, $binary = false): string` | Keyed-hash message authentication code of `$data` under `$key` using the named cryptographic algorithm. Returns lowercase hex by default, or the raw digest bytes when `$binary` is `true`. An unknown algorithm, or a non-cryptographic checksum (crc32/adler/fnv/joaat), throws `\ValueError`. |
 | `htmlspecialchars()` | `htmlspecialchars($str): string` | Escape HTML special chars |
 | `htmlentities()` | `htmlentities($str): string` | Alias for htmlspecialchars |
 | `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |

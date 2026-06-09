@@ -67,6 +67,7 @@ mod md5;
 mod sha1;
 mod crc32;
 mod hash;
+mod hash_hmac;
 mod digest_to_string;
 mod sscanf;
 mod rtrim_mask;
@@ -190,6 +191,8 @@ pub use crc32::emit_crc32;
 /// Emit SHA1 hash helper.
 pub use hash::emit_hash;
 /// Emit generic hash helper.
+pub use hash_hmac::emit_hash_hmac;
+/// Emit keyed-hash HMAC helper.
 pub use digest_to_string::emit_digest_to_string;
 /// Emit the shared raw-digest-to-PHP-string formatter used by hash/md5/sha1.
 pub use sscanf::emit_sscanf;
