@@ -141,7 +141,20 @@ pub(super) fn infer_local_type(
         }
         ExprKind::ArrayAccess { array, .. } => match infer_local_type(array, sig, ctx) {
             PhpType::Str => PhpType::Str,
+            // Under the tagged null representation, int-element reads are miss-capable and
+            // evaluate to a TaggedScalar; the local inference must agree with emission.
+            PhpType::Array(t) if matches!(*t, PhpType::Int)
+                && crate::codegen::sentinels::null_repr_is_tagged() =>
+            {
+                PhpType::TaggedScalar
+            }
             PhpType::Array(t) => *t,
+            PhpType::AssocArray { value, .. }
+                if matches!(*value, PhpType::Int)
+                    && crate::codegen::sentinels::null_repr_is_tagged() =>
+            {
+                PhpType::TaggedScalar
+            }
             PhpType::AssocArray { value, .. } => *value,
             PhpType::Object(class_name) => ctx
                 .filter(|ctx| ctx.object_type_implements_interface(&class_name, "ArrayAccess"))

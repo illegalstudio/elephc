@@ -42,8 +42,9 @@ thread_local! {
     static NULL_REPR: Cell<NullRepr> = const { Cell::new(NullRepr::Sentinel) };
 }
 
-/// Installs the null representation for the compilation running on this thread.
-pub(crate) fn set_null_repr(repr: NullRepr) {
+/// Installs the null representation for the compilation running on this thread. Must run
+/// before type checking: parameter specialization consults it for null-capable widening.
+pub fn set_null_repr(repr: NullRepr) {
     NULL_REPR.with(|cell| cell.set(repr));
 }
 

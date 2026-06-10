@@ -187,6 +187,23 @@ pub(crate) fn emit_assign_stmt(
         };
         let offset = var.stack_offset;
         let old_ty = var.ty.clone();
+        let slot_size = var.slot_size;
+        if matches!(ty, PhpType::TaggedScalar)
+            && slot_size < 16
+            && matches!(
+                old_ty,
+                PhpType::Int
+                    | PhpType::Bool
+                    | PhpType::Void
+                    | PhpType::Never
+                    | PhpType::Resource(_)
+            )
+        {
+            // The local slot is one word: keep the tagged scalar payload as a plain int.
+            // A null payload carries the legacy in-band sentinel, so storage matches the
+            // sentinel representation instead of writing the tag into the neighboring slot.
+            ty = PhpType::Int;
+        }
         if matches!(ty, PhpType::Mixed | PhpType::Union(_))
             && !matches!(old_ty, PhpType::Mixed | PhpType::Union(_))
             && super::super::super::expr::can_coerce_result_to_type(&ty, &old_ty)

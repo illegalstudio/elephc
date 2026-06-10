@@ -76,6 +76,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
 ) -> (String, String, Vec<String>) {
+    elephc::codegen::set_null_repr(null_repr);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");

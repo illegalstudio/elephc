@@ -35,7 +35,7 @@ mod program_usage;
 mod reflection;
 mod runtime;
 mod runtime_features;
-mod sentinels;
+pub(crate) mod sentinels;
 mod stmt;
 
 use std::cell::{Cell, RefCell};
@@ -124,7 +124,7 @@ pub(crate) use driver_support::{
     runtime_value_tag,
 };
 pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
-pub use sentinels::NullRepr;
+pub use sentinels::{set_null_repr, NullRepr};
 #[allow(unused_imports)]
 pub use driver_support::{generate_runtime, generate_runtime_with_features};
 pub use runtime_features::{

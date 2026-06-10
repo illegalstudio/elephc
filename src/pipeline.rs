@@ -49,6 +49,7 @@ pub(crate) fn compile(config: CliConfig) {
         defines,
     } = config;
     let filename = filename.as_str();
+    codegen::set_null_repr(null_repr);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let output_paths = output_paths(filename);
     let mut timings = CompileTimings::new(emit_timings);

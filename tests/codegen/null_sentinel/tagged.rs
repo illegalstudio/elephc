@@ -227,6 +227,11 @@ fn test_tagged_unary_minus_and_abs_narrow_null() {
 /// the same fixture still misreads PHP_INT_MAX-1 as null (guards the default until Phase 4).
 #[test]
 fn test_sentinel_default_still_suppresses_collision_value() {
+    if default_null_repr() == elephc::codegen::NullRepr::Tagged {
+        // The whole suite is forced to the tagged representation; the legacy default
+        // behavior under test does not apply in this configuration.
+        return;
+    }
     let out = compile_and_run("<?php echo 9223372036854775806;");
     assert_eq!(out, "");
 }

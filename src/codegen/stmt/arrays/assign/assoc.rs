@@ -65,6 +65,11 @@ pub(super) fn emit_assoc_array_assign(
     abi::emit_push_reg_pair(emitter, key_ptr_reg, key_len_reg);                       // preserve the computed key pointer and length while evaluating the value expression
 
     let mut val_ty = emit_expr(value, emitter, ctx, data);
+    if matches!(val_ty, PhpType::TaggedScalar) {
+        // store the tagged scalar payload word as a plain int: a null payload carries the
+        // legacy in-band sentinel, matching the sentinel representation for stored nulls
+        val_ty = PhpType::Int;
+    }
     if matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
         && !matches!(target.elem_ty, PhpType::Mixed | PhpType::Union(_))
         && crate::codegen::expr::can_coerce_result_to_type(&val_ty, &target.elem_ty)
