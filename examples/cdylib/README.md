@@ -39,15 +39,14 @@ elephc cdylib demo OK: add_i64(40,2)=42, validate_token long=0 short=1
 - Scalar return values (`int32_t` from `validate_token`, `int64_t` from
   `add_i64`).
 
+The demo works on every supported target: macOS aarch64, Linux aarch64, and
+Linux x86_64. Code generation runs in PIC mode (global data references go
+through the GOT), and on ELF targets every internal symbol is emitted with
+hidden visibility, so the `.so` exports only the lifecycle entry points and
+the `#[Export]` trampolines.
+
 ## What v1 deliberately does not cover
 
-- **x86_64 targets.** The runtime emits ~700 inline `[rip + sym]` references
-  to its own globals which fail as `R_X86_64_PC32` relocations in a `.so`.
-  v1 errors out cleanly on `--target linux-x86_64` / `--target macos-x86_64`
-  with `--emit cdylib`. Unblocking it requires routing the runtime through
-  the GOT helpers in `src/codegen/abi/symbols.rs` (the user-code path was
-  ported as part of this change and works on x86_64 — only the shared
-  runtime object is still direct-RIP).
 - String return values (no `elephc_free`-able host-owned strings yet).
 - Array, object, callable, or `null` parameter / return types.
 - Exception propagation from PHP back to C.
