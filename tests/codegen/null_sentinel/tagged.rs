@@ -239,7 +239,10 @@ fn test_tagged_plain_int_emits_no_sentinel_check() {
         false,
         elephc::codegen::NullRepr::Tagged,
     );
-    let main_start = user_asm.find("_main:").expect("user asm contains _main");
+    let main_start = user_asm
+        .find("_main:")
+        .or_else(|| user_asm.find("\nmain:").map(|i| i + 1))
+        .expect("user asm contains the main label");
     let main_body = &user_asm[main_start..];
     let main_end = main_body.find("ret").map(|i| i + main_start).unwrap_or(user_asm.len());
     let main_section = &user_asm[main_start..main_end];
@@ -265,7 +268,10 @@ fn test_sentinel_plain_int_still_emits_sentinel_check() {
         false,
         elephc::codegen::NullRepr::Sentinel,
     );
-    let main_start = user_asm.find("_main:").expect("user asm contains _main");
+    let main_start = user_asm
+        .find("_main:")
+        .or_else(|| user_asm.find("\nmain:").map(|i| i + 1))
+        .expect("user asm contains the main label");
     let main_body = &user_asm[main_start..];
     let main_end = main_body.find("ret").map(|i| i + main_start).unwrap_or(user_asm.len());
     let main_section = &user_asm[main_start..main_end];
