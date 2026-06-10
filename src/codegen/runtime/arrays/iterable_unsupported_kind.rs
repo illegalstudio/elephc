@@ -33,8 +33,7 @@ pub fn emit_iterable_unsupported_kind(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: iterable_unsupported_kind ---");
     emitter.label_global("__rt_iterable_unsupported_kind");
-    emitter.adrp("x1", "_iterable_unsupported_kind_msg");                       // load the page that contains the iterable runtime fatal message
-    emitter.add_lo12("x1", "x1", "_iterable_unsupported_kind_msg");             // resolve the iterable runtime fatal message address within that page
+    abi::emit_symbol_address(emitter, "x1", "_iterable_unsupported_kind_msg");  // load the page that contains the iterable runtime fatal message
     emitter.instruction("mov x2, #57");                                         // pass the fixed iterable runtime fatal message length to write()
     emitter.instruction("mov x0, #2");                                          // write diagnostics to stderr
     emitter.syscall(4);

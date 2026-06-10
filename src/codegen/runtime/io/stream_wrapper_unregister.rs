@@ -71,7 +71,7 @@ fn emit_stream_wrapper_unregister_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_wrapper_unregister ---");
     emitter.label_global("__rt_stream_wrapper_unregister");
 
-    emitter.instruction("lea r8, [rip + _user_wrappers]");                      // wrapper table base
+    abi::emit_symbol_address(emitter, "r8", "_user_wrappers");                  // wrapper table base
     emitter.instruction("xor r9, r9");                                          // wrapper slot index
     emitter.label("__rt_swu_scan_x86");
     emitter.instruction("cmp r9, 64");                                          // scanned every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?

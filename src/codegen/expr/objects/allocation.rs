@@ -1246,13 +1246,13 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(emitter: &mut Emitter) 
             emitter.instruction("call __rt_heap_alloc");                        // allocate the LogicException object payload
             emitter.instruction("mov r10, 0x4548504c00000006");                 // x86_64 heap-kind word: HE LP magic + kind 6 object
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp allocation as a runtime object
-            emitter.instruction("mov r10, QWORD PTR [rip + _spl_logic_exception_class_id]"); // load LogicException's runtime class id for this program
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_logic_exception_class_id", 0); // load LogicException's runtime class id for this program
             emitter.instruction("mov QWORD PTR [rax], r10");                    // store class id at object header
-            emitter.instruction("lea r10, [rip + _iterator_iterator_downcast_msg]"); // materialize static exception message pointer
+            abi::emit_symbol_address(emitter, "r10", "_iterator_iterator_downcast_msg"); // materialize static exception message pointer
             emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store static exception message pointer
             emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len())); // store static exception message length
             emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
-            emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");       // publish the active exception object
+            abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);     // publish the active exception object
             emitter.instruction("mov rsp, rbp");                                // release helper frame before throwing
             emitter.instruction("pop rbp");                                     // restore caller frame pointer before throwing
             emitter.instruction("jmp __rt_throw_current");                      // enter the standard exception unwinder

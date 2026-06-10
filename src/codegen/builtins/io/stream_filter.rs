@@ -181,12 +181,12 @@ pub fn emit_attach(
             abi::emit_pop_reg(emitter, "rcx"); // descriptor into rcx, mode in rax
             emitter.instruction("test rax, 1");                                 // STREAM_FILTER_READ bit set?
             emitter.instruction(&format!("jz {}", skip_read));                  // skip the read-filter table otherwise
-            emitter.instruction("lea r9, [rip + _stream_read_filters]");        // read-filter table base
+            abi::emit_symbol_address(emitter, "r9", "_stream_read_filters");    // read-filter table base
             emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id));   // record the read filter for this descriptor
             emitter.label(&skip_read);
             emitter.instruction("test rax, 2");                                 // STREAM_FILTER_WRITE bit set?
             emitter.instruction(&format!("jz {}", skip_write));                 // skip the write-filter table otherwise
-            emitter.instruction("lea r9, [rip + _stream_write_filters]");       // write-filter table base
+            abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");   // write-filter table base
             emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id));   // record the write filter for this descriptor
             emitter.label(&skip_write);
             emitter.instruction("mov rdi, rcx");                                // resource payload = the descriptor
@@ -309,9 +309,9 @@ pub fn emit_remove(
             emitter.instruction("mov x0, #1");                                  // stream_filter_remove() returns true
         }
         Arch::X86_64 => {
-            emitter.instruction("lea r9, [rip + _stream_read_filters]");        // read-filter table base
+            abi::emit_symbol_address(emitter, "r9", "_stream_read_filters");    // read-filter table base
             emitter.instruction("mov BYTE PTR [r9 + rax], 0");                  // clear the read filter for this descriptor
-            emitter.instruction("lea r9, [rip + _stream_write_filters]");       // write-filter table base
+            abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");   // write-filter table base
             emitter.instruction("mov BYTE PTR [r9 + rax], 0");                  // clear the write filter for this descriptor
             emitter.instruction("mov eax, 1");                                  // stream_filter_remove() returns true
         }

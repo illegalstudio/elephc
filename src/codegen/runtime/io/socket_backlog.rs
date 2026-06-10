@@ -25,6 +25,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Default `listen()` backlog when no `socket.backlog` option is set (PHP/libc
 /// convention).
@@ -82,9 +83,9 @@ fn emit_socket_backlog_linux_x86_64(emitter: &mut Emitter) {
     // -- look up _stream_context_options['socket']['backlog'] as a string --
     emitter.instruction("mov QWORD PTR [rbp - 8], 0");                          // value pointer default = null
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // value length default = 0
-    emitter.instruction("lea rdi, [rip + _socket_key_str]");                    // wrapper key = "socket"
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // wrapper key = "socket"
     emitter.instruction("mov rsi, 6");                                          // strlen("socket")
-    emitter.instruction("lea rdx, [rip + _socket_backlog_key_str]");            // option key = "backlog"
+    abi::emit_symbol_address(emitter, "rdx", "_socket_backlog_key_str");        // option key = "backlog"
     emitter.instruction("mov rcx, 7");                                          // strlen("backlog")
     emitter.instruction("lea r8, [rbp - 8]");                                   // out_ptr_addr
     emitter.instruction("lea r9, [rbp - 16]");                                  // out_len_addr

@@ -73,7 +73,7 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_filter_register ---");
     emitter.label_global("__rt_stream_filter_register");
 
-    emitter.instruction("lea r8, [rip + _user_filter_registry]");               // registry base
+    abi::emit_symbol_address(emitter, "r8", "_user_filter_registry");           // registry base
     emitter.instruction("xor r9, r9");                                          // filter slot index
     emitter.label("__rt_sfr_scan_x86");
     emitter.instruction(&format!("cmp r9, {}", USER_FILTER_REGISTRATIONS_CAP)); // is the filter registry full?
@@ -295,7 +295,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, rax");                                         // copy id into a scratch register
     emitter.instruction("sub r9, 128");                                         // slot_index = id - USER_FILTER_ID_BASE
     emitter.instruction("shl r9, 5");                                           // slot offset = slot_index * 32
-    emitter.instruction("lea r10, [rip + _user_filter_registry]");              // registry base
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_registry");          // registry base
     emitter.instruction("add r10, r9");                                         // entry pointer = base + offset
     emitter.instruction("mov rax, QWORD PTR [r10 + 16]");                       // class_name pointer (loaded into the new_by_name name-ptr reg)
     emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");                       // class_name length
@@ -306,7 +306,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
 
     // -- onCreate() lifecycle hook (vtable slot 1) — see ARM64 path. --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of the obj
-    emitter.instruction("lea r11, [rip + _user_filter_vtable_ptrs]");           // load runtime data address
+    abi::emit_symbol_address(emitter, "r11", "_user_filter_vtable_ptrs");       // load runtime data address
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-filter vtable
     emitter.instruction("mov r11, QWORD PTR [r11 + 8]");                        // slot 1 = onCreate
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
@@ -327,7 +327,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload mode
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload resolved id (u8 in the low byte)
-    emitter.instruction("lea r9, [rip + _user_filter_instances]");              // instances table base
+    abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");          // instances table base
 
     // mode & 1 → read direction
     emitter.instruction("test rsi, 1");                                         // STREAM_FILTER_READ bit set?
@@ -335,7 +335,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, rdi");                                        // fd
     emitter.instruction("add r10, r10");                                        // fd*2 — read slot
     emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // _user_filter_instances[fd*2] = obj
-    emitter.instruction("lea r11, [rip + _stream_read_filters]");               // load runtime data address
+    abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // load runtime data address
     emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_read_filters[fd] = id (low 8 bits)
     emitter.label("__rt_sfau_skip_read_x86");
 
@@ -346,7 +346,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, r10");                                        // fd*2
     emitter.instruction("add r10, 1");                                          // fd*2 + 1 — write slot
     emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // _user_filter_instances[fd*2 + 1] = obj
-    emitter.instruction("lea r11, [rip + _stream_write_filters]");              // load runtime data address
+    abi::emit_symbol_address(emitter, "r11", "_stream_write_filters");          // load runtime data address
     emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_write_filters[fd] = id (low 8 bits)
     emitter.label("__rt_sfau_skip_write_x86");
 
@@ -453,14 +453,14 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, rdi");                                         // fd
     emitter.instruction("add r9, r9");                                          // fd*2
     emitter.instruction("add r9, rcx");                                         // fd*2 + dir
-    emitter.instruction("lea r10, [rip + _user_filter_instances]");             // load runtime data address
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_instances");         // load runtime data address
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = instances[slot] (loaded into the method's $this register)
     emitter.instruction("test rdi, rdi");                                       // any instance attached?
     emitter.instruction("jz __rt_aufs_passthrough_x86");                        // no instance → pass the buffer through unchanged
 
     // -- look up the filter() method pointer in the class's user-filter vtable --
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // class_id at the head of the obj
-    emitter.instruction("lea r10, [rip + _user_filter_vtable_ptrs]");           // load runtime data address
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_vtable_ptrs");       // load runtime data address
     emitter.instruction("mov r10, QWORD PTR [r10 + r11 * 8]");                  // per-class user-filter vtable
     emitter.instruction("mov r8, QWORD PTR [r10]");                             // slot 0 = filter() method pointer
     emitter.instruction("test r8, r8");                                         // class did not implement filter()?
@@ -481,7 +481,7 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     //    the method's prologue typically rewinds _concat_off). --
     emitter.instruction("push r10");                                            // save filter method ptr across the copy loop
     emitter.instruction("push rdi");                                            // save $this across the copy loop
-    emitter.instruction("lea r10, [rip + _stream_filter_buf]");                 // load runtime data address
+    abi::emit_symbol_address(emitter, "r10", "_stream_filter_buf");             // load runtime data address
     emitter.instruction("xor r9, r9");                                          // byte copy index
     emitter.label("__rt_aufs_copy_x86");
     emitter.instruction("cmp r9, rdx");                                         // copied every byte?
@@ -514,7 +514,7 @@ fn emit_resolve_user_filter_id_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: resolve_user_filter_id ---");
     emitter.label_global("__rt_resolve_user_filter_id");
 
-    emitter.instruction("lea r8, [rip + _user_filter_registry]");               // registry base
+    abi::emit_symbol_address(emitter, "r8", "_user_filter_registry");           // registry base
     emitter.instruction("xor r9, r9");                                          // filter slot index
     emitter.label("__rt_rufi_scan_x86");
     emitter.instruction(&format!("cmp r9, {}", USER_FILTER_REGISTRATIONS_CAP)); // scanned every registry slot?
@@ -634,12 +634,12 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
         if dir == 1 {
             emitter.instruction("add r10, 1");                                  // advance runtime pointer or counter
         }
-        emitter.instruction("lea r9, [rip + _user_filter_instances]");          // load runtime data address
+        abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");      // load runtime data address
         emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");               // obj
         emitter.instruction("test r11, r11");                                   // check whether the runtime value is zero
         emitter.instruction(&format!("jz {}", skip));                           // branch when the checked value is zero or equal
         emitter.instruction("mov r12, QWORD PTR [r11]");                        // class_id
-        emitter.instruction("lea r13, [rip + _user_filter_vtable_ptrs]");       // load runtime data address
+        abi::emit_symbol_address(emitter, "r13", "_user_filter_vtable_ptrs");   // load runtime data address
         emitter.instruction("mov r13, QWORD PTR [r13 + r12 * 8]");              // vtable
         emitter.instruction("mov r14, QWORD PTR [r13 + 16]");                   // slot 2 = onClose
         emitter.instruction("test r14, r14");                                   // check whether the runtime value is zero
@@ -654,7 +654,7 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
         if dir == 1 {
             emitter.instruction("add r10, 1");                                  // advance runtime pointer or counter
         }
-        emitter.instruction("lea r9, [rip + _user_filter_instances]");          // load runtime data address
+        abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");      // load runtime data address
         emitter.instruction("mov QWORD PTR [r9 + r10 * 8], 0");                 // store runtime value
         emitter.label(&skip);
     }

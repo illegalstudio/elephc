@@ -9,6 +9,7 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const FILE_GET_CONTENTS_FAILED_WARNING: &str =
@@ -109,8 +110,7 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     emitter.label("__rt_file_get_contents_fail");
-    emitter.adrp("x1", "_diag_file_get_contents_failed_msg");
-    emitter.add_lo12("x1", "x1", "_diag_file_get_contents_failed_msg");
+    abi::emit_symbol_address(emitter, "x1", "_diag_file_get_contents_failed_msg");
     emitter.instruction(&format!("mov x2, #{}", FILE_GET_CONTENTS_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
     emitter.instruction("bl __rt_diag_warning");                                // emit or suppress the file_get_contents() failure warning
     emitter.instruction("mov x1, #0");                                          // return an empty string pointer on read-path failure
@@ -185,7 +185,7 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the owned file contents as an elephc string
 
     emitter.label("__rt_file_get_contents_fail");
-    emitter.instruction("lea rdi, [rip + _diag_file_get_contents_failed_msg]"); // pass the file_get_contents() warning text pointer to the diagnostic helper
+    abi::emit_symbol_address(emitter, "rdi", "_diag_file_get_contents_failed_msg"); // pass the file_get_contents() warning text pointer to the diagnostic helper
     emitter.instruction(&format!("mov esi, {}", FILE_GET_CONTENTS_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
     emitter.instruction("call __rt_diag_warning");                              // emit or suppress the file_get_contents() failure warning
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when the file could not be stated or opened

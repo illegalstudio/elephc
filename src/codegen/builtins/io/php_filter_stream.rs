@@ -89,11 +89,11 @@ pub fn emit(
             emitter.instruction(&format!("jne {}", done_label));                // open failed (false) → return it unchanged
             emitter.instruction("mov rcx, QWORD PTR [rax + 8]");                // descriptor from the resource payload
             if mode_bits & 1 != 0 {
-                emitter.instruction("lea r8, [rip + _stream_read_filters]");    // read-filter table base
+                abi::emit_symbol_address(emitter, "r8", "_stream_read_filters"); // read-filter table base
                 emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", id)); // record the read filter for this descriptor
             }
             if mode_bits & 2 != 0 {
-                emitter.instruction("lea r8, [rip + _stream_write_filters]");   // write-filter table base
+                abi::emit_symbol_address(emitter, "r8", "_stream_write_filters"); // write-filter table base
                 emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", id)); // record the write filter for this descriptor
             }
             emitter.label(&done_label);

@@ -83,9 +83,9 @@ fn emit_store_recv_address(arg: &Expr, emitter: &mut Emitter, ctx: &mut Context)
         }
         Arch::X86_64 => {
             abi::emit_push_reg(emitter, "rax"); // preserve the boxed receive result
-            emitter.instruction("lea r9, [rip + _recvfrom_addr_ptr]");          // address of the stashed-pointer global
+            abi::emit_symbol_address(emitter, "r9", "_recvfrom_addr_ptr");      // address of the stashed-pointer global
             emitter.instruction("mov r10, QWORD PTR [r9]");                     // load the stashed sender address pointer
-            emitter.instruction("lea r9, [rip + _recvfrom_addr_len]");          // address of the stashed-length global
+            abi::emit_symbol_address(emitter, "r9", "_recvfrom_addr_len");      // address of the stashed-length global
             emitter.instruction("mov r11, QWORD PTR [r9]");                     // load the stashed sender address length
             emit_store_recv_address_slot(name, emitter, ctx);
             abi::emit_pop_reg(emitter, "rax"); // restore the boxed receive result
@@ -103,8 +103,7 @@ fn emit_store_recv_address_slot(name: &str, emitter: &mut Emitter, ctx: &Context
         let label = format!("_gvar_{}", name);
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.adrp("x9", &label);                                     // load page of the global address variable
-                emitter.add_lo12("x9", "x9", &label);                           // resolve the global address variable
+                abi::emit_symbol_address(emitter, "x9", &label);                // load page of the global address variable
                 emitter.instruction("str x10, [x9]");                           // store the address string pointer
                 emitter.instruction("str x11, [x9, #8]");                       // store the address string length
             }

@@ -9,6 +9,7 @@
 //! - The SysV validator path must mirror AArch64 diagnostics and depth behavior.
 
 use crate::codegen::emit::Emitter;
+use crate::codegen::abi;
 
 /// Emits the top-level `__rt_json_validate` entry point and all sub-helpers.
 /// Publishes `_json_validate_ptr` / `_json_validate_len`, initializes depth to 0,
@@ -22,21 +23,21 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
 
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_ptr], rax");       // publish the source pointer
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_len], rdx");       // publish the source length
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], 0");         // start at the beginning of the input
-    emitter.instruction("mov QWORD PTR [rip + _json_active_depth], 0");         // begin at depth 0
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_json_validate_ptr", 0);     // publish the source pointer
+    abi::emit_store_reg_to_symbol(emitter, "rdx", "_json_validate_len", 0);     // publish the source length
+    abi::emit_store_zero_to_symbol(emitter, "_json_validate_idx", 0);           // start at the beginning of the input
+    abi::emit_store_zero_to_symbol(emitter, "_json_active_depth", 0);           // begin at depth 0
 
     emitter.instruction("call __rt_json_validate_skip_ws_x");                   // call the json validate skip ws x helper
     emitter.instruction("call __rt_json_validate_value_x");                     // call the json validate value x helper
     emitter.instruction("test rax, rax");                                       // check the current JSON validator condition
     emitter.instruction("je __rt_json_validate_fail_x");                        // branch on the current JSON validator condition
     emitter.instruction("call __rt_json_validate_skip_ws_x");                   // call the json validate skip ws x helper
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("cmp rcx, QWORD PTR [rip + _json_validate_len]");       // check the current JSON validator condition
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_cmp_reg_to_symbol(emitter, "rcx", "_json_validate_len");          // check the current JSON validator condition
     emitter.instruction("jl __rt_json_validate_syntax_error_x");                // branch on the current JSON validator condition
 
-    emitter.instruction("mov QWORD PTR [rip + _json_last_error], 0");           // load or prepare JSON validator state
+    abi::emit_store_zero_to_symbol(emitter, "_json_last_error", 0);             // load or prepare JSON validator state
     emitter.instruction("mov rax, 1");                                          // load or prepare JSON validator state
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON validator state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON validator scratch state
@@ -74,9 +75,9 @@ fn emit_skip_ws_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_skip_ws_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
     emitter.instruction("mov rbp, rsp");                                        // load or prepare JSON validator state
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_validate_len]");       // load or prepare JSON validator state
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_validate_ptr]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_validate_len", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
     emitter.label("__rt_json_validate_skip_ws_loop_x");
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON validator condition
     emitter.instruction("jge __rt_json_validate_skip_ws_done_x");               // branch on the current JSON validator condition
@@ -93,7 +94,7 @@ fn emit_skip_ws_x(emitter: &mut Emitter) {
     emitter.instruction("add rcx, 1");                                          // update the JSON validator cursor or counter
     emitter.instruction("jmp __rt_json_validate_skip_ws_loop_x");               // continue in the JSON validator control path
     emitter.label("__rt_json_validate_skip_ws_done_x");
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON validator state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON validator scratch state
     emitter.instruction("ret");                                                 // return from the JSON validator helper
@@ -106,11 +107,11 @@ fn emit_value_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_value_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
     emitter.instruction("mov rbp, rsp");                                        // load or prepare JSON validator state
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_validate_len]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_validate_len", 0);      // load or prepare JSON validator state
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON validator condition
     emitter.instruction("jge __rt_json_validate_value_syntax_x");               // branch on the current JSON validator condition
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_validate_ptr]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON validator state
     emitter.instruction("cmp r8, 34");                                          // string opener?
     emitter.instruction("je __rt_json_validate_value_string_x");                // branch on the current JSON validator condition
@@ -185,19 +186,19 @@ fn emit_match_literal_x(emitter: &mut Emitter, suffix: &str, lit: &[char]) {
     emitter.label(&label);
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
     emitter.instruction("mov rbp, rsp");                                        // load or prepare JSON validator state
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_validate_len]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_validate_len", 0);      // load or prepare JSON validator state
     emitter.instruction(&format!("lea r8, [rcx + {}]", lit.len()));             // load or prepare JSON validator state
     emitter.instruction("cmp r8, rdx");                                         // check the current JSON validator condition
     emitter.instruction(&format!("jg {}", fail_label));                         // branch on the current JSON validator condition
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_validate_ptr]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
     for (offset, &c) in lit.iter().enumerate() {
         emitter.instruction(&format!("movzx r9, BYTE PTR [rax + rcx + {}]", offset)); // load or prepare JSON validator state
         emitter.instruction(&format!("cmp r9, {}", c as u32));                  // check the current JSON validator condition
         emitter.instruction(&format!("jne {}", fail_label));                    // branch on the current JSON validator condition
     }
     emitter.instruction(&format!("add rcx, {}", lit.len()));                    // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("mov rax, 1");                                          // load or prepare JSON validator state
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON validator state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON validator scratch state
@@ -219,9 +220,9 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
     emitter.instruction("mov rbp, rsp");                                        // load or prepare JSON validator state
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_validate_len]");       // load or prepare JSON validator state
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_validate_ptr]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_validate_len", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON validator condition
     emitter.instruction("jge __rt_json_validate_string_syntax_x");              // branch on the current JSON validator condition
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON validator state
@@ -307,7 +308,7 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_validate_string_close_x");
     emitter.instruction("add rcx, 1");                                          // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("mov rax, 1");                                          // load or prepare JSON validator state
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON validator state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON validator scratch state
@@ -383,7 +384,7 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_validate_string_loop_x");                // valid surrogate pair → resume content scan
 
     emitter.label("__rt_json_validate_string_utf16_x");
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // commit the failure index for diagnostics
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // commit the failure index for diagnostics
     emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
     emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
     emitter.instruction("mov rax, 10");                                         // JSON_ERROR_UTF16
@@ -394,7 +395,7 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_string_ctrl_char_x");
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // commit the control-character failure index
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // commit the control-character failure index
     emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
     emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
     emitter.instruction("mov rax, 3");                                          // JSON_ERROR_CTRL_CHAR
@@ -405,7 +406,7 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_string_utf8_x");
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // commit the malformed-UTF-8 failure index
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // commit the malformed-UTF-8 failure index
     emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
     emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
     emitter.instruction("mov rax, 5");                                          // JSON_ERROR_UTF8
@@ -416,7 +417,7 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_string_syntax_x");
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
     emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
     emitter.instruction("mov rax, 4");                                          // load or prepare JSON validator state
@@ -475,9 +476,9 @@ fn emit_number_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_number_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
     emitter.instruction("mov rbp, rsp");                                        // load or prepare JSON validator state
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_validate_len]");       // load or prepare JSON validator state
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_validate_ptr]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_validate_len", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
 
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON validator condition
     emitter.instruction("jge __rt_json_validate_number_syntax_x");              // branch on the current JSON validator condition
@@ -584,14 +585,14 @@ fn emit_number_parser_x(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_validate_number_exp_loop_x");            // continue in the JSON validator control path
 
     emitter.label("__rt_json_validate_number_done_x");
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("mov rax, 1");                                          // load or prepare JSON validator state
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON validator state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON validator scratch state
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 
     emitter.label("__rt_json_validate_number_syntax_x");
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("add rax, rcx");                                        // convert validator index to an absolute source pointer
     emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
     emitter.instruction("mov rax, 4");                                          // load or prepare JSON validator state
@@ -610,22 +611,22 @@ fn emit_array_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_array_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
     emitter.instruction("mov rbp, rsp");                                        // load or prepare JSON validator state
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_active_depth]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_active_depth", 0);      // load or prepare JSON validator state
     emitter.instruction("add rcx, 1");                                          // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_active_depth], rcx");       // load or prepare JSON validator state
-    emitter.instruction("cmp rcx, QWORD PTR [rip + _json_depth_limit]");        // check the current JSON validator condition
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_active_depth", 0);     // load or prepare JSON validator state
+    abi::emit_cmp_reg_to_symbol(emitter, "rcx", "_json_depth_limit");           // check the current JSON validator condition
     emitter.instruction("jg __rt_json_validate_array_depth_x");                 // branch on the current JSON validator condition
 
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
     emitter.instruction("add rcx, 1");                                          // consume '['
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("call __rt_json_validate_skip_ws_x");                   // call the json validate skip ws x helper
 
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_validate_len]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_validate_len", 0);      // load or prepare JSON validator state
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON validator condition
     emitter.instruction("jge __rt_json_validate_array_syntax_x");               // branch on the current JSON validator condition
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_validate_ptr]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON validator state
     emitter.instruction("cmp r8, 93");                                          // ']'?
     emitter.instruction("je __rt_json_validate_array_close_x");                 // branch on the current JSON validator condition
@@ -635,27 +636,27 @@ fn emit_array_parser_x(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // check the current JSON validator condition
     emitter.instruction("je __rt_json_validate_array_propagate_x");             // branch on the current JSON validator condition
     emitter.instruction("call __rt_json_validate_skip_ws_x");                   // call the json validate skip ws x helper
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_validate_len]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_validate_len", 0);      // load or prepare JSON validator state
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON validator condition
     emitter.instruction("jge __rt_json_validate_array_syntax_x");               // branch on the current JSON validator condition
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_validate_ptr]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON validator state
     emitter.instruction("cmp r8, 93");                                          // check the current JSON validator condition
     emitter.instruction("je __rt_json_validate_array_close_x");                 // branch on the current JSON validator condition
     emitter.instruction("cmp r8, 44");                                          // check the current JSON validator condition
     emitter.instruction("jne __rt_json_validate_array_syntax_x");               // branch on the current JSON validator condition
     emitter.instruction("add rcx, 1");                                          // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("call __rt_json_validate_skip_ws_x");                   // call the json validate skip ws x helper
     emitter.instruction("jmp __rt_json_validate_array_elem_x");                 // continue in the JSON validator control path
 
     emitter.label("__rt_json_validate_array_close_x");
     emitter.instruction("add rcx, 1");                                          // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_active_depth]");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_active_depth", 0);      // load or prepare JSON validator state
     emitter.instruction("sub rcx, 1");                                          // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_active_depth], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_active_depth", 0);     // load or prepare JSON validator state
     emitter.instruction("mov rax, 1");                                          // load or prepare JSON validator state
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON validator state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON validator scratch state
@@ -692,22 +693,22 @@ fn emit_object_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_object_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
     emitter.instruction("mov rbp, rsp");                                        // load or prepare JSON validator state
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_active_depth]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_active_depth", 0);      // load or prepare JSON validator state
     emitter.instruction("add rcx, 1");                                          // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_active_depth], rcx");       // load or prepare JSON validator state
-    emitter.instruction("cmp rcx, QWORD PTR [rip + _json_depth_limit]");        // check the current JSON validator condition
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_active_depth", 0);     // load or prepare JSON validator state
+    abi::emit_cmp_reg_to_symbol(emitter, "rcx", "_json_depth_limit");           // check the current JSON validator condition
     emitter.instruction("jg __rt_json_validate_object_depth_x");                // branch on the current JSON validator condition
 
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
     emitter.instruction("add rcx, 1");                                          // consume '{'
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("call __rt_json_validate_skip_ws_x");                   // call the json validate skip ws x helper
 
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_validate_len]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_validate_len", 0);      // load or prepare JSON validator state
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON validator condition
     emitter.instruction("jge __rt_json_validate_object_syntax_x");              // branch on the current JSON validator condition
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_validate_ptr]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON validator state
     emitter.instruction("cmp r8, 125");                                         // '}'?
     emitter.instruction("je __rt_json_validate_object_close_x");                // branch on the current JSON validator condition
@@ -717,42 +718,42 @@ fn emit_object_parser_x(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // check the current JSON validator condition
     emitter.instruction("je __rt_json_validate_object_propagate_x");            // branch on the current JSON validator condition
     emitter.instruction("call __rt_json_validate_skip_ws_x");                   // call the json validate skip ws x helper
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_validate_len]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_validate_len", 0);      // load or prepare JSON validator state
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON validator condition
     emitter.instruction("jge __rt_json_validate_object_syntax_x");              // branch on the current JSON validator condition
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_validate_ptr]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON validator state
     emitter.instruction("cmp r8, 58");                                          // check the current JSON validator condition
     emitter.instruction("jne __rt_json_validate_object_syntax_x");              // branch on the current JSON validator condition
     emitter.instruction("add rcx, 1");                                          // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("call __rt_json_validate_skip_ws_x");                   // call the json validate skip ws x helper
     emitter.instruction("call __rt_json_validate_value_x");                     // call the json validate value x helper
     emitter.instruction("test rax, rax");                                       // check the current JSON validator condition
     emitter.instruction("je __rt_json_validate_object_propagate_x");            // branch on the current JSON validator condition
     emitter.instruction("call __rt_json_validate_skip_ws_x");                   // call the json validate skip ws x helper
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_validate_idx]");       // load or prepare JSON validator state
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_validate_len]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_validate_idx", 0);      // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_validate_len", 0);      // load or prepare JSON validator state
     emitter.instruction("cmp rcx, rdx");                                        // check the current JSON validator condition
     emitter.instruction("jge __rt_json_validate_object_syntax_x");              // branch on the current JSON validator condition
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_validate_ptr]");       // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON validator state
     emitter.instruction("cmp r8, 125");                                         // check the current JSON validator condition
     emitter.instruction("je __rt_json_validate_object_close_x");                // branch on the current JSON validator condition
     emitter.instruction("cmp r8, 44");                                          // check the current JSON validator condition
     emitter.instruction("jne __rt_json_validate_object_syntax_x");              // branch on the current JSON validator condition
     emitter.instruction("add rcx, 1");                                          // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
     emitter.instruction("call __rt_json_validate_skip_ws_x");                   // call the json validate skip ws x helper
     emitter.instruction("jmp __rt_json_validate_object_pair_x");                // continue in the JSON validator control path
 
     emitter.label("__rt_json_validate_object_close_x");
     emitter.instruction("add rcx, 1");                                          // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], rcx");       // load or prepare JSON validator state
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_active_depth]");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_validate_idx", 0);     // load or prepare JSON validator state
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_active_depth", 0);      // load or prepare JSON validator state
     emitter.instruction("sub rcx, 1");                                          // update the JSON validator cursor or counter
-    emitter.instruction("mov QWORD PTR [rip + _json_active_depth], rcx");       // load or prepare JSON validator state
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_json_active_depth", 0);     // load or prepare JSON validator state
     emitter.instruction("mov rax, 1");                                          // load or prepare JSON validator state
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON validator state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON validator scratch state

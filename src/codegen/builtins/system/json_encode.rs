@@ -298,10 +298,10 @@ fn box_json_encode_result(emitter: &mut Emitter, ctx: &mut Context) {
         }
         Arch::X86_64 => {
             abi::emit_push_reg_pair(emitter, "rax", "rdx");                    // preserve the encoded JSON string while checking failure state
-            emitter.instruction("mov r10, QWORD PTR [rip + _json_last_error]"); // load the current JSON error code
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_json_last_error", 0); // load the current JSON error code
             emitter.instruction("test r10, r10");                               // check whether the encoder reported an error
             emitter.instruction(&format!("jz {}", string_label));               // no JSON error means the string result is valid
-            emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]"); // load the active JSON flag bitmask
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0); // load the active JSON flag bitmask
             emitter.instruction("test r10, 512");                               // JSON_PARTIAL_OUTPUT_ON_ERROR keeps the partial string result
             emitter.instruction(&format!("jnz {}", string_label));              // partial-output flag means return the encoded string
             abi::emit_pop_reg_pair(emitter, "r10", "r11");                     // discard the partial string result before returning false

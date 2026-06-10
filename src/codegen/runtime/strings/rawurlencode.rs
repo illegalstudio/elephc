@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits the `__rt_rawurlencode` runtime helper for rawurlencode (RFC 3986).
 ///
@@ -200,8 +201,8 @@ fn emit_rawurlencode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r8");                                         // return the concat-backed result start pointer after percent-encoding the full input string
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer destination cursor before computing the encoded string length
     emitter.instruction("sub rdx, r8");                                         // compute the encoded string length as dest_end - dest_start for the returned x86_64 string value
-    emitter.instruction("mov rcx, QWORD PTR [rip + _concat_off]");              // reload the concat-buffer write offset before publishing the bytes that rawurlencode() appended
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer write offset before publishing the bytes that rawurlencode() appended
     emitter.instruction("add rcx, rdx");                                        // advance the concat-buffer write offset by the produced encoded-string length
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // persist the updated concat-buffer write offset after finishing the rawurlencode() pass
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // persist the updated concat-buffer write offset after finishing the rawurlencode() pass
     emitter.instruction("ret");                                                 // return the concat-backed rawurlencoded string in the standard x86_64 string result registers
 }

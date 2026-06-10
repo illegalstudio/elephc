@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// __rt_json_depth_enter: increment `_json_active_depth` and compare against
 /// `_json_depth_limit`. When the depth crosses the limit, route through
@@ -75,10 +76,10 @@ fn emit_enter_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_depth_enter ---");
     emitter.label_global("__rt_json_depth_enter");
 
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_active_depth]");       // load the current encoding depth
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_active_depth", 0);      // load the current encoding depth
     emitter.instruction("add rax, 1");                                          // bump the depth for the new container
-    emitter.instruction("mov QWORD PTR [rip + _json_active_depth], rax");       // publish the bumped depth
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_depth_limit]");        // load the depth limit
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_json_active_depth", 0);     // publish the bumped depth
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_depth_limit", 0);       // load the depth limit
     emitter.instruction("cmp rax, rdx");                                        // is the new depth still within the budget?
     emitter.instruction("jle __rt_json_depth_enter_ok_x");                      // budget is fine, keep going (encode semantics: <= limit OK)
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before the throw helper
@@ -99,8 +100,8 @@ fn emit_exit_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_depth_exit ---");
     emitter.label_global("__rt_json_depth_exit");
 
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_active_depth]");       // load the current encoding depth
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_active_depth", 0);      // load the current encoding depth
     emitter.instruction("sub rax, 1");                                          // step back out of the just-finished container
-    emitter.instruction("mov QWORD PTR [rip + _json_active_depth], rax");       // publish the decremented depth
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_json_active_depth", 0);     // publish the decremented depth
     emitter.instruction("ret");                                                 // return to the container encoder
 }

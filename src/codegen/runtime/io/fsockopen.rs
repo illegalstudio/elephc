@@ -109,8 +109,8 @@ fn emit_fsockopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the port
 
     // -- copy the "tcp://" scheme prefix into the address buffer --
-    emitter.instruction("lea r8, [rip + _fsockopen_addr]");                     // address buffer base
-    emitter.instruction("lea r9, [rip + _ftp_tcp_prefix]");                     // \"tcp://\" prefix base
+    abi::emit_symbol_address(emitter, "r8", "_fsockopen_addr");                 // address buffer base
+    abi::emit_symbol_address(emitter, "r9", "_ftp_tcp_prefix");                 // \"tcp://\" prefix base
     emitter.instruction("xor rcx, rcx");                                        // address write index
     emitter.label("__rt_fsockopen_pfx_x86");
     emitter.instruction("cmp rcx, 6");                                          // copied the whole \"tcp://\" prefix?
@@ -158,7 +158,7 @@ fn emit_fsockopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fsockopen_port_done_x86");
 
     // -- connect to the assembled tcp://host:port address --
-    emitter.instruction("lea rdi, [rip + _fsockopen_addr]");                    // assembled address pointer
+    abi::emit_symbol_address(emitter, "rdi", "_fsockopen_addr");                // assembled address pointer
     emitter.instruction("mov rsi, rcx");                                        // total assembled address length
     emitter.instruction("call __rt_stream_socket_client");                      // connect, rax = fd or -1
     emitter.instruction("add rsp, 32");                                         // release the helper frame

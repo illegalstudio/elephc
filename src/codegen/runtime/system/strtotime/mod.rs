@@ -26,6 +26,7 @@ mod time_only;
 mod weekdays;
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 pub(crate) use data::emit_strtotime_data;
 
@@ -129,8 +130,7 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
 
     // -- alpha: try keyword table match --
     emitter.instruction("add x6, sp, #64");                                     // x6 = lc16 buffer ptr (candidate)
-    emitter.adrp("x7", "_strtotime_keyword_tab");                                      // load page of keyword table
-    emitter.add_lo12("x7", "x7", "_strtotime_keyword_tab");                            // resolve full address
+    abi::emit_symbol_address(emitter, "x7", "_strtotime_keyword_tab");          // load page of keyword table
     emitter.instruction("ldr x8, [sp, #56]");                                   // x8 = trimmed input length
     emitter.instruction("mov x11, #16");                                        // cap candidate window to lc16 size
     emitter.instruction("cmp x8, x11");                                         // available > 16 ?
@@ -253,7 +253,7 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     // Args (caller-saved): rdi = candidate ptr, rsi = table base, rcx = available bytes.
     // Returns: rax = consumed bytes (0 = no match), rdx = kind (-1 = no match).
     emitter.instruction("lea rdi, [rbp - 64]");                                 // rdi = candidate prefix (lc16 buffer)
-    emitter.instruction("lea rsi, [rip + _strtotime_keyword_tab]");             // rsi = keyword table base
+    abi::emit_symbol_address(emitter, "rsi", "_strtotime_keyword_tab");         // rsi = keyword table base
     emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");                       // rcx = trimmed input length
     emitter.instruction("mov r8, 16");                                          // cap candidate window to 16
     emitter.instruction("cmp rcx, r8");                                         // len > 16 ?

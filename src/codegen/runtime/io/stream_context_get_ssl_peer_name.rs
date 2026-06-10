@@ -101,11 +101,11 @@ fn emit_get_ssl_peer_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save out_len_addr
 
     // -- load top-level options hash --
-    emitter.instruction("mov rdi, QWORD PTR [rip + _stream_context_options]");  // prepare SysV call argument
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_context_options", 0); // prepare SysV call argument
     emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gspn_miss_x86");                               // branch when the checked value is zero or equal
 
-    emitter.instruction("lea rsi, [rip + _ssl_key_str]");                       // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_ssl_key_str");                   // load runtime data address
     emitter.instruction("mov edx, 3");                                          // strlen("ssl")
     // __rt_hash_get's x86_64 returns: rax=found, rdi=value_lo, rsi=value_hi,
     // rcx=tag — the rdi/rsi mapping mirrors the SysV first-two-args
@@ -117,7 +117,7 @@ fn emit_get_ssl_peer_name_linux_x86_64(emitter: &mut Emitter) {
 
     // -- second hash_get(sub, "peer_name", 9): sub-hash is already in
     //    rdi from the previous call's value_lo return. --
-    emitter.instruction("lea rsi, [rip + _ssl_peer_name_key_str]");             // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_ssl_peer_name_key_str");         // load runtime data address
     emitter.instruction("mov edx, 9");                                          // strlen("peer_name")
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=lo, rsi=hi, rcx=tag
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero

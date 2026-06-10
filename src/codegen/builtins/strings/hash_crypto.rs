@@ -58,7 +58,7 @@ pub(crate) fn publish_elephc_crypto_function_pointers(emitter: &mut Emitter) {
             for (c_name, slot) in ENTRIES {
                 let extern_sym = emitter.target.extern_symbol(c_name);
                 abi::emit_extern_symbol_address(emitter, "r9", &extern_sym);
-                emitter.instruction(&format!("mov QWORD PTR [rip + {}], r9", slot)); // publish the elephc-crypto hash entry into its runtime slot
+                abi::emit_store_reg_to_symbol(emitter, "r9", slot, 0);          // publish the elephc-crypto hash entry into its runtime slot
             }
         }
     }
@@ -122,13 +122,13 @@ fn emit_throw_value_error_x86_64(
     emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object payload
     emitter.instruction("mov r10, 0x4548504c00000006");                         // x86_64 heap-kind word: HE LP magic + kind 6 object
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
-    emitter.instruction("mov r10, QWORD PTR [rip + _spl_value_error_class_id]"); // load ValueError's runtime class id for this program
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_value_error_class_id", 0); // load ValueError's runtime class id for this program
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at the object header
-    emitter.instruction(&format!("lea r10, [rip + {}]", message_symbol));       // materialize static ValueError message pointer
+    abi::emit_symbol_address(emitter, "r10", message_symbol);                   // materialize static ValueError message pointer
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static ValueError message pointer
     emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static ValueError message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");               // publish the active exception object
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the active exception object
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emitter.instruction("jmp __rt_throw_current");                              // enter the standard exception unwinder

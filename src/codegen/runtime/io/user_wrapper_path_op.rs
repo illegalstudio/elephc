@@ -196,7 +196,7 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uwpo_check_x86");
-    emitter.instruction("lea r10, [rip + _user_wrappers]");                     // wrapper table base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwpo_slot_x86");
     emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
@@ -235,7 +235,7 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
 
     // -- look up the method in the per-class vtable at the requested slot --
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
-    emitter.instruction("lea r10, [rip + _user_wrapper_vtable_ptrs]");          // base of the per-class user-wrapper vtable pointer table
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // per-class user-wrapper vtable for the resolved class
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the requested vtable slot index
     emitter.instruction("mov r11, QWORD PTR [r10 + r9 * 8]");                   // load the requested method pointer from the vtable
@@ -437,7 +437,7 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uwrn_check_x86");
-    emitter.instruction("lea r10, [rip + _user_wrappers]");                     // wrapper table base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwrn_slot_x86");
     emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
@@ -476,7 +476,7 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
 
     // -- look up rename in the per-class user-wrapper vtable (slot 16) --
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
-    emitter.instruction("lea r10, [rip + _user_wrapper_vtable_ptrs]");          // base of the per-class user-wrapper vtable pointer table
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", VTABLE_RENAME_OFFSET)); // load the rename method pointer (slot 16)
     emitter.instruction("test r11, r11");                                       // class did not implement rename?

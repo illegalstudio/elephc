@@ -114,8 +114,8 @@ fn emit_error_outputs(args: &[Expr], emitter: &mut Emitter, ctx: &mut Context, d
             emitter.instruction(&format!("mov r9, {}", econnrefused));          // failure error code = ECONNREFUSED
             emitter.instruction("mov r10, 0");                                  // success error code = 0
             emitter.instruction("cmovge r9, r10");                              // r9 = error code for the outcome
-            emitter.instruction(&format!("lea r10, [rip + {}]", msg_sym));      // failure error-message pointer
-            emitter.instruction(&format!("lea r11, [rip + {}]", empty_sym));    // success error-message pointer
+            abi::emit_symbol_address(emitter, "r10", &msg_sym);                 // failure error-message pointer
+            abi::emit_symbol_address(emitter, "r11", &empty_sym);               // success error-message pointer
             emitter.instruction("cmovge r10, r11");                             // r10 = error-message pointer
             emitter.instruction(&format!("mov r11, {}", msg_len));              // failure error-message length
             emitter.instruction("mov rcx, 0");                                  // success error-message length = 0
@@ -148,8 +148,7 @@ fn store_int(name: &str, value_reg: &str, emitter: &mut Emitter, ctx: &Context) 
         let label = format!("_gvar_{}", name);
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.adrp("x13", &label);                                    // load page of the error-code variable
-                emitter.add_lo12("x13", "x13", &label);                         // resolve the error-code variable
+                abi::emit_symbol_address(emitter, "x13", &label);               // load page of the error-code variable
                 emitter.instruction(&format!("str {}, [x13]", value_reg));      // store the error code
             }
             Arch::X86_64 => {
@@ -190,8 +189,7 @@ fn store_str(name: &str, ptr_reg: &str, len_reg: &str, emitter: &mut Emitter, ct
         let label = format!("_gvar_{}", name);
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.adrp("x13", &label);                                    // load page of the error-message variable
-                emitter.add_lo12("x13", "x13", &label);                         // resolve the error-message variable
+                abi::emit_symbol_address(emitter, "x13", &label);               // load page of the error-message variable
                 emitter.instruction(&format!("str {}, [x13]", ptr_reg));        // store the error-message pointer
                 emitter.instruction(&format!("str {}, [x13, #8]", len_reg));    // store the error-message length
             }

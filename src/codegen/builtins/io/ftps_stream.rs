@@ -70,7 +70,7 @@ pub(super) fn emit_open_fd(args: &[Expr], emitter: &mut Emitter, data: &mut Data
                     emitter.instruction(&format!("mov x3, #{}", retr_len));     // RETR command length
                 }
                 Arch::X86_64 => {
-                    emitter.instruction("mov QWORD PTR [rip + _ftp_use_tls], 1"); // publish the AUTH-TLS flag for __rt_ftp_open
+                    abi::emit_store_imm_to_symbol(emitter, "_ftp_use_tls", 0, 1); // publish the AUTH-TLS flag for __rt_ftp_open
                     abi::emit_symbol_address(emitter, "rdi", &ctrl_sym);
                     emitter.instruction(&format!("mov rsi, {}", ctrl_len));     // control address length
                     abi::emit_symbol_address(emitter, "rdx", &retr_sym);

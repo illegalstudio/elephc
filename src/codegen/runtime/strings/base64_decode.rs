@@ -9,6 +9,7 @@
 //! - Base64 helpers depend on fixed encode/decode tables and must report decoded pointer/length pairs consistently.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// Emits the `__rt_base64_decode` runtime helper.
 ///
@@ -130,14 +131,14 @@ fn emit_base64_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: base64_decode ---");
     emitter.label_global("__rt_base64_decode");
 
-    emitter.instruction("mov r8, QWORD PTR [rip + _concat_off]");               // load the current concat-buffer offset before appending the decoded bytes
-    emitter.instruction("lea r9, [rip + _concat_buf]");                         // load the base address of the shared concat buffer
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer offset before appending the decoded bytes
+    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // load the base address of the shared concat buffer
     emitter.instruction("add r9, r8");                                          // compute the destination pointer at the current concat-buffer tail
     emitter.instruction("mov r10, r9");                                         // preserve the decoded string start pointer for the return value
     emitter.instruction("mov rcx, rdx");                                        // copy the encoded character count into a decrementing loop counter
     emitter.instruction("mov rsi, rax");                                        // copy the encoded string pointer into a cursor register for byte-by-byte reads
     emitter.label("__rt_b64dec_loop_linux_x86_64");
-    emitter.instruction("lea r11, [rip + _b64_decode_tbl]");                    // reload the base64 reverse-lookup table address for this decoding iteration
+    abi::emit_symbol_address(emitter, "r11", "_b64_decode_tbl");                // reload the base64 reverse-lookup table address for this decoding iteration
     emitter.instruction("cmp rcx, 4");                                          // check whether at least one full 4-character chunk remains
     emitter.instruction("jl __rt_b64dec_done_linux_x86_64");                    // stop once fewer than 4 encoded characters remain
 
@@ -211,8 +212,8 @@ fn emit_base64_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r9");                                         // copy the concat-buffer tail into the length scratch register
     emitter.instruction("sub rdx, r10");                                        // compute the decoded string length from the written byte count
     emitter.instruction("mov r8, r9");                                          // copy the absolute concat-buffer tail before normalizing it back to a shared offset
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // load the concat-buffer base so the shared offset can stay relative
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // load the concat-buffer base so the shared offset can stay relative
     emitter.instruction("sub r8, r11");                                         // convert the absolute concat-buffer tail back into the shared relative offset
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r8");               // publish the updated relative concat-buffer offset for later string appenders
+    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated relative concat-buffer offset for later string appenders
     emitter.instruction("ret");                                                 // return the decoded string through the standard x86_64 string result registers
 }

@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Decodes URL-encoded byte sequences in a PHP byte-string.
 /// Input: x1=source pointer, x2=source length (ARM64). Output: x1=result pointer, x2=result length.
@@ -193,8 +194,8 @@ fn emit_urldecode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r8");                                         // return the concat-backed result start pointer after decoding the full input string
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer destination cursor before computing the decoded string length
     emitter.instruction("sub rdx, r8");                                         // compute the decoded string length as dest_end - dest_start for the returned x86_64 string value
-    emitter.instruction("mov rcx, QWORD PTR [rip + _concat_off]");              // reload the concat-buffer write offset before publishing the bytes that urldecode() appended
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer write offset before publishing the bytes that urldecode() appended
     emitter.instruction("add rcx, rdx");                                        // advance the concat-buffer write offset by the produced decoded-string length
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // persist the updated concat-buffer write offset after finishing the urldecode() pass
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // persist the updated concat-buffer write offset after finishing the urldecode() pass
     emitter.instruction("ret");                                                 // return the concat-backed decoded string in the standard x86_64 string result registers
 }

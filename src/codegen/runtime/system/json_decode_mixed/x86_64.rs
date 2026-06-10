@@ -9,6 +9,7 @@
 //! - The SysV decoder path must mirror the AArch64 parser contract and shared JSON state slots.
 
 use crate::codegen::emit::Emitter;
+use crate::codegen::abi;
 
 /// Emits x86_64 assembly for `__rt_json_decode_mixed`, the entry point that
 /// decodes any JSON value into a boxed `Mixed` runtime value.
@@ -139,14 +140,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- validate and box a decoded JSON string --
     emitter.label("__rt_json_decode_mixed_string");
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // trimmed raw string pointer
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_ptr], rax");       // publish validator source pointer
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_json_validate_ptr", 0);     // publish validator source pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // trimmed raw string length
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_len], rax");       // publish validator source length
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], 0");         // validate from the start of the trimmed string
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_json_validate_len", 0);     // publish validator source length
+    abi::emit_store_zero_to_symbol(emitter, "_json_validate_idx", 0);           // validate from the start of the trimmed string
     emitter.instruction("call __rt_json_validate_string_x");                    // validate escapes, controls, and UTF-16 before boxing
     emitter.instruction("test rax, rax");                                       // non-zero means the string syntax is valid
     emitter.instruction("je __rt_json_decode_mixed_error_done");                // validation helper already recorded the JSON error
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_validate_idx]");       // validator cursor after the decoded string
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_validate_idx", 0);      // validator cursor after the decoded string
     emitter.instruction("cmp r10, QWORD PTR [rbp - 88]");                       // did the string parser consume the whole JSON value?
     emitter.instruction("jne __rt_json_decode_mixed_syntax_error");             // trailing bytes after the string are invalid
     emitter.instruction("mov rax, 1");                                          // tag = string
@@ -160,7 +161,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // use this array's opening bracket as a possible depth-error location
     emitter.instruction("call __rt_json_set_error_location");                   // preseed line/column metadata before depth validation
     emitter.instruction("call __rt_json_depth_enter");                          // enforce json_decode depth before parsing the container
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_last_error]");         // load any depth error recorded by depth_enter
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_last_error", 0);        // load any depth error recorded by depth_enter
     emitter.instruction("test r10, r10");                                       // non-zero means the container exceeded depth
     emitter.instruction("jne __rt_json_decode_mixed_error_done");               // depth overflow returns null/throws instead of decoding
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // trimmed raw slice ptr
@@ -206,7 +207,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // use this object's opening brace as a possible depth-error location
     emitter.instruction("call __rt_json_set_error_location");                   // preseed line/column metadata before depth validation
     emitter.instruction("call __rt_json_depth_enter");                          // enforce json_decode depth before parsing the container
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_last_error]");         // load any depth error recorded by depth_enter
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_last_error", 0);        // load any depth error recorded by depth_enter
     emitter.instruction("test r10, r10");                                       // non-zero means the container exceeded depth
     emitter.instruction("jne __rt_json_decode_mixed_error_done");               // depth overflow returns null/throws instead of decoding
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // trimmed raw slice ptr
@@ -240,7 +241,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_new");                                  // returns rax = hash pointer
     emitter.instruction("mov rdi, rax");                                        // payload = hash pointer
     // Honor the json_decode `$associative` flag: 0 → stdClass, non-zero → assoc.
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_decode_assoc]");       // load the assoc flag
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_decode_assoc", 0);      // load the assoc flag
     emitter.instruction("test r10, r10");                                       // zero → stdClass dispatch
     emitter.instruction("je __rt_json_decode_mixed_object_empty_stdclass_x");   // wrap the empty hash in a stdClass instance
     emitter.instruction("mov rax, 5");                                          // tag = associative array
@@ -329,14 +330,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- number: scan for '.', 'e', 'E' to choose int vs float --
     emitter.label("__rt_json_decode_mixed_number");
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // trimmed raw number pointer
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_ptr], rax");       // publish validator source pointer
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_json_validate_ptr", 0);     // publish validator source pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // trimmed raw number length
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_len], rax");       // publish validator source length
-    emitter.instruction("mov QWORD PTR [rip + _json_validate_idx], 0");         // validate from the start of the number
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_json_validate_len", 0);     // publish validator source length
+    abi::emit_store_zero_to_symbol(emitter, "_json_validate_idx", 0);           // validate from the start of the number
     emitter.instruction("call __rt_json_validate_number_x");                    // validate RFC 8259 number grammar before numeric conversion
     emitter.instruction("test rax, rax");                                       // non-zero means the number syntax is valid
     emitter.instruction("je __rt_json_decode_mixed_error_done");                // validation helper already recorded the JSON error
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_validate_idx]");       // validator cursor after the number
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_validate_idx", 0);      // validator cursor after the number
     emitter.instruction("cmp r10, QWORD PTR [rbp - 88]");                       // did the number parser consume the whole JSON value?
     emitter.instruction("jne __rt_json_decode_mixed_syntax_error");             // trailing bytes after the number are invalid
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // decoded ptr
@@ -378,7 +379,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, 19");                                         // compare length against 19
     emitter.instruction("jl __rt_json_decode_mixed_number_int_atoi");           // < 19 digits → fits in i64
     emitter.instruction("jg __rt_json_decode_mixed_number_overflow");           // > 19 digits → guaranteed overflow
-    emitter.instruction("lea r11, [rip + _json_int_max_str]");                  // threshold address
+    abi::emit_symbol_address(emitter, "r11", "_json_int_max_str");              // threshold address
     emitter.instruction("xor rcx, rcx");                                        // lex-compare cursor
     emitter.label("__rt_json_decode_mixed_number_overflow_pos_lex");
     emitter.instruction("cmp rcx, 19");                                         // walked all 19 threshold bytes?
@@ -395,7 +396,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, 20");                                         // compare length against 20
     emitter.instruction("jl __rt_json_decode_mixed_number_int_atoi");           // < 20 chars → fits in i64
     emitter.instruction("jg __rt_json_decode_mixed_number_overflow");           // > 20 chars → overflow
-    emitter.instruction("lea r11, [rip + _json_int_min_str]");                  // threshold address
+    abi::emit_symbol_address(emitter, "r11", "_json_int_min_str");              // threshold address
     emitter.instruction("xor rcx, rcx");                                        // lex-compare cursor
     emitter.label("__rt_json_decode_mixed_number_overflow_neg_lex");
     emitter.instruction("cmp rcx, 20");                                         // walked all 20 threshold bytes?
@@ -409,7 +410,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_decode_mixed_number_overflow_neg_lex");  // next byte
     // -- overflow: JSON_BIGINT_AS_STRING selects between string and float --
     emitter.label("__rt_json_decode_mixed_number_overflow");
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]");       // load the active flag bitmask
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);      // load the active flag bitmask
     emitter.instruction("test r10, 2");                                         // JSON_BIGINT_AS_STRING bit
     emitter.instruction("jne __rt_json_decode_mixed_number_bigint_string");     // flag set → preserve digits as string
     emitter.instruction("jmp __rt_json_decode_mixed_number_float");             // flag clear → fall back to float (PHP default)

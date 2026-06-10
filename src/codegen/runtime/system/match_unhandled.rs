@@ -24,8 +24,7 @@ pub fn emit_match_unhandled(emitter: &mut Emitter) {
     emitter.label_global("__rt_match_unhandled");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.adrp("x1", "_match_unhandled_msg");                          // load the unhandled-match error message page for the AArch64 fatal path
-            emitter.add_lo12("x1", "x1", "_match_unhandled_msg");               // resolve the exact unhandled-match error message address for the AArch64 fatal path
+            abi::emit_symbol_address(emitter, "x1", "_match_unhandled_msg");    // load the unhandled-match error message page for the AArch64 fatal path
             emitter.instruction("mov x2, #34");                                 // byte length of the unhandled-match error message
             emitter.instruction("mov x0, #2");                                  // write diagnostics to stderr on the AArch64 fatal path
             emitter.syscall(4);

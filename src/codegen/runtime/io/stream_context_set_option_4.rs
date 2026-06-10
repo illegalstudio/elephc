@@ -152,13 +152,13 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save val_len
 
     // -- ensure top-level hash exists --
-    emitter.instruction("mov rax, QWORD PTR [rip + _stream_context_options]");  // current top hash (may be null)
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_stream_context_options", 0); // current top hash (may be null)
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jnz __rt_scso4_top_ok_x86");                           // branch when the checked value is nonzero or different
     emitter.instruction("mov edi, 4");                                          // initial capacity
     emitter.instruction("mov esi, 7");                                          // value tag = Mixed
     emitter.instruction("call __rt_hash_new");                                  // call runtime helper
-    emitter.instruction("mov QWORD PTR [rip + _stream_context_options], rax");  // store runtime value
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_stream_context_options", 0); // store runtime value
     emitter.instruction("mov rdi, rax");                                        // prepare SysV call argument
     emitter.instruction("call __rt_incref");                                    // call runtime helper
     emitter.label("__rt_scso4_top_ok_x86");
@@ -201,7 +201,7 @@ fn emit_stream_context_set_option_4_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r8, r8");                                          // clear register value
     emitter.instruction("mov r9, 5");                                           // value tag = assoc array
     emitter.instruction("call __rt_hash_set");                                  // rax = updated top
-    emitter.instruction("mov QWORD PTR [rip + _stream_context_options], rax");  // store runtime value
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_stream_context_options", 0); // store runtime value
 
     emitter.instruction("mov eax, 1");                                          // PHP true
     emitter.instruction("add rsp, 80");                                         // release runtime stack frame

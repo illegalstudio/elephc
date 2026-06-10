@@ -88,14 +88,14 @@ fn emit_user_wrapper_set_option_linux_x86_64(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
     emitter.instruction("sub r9, 0x40000000");                                  // r9 = handle slot index = fd - USER_WRAPPER_FD_BASE
-    emitter.instruction("lea r10, [rip + _user_wrapper_handles]");              // handle table base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
     emitter.instruction("test rdi, rdi");                                       // empty slot?
     emitter.instruction("jz __rt_uwsetopt_false_x86");                          // empty slot → false
 
     // -- resolve stream_set_option (vtable slot 13) for the object's class --
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
-    emitter.instruction("lea r11, [rip + _user_wrapper_vtable_ptrs]");          // base of the per-class vtable pointer table
+    abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_SET_OPTION_OFFSET)); // load the stream_set_option method pointer (slot 13)
     emitter.instruction("test r11, r11");                                       // class did not implement stream_set_option?

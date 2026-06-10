@@ -301,8 +301,7 @@ fn emit_private_static_property_access_fatal(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // fd = stderr for the private static property fatal diagnostic
-            emitter.adrp("x1", STATIC_PROP_PRIVATE_ACCESS_LABEL);
-            emitter.add_lo12("x1", "x1", STATIC_PROP_PRIVATE_ACCESS_LABEL);
+            abi::emit_symbol_address(emitter, "x1", STATIC_PROP_PRIVATE_ACCESS_LABEL);
             emitter.instruction(&format!("mov x2, #{}", len));                  // pass the private static property fatal diagnostic byte length to write()
             emitter.syscall(4);
             emitter.instruction("mov x0, #1");                                  // exit status 1 indicates abnormal termination

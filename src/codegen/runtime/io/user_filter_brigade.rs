@@ -433,7 +433,7 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_ufbi_walk_next_x");                           // branch when the checked value is nonzero or different
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // str ptr
     emitter.instruction("mov r11, QWORD PTR [rax + 16]");                       // str len
-    emitter.instruction("lea r8, [rip + _stream_filter_buf]");                  // load runtime data address
+    abi::emit_symbol_address(emitter, "r8", "_stream_filter_buf");              // load runtime data address
 
     emitter.instruction("xor r9, r9");                                          // clear register value
     emitter.label("__rt_ufbi_copy_byte_x");
@@ -451,7 +451,7 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_ufbi_walk_loop_x");                           // continue at target label
 
     emitter.label("__rt_ufbi_walk_done_x");
-    emitter.instruction("lea rax, [rip + _stream_filter_buf]");                 // load runtime data address
+    abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // load runtime data address
     emitter.instruction("mov rdx, r15");                                        // result len
     emitter.instruction("mov r12, QWORD PTR [rbp - 96]");                       // restore callee-saved regs
     emitter.instruction("mov r13, QWORD PTR [rbp - 104]");                      // move runtime value between registers
@@ -462,7 +462,7 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     emitter.label("__rt_ufbi_empty_x");
-    emitter.instruction("lea rax, [rip + _stream_filter_buf]");                 // load runtime data address
+    abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // load runtime data address
     emitter.instruction("xor edx, edx");                                        // clear register value
     emitter.instruction("mov rsp, rbp");                                        // move runtime value between registers
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

@@ -465,10 +465,10 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // reload addr len
 
     // -- if [http][proxy] is set, override the connect target with proxy --
-    emitter.instruction("mov r10, QWORD PTR [rip + _http_active_proxy_len]");   // move runtime value between registers
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_http_active_proxy_len", 0);  // move runtime value between registers
     emitter.instruction("test r10, r10");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_http_open_no_proxy_x");                        // branch when the checked value is zero or equal
-    emitter.instruction("mov rdi, QWORD PTR [rip + _http_active_proxy_ptr]");   // prepare SysV call argument
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_http_active_proxy_ptr", 0);  // prepare SysV call argument
     emitter.instruction("mov rsi, r10");                                        // prepare SysV call argument
     emitter.label("__rt_http_open_no_proxy_x");
     // -- connect the TCP socket (rdi/rsi hold the address — possibly proxy-overridden) --
@@ -488,7 +488,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore fd into rax (the shim clobbered it; the send relies on it)
 
     // -- if [http][timeout] was set (seconds > 0), apply SO_RCVTIMEO --
-    emitter.instruction("mov r9, QWORD PTR [rip + _http_active_timeout_seconds]"); // prepare SysV call argument
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_http_active_timeout_seconds", 0); // prepare SysV call argument
     emitter.instruction("test r9, r9");                                         // check whether the runtime value is zero
     emitter.instruction("jz __rt_http_open_skip_timeout_x");                    // branch when the checked value is zero or equal
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // prepare SysV call argument
@@ -507,7 +507,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // accumulated response length = 0
     emitter.label("__rt_http_open_read_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // socket descriptor for the read
-    emitter.instruction("lea rsi, [rip + _http_resp_buf]");                     // response buffer base
+    abi::emit_symbol_address(emitter, "rsi", "_http_resp_buf");                 // response buffer base
     emitter.instruction("add rsi, QWORD PTR [rbp - 32]");                       // read past the bytes already buffered
     emitter.instruction(&format!("mov rdx, {}", HTTP_RESP_BUF_SIZE));           // response buffer capacity
     emitter.instruction("sub rdx, QWORD PTR [rbp - 32]");                       // remaining buffer capacity
@@ -530,7 +530,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // response length
     emitter.instruction("cmp r10, 12");                                         // compare runtime values for the next branch
     emitter.instruction("jl __rt_http_open_status_ok_x");                       // branch when comparison is below target
-    emitter.instruction("lea r8, [rip + _http_resp_buf]");                      // load runtime data address
+    abi::emit_symbol_address(emitter, "r8", "_http_resp_buf");                  // load runtime data address
     emitter.instruction("movzx eax, BYTE PTR [r8 + 9]");                        // hundreds
     emitter.instruction("sub eax, 48");                                         // reduce runtime pointer or counter
     emitter.instruction("movzx r9d, BYTE PTR [r8 + 10]");                       // tens
@@ -547,7 +547,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_http_open_check_err_x");                       // branch when comparison is below target
     emitter.instruction("cmp eax, 400");                                        // compare runtime values for the next branch
     emitter.instruction("jge __rt_http_open_check_err_x");                      // branch when comparison is at least target
-    emitter.instruction("mov r9, QWORD PTR [rip + _http_active_max_redirects]"); // prepare SysV call argument
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_http_active_max_redirects", 0); // prepare SysV call argument
     emitter.instruction("test r9, r9");                                         // check whether the runtime value is zero
     emitter.instruction("jz __rt_http_open_check_err_x");                       // branch when the checked value is zero or equal
     // Scan for case-folded "location:" header — same pattern as ARM64.
@@ -589,7 +589,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc rcx");                                             // advance runtime pointer or counter
     emitter.instruction("jmp __rt_http_open_loc_skip_ws_x");                    // continue at target label
     emitter.label("__rt_http_open_loc_copy_x");
-    emitter.instruction("lea r12, [rip + _http_redirect_path_buf]");            // load runtime data address
+    abi::emit_symbol_address(emitter, "r12", "_http_redirect_path_buf");        // load runtime data address
     emitter.instruction("xor r13, r13");                                        // write index
     emitter.label("__rt_http_open_loc_copy_loop_x");
     emitter.instruction("cmp rcx, r10");                                        // compare runtime values for the next branch
@@ -606,7 +606,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r13");                                             // advance runtime pointer or counter
     emitter.instruction("jmp __rt_http_open_loc_copy_loop_x");                  // continue at target label
     emitter.label("__rt_http_open_loc_copy_done_x");
-    emitter.instruction("mov QWORD PTR [rip + _http_redirect_path_len], r13");  // store runtime value
+    abi::emit_store_reg_to_symbol(emitter, "r13", "_http_redirect_path_len", 0); // store runtime value
     emitter.instruction("test r13, r13");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_http_open_check_err_x");                       // branch when the checked value is zero or equal
     // Two redirect shapes are accepted: a relative path starting with '/' (use
@@ -643,12 +643,12 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp dl, 47");                                          // '/'
     emitter.instruction("jne __rt_http_open_check_err_x");                      // branch when the checked value is nonzero or different
     // "http://" matched. Compare host bytes against the active host:port.
-    emitter.instruction("mov r9, QWORD PTR [rip + _http_active_host_len]");     // r9 = active host length
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_http_active_host_len", 0);    // r9 = active host length
     emitter.instruction("mov rax, r9");                                         // prepare runtime result value
     emitter.instruction("add rax, 7");                                          // 7 + host_len = required min length
     emitter.instruction("cmp r13, rax");                                        // compare runtime values for the next branch
     emitter.instruction("jl __rt_http_open_check_err_x");                       // buffer too short for same-host URL
-    emitter.instruction("mov r14, QWORD PTR [rip + _http_active_host_ptr]");    // r14 = active host ptr
+    abi::emit_load_symbol_to_reg(emitter, "r14", "_http_active_host_ptr", 0);   // r14 = active host ptr
     emitter.instruction("xor rcx, rcx");                                        // host compare index
     emitter.label("__rt_http_open_loc_host_cmp_x");
     emitter.instruction("cmp rcx, r9");                                         // compare runtime values for the next branch
@@ -707,16 +707,16 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r12], 47");                              // '/'
     emitter.instruction("mov r13, 1");                                          // move runtime value between registers
     emitter.label("__rt_http_open_loc_abs_done_x");
-    emitter.instruction("mov QWORD PTR [rip + _http_redirect_path_len], r13");  // persist rewritten length
+    abi::emit_store_reg_to_symbol(emitter, "r13", "_http_redirect_path_len", 0); // persist rewritten length
     // Decrement max_redirects.
-    emitter.instruction("dec QWORD PTR [rip + _http_active_max_redirects]");    // reduce runtime pointer or counter
+    abi::emit_dec_symbol(emitter, "_http_active_max_redirects");                // reduce runtime pointer or counter
     // Rebuild request: __rt_http_build_request(host, host_len, redirect_buf, redirect_len).
-    emitter.instruction("mov rdi, QWORD PTR [rip + _http_active_host_ptr]");    // prepare SysV call argument
-    emitter.instruction("mov rsi, QWORD PTR [rip + _http_active_host_len]");    // prepare SysV call argument
-    emitter.instruction("lea rdx, [rip + _http_redirect_path_buf]");            // load runtime data address
-    emitter.instruction("mov rcx, QWORD PTR [rip + _http_redirect_path_len]");  // prepare SysV call argument
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_http_active_host_ptr", 0);   // prepare SysV call argument
+    abi::emit_load_symbol_to_reg(emitter, "rsi", "_http_active_host_len", 0);   // prepare SysV call argument
+    abi::emit_symbol_address(emitter, "rdx", "_http_redirect_path_buf");        // load runtime data address
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_http_redirect_path_len", 0); // prepare SysV call argument
     emitter.instruction("call __rt_http_build_request");                        // returns new req len in rax
-    emitter.instruction("lea r9, [rip + _http_req_scratch]");                   // load runtime data address
+    abi::emit_symbol_address(emitter, "r9", "_http_req_scratch");               // load runtime data address
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // store runtime value
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // store runtime value
     emitter.instruction("jmp __rt_http_open_loop_top_x");                       // continue at target label
@@ -728,14 +728,14 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_http_open_check_err_x");
     emitter.instruction("cmp eax, 400");                                        // compare runtime values for the next branch
     emitter.instruction("jl __rt_http_open_status_ok_x");                       // branch when comparison is below target
-    emitter.instruction("mov r9, QWORD PTR [rip + _http_active_ignore_errors]"); // prepare SysV call argument
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_http_active_ignore_errors", 0); // prepare SysV call argument
     emitter.instruction("test r9, r9");                                         // check whether the runtime value is zero
     emitter.instruction("jnz __rt_http_open_status_ok_x");                      // branch when the checked value is nonzero or different
     emitter.instruction("jmp __rt_http_open_fail_x86");                         // continue at target label
     emitter.label("__rt_http_open_status_ok_x");
 
     // -- scan for the CRLFCRLF that separates headers from the body --
-    emitter.instruction("lea r8, [rip + _http_resp_buf]");                      // response buffer base
+    abi::emit_symbol_address(emitter, "r8", "_http_resp_buf");                  // response buffer base
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // response length
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // body start = 0 when no separator is found
     emitter.instruction("xor rcx, rcx");                                        // response scan index
@@ -774,7 +774,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
 
     // -- write(temp, body, body length) --
     emitter.instruction("mov rdi, rax");                                        // temp-file descriptor for the write
-    emitter.instruction("lea rsi, [rip + _http_resp_buf]");                     // response buffer base
+    abi::emit_symbol_address(emitter, "rsi", "_http_resp_buf");                 // response buffer base
     emitter.instruction("add rsi, QWORD PTR [rbp - 40]");                       // body pointer = buffer + body start
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // response length
     emitter.instruction("sub rdx, QWORD PTR [rbp - 40]");                       // body length = response length - body start

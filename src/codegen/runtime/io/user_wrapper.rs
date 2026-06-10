@@ -104,7 +104,7 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     // -- free the handle slot so the synthetic fd cannot be reused stale --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the synthetic file descriptor
     emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = fd & 0x3f, the handle slot index
-    emitter.instruction("lea r10, [rip + _user_wrapper_handles]");              // handle table base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
     emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // clear the freed handle slot
     emitter.instruction("mov eax, 1");                                          // fclose() on a wrapper always reports success
     emitter.instruction("add rsp, 16");                                         // release the helper frame
@@ -824,7 +824,7 @@ fn emit_x86_slot_from_fd(emitter: &mut Emitter, src: &str, dst: &str) {
 /// jumps to `missing_label`.
 fn emit_x86_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
     emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = handle slot index
-    emitter.instruction("lea r10, [rip + _user_wrapper_handles]");              // handle table base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
     emitter.instruction("test rdi, rdi");                                       // is the slot empty?
     emitter.instruction(&format!("jz {}", missing_label));                      // slot empty: take the fallback
@@ -835,7 +835,7 @@ fn emit_x86_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
 /// in `r11`. On a missing method jumps to `missing_label`.
 fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slot: usize) {
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id stored at the head of every wrapper object
-    emitter.instruction("lea r11, [rip + _user_wrapper_vtable_ptrs]");          // base of the per-class user-wrapper vtable pointer table
+    abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", vtable_slot * 8)); // load the requested wrapper method pointer
     emitter.instruction("test r11, r11");                                       // is the method missing?

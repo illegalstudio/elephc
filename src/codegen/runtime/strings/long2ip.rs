@@ -11,6 +11,7 @@
 
 use crate::codegen::abi::emit_symbol_address;
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// long2ip: format the low 32 bits of an integer as `A.B.C.D`.
 /// Input:  x0 = IP integer
@@ -96,8 +97,8 @@ fn emit_long2ip_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: long2ip ---");
     emitter.label_global("__rt_long2ip");
 
-    emitter.instruction("lea rax, [rip + _concat_buf]");                        // concat-buffer base address
-    emitter.instruction("mov rcx, QWORD PTR [rip + _concat_off]");              // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "rax", "_concat_buf");                    // concat-buffer base address
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // current concat-buffer offset
     emitter.instruction("lea r11, [rax + rcx]");                                // r11 = result start pointer
     emitter.instruction("mov r10, r11");                                        // r10 is the running write cursor
 
@@ -109,9 +110,9 @@ fn emit_long2ip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r10");                                        // cursor
     emitter.instruction("sub rdx, r11");                                        // result length = cursor - start
     emitter.instruction("mov rax, r11");                                        // result pointer = start
-    emitter.instruction("mov rcx, QWORD PTR [rip + _concat_off]");              // reload the concat-buffer offset
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer offset
     emitter.instruction("add rcx, rdx");                                        // advance it past the formatted address
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the updated offset
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated offset
     emitter.instruction("ret");                                                 // return the dotted-quad string slice
 }
 

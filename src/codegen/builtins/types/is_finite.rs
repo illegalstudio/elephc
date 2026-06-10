@@ -43,8 +43,7 @@ pub fn emit(
             // -- check if |value| is strictly less than infinity (not NaN, not Inf) --
             emitter.instruction("fabs d0, d0");                                 // take the absolute value so both +INF and -INF compare against the same constant
             let inf_label = data.add_float(f64::INFINITY);
-            emitter.adrp("x9", &inf_label);                                     // load the page that contains the infinity constant
-            emitter.add_lo12("x9", "x9", &inf_label);                           // resolve the infinity constant address within that page
+            abi::emit_symbol_address(emitter, "x9", &inf_label);                // resolve the address of the infinity constant
             emitter.instruction("ldr d1, [x9]");                                // load the infinity constant into the comparison register
             emitter.instruction("fcmp d0, d1");                                 // compare the absolute value against positive infinity
             emitter.instruction("cset x0, mi");                                 // materialize the strict-less-than-infinity result as a boolean integer
@@ -56,10 +55,10 @@ pub fn emit(
             let done_label = ctx.next_label("is_finite_done");
             emitter.instruction("ucomisd xmm0, xmm0");                          // compare the value against itself so NaN sets the parity flag
             emitter.instruction(&format!("jp {}", not_finite_label));           // NaN is not finite
-            emitter.instruction(&format!("movsd xmm1, QWORD PTR [rip + {}]", pos_inf_label)); // load the positive infinity constant into the comparison register
+            abi::emit_load_symbol_to_reg(emitter, "xmm1", &pos_inf_label, 0);   // load the positive infinity constant into the comparison register
             emitter.instruction("ucomisd xmm0, xmm1");                          // compare the value against positive infinity
             emitter.instruction(&format!("je {}", not_finite_label));           // +INF is not finite
-            emitter.instruction(&format!("movsd xmm1, QWORD PTR [rip + {}]", neg_inf_label)); // load the negative infinity constant into the comparison register
+            abi::emit_load_symbol_to_reg(emitter, "xmm1", &neg_inf_label, 0);   // load the negative infinity constant into the comparison register
             emitter.instruction("ucomisd xmm0, xmm1");                          // compare the value against negative infinity
             emitter.instruction(&format!("je {}", not_finite_label));           // -INF is not finite
             emitter.instruction("mov rax, 1");                                  // any remaining non-NaN and non-infinite value is finite

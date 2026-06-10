@@ -9,6 +9,7 @@
 //! - Formatting reads libc tm fields and fixed date tables using Linux x86_64 register conventions.
 
 use crate::codegen::emit::Emitter;
+use crate::codegen::abi;
 
 /// Emits the `__rt_date` and `__rt_date_have_time_linux_x86_64` runtime helpers for Linux x86_64.
 ///
@@ -61,9 +62,9 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call localtime");                                      // decompose the Unix timestamp into libc's struct tm fields in the current local timezone
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the returned struct tm pointer so each format-token branch can reload the decomposed calendar fields
 
-    emitter.instruction("mov r8, QWORD PTR [rip + _concat_off]");               // load the current concat-buffer offset before appending the formatted date output
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer offset before appending the formatted date output
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // preserve the original concat-buffer offset for the final global offset update
-    emitter.instruction("lea r9, [rip + _concat_buf]");                         // load the base address of the shared concat buffer used for transient string results
+    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // load the base address of the shared concat buffer used for transient string results
     emitter.instruction("add r9, r8");                                          // compute the initial write cursor inside the concat buffer from the saved relative offset
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save the live write cursor so every token helper can append to the same destination buffer
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the formatted string start pointer for the final return value
@@ -246,7 +247,7 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // reload the struct tm pointer before reading the weekday index for the full weekday name table
     emitter.instruction("mov eax, DWORD PTR [r8 + 24]");                        // load tm_wday where libc uses Sunday=0 and Saturday=6
     emitter.instruction("imul rax, rax, 12");                                   // convert the weekday index into the 12-byte table stride used by the runtime day-name data
-    emitter.instruction("lea r9, [rip + _day_names]");                          // load the base address of the runtime weekday-name lookup table
+    abi::emit_symbol_address(emitter, "r9", "_day_names");                      // load the base address of the runtime weekday-name lookup table
     emitter.instruction("add r9, rax");                                         // advance to the selected weekday-name entry inside the runtime lookup table
     emitter.instruction("movzx ecx, BYTE PTR [r9 + 10]");                       // load the selected weekday-name length from the table metadata byte
     emitter.instruction("xor r10, r10");                                        // start a byte-copy index at zero before appending the full weekday name
@@ -267,7 +268,7 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // reload the struct tm pointer before reading the weekday index for the short weekday name table
     emitter.instruction("mov eax, DWORD PTR [r8 + 24]");                        // load tm_wday where libc uses Sunday=0 and Saturday=6
     emitter.instruction("imul rax, rax, 12");                                   // convert the weekday index into the 12-byte table stride used by the runtime day-name data
-    emitter.instruction("lea r9, [rip + _day_names]");                          // load the base address of the runtime weekday-name lookup table
+    abi::emit_symbol_address(emitter, "r9", "_day_names");                      // load the base address of the runtime weekday-name lookup table
     emitter.instruction("add r9, rax");                                         // advance to the selected weekday-name entry inside the runtime lookup table
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the live output cursor before appending the three-byte short weekday name
     emitter.instruction("mov al, BYTE PTR [r9 + 0]");                           // load the first byte of the selected weekday name
@@ -284,7 +285,7 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // reload the struct tm pointer before reading the month index for the full month-name table
     emitter.instruction("mov eax, DWORD PTR [r8 + 16]");                        // load tm_mon where libc uses January=0 and December=11
     emitter.instruction("imul rax, rax, 12");                                   // convert the month index into the 12-byte table stride used by the runtime month-name data
-    emitter.instruction("lea r9, [rip + _month_names]");                        // load the base address of the runtime month-name lookup table
+    abi::emit_symbol_address(emitter, "r9", "_month_names");                    // load the base address of the runtime month-name lookup table
     emitter.instruction("add r9, rax");                                         // advance to the selected month-name entry inside the runtime lookup table
     emitter.instruction("movzx ecx, BYTE PTR [r9 + 10]");                       // load the selected month-name length from the table metadata byte
     emitter.instruction("xor r10, r10");                                        // start a byte-copy index at zero before appending the full month name
@@ -305,7 +306,7 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // reload the struct tm pointer before reading the month index for the short month-name table
     emitter.instruction("mov eax, DWORD PTR [r8 + 16]");                        // load tm_mon where libc uses January=0 and December=11
     emitter.instruction("imul rax, rax, 12");                                   // convert the month index into the 12-byte table stride used by the runtime month-name data
-    emitter.instruction("lea r9, [rip + _month_names]");                        // load the base address of the runtime month-name lookup table
+    abi::emit_symbol_address(emitter, "r9", "_month_names");                    // load the base address of the runtime month-name lookup table
     emitter.instruction("add r9, rax");                                         // advance to the selected month-name entry inside the runtime lookup table
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the live output cursor before appending the three-byte short month name
     emitter.instruction("mov al, BYTE PTR [r9 + 0]");                           // load the first byte of the selected month name
@@ -330,7 +331,7 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, rax");                                        // compute the formatted-string length from the distance between the output cursor and the start pointer
     emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload the original concat-buffer offset that was active before formatting started
     emitter.instruction("add r8, rdx");                                         // advance the global concat-buffer offset by the number of bytes written by the formatter
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r8");               // publish the updated concat-buffer offset for later transient string helpers
+    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat-buffer offset for later transient string helpers
     emitter.instruction("add rsp, 128");                                        // release the formatter locals and decimal scratch buffer before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the formatted date string
     emitter.instruction("ret");                                                 // return the formatted date string pointer and length through the standard x86_64 string result registers

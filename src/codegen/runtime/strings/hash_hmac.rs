@@ -144,7 +144,7 @@ fn emit_hash_hmac_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 120]");                       // C arg5 = data length
 
     // -- call elephc_crypto_hmac indirectly through the published slot --
-    emitter.instruction("mov rax, QWORD PTR [rip + _elephc_crypto_hmac_fn]");   // load the published elephc_crypto_hmac function pointer
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_elephc_crypto_hmac_fn", 0);  // load the published elephc_crypto_hmac function pointer
     emitter.instruction("test rax, rax");                                       // a null slot means the program never linked elephc-crypto → unknown algo
     emitter.instruction("jz __rt_hash_hmac_unknown_linux_x86_64");              // throw the unknown-algorithm ValueError when the slot is null
     emitter.instruction("lea r10, [rbp - 64]");                                 // address of the stack-backed 64-byte raw-digest output buffer

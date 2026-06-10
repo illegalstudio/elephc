@@ -9,6 +9,7 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// Emits the `__rt_filesize`, `__rt_filemtime` runtime helper assembly for stat ext.
 /// Keeps PHP filesystem/resource behavior, libc calls, and target-specific ABI variants in one focused emitter.
@@ -178,8 +179,7 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     emitter.instruction("b __rt_filetype_unknown");                             // fall-through → "unknown"
 
     let ft_emit = |emitter: &mut Emitter, sym: &str, len: i64| {
-        emitter.adrp("x1", sym);                                                // load page of the type-name literal
-        emitter.add_lo12("x1", "x1", sym);                                      // resolve full address of the type-name literal
+        abi::emit_symbol_address(emitter, "x1", sym);                           // load page of the type-name literal
         emitter.instruction(&format!("mov x2, #{}", len));                      // length of the type-name literal
         emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));  // restore frame pointer and return address
         emitter.instruction(&format!("add sp, sp, #{}", frame_size));           // deallocate stack frame
@@ -390,7 +390,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_filetype_unknown");                           // fall-through → "unknown"
 
     let ft_emit = |emitter: &mut Emitter, sym: &str, len: i64| {
-        emitter.instruction(&format!("lea rax, [rip + {}]", sym));              // result pointer
+        abi::emit_symbol_address(emitter, "rax", sym);                          // result pointer
         emitter.instruction(&format!("mov rdx, {}", len));                      // result length
         emitter.instruction(&format!("add rsp, {}", frame_size));               // release the stat buffer
         emitter.instruction("pop rbp");                                         // restore caller frame pointer

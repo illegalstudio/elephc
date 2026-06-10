@@ -127,7 +127,7 @@ pub fn emit(
             emitter.instruction("mov r8, QWORD PTR [rsp + 8]");                 // current line length
             emitter.instruction("cmp r8, 0x100000");                            // is the buffer full (1 MiB)?
             emitter.instruction(&format!("jge {}", wrelease_label));            // full: release the chunk and stop
-            emitter.instruction("lea r11, [rip + _user_wrapper_drain_buf]");    // line buffer base
+            abi::emit_symbol_address(emitter, "r11", "_user_wrapper_drain_buf"); // line buffer base
             emitter.instruction("mov BYTE PTR [r11 + r8], r10b");               // append the byte to the line buffer
             emitter.instruction("inc r8");                                      // advance the line length
             emitter.instruction("mov QWORD PTR [rsp + 8], r8");                 // store the updated line length
@@ -141,7 +141,7 @@ pub fn emit(
             emitter.label(&wrelease_label);
             abi::emit_call_label(emitter, "__rt_decref_any");                   // release the dropped chunk (rax=ptr, buffer full)
             emitter.label(&wdone_label);
-            emitter.instruction("lea rax, [rip + _user_wrapper_drain_buf]");    // line pointer
+            abi::emit_symbol_address(emitter, "rax", "_user_wrapper_drain_buf"); // line pointer
             emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                // line length
             emitter.instruction("add rsp, 16");                                 // release the scratch frame
             emitter.label(&box_label);

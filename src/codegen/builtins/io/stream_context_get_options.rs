@@ -49,7 +49,7 @@ pub fn emit(
             emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            emitter.instruction("lea r9, [rip + _stream_context_options]");     // load runtime data address
+            abi::emit_symbol_address(emitter, "r9", "_stream_context_options"); // load runtime data address
             emitter.instruction("mov rax, QWORD PTR [r9]");                     // load the persisted hash pointer
             emitter.instruction("test rax, rax");                               // check whether the runtime value is zero
             emitter.instruction(&format!("jz {}", empty_label));                // empty fallback when no context exists

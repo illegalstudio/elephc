@@ -64,7 +64,7 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_stream_wrapper_register");
 
     // -- scan _user_wrappers for the first empty slot --
-    emitter.instruction("lea r8, [rip + _user_wrappers]");                      // wrapper table base
+    abi::emit_symbol_address(emitter, "r8", "_user_wrappers");                  // wrapper table base
     emitter.instruction("xor r9, r9");                                          // wrapper slot index
     emitter.label("__rt_swr_scan_x86");
     emitter.instruction("cmp r9, 64");                                          // is the wrapper table full (USER_WRAPPER_REGISTRATIONS_CAP)?

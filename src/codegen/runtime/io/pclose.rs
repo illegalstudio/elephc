@@ -58,7 +58,7 @@ fn emit_pclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
 
     // -- look up the FILE* recorded for this descriptor --
-    emitter.instruction("lea r9, [rip + _popen_files]");                        // base of the fd->FILE* table
+    abi::emit_symbol_address(emitter, "r9", "_popen_files");                    // base of the fd->FILE* table
     emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // FILE* = _popen_files[fd]
     emitter.instruction("test r10, r10");                                       // was a FILE* recorded?
     emitter.instruction("jz __rt_pclose_plain_x86");                            // no FILE* recorded: close directly

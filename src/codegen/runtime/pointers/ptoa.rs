@@ -34,8 +34,7 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     emitter.instruction("str x30, [sp, #-16]!");                                // save link register
 
     // -- set up output buffer in concat_buf --
-    emitter.adrp("x1", "_concat_buf");                           // load page of concat buffer
-    emitter.add_lo12("x1", "x1", "_concat_buf");                     // resolve concat buffer address
+    abi::emit_symbol_address(emitter, "x1", "_concat_buf");                     // load page of concat buffer
     emitter.instruction("mov x3, x1");                                          // x3 = write cursor
 
     // -- write "0x" prefix --

@@ -189,8 +189,7 @@ fn emit_missing_tostring_fatal(emitter: &mut Emitter, data: &mut DataSection, cl
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // fd = stderr for fatal conversion diagnostics
-            emitter.adrp("x1", &label);                                          // load the page that contains the fatal conversion message
-            emitter.add_lo12("x1", "x1", &label);                               // resolve the fatal conversion message address within that page
+            abi::emit_symbol_address(emitter, "x1", &label);                    // load the page that contains the fatal conversion message
             emitter.instruction(&format!("mov x2, #{}", len));                  // pass the fatal conversion message length to write()
             emitter.syscall(4);
             emitter.instruction("mov x0, #1");                                  // exit status 1 indicates abnormal termination

@@ -125,9 +125,9 @@ fn emit_apply_socket_bindto_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // store runtime value
 
     // bindto lookup.
-    emitter.instruction("lea rdi, [rip + _socket_key_str]");                    // load runtime data address
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
     emitter.instruction("mov rsi, 6");                                          // prepare SysV call argument
-    emitter.instruction("lea rdx, [rip + _socket_bindto_key_str]");             // load runtime data address
+    abi::emit_symbol_address(emitter, "rdx", "_socket_bindto_key_str");         // load runtime data address
     emitter.instruction("mov rcx, 6");                                          // prepare SysV call argument
     emitter.instruction("lea r8, [rbp - 16]");                                  // load runtime data address
     emitter.instruction("lea r9, [rbp - 24]");                                  // load runtime data address
@@ -330,9 +330,9 @@ fn emit_apply_socket_client_opts_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default
 
-    emitter.instruction("lea rdi, [rip + _socket_key_str]");                    // load runtime data address
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
     emitter.instruction("mov rsi, 6");                                          // strlen("socket")
-    emitter.instruction("lea rdx, [rip + _socket_tcp_nodelay_key_str]");        // load runtime data address
+    abi::emit_symbol_address(emitter, "rdx", "_socket_tcp_nodelay_key_str");    // load runtime data address
     emitter.instruction("mov rcx, 11");                                         // strlen("tcp_nodelay")
     emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
     emitter.instruction("call __rt_get_int_context_option");                    // call runtime helper
@@ -352,9 +352,9 @@ fn emit_apply_socket_client_opts_linux_x86_64(emitter: &mut Emitter) {
     // so_broadcast lookup. Enables sendto() to broadcast addresses on UDP.
     emitter.label("__rt_asco_bcast_x");
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default = 0
-    emitter.instruction("lea rdi, [rip + _socket_key_str]");                    // load runtime data address
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
     emitter.instruction("mov rsi, 6");                                          // strlen("socket")
-    emitter.instruction("lea rdx, [rip + _socket_so_broadcast_key_str]");       // load runtime data address
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_broadcast_key_str");   // load runtime data address
     emitter.instruction("mov rcx, 12");                                         // strlen("so_broadcast")
     emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
     emitter.instruction("call __rt_get_int_context_option");                    // call runtime helper
@@ -389,9 +389,9 @@ fn emit_apply_socket_server_opts_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default
 
-    emitter.instruction("lea rdi, [rip + _socket_key_str]");                    // load runtime data address
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
     emitter.instruction("mov rsi, 6");                                          // strlen("socket")
-    emitter.instruction("lea rdx, [rip + _socket_so_reuseport_key_str]");       // load runtime data address
+    abi::emit_symbol_address(emitter, "rdx", "_socket_so_reuseport_key_str");   // load runtime data address
     emitter.instruction("mov rcx, 12");                                         // strlen("so_reuseport")
     emitter.instruction("lea r8, [rbp - 16]");                                  // out_int_addr
     emitter.instruction("call __rt_get_int_context_option");                    // call runtime helper
@@ -412,9 +412,9 @@ fn emit_apply_socket_server_opts_linux_x86_64(emitter: &mut Emitter) {
     // ipv6_v6only lookup. setsockopt on a v4 socket fails silently; we just
     // probe regardless and let the kernel reject if the family is wrong.
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // reset out_int slot
-    emitter.instruction("lea rdi, [rip + _socket_key_str]");                    // load runtime data address
+    abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address
     emitter.instruction("mov rsi, 6");                                          // strlen("socket")
-    emitter.instruction("lea rdx, [rip + _socket_ipv6_v6only_key_str]");        // load runtime data address
+    abi::emit_symbol_address(emitter, "rdx", "_socket_ipv6_v6only_key_str");    // load runtime data address
     emitter.instruction("mov rcx, 11");                                         // strlen("ipv6_v6only")
     emitter.instruction("lea r8, [rbp - 16]");                                  // load runtime data address
     emitter.instruction("call __rt_get_int_context_option");                    // call runtime helper

@@ -743,8 +743,7 @@ pub(super) fn emit_runtime_warning(
     let (message_label, message_len) = data.add_string(message);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.adrp("x1", &message_label);                                 // load the page containing the runtime warning text
-            emitter.add_lo12("x1", "x1", &message_label);                       // resolve the runtime warning text address
+            abi::emit_symbol_address(emitter, "x1", &message_label);            // load the page containing the runtime warning text
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the runtime warning byte length to the diagnostic helper
         }
         Arch::X86_64 => {
@@ -777,8 +776,7 @@ fn emit_fatal_message(emitter: &mut Emitter, message_label: &str, message_len: u
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // fd = stderr for the nullable-object fatal diagnostic
-            emitter.adrp("x1", message_label);                                  // load the page containing the nullable-object fatal diagnostic
-            emitter.add_lo12("x1", "x1", message_label);                        // resolve the nullable-object fatal diagnostic address
+            abi::emit_symbol_address(emitter, "x1", message_label);             // load the page containing the nullable-object fatal diagnostic
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the nullable-object fatal diagnostic length to write()
             emitter.syscall(4);
             emitter.instruction("mov x0, #1");                                  // exit status 1 indicates abnormal termination

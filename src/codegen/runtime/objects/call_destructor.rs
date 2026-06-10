@@ -23,6 +23,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits `__rt_call_object_destructor` for the active target.
 /// Input: x0/rdi = object pointer (heap-backed, non-null, an object instance).
@@ -74,9 +75,9 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rdi, rdi");                                       // null receiver → nothing to destruct
     emitter.instruction("jz __rt_call_object_destructor_ret");                  // skip the lookup for a null object
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = runtime class_id (object payload offset 0)
-    emitter.instruction("cmp rax, QWORD PTR [rip + _class_destruct_count]");    // is class_id within the destructor table?
+    abi::emit_cmp_reg_to_symbol(emitter, "rax", "_class_destruct_count");       // is class_id within the destructor table?
     emitter.instruction("jae __rt_call_object_destructor_ret");                 // out-of-range class ids have no destructor
-    emitter.instruction("lea r10, [rip + _class_destruct_ptrs]");               // r10 = base of the per-class destructor symbol table
+    abi::emit_symbol_address(emitter, "r10", "_class_destruct_ptrs");           // r10 = base of the per-class destructor symbol table
     emitter.instruction("mov r10, QWORD PTR [r10 + rax * 8]");                  // r10 = destructor symbol for this class (or 0)
     emitter.instruction("test r10, r10");                                       // class defines no __destruct?
     emitter.instruction("jz __rt_call_object_destructor_ret");                  // nothing to call → done

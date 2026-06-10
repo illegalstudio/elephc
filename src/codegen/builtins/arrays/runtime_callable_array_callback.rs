@@ -1145,8 +1145,7 @@ fn emit_no_match_abort(emitter: &mut Emitter, data: &mut DataSection) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // write the callable-array callback diagnostic to stderr
-            emitter.adrp("x1", &message_label);
-            emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(emitter, "x1", &message_label);
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the callable-array callback diagnostic length to write()
             emitter.syscall(4);
             abi::emit_exit(emitter, 1);

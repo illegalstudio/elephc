@@ -9,6 +9,7 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// pathinfo (no-flag form): build an associative array with the path components.
 /// Input:  x1/x2 = path
@@ -66,8 +67,7 @@ pub fn emit_pathinfo_array(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // copy slice into owned heap storage
     emitter.instruction("str x1, [sp, #24]");                                   // save persisted value pointer
     emitter.instruction("str x2, [sp, #32]");                                   // save persisted value length
-    emitter.adrp("x1", "_pathinfo_key_dirname");                     // load page of "dirname" literal
-    emitter.add_lo12("x1", "x1", "_pathinfo_key_dirname");           // resolve full address of "dirname"
+    abi::emit_symbol_address(emitter, "x1", "_pathinfo_key_dirname");           // load page of "dirname" literal
     emitter.instruction("mov x2, #7");                                          // length of "dirname"
     emitter.instruction("ldr x3, [sp, #24]");                                   // value_lo = persisted string pointer
     emitter.instruction("ldr x4, [sp, #32]");                                   // value_hi = persisted string length
@@ -86,8 +86,7 @@ pub fn emit_pathinfo_array(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // persist basename into owned heap storage
     emitter.instruction("str x1, [sp, #24]");                                   // save persisted value pointer
     emitter.instruction("str x2, [sp, #32]");                                   // save persisted value length
-    emitter.adrp("x1", "_pathinfo_key_basename");                    // load page of "basename" literal
-    emitter.add_lo12("x1", "x1", "_pathinfo_key_basename");          // resolve full address of "basename"
+    abi::emit_symbol_address(emitter, "x1", "_pathinfo_key_basename");          // load page of "basename" literal
     emitter.instruction("mov x2, #8");                                          // length of "basename"
     emitter.instruction("ldr x3, [sp, #24]");                                   // value_lo
     emitter.instruction("ldr x4, [sp, #32]");                                   // value_hi
@@ -105,8 +104,7 @@ pub fn emit_pathinfo_array(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // persist extension into owned heap storage
     emitter.instruction("str x1, [sp, #24]");                                   // save persisted value pointer
     emitter.instruction("str x2, [sp, #32]");                                   // save persisted value length
-    emitter.adrp("x1", "_pathinfo_key_extension");                   // load page of "extension" literal
-    emitter.add_lo12("x1", "x1", "_pathinfo_key_extension");         // resolve full address of "extension"
+    abi::emit_symbol_address(emitter, "x1", "_pathinfo_key_extension");         // load page of "extension" literal
     emitter.instruction("mov x2, #9");                                          // length of "extension"
     emitter.instruction("ldr x3, [sp, #24]");                                   // value_lo
     emitter.instruction("ldr x4, [sp, #32]");                                   // value_hi
@@ -125,8 +123,7 @@ pub fn emit_pathinfo_array(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // persist filename into owned heap storage
     emitter.instruction("str x1, [sp, #24]");                                   // save persisted value pointer
     emitter.instruction("str x2, [sp, #32]");                                   // save persisted value length
-    emitter.adrp("x1", "_pathinfo_key_filename");                    // load page of "filename" literal
-    emitter.add_lo12("x1", "x1", "_pathinfo_key_filename");          // resolve full address of "filename"
+    abi::emit_symbol_address(emitter, "x1", "_pathinfo_key_filename");          // load page of "filename" literal
     emitter.instruction("mov x2, #8");                                          // length of "filename"
     emitter.instruction("ldr x3, [sp, #24]");                                   // value_lo
     emitter.instruction("ldr x4, [sp, #32]");                                   // value_hi
@@ -184,7 +181,7 @@ fn emit_pathinfo_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // rax/rdx = persisted dirname
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save persisted value pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save persisted value length
-    emitter.instruction("lea rsi, [rip + _pathinfo_key_dirname]");              // key pointer = "dirname"
+    abi::emit_symbol_address(emitter, "rsi", "_pathinfo_key_dirname");          // key pointer = "dirname"
     emitter.instruction("mov rdx, 7");                                          // key length = 7
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value_lo
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // value_hi
@@ -203,7 +200,7 @@ fn emit_pathinfo_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // rax/rdx = persisted basename
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save persisted value pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save persisted value length
-    emitter.instruction("lea rsi, [rip + _pathinfo_key_basename]");             // key = "basename"
+    abi::emit_symbol_address(emitter, "rsi", "_pathinfo_key_basename");         // key = "basename"
     emitter.instruction("mov rdx, 8");                                          // key length = 8
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value_lo
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // value_hi
@@ -222,7 +219,7 @@ fn emit_pathinfo_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // persist extension into owned heap storage
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save persisted value pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save persisted value length
-    emitter.instruction("lea rsi, [rip + _pathinfo_key_extension]");            // key = "extension"
+    abi::emit_symbol_address(emitter, "rsi", "_pathinfo_key_extension");        // key = "extension"
     emitter.instruction("mov rdx, 9");                                          // key length = 9
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value_lo
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // value_hi
@@ -241,7 +238,7 @@ fn emit_pathinfo_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // persist filename into owned heap storage
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save persisted value pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save persisted value length
-    emitter.instruction("lea rsi, [rip + _pathinfo_key_filename]");             // key = "filename"
+    abi::emit_symbol_address(emitter, "rsi", "_pathinfo_key_filename");         // key = "filename"
     emitter.instruction("mov rdx, 8");                                          // key length = 8
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value_lo
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // value_hi

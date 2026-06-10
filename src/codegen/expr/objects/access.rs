@@ -575,7 +575,7 @@ fn emit_branch_to_stdclass_fallback(label: &str, emitter: &mut Emitter) {
         }
         Arch::X86_64 => {
             emitter.instruction("mov r10, QWORD PTR [rax]");                    // reload the receiver class id before the stdClass fallback check
-            emitter.instruction("mov r11, QWORD PTR [rip + _stdclass_class_id]"); // load the compile-time stdClass class id sentinel
+            abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0); // load the compile-time stdClass class id sentinel
             emitter.instruction("cmp r10, r11");                                // check whether the object uses stdClass dynamic storage
             emitter.instruction(&format!("je {}", label));                      // route stdClass property reads through the hash-backed helper
         }

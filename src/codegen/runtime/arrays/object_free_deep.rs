@@ -11,6 +11,7 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime::generators::frame as gen_frame;
+use crate::codegen::abi;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
@@ -406,9 +407,9 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r10, 4");                                          // divide by 16 because every property slot occupies two qwords
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the total property count for the deep-free loop
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the runtime class id from the object payload
-    emitter.instruction("cmp r10, QWORD PTR [rip + _class_gc_desc_count]");     // is the runtime class id within the emitted descriptor table?
+    abi::emit_cmp_reg_to_symbol(emitter, "r10", "_class_gc_desc_count");        // is the runtime class id within the emitted descriptor table?
     emitter.instruction("jae __rt_object_free_deep_struct");                    // invalid class ids fall back to a shallow object free on x86_64
-    emitter.instruction("lea r11, [rip + _class_gc_desc_ptrs]");                // materialize the base address of the class property-tag descriptor table
+    abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");            // materialize the base address of the class property-tag descriptor table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load the property-tag descriptor pointer for this object class
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the descriptor pointer for the object-property cleanup loop
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the object-property loop index to zero

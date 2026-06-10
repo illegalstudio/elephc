@@ -268,7 +268,7 @@ fn emit_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the payload length as the return value
 
     // -- load this descriptor's z_stream handle and seed the input window --
-    emitter.instruction("lea r9, [rip + _zstream_handles]");                    // z_stream handle table base
+    abi::emit_symbol_address(emitter, "r9", "_zstream_handles");                // z_stream handle table base
     emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // r10 = z_stream pointer for this descriptor
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the z_stream pointer
     emitter.instruction("mov QWORD PTR [r10 + 0], rsi");                        // z_stream.next_in = payload pointer
@@ -277,7 +277,7 @@ fn emit_x86_64(
     // -- deflate loop: drain next_in into the scratch window and write it out --
     emitter.label(&format!("{}_loop", fwrite_label));
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the z_stream pointer
-    emitter.instruction("lea r11, [rip + _stream_filter_buf]");                 // scratch window base
+    abi::emit_symbol_address(emitter, "r11", "_stream_filter_buf");             // scratch window base
     emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // z_stream.next_out = scratch window base
     emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // z_stream.avail_out = scratch window capacity
     emitter.instruction("mov rdi, r10");                                        // arg 0 = z_stream pointer
@@ -289,7 +289,7 @@ fn emit_x86_64(
     emitter.instruction("sub eax, DWORD PTR [r10 + 32]");                       // produced = capacity - avail_out
     emitter.instruction("mov edx, eax");                                        // produced byte count as the write length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd = the saved file descriptor
-    emitter.instruction("lea rsi, [rip + _stream_filter_buf]");                 // write buffer = the scratch window base
+    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf");             // write buffer = the scratch window base
     emitter.instruction("call write");                                          // write the compressed chunk through libc write()
     // -- repeat while input remains OR the output window filled completely --
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the z_stream pointer
@@ -311,7 +311,7 @@ fn emit_x86_64(
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 32");                                         // frame: [-8]=fd [-16]=z_stream [-24]=ret code
-    emitter.instruction("lea r9, [rip + _zstream_handles]");                    // z_stream handle table base
+    abi::emit_symbol_address(emitter, "r9", "_zstream_handles");                // z_stream handle table base
     emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // r10 = z_stream pointer for this descriptor
     emitter.instruction("test r10, r10");                                       // is a deflate stream attached to this descriptor?
     emitter.instruction(&format!("jz {}_done", close_label));                   // nothing to flush when no filter is attached
@@ -323,7 +323,7 @@ fn emit_x86_64(
     // -- flush loop: deflate with Z_FINISH until Z_STREAM_END --
     emitter.label(&format!("{}_loop", close_label));
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the z_stream pointer
-    emitter.instruction("lea r11, [rip + _stream_filter_buf]");                 // scratch window base
+    abi::emit_symbol_address(emitter, "r11", "_stream_filter_buf");             // scratch window base
     emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // z_stream.next_out = scratch window base
     emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // z_stream.avail_out = scratch window capacity
     emitter.instruction("mov rdi, r10");                                        // arg 0 = z_stream pointer
@@ -336,7 +336,7 @@ fn emit_x86_64(
     emitter.instruction("sub eax, DWORD PTR [r10 + 32]");                       // produced = capacity - avail_out
     emitter.instruction("mov edx, eax");                                        // produced byte count as the write length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd = the preserved file descriptor
-    emitter.instruction("lea rsi, [rip + _stream_filter_buf]");                 // write buffer = the scratch window base
+    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf");             // write buffer = the scratch window base
     emitter.instruction("call write");                                          // write the compressed tail chunk through libc write()
     emitter.instruction("cmp QWORD PTR [rbp - 24], 1");                         // did deflate report Z_STREAM_END?
     emitter.instruction(&format!("jne {}_loop", close_label));                  // not finished yet: flush another chunk
@@ -345,7 +345,7 @@ fn emit_x86_64(
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // arg 0 = z_stream pointer
     emitter.instruction("call deflateEnd");                                     // release zlib's internal deflate state
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
-    emitter.instruction("lea r9, [rip + _zstream_handles]");                    // z_stream handle table base
+    abi::emit_symbol_address(emitter, "r9", "_zstream_handles");                // z_stream handle table base
     emitter.instruction("mov QWORD PTR [r9 + rdi*8], 0");                       // clear this descriptor's z_stream handle
     emitter.label(&format!("{}_done", close_label));
     emitter.instruction("add rsp, 32");                                         // release the helper frame
@@ -389,7 +389,7 @@ fn emit_x86_64(
     emitter.instruction("mov r8d, 8");                                          // arg 4 = default memLevel
     emitter.instruction("xor r9d, r9d");                                        // arg 5 = Z_DEFAULT_STRATEGY
     emitter.instruction("sub rsp, 16");                                         // reserve the two stack arguments (kept 16-aligned)
-    emitter.instruction("lea rax, [rip + _zlib_version]");                      // the zlib version string
+    abi::emit_symbol_address(emitter, "rax", "_zlib_version");                  // the zlib version string
     emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // stack arg 6 = version
     emitter.instruction(&format!("mov QWORD PTR [rsp + 8], {}", Z_STREAM_SIZE)); // stack arg 7 = sizeof(z_stream)
     emitter.instruction("call deflateInit2_");                                  // initialize a raw-deflate zlib stream
@@ -398,17 +398,17 @@ fn emit_x86_64(
     // -- register the handle and mark the descriptor's write filter as zlib --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the z_stream pointer
-    emitter.instruction("lea r9, [rip + _zstream_handles]");                    // z_stream handle table base
+    abi::emit_symbol_address(emitter, "r9", "_zstream_handles");                // z_stream handle table base
     emitter.instruction("mov QWORD PTR [r9 + rdi*8], r10");                     // store the z_stream handle for this descriptor
-    emitter.instruction("lea r9, [rip + _stream_write_filters]");               // write-filter table base
+    abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");           // write-filter table base
     emitter.instruction("mov BYTE PTR [r9 + rdi], 4");                          // write-filter id 4 = zlib.deflate
 
     // -- publish the helper addresses so __rt_fwrite / fclose can call them --
     emitter.instruction(&format!("lea r10, [rip + {}]", fwrite_label));         // address of the deflate fwrite helper
-    emitter.instruction("lea r9, [rip + _zlib_fwrite_fn]");                     // _zlib_fwrite_fn slot
+    abi::emit_symbol_address(emitter, "r9", "_zlib_fwrite_fn");                 // _zlib_fwrite_fn slot
     emitter.instruction("mov QWORD PTR [r9], r10");                             // _zlib_fwrite_fn = the deflate fwrite helper
     emitter.instruction(&format!("lea r10, [rip + {}]", close_label));          // address of the deflate close helper
-    emitter.instruction("lea r9, [rip + _zlib_close_fn]");                      // _zlib_close_fn slot
+    abi::emit_symbol_address(emitter, "r9", "_zlib_close_fn");                  // _zlib_close_fn slot
     emitter.instruction("mov QWORD PTR [r9], r10");                             // _zlib_close_fn = the deflate close helper
 
     // -- re-box the descriptor as a resource, matching stream_filter_append --

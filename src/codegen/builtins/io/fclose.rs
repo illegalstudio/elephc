@@ -90,9 +90,9 @@ pub fn emit(
             emitter.instruction("mov x0, #1");                                  // return true when the close syscall succeeds
         }
         Arch::X86_64 => {
-            emitter.instruction("lea r9, [rip + _stream_read_filters]");        // read-filter table base
+            abi::emit_symbol_address(emitter, "r9", "_stream_read_filters");    // read-filter table base
             emitter.instruction("mov BYTE PTR [r9 + rax], 0");                  // drop any read filter so a reused descriptor starts clean
-            emitter.instruction("lea r9, [rip + _stream_write_filters]");       // write-filter table base
+            abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");   // write-filter table base
             emitter.instruction("mov BYTE PTR [r9 + rax], 0");                  // drop any write filter so a reused descriptor starts clean
             emitter.instruction("mov rdi, rax");                                // move the file descriptor into the first SysV libc close() argument register
             emitter.instruction("call close");                                  // close the requested file descriptor through libc close()
@@ -174,16 +174,16 @@ pub(super) fn emit_tls_session_teardown(emitter: &mut Emitter, ctx: &mut Context
             emitter.label(&skip);
         }
         Arch::X86_64 => {
-            emitter.instruction("lea r9, [rip + _tls_sessions]");               // load runtime data address
+            abi::emit_symbol_address(emitter, "r9", "_tls_sessions");           // load runtime data address
             emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");             // _tls_sessions[fd] handle
             emitter.instruction("test r10, r10");                               // check whether the runtime value is zero
             emitter.instruction(&format!("je {}", skip));                       // no TLS attached → skip
             abi::emit_push_reg(emitter, "rax");                                 // preserve fd across the close call
             emitter.instruction("mov rdi, r10");                                // handle as first arg
-            emitter.instruction("mov r9, QWORD PTR [rip + _elephc_tls_close_fn]"); // prepare SysV call argument
+            abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_close_fn", 0); // prepare SysV call argument
             emitter.instruction("call r9");                                     // call selected function pointer
             abi::emit_pop_reg(emitter, "rax");                                  // restore fd
-            emitter.instruction("lea r9, [rip + _tls_sessions]");               // load runtime data address
+            abi::emit_symbol_address(emitter, "r9", "_tls_sessions");           // load runtime data address
             emitter.instruction("mov QWORD PTR [r9 + rax*8], 0");               // clear the slot
             emitter.label(&skip);
         }
@@ -211,13 +211,13 @@ fn emit_zlib_flush_on_close(emitter: &mut Emitter, ctx: &mut Context) {
             emitter.label(&skip);
         }
         Arch::X86_64 => {
-            emitter.instruction("lea r9, [rip + _zstream_handles]");            // deflate stream handle table base
+            abi::emit_symbol_address(emitter, "r9", "_zstream_handles");        // deflate stream handle table base
             emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");             // load this descriptor's deflate stream handle
             emitter.instruction("test r10, r10");                               // is a zlib deflate filter attached?
             emitter.instruction(&format!("je {}", skip));                       // no zlib filter attached: nothing to flush
             abi::emit_push_reg(emitter, "rax"); // preserve the descriptor across the flush helper
             emitter.instruction("mov rdi, rax");                                // fd argument for the deflate close helper
-            emitter.instruction("mov r9, QWORD PTR [rip + _zlib_close_fn]");    // load the deflate close helper pointer
+            abi::emit_load_symbol_to_reg(emitter, "r9", "_zlib_close_fn", 0);   // load the deflate close helper pointer
             emitter.instruction("call r9");                                     // flush the compressed tail and end the stream
             abi::emit_pop_reg(emitter, "rax"); // restore the descriptor for the close path
             emitter.label(&skip);
@@ -246,13 +246,13 @@ fn emit_iconv_flush_on_close(emitter: &mut Emitter, ctx: &mut Context) {
             emitter.label(&skip);
         }
         Arch::X86_64 => {
-            emitter.instruction("lea r9, [rip + _iconv_handles]");              // iconv transcoder handle table base
+            abi::emit_symbol_address(emitter, "r9", "_iconv_handles");          // iconv transcoder handle table base
             emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");             // load this descriptor's iconv transcoder handle
             emitter.instruction("test r10, r10");                               // is an iconv write filter attached?
             emitter.instruction(&format!("je {}", skip));                       // no iconv write filter attached: nothing to close
             abi::emit_push_reg(emitter, "rax"); // preserve the descriptor across the close helper
             emitter.instruction("mov rdi, rax");                                // fd argument for the iconv close helper
-            emitter.instruction("mov r9, QWORD PTR [rip + _iconv_close_fn]");   // load the iconv close helper pointer
+            abi::emit_load_symbol_to_reg(emitter, "r9", "_iconv_close_fn", 0);  // load the iconv close helper pointer
             emitter.instruction("call r9");                                     // iconv_close the descriptor and clear the handle
             abi::emit_pop_reg(emitter, "rax"); // restore the descriptor for the close path
             emitter.label(&skip);
@@ -282,13 +282,13 @@ fn emit_bz2_flush_on_close(emitter: &mut Emitter, ctx: &mut Context) {
             emitter.label(&skip);
         }
         Arch::X86_64 => {
-            emitter.instruction("lea r9, [rip + _bzstream_handles]");           // bzip2 stream handle table base
+            abi::emit_symbol_address(emitter, "r9", "_bzstream_handles");       // bzip2 stream handle table base
             emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");             // load this descriptor's bzip2 stream handle
             emitter.instruction("test r10, r10");                               // is a bzip2 compress filter attached?
             emitter.instruction(&format!("je {}", skip));                       // no bzip2 filter attached: nothing to flush
             abi::emit_push_reg(emitter, "rax"); // preserve the descriptor across the flush helper
             emitter.instruction("mov rdi, rax");                                // fd argument for the bzip2 close helper
-            emitter.instruction("mov r9, QWORD PTR [rip + _bz2_close_fn]");     // load the bzip2 close helper pointer
+            abi::emit_load_symbol_to_reg(emitter, "r9", "_bz2_close_fn", 0);    // load the bzip2 close helper pointer
             emitter.instruction("call r9");                                     // flush the compressed tail and end the stream
             abi::emit_pop_reg(emitter, "rax"); // restore the descriptor for the close path
             emitter.label(&skip);

@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// __rt_json_last_error_msg: read `_json_last_error` and return the
 /// PHP-compatible message string for that code.
@@ -42,13 +43,11 @@ fn emit_message_formatter_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #64");                                    // establish a stable formatter frame
 
     // -- load current error code --
-    emitter.adrp("x9", "_json_last_error");                                     // load page of the runtime error-code slot
-    emitter.add_lo12("x9", "x9", "_json_last_error");                           // resolve absolute address of the runtime error-code slot
+    abi::emit_symbol_address(emitter, "x9", "_json_last_error");                // load page of the runtime error-code slot
     emitter.instruction("ldr x10, [x9]");                                       // load the current JSON_ERROR_* code into a scratch register
 
     // -- bounds check: if code < 0 or code >= count, fall back to code 0 --
-    emitter.adrp("x9", "_json_err_msg_count");                                  // load page of the message-table cardinality
-    emitter.add_lo12("x9", "x9", "_json_err_msg_count");                        // resolve absolute address of the message-table cardinality
+    abi::emit_symbol_address(emitter, "x9", "_json_err_msg_count");             // load page of the message-table cardinality
     emitter.instruction("ldr x11, [x9]");                                       // load the message-table cardinality into a scratch register
     emitter.instruction("cmp x10, x11");                                        // compare the requested code against the table cardinality
     emitter.instruction("b.lo 1f");                                             // jump to the in-range branch when the code is below the cardinality
@@ -56,8 +55,7 @@ fn emit_message_formatter_aarch64(emitter: &mut Emitter) {
     emitter.label("1");
 
     // -- index into the (ptr,len) table --
-    emitter.adrp("x9", "_json_err_msg_table");                                  // load page of the per-code (ptr,len) message table
-    emitter.add_lo12("x9", "x9", "_json_err_msg_table");                        // resolve absolute address of the per-code (ptr,len) message table
+    abi::emit_symbol_address(emitter, "x9", "_json_err_msg_table");             // load page of the per-code (ptr,len) message table
     emitter.instruction("lsl x10, x10, #4");                                    // multiply the code by 16 to step over a (ptr,len) pair
     emitter.instruction("add x9, x9, x10");                                     // advance to the table entry for the requested code
     emitter.instruction("ldr x1, [x9]");                                        // load the message pointer into the string-result pointer register
@@ -65,12 +63,10 @@ fn emit_message_formatter_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save the base message slice for fallback or suffix formatting
 
     // -- return the base message unless decode recorded a location --
-    emitter.adrp("x9", "_json_last_error");                                     // load page of the runtime error-code slot
-    emitter.add_lo12("x9", "x9", "_json_last_error");                           // resolve absolute address of the runtime error-code slot
+    abi::emit_symbol_address(emitter, "x9", "_json_last_error");                // load page of the runtime error-code slot
     emitter.instruction("ldr x10, [x9]");                                       // reload the unclamped JSON error code
     emitter.instruction("cbz x10, __rt_json_error_message_base_a");             // JSON_ERROR_NONE never carries a location suffix
-    emitter.adrp("x9", "_json_error_location_active");                          // load page of the decode-location active flag
-    emitter.add_lo12("x9", "x9", "_json_error_location_active");                // resolve absolute address of the decode-location active flag
+    abi::emit_symbol_address(emitter, "x9", "_json_error_location_active");     // load page of the decode-location active flag
     emitter.instruction("ldr x10, [x9]");                                       // load whether the last error has a stored line/column
     emitter.instruction("cbz x10, __rt_json_error_message_base_a");             // errors without decode locations keep the base PHP message
 
@@ -139,13 +135,13 @@ fn emit_message_formatter_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable formatter frame
     emitter.instruction("sub rsp, 64");                                         // reserve formatter slots for base and appended location fragments
 
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_last_error]");         // load the current JSON_ERROR_* code into a scratch register
-    emitter.instruction("mov r8, QWORD PTR [rip + _json_err_msg_count]");       // load the message-table cardinality into a scratch register
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_last_error", 0);        // load the current JSON_ERROR_* code into a scratch register
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_json_err_msg_count", 0);      // load the message-table cardinality into a scratch register
     emitter.instruction("cmp rcx, r8");                                         // compare the requested code against the table cardinality
     emitter.instruction("jb 1f");                                               // jump to the in-range branch when the code is below the cardinality
     emitter.instruction("xor rcx, rcx");                                        // clamp out-of-range codes to JSON_ERROR_NONE
     emitter.label("1");
-    emitter.instruction("lea r9, [rip + _json_err_msg_table]");                 // materialize the address of the per-code (ptr,len) message table
+    abi::emit_symbol_address(emitter, "r9", "_json_err_msg_table");             // materialize the address of the per-code (ptr,len) message table
     emitter.instruction("shl rcx, 4");                                          // multiply the code by 16 to step over a (ptr,len) pair
     emitter.instruction("add r9, rcx");                                         // advance to the table entry for the requested code
     emitter.instruction("mov rax, QWORD PTR [r9]");                             // load the message pointer into the string-result pointer register
@@ -153,14 +149,14 @@ fn emit_message_formatter_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the base message pointer for fallback or suffix formatting
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the base message length for fallback or suffix formatting
 
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_last_error]");         // reload the unclamped JSON error code
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_last_error", 0);        // reload the unclamped JSON error code
     emitter.instruction("test rcx, rcx");                                       // JSON_ERROR_NONE never carries a location suffix
     emitter.instruction("je __rt_json_error_message_base_x");                   // return base message for JSON_ERROR_NONE
-    emitter.instruction("mov rcx, QWORD PTR [rip + _json_error_location_active]"); // load whether the last error has a stored line/column
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_error_location_active", 0); // load whether the last error has a stored line/column
     emitter.instruction("test rcx, rcx");                                       // check whether a decode location is available
     emitter.instruction("je __rt_json_error_message_base_x");                   // errors without decode locations keep the base PHP message
 
-    emitter.instruction("lea rdi, [rip + _json_err_loc_prefix]");               // right operand pointer = " near location "
+    abi::emit_symbol_address(emitter, "rdi", "_json_err_loc_prefix");           // right operand pointer = " near location "
     emitter.instruction("mov rsi, 15");                                         // right operand length = 15
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // left operand pointer = base message
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // left operand length = base message length
@@ -168,7 +164,7 @@ fn emit_message_formatter_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save partial message pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save partial message length
 
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_error_line]");         // load the stored decode-error line number
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_error_line", 0);        // load the stored decode-error line number
     emitter.instruction("call __rt_itoa");                                      // format the line number as decimal text
     emitter.instruction("mov rdi, rax");                                        // right operand pointer = line digits
     emitter.instruction("mov rsi, rdx");                                        // right operand length = line digit count
@@ -178,7 +174,7 @@ fn emit_message_formatter_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save partial message pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save partial message length
 
-    emitter.instruction("lea rdi, [rip + _json_err_loc_colon]");                // right operand pointer = ":"
+    abi::emit_symbol_address(emitter, "rdi", "_json_err_loc_colon");            // right operand pointer = ":"
     emitter.instruction("mov rsi, 1");                                          // right operand length = 1
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // left operand pointer = partial message
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // left operand length = partial message length
@@ -186,7 +182,7 @@ fn emit_message_formatter_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save partial message pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save partial message length
 
-    emitter.instruction("mov rax, QWORD PTR [rip + _json_error_column]");       // load the stored decode-error column number
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_json_error_column", 0);      // load the stored decode-error column number
     emitter.instruction("call __rt_itoa");                                      // format the column number as decimal text
     emitter.instruction("mov rdi, rax");                                        // right operand pointer = column digits
     emitter.instruction("mov rsi, rdx");                                        // right operand length = column digit count

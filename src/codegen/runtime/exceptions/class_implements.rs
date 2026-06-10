@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits assembly for class implements interface.
 pub fn emit_class_implements_interface(emitter: &mut Emitter) {
@@ -22,13 +23,11 @@ pub fn emit_class_implements_interface(emitter: &mut Emitter) {
     emitter.comment("--- runtime: class_implements_interface ---");
     emitter.label_global("__rt_class_implements_interface");
 
-    emitter.adrp("x9", "_class_gc_desc_count");                               // load page of the emitted class-count table
-    emitter.add_lo12("x9", "x9", "_class_gc_desc_count");                     // resolve the emitted class-count table address
+    abi::emit_symbol_address(emitter, "x9", "_class_gc_desc_count");            // load page of the emitted class-count table
     emitter.instruction("ldr x9, [x9]");                                        // x9 = total number of emitted class metadata slots
     emitter.instruction("cmp x0, x9");                                          // is the requested class id within the emitted class table?
     emitter.instruction("b.hs __rt_class_implements_interface_no");             // out-of-range class ids cannot implement any interface
-    emitter.adrp("x10", "_class_interface_ptrs");                              // load page of the class-to-interface metadata table
-    emitter.add_lo12("x10", "x10", "_class_interface_ptrs");                  // resolve the class-to-interface metadata table address
+    abi::emit_symbol_address(emitter, "x10", "_class_interface_ptrs");          // load page of the class-to-interface metadata table
     emitter.instruction("lsl x11, x0, #3");                                     // scale class id by 8 bytes per metadata pointer
     emitter.instruction("ldr x10, [x10, x11]");                                 // x10 = pointer to this class's interface metadata block
     emitter.instruction("ldr x11, [x10]");                                      // x11 = number of emitted interfaces for this class
@@ -58,10 +57,10 @@ fn emit_class_implements_interface_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: class_implements_interface ---");
     emitter.label_global("__rt_class_implements_interface");
 
-    emitter.instruction("mov r8, QWORD PTR [rip + _class_gc_desc_count]");      // r8 = total number of emitted class metadata slots
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_class_gc_desc_count", 0);     // r8 = total number of emitted class metadata slots
     emitter.instruction("cmp rdi, r8");                                         // is the requested class id within the emitted class table?
     emitter.instruction("jae __rt_class_implements_interface_no");              // out-of-range class ids cannot implement any interface
-    emitter.instruction("lea r9, [rip + _class_interface_ptrs]");               // materialize the class-to-interface metadata table base pointer
+    abi::emit_symbol_address(emitter, "r9", "_class_interface_ptrs");           // materialize the class-to-interface metadata table base pointer
     emitter.instruction("mov r9, QWORD PTR [r9 + rdi * 8]");                    // r9 = pointer to this class's interface metadata block
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // r10 = number of emitted interfaces for this class
     emitter.instruction("add r9, 8");                                           // advance to the first [interface_id, impl_ptr] pair

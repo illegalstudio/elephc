@@ -55,8 +55,7 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
 
     // -- call snprintf(buf, 32, "%.14G", double) --
     emitter.instruction("mov x1, #32");                                         // buffer size limit = 32 bytes
-    emitter.adrp("x2", "_fmt_g");                                // load page address of format string "%.14G"
-    emitter.add_lo12("x2", "x2", "_fmt_g");                          // resolve exact address of format string
+    crate::codegen::abi::emit_symbol_address(emitter, "x2", "_fmt_g");          // load page address of format string "%.14G"
     // -- Apple ARM64 variadic ABI: float arg goes on stack, not in SIMD reg --
     emitter.instruction("str d0, [sp]");                                        // push double onto stack for variadic call
     emitter.bl_c("snprintf");                                        // call snprintf; returns char count in x0

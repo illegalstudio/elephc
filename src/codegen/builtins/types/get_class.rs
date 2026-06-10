@@ -138,25 +138,25 @@ fn emit_dynamic_object_class_name_x86_64(
     emitter.instruction("test rax, rax");                                       // null object pointers produce an empty class name
     emitter.instruction(&format!("je {}", empty_label));                        // branch to the empty-string fallback for null object pointers
     emitter.instruction("mov r8, QWORD PTR [rax]");                             // load the object's concrete runtime class id
-    emitter.instruction("mov r9, QWORD PTR [rip + _class_name_count]");         // r9 = number of dense class-name lookup rows
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_class_name_count", 0);        // r9 = number of dense class-name lookup rows
     if name == "get_parent_class" {
         emitter.instruction("cmp r8, r9");                                      // validate the object class id before reading its parent id
         emitter.instruction(&format!("jae {}", empty_label));                   // unknown object class ids have no reportable parent class
-        emitter.instruction("lea r10, [rip + _class_parent_ids]");              // materialize the runtime parent-id table base pointer
+        abi::emit_symbol_address(emitter, "r10", "_class_parent_ids");          // materialize the runtime parent-id table base pointer
         emitter.instruction("mov r8, QWORD PTR [r10 + r8 * 8]");                // replace the object class id with its parent class id
         emitter.instruction("cmp r8, -1");                                      // check whether the runtime class has no parent
         emitter.instruction(&format!("je {}", empty_label));                    // parentless runtime classes produce an empty string
     }
     emitter.instruction("cmp r8, r9");                                          // validate the class id before indexing class-name metadata
     emitter.instruction(&format!("jae {}", empty_label));                       // invalid class ids produce an empty class name
-    emitter.instruction("lea r10, [rip + _class_name_entries]");                // materialize the class-name metadata table base pointer
+    abi::emit_symbol_address(emitter, "r10", "_class_name_entries");            // materialize the class-name metadata table base pointer
     emitter.instruction("shl r8, 4");                                           // scale the class id by the 16-byte class-name row size
     emitter.instruction("mov rax, QWORD PTR [r10 + r8]");                       // load the concrete class-name string pointer
     emitter.instruction("mov rdx, QWORD PTR [r10 + r8 + 8]");                   // load the concrete class-name string length
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the empty-string fallback after a successful lookup
 
     emitter.label(empty_label);
-    emitter.instruction("lea rax, [rip + _class_name_missing]");                // return the shared empty class-name string pointer
+    abi::emit_symbol_address(emitter, "rax", "_class_name_missing");            // return the shared empty class-name string pointer
     emitter.instruction("xor edx, edx");                                        // return zero bytes for the empty class name
 
     emitter.label(done_label);

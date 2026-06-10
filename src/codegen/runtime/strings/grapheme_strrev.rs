@@ -11,6 +11,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits the grapheme-aware string reversal runtime helper for the active target.
 ///
@@ -292,9 +293,9 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_grapheme_strrev_loop_x");                     // continue with the previous source grapheme cluster
 
     emitter.label("__rt_grapheme_strrev_done_x");
-    emitter.instruction("mov r8, QWORD PTR [rip + _concat_off]");               // reload concat-buffer write offset for the final update
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload concat-buffer write offset for the final update
     emitter.instruction("add r8, r12");                                         // advance offset by the unchanged source byte length
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r8");               // publish the updated concat-buffer write offset
+    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat-buffer write offset
     emitter.instruction("mov rax, r14");                                        // return pointer to the reversed string
     emitter.instruction("mov rdx, r12");                                        // return the unchanged source byte length
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage

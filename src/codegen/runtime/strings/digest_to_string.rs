@@ -109,7 +109,7 @@ fn emit_digest_to_string_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_digest_to_string");
 
     // -- resolve the concat-buffer destination cursor --
-    emitter.instruction("mov r8, QWORD PTR [rip + _concat_off]");               // load the current concat-buffer write offset
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer write offset
     abi::emit_symbol_address(emitter, "r10", "_concat_buf");
     emitter.instruction("lea r11, [r10 + r8]");                                 // compute the destination pointer for the formatted digest
     emitter.instruction("mov r8, r11");                                         // preserve the result start pointer across the write loop
@@ -167,8 +167,8 @@ fn emit_digest_to_string_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r8");                                         // result pointer = formatted-digest start
     emitter.instruction("mov rdx, r11");                                        // copy the final destination cursor before computing the length
     emitter.instruction("sub rdx, r8");                                         // result length = bytes written
-    emitter.instruction("mov rcx, QWORD PTR [rip + _concat_off]");              // reload the concat-buffer write offset
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer write offset
     emitter.instruction("add rcx, rdx");                                        // advance it past the formatted digest
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // persist the updated concat-buffer write offset
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // persist the updated concat-buffer write offset
     emitter.instruction("ret");                                                 // return the PHP string ptr/len in rax/rdx
 }

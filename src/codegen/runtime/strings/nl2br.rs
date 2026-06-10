@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits the `__rt_nl2br` runtime helper for the nl2br PHP builtin.
 ///
@@ -120,8 +121,8 @@ fn emit_nl2br_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r8");                                         // return the concat-backed result start pointer after nl2br() finishes expanding the input string
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer destination cursor before computing the produced string length
     emitter.instruction("sub rdx, r8");                                         // compute the produced string length as dest_end - dest_start for the returned x86_64 string value
-    emitter.instruction("mov rcx, QWORD PTR [rip + _concat_off]");              // reload the concat-buffer write offset before publishing the bytes that nl2br() appended
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer write offset before publishing the bytes that nl2br() appended
     emitter.instruction("add rcx, rdx");                                        // advance the concat-buffer write offset by the produced string length that nl2br() just materialized
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // persist the updated concat-buffer write offset after finishing the nl2br() expansion
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // persist the updated concat-buffer write offset after finishing the nl2br() expansion
     emitter.instruction("ret");                                                 // return the concat-backed nl2br() result in the standard x86_64 string result registers
 }

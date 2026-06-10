@@ -103,7 +103,7 @@ pub fn emit(
             emitter.instruction(&format!("jmp {}", done_label));                // skip EOF reset after a failed seek
             emitter.label(&success_label);
             abi::emit_pop_reg(emitter, "r10");                                  // restore fd for EOF-flag reset after a successful seek
-            emitter.instruction("lea r11, [rip + _eof_flags]");                 // materialize the eof-flag table for rewind()
+            abi::emit_symbol_address(emitter, "r11", "_eof_flags");             // materialize the eof-flag table for rewind()
             emitter.instruction("mov BYTE PTR [r11 + r10], 0");                 // clear EOF because rewind() moved the stream back to the start
             emitter.instruction("mov rax, 1");                                  // rewind() returns true after a successful seek
             emitter.label(&done_label);

@@ -180,7 +180,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the payload length
 
     // -- look up the write filter for this descriptor --
-    emitter.instruction("lea r9, [rip + _stream_write_filters]");               // write-filter table base
+    abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");           // write-filter table base
     emitter.instruction("movzx ecx, BYTE PTR [r9 + rdi]");                      // write filter id for this descriptor
     emitter.instruction("test rcx, rcx");                                       // is a write filter attached?
     emitter.instruction("jz __rt_fwrite_direct_x86");                           // no filter: write the payload directly
@@ -196,7 +196,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jg __rt_fwrite_direct_x86");                           // oversized payloads are written unfiltered
 
     // -- copy the payload into the filter scratch --
-    emitter.instruction("lea r8, [rip + _stream_filter_buf]");                  // filter scratch base
+    abi::emit_symbol_address(emitter, "r8", "_stream_filter_buf");              // filter scratch base
     emitter.instruction("xor r9, r9");                                          // copy index
     emitter.label("__rt_fwrite_copy_x86");
     emitter.instruction("cmp r9, rdx");                                         // copied every byte?
@@ -219,7 +219,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd argument for the zlib deflate helper
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // payload pointer argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length argument
-    emitter.instruction("mov r9, QWORD PTR [rip + _zlib_fwrite_fn]");           // load the deflate fwrite helper pointer
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_zlib_fwrite_fn", 0);          // load the deflate fwrite helper pointer
     emitter.instruction("call r9");                                             // deflate-compress the payload, rax = bytes consumed
     emitter.instruction("add rsp, 32");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -230,7 +230,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd argument for the bzip2 compress helper
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // payload pointer argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length argument
-    emitter.instruction("mov r9, QWORD PTR [rip + _bz2_fwrite_fn]");            // load the bzip2 compress fwrite helper pointer
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_bz2_fwrite_fn", 0);           // load the bzip2 compress fwrite helper pointer
     emitter.instruction("call r9");                                             // bzip2-compress the payload, rax = bytes consumed
     emitter.instruction("add rsp, 32");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -241,7 +241,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd argument for the iconv write helper
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // payload pointer argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length argument
-    emitter.instruction("mov r9, QWORD PTR [rip + _iconv_fwrite_fn]");          // load the iconv write helper pointer
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_iconv_fwrite_fn", 0);         // load the iconv write helper pointer
     emitter.instruction("call r9");                                             // transcode the payload, rax = bytes consumed
     emitter.instruction("add rsp, 32");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -263,12 +263,12 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // payload pointer (original or filtered)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length
     // -- TLS dispatch (Phase 11 B3) --
-    emitter.instruction("lea r10, [rip + _tls_sessions]");                      // load runtime data address
+    abi::emit_symbol_address(emitter, "r10", "_tls_sessions");                  // load runtime data address
     emitter.instruction("mov r11, QWORD PTR [r10 + rdi * 8]");                  // _tls_sessions[fd] handle
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_fwrite_syscall_x86");                          // plain TCP → libc write
     emitter.instruction("mov rdi, r11");                                        // handle as first arg
-    emitter.instruction("mov r9, QWORD PTR [rip + _elephc_tls_write_fn]");      // prepare SysV call argument
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_write_fn", 0);     // prepare SysV call argument
     emitter.instruction("call r9");                                             // rax = bytes written or -1
     emitter.instruction("jmp __rt_fwrite_return_x86");                          // continue at target label
     emitter.label("__rt_fwrite_syscall_x86");

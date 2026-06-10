@@ -118,12 +118,11 @@ fn define_seen_symbol(name: &str) -> String {
 fn emit_duplicate_warning(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.adrp("x1", "_diag_define_already_defined_msg");
-            emitter.add_lo12("x1", "x1", "_diag_define_already_defined_msg");
+            abi::emit_symbol_address(emitter, "x1", "_diag_define_already_defined_msg");
             emitter.instruction(&format!("mov x2, #{}", DEFINE_ALREADY_DEFINED_WARNING.len())); // pass the warning byte length to the diagnostic helper
         }
         Arch::X86_64 => {
-            emitter.instruction("lea rdi, [rip + _diag_define_already_defined_msg]"); // pass the define() duplicate warning pointer to the diagnostic helper
+            abi::emit_symbol_address(emitter, "rdi", "_diag_define_already_defined_msg"); // pass the define() duplicate warning pointer to the diagnostic helper
             emitter.instruction(&format!("mov esi, {}", DEFINE_ALREADY_DEFINED_WARNING.len())); // pass the warning byte length to the diagnostic helper
         }
     }

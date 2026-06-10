@@ -348,7 +348,7 @@ fn emit_read_all_from_fd(emitter: &mut Emitter, ctx: &mut Context) {
             emitter.instruction(&format!("jle {}", release_eof_label));         // buffer full: release the chunk, then finish
             emitter.instruction("cmp rdx, r9");                                 // does this chunk exceed the remaining capacity?
             emitter.instruction("cmova rdx, r9");                               // clamp the chunk to the remaining capacity
-            emitter.instruction("lea r10, [rip + _user_wrapper_drain_buf]");    // drain buffer base
+            abi::emit_symbol_address(emitter, "r10", "_user_wrapper_drain_buf"); // drain buffer base
             emitter.instruction("add r10, r8");                                 // destination = drain buffer + total
             emitter.instruction("xor rcx, rcx");                                // byte-copy index
             emitter.label(&copy_label);
@@ -366,7 +366,7 @@ fn emit_read_all_from_fd(emitter: &mut Emitter, ctx: &mut Context) {
             emitter.label(&release_eof_label);
             abi::emit_call_label(emitter, "__rt_decref_any");                   // release the final (empty/uncopied) result (rax=ptr)
             emitter.label(&wdone_label);
-            emitter.instruction("lea rax, [rip + _user_wrapper_drain_buf]");    // result string pointer
+            abi::emit_symbol_address(emitter, "rax", "_user_wrapper_drain_buf"); // result string pointer
             emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                // result length = accumulated total
             emitter.instruction("add rsp, 16");                                 // release the scratch frame
             emitter.label(&done_label);

@@ -145,10 +145,10 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the name length (elephc string ABI: rdx)
 
     // -- load the lookup-table cursor + bound --
-    emitter.instruction("mov r9, QWORD PTR [rip + _classes_by_name_count]");    // r9 = entry count
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_classes_by_name_count", 0);   // r9 = entry count
     emitter.instruction("test r9, r9");                                         // empty registry?
     emitter.instruction("jz __rt_nbn_miss_x86");                                // no entries → no match
-    emitter.instruction("lea r10, [rip + _classes_by_name]");                   // r10 = table base
+    abi::emit_symbol_address(emitter, "r10", "_classes_by_name");               // r10 = table base
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // entry cursor
     emitter.instruction("xor r11, r11");                                        // entry index
 
@@ -175,7 +175,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 32");                                         // advance to the next 32-byte entry
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // persist the cursor
     emitter.instruction("add r11, 1");                                          // advance the entry index
-    emitter.instruction("mov r9, QWORD PTR [rip + _classes_by_name_count]");    // reload the count (lost across the table walk)
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_classes_by_name_count", 0);   // reload the count (lost across the table walk)
     emitter.instruction("jmp __rt_nbn_loop_x86");                               // continue scanning
 
     emitter.label("__rt_nbn_match_x86");
@@ -206,7 +206,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_nbn_done_x86");
     // -- run the per-class property-default thunk, if this class has one --
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the matched class_id
-    emitter.instruction("lea r10, [rip + _class_propinit_ptrs]");               // property-init thunk table base
+    abi::emit_symbol_address(emitter, "r10", "_class_propinit_ptrs");           // property-init thunk table base
     emitter.instruction("mov r10, QWORD PTR [r10 + rcx*8]");                    // _class_propinit_ptrs[class_id] (0 = no defaults)
     emitter.instruction("test r10, r10");                                       // does this class have a property-init thunk?
     emitter.instruction("jz __rt_nbn_no_propinit_x86");                         // class has no property defaults: skip

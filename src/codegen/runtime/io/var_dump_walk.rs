@@ -22,6 +22,7 @@
 //!   v1 fallback in the builtin emitter prints just `array(N) {\n}\n`.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// `__rt_var_dump_array_int`: emit one `[N]=>\n  int(VAL)\n` block per
 /// element of an indexed `int[]` array. Input: AArch64 x0 / x86_64 rdi =
@@ -263,7 +264,7 @@ fn emit_var_dump_emit_indexed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the index
 
     // Emit "  ["
-    emitter.instruction("lea rsi, [rip + _vd_indent_open]");                    // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_indent_open");                // load runtime data address
     emitter.instruction("mov edx, 3");                                          // prepare SysV call argument
     emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
@@ -278,7 +279,7 @@ fn emit_var_dump_emit_indexed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("syscall");                                             // invoke kernel service
 
     // Emit "]=>\n"
-    emitter.instruction("lea rsi, [rip + _vd_close_arrow]");                    // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_close_arrow");                // load runtime data address
     emitter.instruction("mov edx, 4");                                          // prepare SysV call argument
     emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
@@ -340,7 +341,7 @@ fn emit_var_dump_emit_int_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // allocate runtime stack frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save value
 
-    emitter.instruction("lea rsi, [rip + _vd_int_prefix]");                     // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_int_prefix");                 // load runtime data address
     emitter.instruction("mov edx, 6");                                          // prepare SysV call argument
     emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
@@ -353,7 +354,7 @@ fn emit_var_dump_emit_int_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
     emitter.instruction("syscall");                                             // invoke kernel service
 
-    emitter.instruction("lea rsi, [rip + _vd_close_paren]");                    // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_close_paren");                // load runtime data address
     emitter.instruction("mov edx, 2");                                          // prepare SysV call argument
     emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
@@ -428,7 +429,7 @@ fn emit_var_dump_emit_string_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save ptr
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save len
 
-    emitter.instruction("lea rsi, [rip + _vd_str_prefix]");                     // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_str_prefix");                 // load runtime data address
     emitter.instruction("mov edx, 9");                                          // prepare SysV call argument
     emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
@@ -441,7 +442,7 @@ fn emit_var_dump_emit_string_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
     emitter.instruction("syscall");                                             // invoke kernel service
 
-    emitter.instruction("lea rsi, [rip + _vd_close_paren_space]");              // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_close_paren_space");          // load runtime data address
     emitter.instruction("mov edx, 3");                                          // prepare SysV call argument
     emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
@@ -453,7 +454,7 @@ fn emit_var_dump_emit_string_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
     emitter.instruction("syscall");                                             // invoke kernel service
 
-    emitter.instruction("lea rsi, [rip + _vd_close_quote]");                    // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_close_quote");                // load runtime data address
     emitter.instruction("mov edx, 2");                                          // prepare SysV call argument
     emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
@@ -502,11 +503,11 @@ fn emit_var_dump_emit_bool_line_linux_x86_64(emitter: &mut Emitter) {
     let done_label = "__rt_vd_bool_done_x86";
     emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
     emitter.instruction(&format!("jz {}", false_label));                        // branch when the checked value is zero or equal
-    emitter.instruction("lea rsi, [rip + _vd_bool_true_line]");                 // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_bool_true_line");             // load runtime data address
     emitter.instruction("mov edx, 13");                                         // prepare SysV call argument
     emitter.instruction(&format!("jmp {}", done_label));                        // continue at target label
     emitter.label(false_label);
-    emitter.instruction("lea rsi, [rip + _vd_bool_false_line]");                // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_bool_false_line");            // load runtime data address
     emitter.instruction("mov edx, 14");                                         // prepare SysV call argument
     emitter.label(done_label);
     emitter.instruction("mov edi, 1");                                          // fd = stdout
@@ -609,7 +610,7 @@ fn emit_var_dump_emit_float_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // allocate runtime stack frame
     emitter.instruction("movsd QWORD PTR [rbp - 8], xmm0");                     // preserve xmm0 across the prefix syscall
 
-    emitter.instruction("lea rsi, [rip + _vd_float_prefix]");                   // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_float_prefix");               // load runtime data address
     emitter.instruction("mov edx, 8");                                          // prepare SysV call argument
     emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
@@ -622,7 +623,7 @@ fn emit_var_dump_emit_float_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
     emitter.instruction("syscall");                                             // invoke kernel service
 
-    emitter.instruction("lea rsi, [rip + _vd_close_paren]");                    // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_vd_close_paren");                // load runtime data address
     emitter.instruction("mov edx, 2");                                          // prepare SysV call argument
     emitter.instruction("mov edi, 1");                                          // prepare SysV call argument
     emitter.instruction("mov eax, 1");                                          // prepare runtime result value
@@ -723,7 +724,7 @@ pub fn emit_var_dump_emit_null_line(emitter: &mut Emitter) {
         emitter.blank();
         emitter.comment("--- runtime: var_dump_emit_null_line ---");
         emitter.label_global("__rt_var_dump_emit_null_line");
-        emitter.instruction("lea rsi, [rip + _vd_null_line]");                  // load runtime data address
+        abi::emit_symbol_address(emitter, "rsi", "_vd_null_line");              // load runtime data address
         emitter.instruction("mov edx, 7");                                      // len("  NULL\n") = 7
         emitter.instruction("mov edi, 1");                                      // prepare SysV call argument
         emitter.instruction("mov eax, 1");                                      // prepare runtime result value

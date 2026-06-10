@@ -11,6 +11,7 @@
 //!   services list; a zero byte count means the file was missing.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// servent_load: read `/etc/services` into `_servent_buf`.
 /// Input:  none
@@ -34,8 +35,7 @@ pub fn emit_servent_load(emitter: &mut Emitter) {
     emitter.instruction("stp x19, x20, [sp, #16]");                             // save callee-saved registers for fd and total
 
     // -- open /etc/services read-only --
-    emitter.adrp("x0", "_etc_services_path");
-    emitter.add_lo12("x0", "x0", "_etc_services_path");
+    abi::emit_symbol_address(emitter, "x0", "_etc_services_path");
     emitter.instruction("mov x1, #0");                                          // O_RDONLY = 0
     emitter.instruction("mov x2, #0");                                          // mode is unused for O_RDONLY
     emitter.syscall(5);
@@ -53,8 +53,7 @@ pub fn emit_servent_load(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1048576");                                    // total capacity of the services buffer
     emitter.instruction("sub x2, x2, x20");                                     // remaining capacity = capacity - total
     emitter.instruction("cbz x2, __rt_servent_load_close");                     // stop reading once the buffer is full
-    emitter.adrp("x1", "_servent_buf");
-    emitter.add_lo12("x1", "x1", "_servent_buf");
+    abi::emit_symbol_address(emitter, "x1", "_servent_buf");
     emitter.instruction("add x1, x1, x20");                                     // write position = buffer base + total
     emitter.instruction("mov x0, x19");                                         // file descriptor for the read
     emitter.syscall(3);
@@ -67,8 +66,7 @@ pub fn emit_servent_load(emitter: &mut Emitter) {
     emitter.label("__rt_servent_load_close");
     emitter.instruction("mov x0, x19");                                         // file descriptor to close
     emitter.syscall(6);
-    emitter.adrp("x0", "_servent_buf");
-    emitter.add_lo12("x0", "x0", "_servent_buf");
+    abi::emit_symbol_address(emitter, "x0", "_servent_buf");
     emitter.instruction("mov x1, x20");                                         // return the total byte count
     emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore callee-saved registers
     emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
@@ -76,8 +74,7 @@ pub fn emit_servent_load(emitter: &mut Emitter) {
 
     // -- failure path: return an empty buffer --
     emitter.label("__rt_servent_load_fail");
-    emitter.adrp("x0", "_servent_buf");
-    emitter.add_lo12("x0", "x0", "_servent_buf");
+    abi::emit_symbol_address(emitter, "x0", "_servent_buf");
     emitter.instruction("mov x1, #0");                                          // a zero length signals an unreadable file
     emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore callee-saved registers
     emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
@@ -96,7 +93,7 @@ fn emit_servent_load_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r12");                                            // save the callee-saved register holding the total
 
     // -- open /etc/services read-only --
-    emitter.instruction("lea rdi, [rip + _etc_services_path]");                 // path argument for libc open()
+    abi::emit_symbol_address(emitter, "rdi", "_etc_services_path");             // path argument for libc open()
     emitter.instruction("xor esi, esi");                                        // O_RDONLY flags for libc open()
     emitter.instruction("call open");                                           // open the services file for reading
     emitter.instruction("cmp rax, 0");                                          // did libc open() fail?
@@ -110,7 +107,7 @@ fn emit_servent_load_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, r12");                                        // remaining capacity = capacity - total
     emitter.instruction("jz __rt_servent_load_close");                          // stop reading once the buffer is full
     emitter.instruction("mov rdi, rbx");                                        // file descriptor for the read
-    emitter.instruction("lea rsi, [rip + _servent_buf]");                       // base of the services buffer
+    abi::emit_symbol_address(emitter, "rsi", "_servent_buf");                   // base of the services buffer
     emitter.instruction("add rsi, r12");                                        // write position = buffer base + total
     emitter.instruction("call read");                                           // read the next chunk from the file
     emitter.instruction("cmp rax, 0");                                          // did read reach end-of-file or fail?
@@ -122,13 +119,13 @@ fn emit_servent_load_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_servent_load_close");
     emitter.instruction("mov rdi, rbx");                                        // file descriptor to close
     emitter.instruction("call close");                                          // close the services file
-    emitter.instruction("lea rax, [rip + _servent_buf]");                       // return the buffer base pointer
+    abi::emit_symbol_address(emitter, "rax", "_servent_buf");                   // return the buffer base pointer
     emitter.instruction("mov rdx, r12");                                        // return the total byte count
     emitter.instruction("jmp __rt_servent_load_done");                          // share the common epilogue
 
     // -- failure path: return an empty buffer --
     emitter.label("__rt_servent_load_fail");
-    emitter.instruction("lea rax, [rip + _servent_buf]");                       // return the buffer base pointer
+    abi::emit_symbol_address(emitter, "rax", "_servent_buf");                   // return the buffer base pointer
     emitter.instruction("xor edx, edx");                                        // a zero length signals an unreadable file
 
     emitter.label("__rt_servent_load_done");

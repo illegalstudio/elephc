@@ -72,7 +72,7 @@ fn emit_hash_init(emitter: &mut Emitter) {
             emitter.instruction("sub rsp, 16");                                 // keep nested calls 16-byte aligned
             emitter.instruction("mov rdi, rax");                                // C ABI name_ptr = algorithm string pointer
             emitter.instruction("mov rsi, rdx");                                // C ABI name_len = algorithm string length
-            emitter.instruction("mov r9, QWORD PTR [rip + _elephc_crypto_init_fn]"); // load the elephc_crypto_init entry pointer
+            abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_init_fn", 0); // load the elephc_crypto_init entry pointer
             emitter.instruction("test r9, r9");                                 // missing runtime → fail closed as unknown algorithm
             emitter.instruction("jz __rt_hash_init_unknown_x86");               // jump to the ValueError throw when unavailable
             emitter.instruction("call r9");                                     // create the context, rax = handle (null on unknown algo)
@@ -123,7 +123,7 @@ fn emit_hash_update(emitter: &mut Emitter) {
             emitter.instruction("push rbp");                                    // preserve the caller frame pointer
             emitter.instruction("mov rbp, rsp");                                // establish the frame base
             emitter.instruction("sub rsp, 16");                                 // keep the nested call 16-byte aligned
-            emitter.instruction("mov r9, QWORD PTR [rip + _elephc_crypto_update_fn]"); // load the elephc_crypto_update entry pointer
+            abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_update_fn", 0); // load the elephc_crypto_update entry pointer
             emitter.instruction("test r9, r9");                                 // missing runtime → skip (returns true)
             emitter.instruction("jz __rt_hash_update_done_x86");                // jump past the call when unavailable
             emitter.instruction("call r9");                                     // elephc_crypto_update(ctx, data_ptr, data_len)
@@ -173,7 +173,7 @@ fn emit_hash_final(emitter: &mut Emitter) {
             emitter.instruction("mov QWORD PTR [rbp - 16], r10");               // preserve the binary flag across the C calls
             emitter.instruction("mov rsi, rbp");                                // compute the digest buffer address
             emitter.instruction("sub rsi, 80");                                 // C ABI out = a 64-byte buffer within the frame
-            emitter.instruction("mov r9, QWORD PTR [rip + _elephc_crypto_final_fn]"); // load the elephc_crypto_final entry pointer
+            abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_final_fn", 0); // load the elephc_crypto_final entry pointer
             emitter.instruction("test r9, r9");                                 // missing runtime → empty digest (defensive; slot published at call sites)
             emitter.instruction("jz __rt_hash_final_empty_x86");                // skip the call when the runtime is unavailable
             emitter.instruction("call r9");                                     // finalize+free the context, rax = raw digest length
@@ -221,7 +221,7 @@ fn emit_hash_copy(emitter: &mut Emitter) {
             emitter.instruction("push rbp");                                    // preserve the caller frame pointer
             emitter.instruction("mov rbp, rsp");                                // establish the frame base
             emitter.instruction("sub rsp, 16");                                 // keep nested calls 16-byte aligned
-            emitter.instruction("mov r9, QWORD PTR [rip + _elephc_crypto_clone_fn]"); // load the elephc_crypto_clone entry pointer
+            abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_clone_fn", 0); // load the elephc_crypto_clone entry pointer
             emitter.instruction("test r9, r9");                                 // missing runtime → return the unboxed handle as-is
             emitter.instruction("jz __rt_hash_copy_done_x86");                  // skip the clone call when unavailable
             emitter.instruction("call r9");                                     // clone the context, rax = new handle

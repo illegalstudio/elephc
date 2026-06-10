@@ -83,15 +83,14 @@ pub fn emit(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // fd = stderr
-            emitter.adrp("x1", &err_label);                                     // load the page that contains the fatal error string
-            emitter.add_lo12("x1", "x1", &err_label);                           // resolve the fatal error string address within that page
+            abi::emit_symbol_address(emitter, "x1", &err_label);                // resolve the fatal error string address
             emitter.instruction(&format!("mov x2, #{}", err_len));              // pass the fatal error string length to write()
             emitter.syscall(4);
             emitter.instruction("mov x0, #1");                                  // exit code 1
             emitter.syscall(1);
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("lea rsi, [rip + {}]", err_label));    // point the Linux write() buffer register at the fatal error string
+            abi::emit_symbol_address(emitter, "rsi", &err_label);               // point the Linux write() buffer register at the fatal error string
             emitter.instruction(&format!("mov edx, {}", err_len));              // pass the fatal error string length to write()
             emitter.instruction("mov edi, 2");                                  // fd = stderr
             emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write

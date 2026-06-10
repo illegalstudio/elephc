@@ -9,6 +9,7 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// High 32 bits of the x86_64 owned-string heap marker, combined with a low byte to form
 /// the full `kind` word stamped into heap-allocated template buffers.
@@ -41,8 +42,7 @@ pub fn emit_tempnam(emitter: &mut Emitter) {
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save prefix ptr and len
 
     // -- build template path: dir + "/" + prefix + "XXXXXX" in _cstr_buf --
-    emitter.adrp("x9", "_cstr_buf");                             // load page address of cstr buffer
-    emitter.add_lo12("x9", "x9", "_cstr_buf");                       // resolve exact buffer address
+    abi::emit_symbol_address(emitter, "x9", "_cstr_buf");                       // load page address of cstr buffer
     emitter.instruction("mov x10, x9");                                         // save buffer start
 
     // -- copy dir bytes --

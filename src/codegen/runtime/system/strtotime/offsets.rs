@@ -12,6 +12,7 @@
 //! - Sign temp at `[sp+104]`, had_ago flag at `[sp+108]`. x86_64 also uses `[rsp+112]` (cursor save) and `[rsp+120]` (value save) across `match_word`/helpers that clobber rdi/rax.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// Dispatches to the target-specific offsets emitter: ARM64 or x86_64 Linux.
 /// The offsets strategy handles `[+-]?N unit`, `a/an unit`, composite forms, and trailing `ago`,
@@ -118,8 +119,7 @@ fn emit_offsets_arm64(emitter: &mut Emitter) {
 
     // -- set up match_word args and call --
     emitter.instruction("add x6, sp, #64");                                     // candidate = lc16 buffer
-    emitter.adrp("x7", "_strtotime_unit_tab");                                         // table base page
-    emitter.add_lo12("x7", "x7", "_strtotime_unit_tab");                               // resolve table base
+    abi::emit_symbol_address(emitter, "x7", "_strtotime_unit_tab");             // table base page
     emitter.instruction("sub x8, x4, x3");                                      // remaining bytes
     emitter.instruction("mov x11, #16");                                        // cap to lc16 size
     emitter.instruction("cmp x8, x11");                                         // remaining > 16 ?
@@ -349,7 +349,7 @@ fn emit_offsets_linux_x86_64(emitter: &mut Emitter) {
 
     // -- set up match_word args (rdi=cand, rsi=table, rcx=avail) --
     emitter.instruction("lea rdi, [rbp - 64]");                                 // cand_ptr = lc16 base
-    emitter.instruction("lea rsi, [rip + _strtotime_unit_tab]");                // table base
+    abi::emit_symbol_address(emitter, "rsi", "_strtotime_unit_tab");            // table base
     emitter.instruction("mov rcx, r10");                                        // rcx = end
     emitter.instruction("sub rcx, QWORD PTR [rsp + 112]");                      // rcx = end - saved_cursor = remaining
     emitter.instruction("mov r8, 16");                                          // cap window

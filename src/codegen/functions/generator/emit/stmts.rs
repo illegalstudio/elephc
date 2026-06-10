@@ -228,14 +228,13 @@ fn emit_write_literal(emitter: &mut Emitter, data: &mut DataSection, bytes: &[u8
     let (lbl, len) = data.add_string(bytes);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.adrp("x1", &lbl);                                           // load the page that contains the literal string bytes
-            emitter.add_lo12("x1", "x1", &lbl);                                 // resolve the literal string address within that page
+            abi::emit_symbol_address(emitter, "x1", &lbl);                      // resolve the literal string address
             emitter.instruction(&format!("mov x2, #{}", len));                  // pass the literal string length to write()
             emitter.instruction("mov x0, #1");                                  // fd = stdout
             emitter.syscall(4);
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("lea rsi, [rip + {}]", lbl));          // point the write buffer register at the literal string bytes
+            abi::emit_symbol_address(emitter, "rsi", &lbl);                     // point the write buffer register at the literal string bytes
             emitter.instruction(&format!("mov edx, {}", len));                  // pass the literal string length to write()
             emitter.instruction("mov edi, 1");                                  // fd = stdout
             emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write

@@ -277,7 +277,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fopen_uw_scan_x86");                          // keep scanning for the scheme marker
 
     emitter.label("__rt_fopen_uw_check_wrappers_x86");
-    emitter.instruction("lea r10, [rip + _user_wrappers]");                     // wrapper table base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_fopen_uw_slot_x86");
     emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
@@ -382,7 +382,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id stored at the head of every wrapper object
-    emitter.instruction("lea r11, [rip + _user_wrapper_vtable_ptrs]");          // base of the per-class user-wrapper vtable pointer table
+    abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the stream_open method pointer from slot 0
     emitter.instruction("test r11, r11");                                       // class did not implement stream_open?
@@ -390,7 +390,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 48], r11");                       // save stream_open ptr across the upcoming call
 
     // -- allocate the first free slot in _user_wrapper_handles --
-    emitter.instruction("lea r10, [rip + _user_wrapper_handles]");              // handle table base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
     emitter.instruction("xor r12, r12");                                        // start scanning from handle slot 0
     emitter.label("__rt_fopen_uw_handle_scan_x86");
     emitter.instruction("cmp r12, 256");                                        // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
@@ -417,7 +417,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8,  QWORD PTR [rsp + 24]");                       // mode len
     emitter.instruction("xor r9d, r9d");                                        // options = 0 (PHP STREAM_USE_PATH/REPORT_ERRORS unused in v1)
     emitter.instruction("mov r11, QWORD PTR [rsp + 48]");                       // reload stream_open method pointer before the stack shift
-    emitter.instruction("lea r10, [rip + _stream_open_opened_path_scratch]");   // address of the 16-byte opened_path scratch slot
+    abi::emit_symbol_address(emitter, "r10", "_stream_open_opened_path_scratch"); // address of the 16-byte opened_path scratch slot
     emitter.instruction("mov QWORD PTR [r10], 0");                              // zero the opened_path low half before the call
     emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // zero the opened_path high half before the call
     emitter.instruction("sub rsp, 16");                                         // reserve a 16-byte stack-arg slot for the 7th int arg (rsp stays 16-aligned)
@@ -430,7 +430,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     // -- success: store obj in the handle slot and return the synthetic fd --
     emitter.instruction("mov r12, QWORD PTR [rsp + 40]");                       // reload the handle slot index
     emitter.instruction("mov r13, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
-    emitter.instruction("lea r10, [rip + _user_wrapper_handles]");              // handle table base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
     emitter.instruction("mov QWORD PTR [r10 + r12 * 8], r13");                  // _user_wrapper_handles[slot] = obj
     emitter.instruction("mov rax, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("or rax, r12");                                         // synthetic fd = USER_WRAPPER_FD_BASE | slot index
@@ -447,7 +447,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fopen_silent_fail_x86");                      // share the existing -1 return
 
     emitter.label("__rt_fopen_opened_x86");
-    emitter.instruction("lea r10, [rip + _eof_flags]");                         // materialize the eof-flag table for the newly opened descriptor
+    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table for the newly opened descriptor
     emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
     emitter.label("__rt_fopen_return_x86");
 

@@ -2188,8 +2188,7 @@ fn emit_descriptor_invoker_missing_abort(emitter: &mut Emitter, data: &mut DataS
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // write the descriptor-invoker diagnostic to stderr
-            emitter.adrp("x1", &message_label);
-            emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(emitter, "x1", &message_label);
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the descriptor-invoker diagnostic byte length to write()
             emitter.syscall(4);
             abi::emit_exit(emitter, 1);
@@ -3181,8 +3180,7 @@ fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // write the callback argument diagnostic to stderr
-            emitter.adrp("x1", &message_label);
-            emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(emitter, "x1", &message_label);
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the diagnostic byte length to write()
             emitter.syscall(4);
             abi::emit_exit(emitter, 1);
@@ -3206,8 +3204,7 @@ fn emit_call_user_func_array_unknown_assoc_abort(emitter: &mut Emitter, data: &m
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // write the callback metadata diagnostic to stderr
-            emitter.adrp("x1", &message_label);
-            emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(emitter, "x1", &message_label);
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the callback metadata diagnostic byte length to write()
             emitter.syscall(4);
             abi::emit_exit(emitter, 1);
@@ -3231,8 +3228,7 @@ pub(crate) fn emit_call_user_func_array_invalid_mixed_args_abort(emitter: &mut E
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // write the descriptor argument-shape diagnostic to stderr
-            emitter.adrp("x1", &message_label);
-            emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(emitter, "x1", &message_label);
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the descriptor argument-shape diagnostic byte length to write()
             emitter.syscall(4);
             abi::emit_exit(emitter, 1);
@@ -3256,8 +3252,7 @@ pub(crate) fn emit_dynamic_string_callback_abort(emitter: &mut Emitter, data: &m
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // write the dynamic callback diagnostic to stderr
-            emitter.adrp("x1", &message_label);
-            emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(emitter, "x1", &message_label);
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the dynamic callback diagnostic byte length to write()
             emitter.syscall(4);
             abi::emit_exit(emitter, 1);

@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits the `__rt_json_encode_mixed` runtime helper, dispatching on the boxed `Mixed` value_tag.
 ///
@@ -176,7 +177,7 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     // stdClass instances do not have static property descriptors; encode them
     // through the assoc-array path using the dynamic-property hash at obj+8.
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load class_id from the object header
-    emitter.instruction("mov r11, QWORD PTR [rip + _stdclass_class_id]");       // load the compile-time stdClass class_id sentinel
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id sentinel
     emitter.instruction("cmp r10, r11");                                        // is the receiver a stdClass instance?
     emitter.instruction("jne __rt_json_encode_mixed_object_regular");           // no → fall through to the standard property-walking encoder
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // yes → load the dynamic-property hash from obj+8

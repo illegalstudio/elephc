@@ -206,7 +206,7 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uus_check_x86");
-    emitter.instruction("lea r10, [rip + _user_wrappers]");                     // wrapper table base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uus_slot_x86");
     emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
@@ -236,7 +236,7 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
 
     // -- matched scheme: r12 = registry slot base --
     emitter.label("__rt_uus_match_x86");
-    emitter.instruction("lea r10, [rip + _url_stat_matched]");                  // out-flag address
+    abi::emit_symbol_address(emitter, "r10", "_url_stat_matched");              // out-flag address
     emitter.instruction("mov BYTE PTR [r10], 1");                               // set _url_stat_matched = 1 (do not fall back to the filesystem)
     emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
     emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length (new_by_name reads rax/rdx)
@@ -247,7 +247,7 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
 
     // -- look up url_stat in the per-class user-wrapper vtable (slot 9) --
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
-    emitter.instruction("lea r10, [rip + _user_wrapper_vtable_ptrs]");          // base of the per-class user-wrapper vtable pointer table
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", VTABLE_URL_STAT_OFFSET)); // load the url_stat method pointer (slot 9)
     emitter.instruction("test r11, r11");                                       // class did not implement url_stat?
@@ -275,7 +275,7 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_uus_ret_x86");                                // share the common return path
 
     emitter.label("__rt_uus_nomatch_x86");
-    emitter.instruction("lea r10, [rip + _url_stat_matched]");                  // out-flag address
+    abi::emit_symbol_address(emitter, "r10", "_url_stat_matched");              // out-flag address
     emitter.instruction("mov BYTE PTR [r10], 0");                               // _url_stat_matched = 0 — caller falls back to the real filesystem
     emitter.instruction("xor eax, eax");                                        // return 0; the caller ignores it when the flag is 0
 
@@ -389,11 +389,11 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the field selector
     emitter.instruction("test r10, r10");                                       // size (0) or mode (non-zero)?
     emitter.instruction("jnz __rt_uusf_mode_x86");                              // non-zero selector → 'mode'
-    emitter.instruction("lea rax, [rip + _stat_key_size]");                     // size key pointer (new_by_name-style rax/rdx string ABI)
+    abi::emit_symbol_address(emitter, "rax", "_stat_key_size");                 // size key pointer (new_by_name-style rax/rdx string ABI)
     emitter.instruction("mov rdx, 4");                                          // strlen("size")
     emitter.instruction("jmp __rt_uusf_havekey_x86");                           // proceed with the size key
     emitter.label("__rt_uusf_mode_x86");
-    emitter.instruction("lea rax, [rip + _stat_key_mode]");                     // mode key pointer
+    abi::emit_symbol_address(emitter, "rax", "_stat_key_mode");                 // mode key pointer
     emitter.instruction("mov rdx, 4");                                          // strlen("mode")
     emitter.label("__rt_uusf_havekey_x86");
     emitter.instruction("call __rt_hash_normalize_key");                        // normalize the string key → key_lo in rax, key_hi in rdx

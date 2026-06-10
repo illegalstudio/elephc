@@ -11,6 +11,7 @@
 //! - Result is always midnight (00:00:00) of the target day, mirroring PHP's `strtotime("Monday")`.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// Emit the weekdays strategy on both targets.
 pub(crate) fn emit_weekdays(emitter: &mut Emitter) {
@@ -59,8 +60,7 @@ fn emit_weekdays_arm64(emitter: &mut Emitter) {
 
     emitter.instruction("bl __rt_strtotime_lc_cursor");                         // lowercase next 16 bytes
     emitter.instruction("add x6, sp, #64");                                     // candidate ptr
-    emitter.adrp("x7", "_strtotime_keyword_tab");                               // table base page
-    emitter.add_lo12("x7", "x7", "_strtotime_keyword_tab");                     // resolve table base
+    abi::emit_symbol_address(emitter, "x7", "_strtotime_keyword_tab");          // table base page
     emitter.instruction("sub x8, x4, x3");                                      // remaining bytes
     emitter.instruction("mov x11, #16");                                        // cap to lc16 size
     emitter.instruction("cmp x8, x11");                                         // remaining > 16 ?
@@ -179,7 +179,7 @@ fn emit_weekdays_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_strtotime_lc_cursor_linux_x86_64");          // lowercase next 16 bytes
     emitter.instruction("mov QWORD PTR [rsp + 112], rdi");                      // save weekday cursor before match
     emitter.instruction("lea rdi, [rbp - 64]");                                 // candidate ptr = lc16 base
-    emitter.instruction("lea rsi, [rip + _strtotime_keyword_tab]");             // keyword table base
+    abi::emit_symbol_address(emitter, "rsi", "_strtotime_keyword_tab");         // keyword table base
     emitter.instruction("mov rcx, r10");                                        // copy end
     emitter.instruction("mov r11, QWORD PTR [rbp - 80]");                       // reload original ptr
     emitter.instruction("add r11, rax");                                        // add modifier-consumed

@@ -260,8 +260,7 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub sp, sp, #{}", tmpl_frame));               // allocate frame + template buffer
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", tmpl_save));        // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", tmpl_save));               // establish new frame pointer
-    emitter.adrp("x9", "_tmpfile_template");                                    // load page of the template literal
-    emitter.add_lo12("x9", "x9", "_tmpfile_template");                          // resolve full address of the template literal
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_template");               // load page of the template literal
     emitter.instruction("ldp x10, x11, [x9]");                                  // load 16 bytes of the template
     emitter.instruction("stp x10, x11, [sp]");                                  // copy first 16 bytes onto the stack template
     emitter.instruction("ldr x10, [x9, #16]");                                  // load the remaining bytes (≤ 8) of the template
@@ -383,7 +382,7 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fpassthru_done_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd so feof() observes that passthru reached EOF
-    emitter.instruction("lea r11, [rip + _eof_flags]");                         // materialize the eof-flag table for fpassthru completion
+    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table for fpassthru completion
     emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // set _eof_flags[fd] after consuming the stream
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return total
     emitter.instruction(&format!("add rsp, {}", buf_size + 16));                // release frame
@@ -392,7 +391,7 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fpassthru_read_error_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd so feof() observes the exhausted error state
-    emitter.instruction("lea r11, [rip + _eof_flags]");                         // materialize the eof-flag table after fpassthru read failure
+    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table after fpassthru read failure
     emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // set _eof_flags[fd] after a failed read
     emitter.instruction("mov rax, -1");                                         // read failure sentinel, matching PHP's -1 byte count
     emitter.instruction(&format!("add rsp, {}", buf_size + 16));                // release frame
@@ -439,7 +438,7 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish frame
     emitter.instruction("sub rsp, 48");                                         // reserve template buffer plus fd spill slot
-    emitter.instruction("lea rsi, [rip + _tmpfile_template]");                  // source pointer
+    abi::emit_symbol_address(emitter, "rsi", "_tmpfile_template");              // source pointer
     emitter.instruction("mov rax, QWORD PTR [rsi]");                            // load first 8 bytes
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // store first 8 bytes
     emitter.instruction("mov rax, QWORD PTR [rsi + 8]");                        // load next 8 bytes
@@ -455,7 +454,7 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rbp - 32]");                                 // unlink path
     emitter.instruction("call unlink");                                         // libc unlink — file auto-deletes on close
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return fd
-    emitter.instruction("lea r10, [rip + _eof_flags]");                         // materialize the eof-flag table for the temporary descriptor
+    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table for the temporary descriptor
     emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
     emitter.instruction("add rsp, 48");                                         // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits runtime diagnostic helpers for suppression depth and warning output.
 ///
@@ -35,16 +36,14 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter) {
     emitter.comment("--- runtime: diagnostics ---");
 
     emitter.label_global("__rt_diag_push_suppression");
-    emitter.adrp("x9", "_rt_diag_suppression");
-    emitter.add_lo12("x9", "x9", "_rt_diag_suppression");
+    abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
     emitter.instruction("ldr x10, [x9]");                                       // load the current nested diagnostic-suppression depth
     emitter.instruction("add x10, x10, #1");                                    // enter one additional diagnostic-suppression scope
     emitter.instruction("str x10, [x9]");                                       // publish the incremented diagnostic-suppression depth
     emitter.instruction("ret");                                                 // return to the suppressed expression wrapper
 
     emitter.label_global("__rt_diag_pop_suppression");
-    emitter.adrp("x9", "_rt_diag_suppression");
-    emitter.add_lo12("x9", "x9", "_rt_diag_suppression");
+    abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
     emitter.instruction("ldr x10, [x9]");                                       // load the current nested diagnostic-suppression depth
     emitter.instruction("cbz x10, __rt_diag_pop_done");                         // avoid underflow if suppression scopes are already balanced
     emitter.instruction("sub x10, x10, #1");                                    // leave one diagnostic-suppression scope
@@ -53,8 +52,7 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
     emitter.label_global("__rt_diag_warning");
-    emitter.adrp("x9", "_rt_diag_suppression");
-    emitter.add_lo12("x9", "x9", "_rt_diag_suppression");
+    abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
     emitter.instruction("ldr x10, [x9]");                                       // load suppression depth before deciding whether to emit the warning
     emitter.instruction("cbnz x10, __rt_diag_warning_done");                    // suppress the warning while inside an active @ scope
     emitter.instruction("mov x0, #2");                                          // fd = stderr for runtime warning diagnostics
@@ -82,22 +80,22 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: diagnostics ---");
 
     emitter.label_global("__rt_diag_push_suppression");
-    emitter.instruction("mov r10, QWORD PTR [rip + _rt_diag_suppression]");     // load the current nested diagnostic-suppression depth
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load the current nested diagnostic-suppression depth
     emitter.instruction("add r10, 1");                                          // enter one additional diagnostic-suppression scope
-    emitter.instruction("mov QWORD PTR [rip + _rt_diag_suppression], r10");     // publish the incremented diagnostic-suppression depth
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);   // publish the incremented diagnostic-suppression depth
     emitter.instruction("ret");                                                 // return to the suppressed expression wrapper
 
     emitter.label_global("__rt_diag_pop_suppression");
-    emitter.instruction("mov r10, QWORD PTR [rip + _rt_diag_suppression]");     // load the current nested diagnostic-suppression depth
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load the current nested diagnostic-suppression depth
     emitter.instruction("test r10, r10");                                       // check whether a suppression scope is active before decrementing
     emitter.instruction("jz __rt_diag_pop_done_linux_x86_64");                  // avoid underflow if suppression scopes are already balanced
     emitter.instruction("sub r10, 1");                                          // leave one diagnostic-suppression scope
-    emitter.instruction("mov QWORD PTR [rip + _rt_diag_suppression], r10");     // publish the decremented diagnostic-suppression depth
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);   // publish the decremented diagnostic-suppression depth
     emitter.label("__rt_diag_pop_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
     emitter.label_global("__rt_diag_warning");
-    emitter.instruction("mov r10, QWORD PTR [rip + _rt_diag_suppression]");     // load suppression depth before deciding whether to emit the warning
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load suppression depth before deciding whether to emit the warning
     emitter.instruction("test r10, r10");                                       // is runtime warning output currently suppressed?
     emitter.instruction("jnz __rt_diag_warning_done_linux_x86_64");             // suppress the warning while inside an active @ scope
     emitter.instruction("mov rdx, rsi");                                        // move warning length into the Linux write length register

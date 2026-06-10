@@ -44,8 +44,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
 
     // -- uncaught exceptions terminate the process with a fatal message --
     emitter.label("__rt_throw_current_uncaught");
-    emitter.adrp("x1", "_uncaught_exc_msg");                     // load page of the uncaught-exception error message
-    emitter.add_lo12("x1", "x1", "_uncaught_exc_msg");               // resolve the uncaught-exception error message address
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_msg");               // load page of the uncaught-exception error message
     emitter.instruction("mov x2, #32");                                         // uncaught exception message length in bytes
     emitter.instruction("mov x0, #2");                                          // fd = stderr for fatal runtime diagnostics
     emitter.syscall(4);

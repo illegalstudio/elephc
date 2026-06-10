@@ -134,7 +134,7 @@ fn emit_popen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9d, eax");                                        // r9 = the pipe descriptor
 
     // -- record the FILE* in the fd->FILE* table for pclose() --
-    emitter.instruction("lea r10, [rip + _popen_files]");                       // base of the fd->FILE* table
+    abi::emit_symbol_address(emitter, "r10", "_popen_files");                   // base of the fd->FILE* table
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the FILE*
     emitter.instruction("mov QWORD PTR [r10 + r9 * 8], r11");                   // _popen_files[fd] = FILE*
     emitter.instruction("mov rax, r9");                                         // return the pipe descriptor
