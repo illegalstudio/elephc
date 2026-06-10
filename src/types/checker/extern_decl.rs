@@ -75,6 +75,7 @@ impl Checker {
                 | PhpType::Iterable
                 | PhpType::Mixed
                 | PhpType::Union(_)
+                | PhpType::TaggedScalar
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)

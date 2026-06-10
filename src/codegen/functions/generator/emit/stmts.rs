@@ -27,6 +27,7 @@ use super::yields::{
 use super::{preserved_scratch_reg, slot_offset, LoopLabels, ResumeCtx};
 use super::super::model::*;
 use crate::codegen::abi;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -176,11 +177,23 @@ fn emit_var_dump_boxed_mixed(
 
 /// Emits `var_dump` output for an integer payload in the active result register.
 fn emit_var_dump_int(emitter: &mut Emitter, data: &mut DataSection, ctx: &mut ResumeCtx) {
+    if crate::codegen::sentinels::null_repr_is_tagged() {
+        // Under the tagged representation a plain Int is never null; print the payload
+        // directly so the full i64 range (including PHP_INT_MAX - 1) round-trips.
+        let result_reg = abi::int_result_reg(emitter);
+        abi::emit_push_reg(emitter, result_reg);                                // preserve the integer payload before prefix writes clobber the result register
+        emit_write_literal(emitter, data, b"int(");
+        abi::emit_pop_reg(emitter, result_reg);                                 // restore the integer payload after the prefix write
+        abi::emit_call_label(emitter, "__rt_itoa");                             // convert the integer payload to decimal text
+        emit_write_current_string(emitter);
+        emit_write_literal(emitter, data, b")\n");
+        return;
+    }
     let not_null = ctx.fresh_label("vd_not_null");
     let done = ctx.fresh_label("vd_done");
     let result_reg = abi::int_result_reg(emitter);
     let scratch_reg = abi::symbol_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch_reg, 0x7fff_ffff_ffff_fffe_u64 as i64); // materialize the shared null sentinel used by int-valued locals
+    abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL); // materialize the shared null sentinel used by int-valued locals
     emitter.instruction(&format!("cmp {}, {}", result_reg, scratch_reg));       // compare the incoming integer payload against the null sentinel
     match emitter.target.arch {
         Arch::AArch64 => {

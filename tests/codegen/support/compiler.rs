@@ -36,6 +36,7 @@ pub(crate) fn compile_source_to_asm_with_options(
 // type-checks, and generates ARM64/x86_64 assembly for the current target.
 // Returns user assembly, runtime assembly, and library names required for linking.
 /// Provides the Compile source to asm with defines helper used by the compiler module.
+/// Uses the environment-selected null representation (`ELEPHC_NULL_REPR`).
 pub(crate) fn compile_source_to_asm_with_defines(
     source: &str,
     dir: &Path,
@@ -44,6 +45,39 @@ pub(crate) fn compile_source_to_asm_with_defines(
     gc_stats: bool,
     heap_debug: bool,
 ) -> (String, String, Vec<String>) {
+    compile_source_to_asm_with_defines_repr(
+        source,
+        dir,
+        defines,
+        heap_size,
+        gc_stats,
+        heap_debug,
+        default_null_repr(),
+    )
+}
+
+/// Returns the null representation selected for this test process: `ELEPHC_NULL_REPR` can
+/// force either mode; without it the compiler default (tagged) applies.
+pub(crate) fn default_null_repr() -> elephc::codegen::NullRepr {
+    match std::env::var("ELEPHC_NULL_REPR").as_deref() {
+        Ok("tagged") => elephc::codegen::NullRepr::Tagged,
+        Ok("sentinel") => elephc::codegen::NullRepr::Sentinel,
+        _ => elephc::codegen::NullRepr::default(),
+    }
+}
+
+/// Full compile-to-assembly pipeline with an explicit null representation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_source_to_asm_with_defines_repr(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+    null_repr: elephc::codegen::NullRepr,
+) -> (String, String, Vec<String>) {
+    elephc::codegen::set_null_repr(null_repr);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
@@ -85,6 +119,7 @@ pub(crate) fn compile_source_to_asm_with_defines(
         heap_debug,
         target(),
         requires_elephc_tls,
+        null_repr,
     );
     let runtime_features =
         elephc::codegen::runtime_features_for_program_and_classes(&optimized, &check_result.classes);
@@ -363,4 +398,65 @@ pub(crate) fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> 
 /// Provides the Compile and run helper used by the compiler module.
 pub(crate) fn compile_and_run(source: &str) -> String {
     compile_and_run_with_heap_size(source, 8_388_608)
+}
+
+/// Compiles and runs a PHP source with the legacy sentinel null representation forced on,
+/// regardless of `ELEPHC_NULL_REPR`. Used by the sentinel opt-out guard tests.
+pub(crate) fn compile_and_run_sentinel(source: &str) -> String {
+    compile_and_run_with_repr(source, elephc::codegen::NullRepr::Sentinel)
+}
+
+/// Compiles and runs a PHP source with the tagged null representation forced on,
+/// regardless of `ELEPHC_NULL_REPR`. Used by null-sentinel surface tests.
+pub(crate) fn compile_and_run_tagged(source: &str) -> String {
+    compile_and_run_with_repr(source, elephc::codegen::NullRepr::Tagged)
+}
+
+/// Compiles and runs a PHP source with an explicit null representation.
+fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_tagged_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_defines_repr(
+        source,
+        &dir,
+        &HashSet::new(),
+        8_388_608,
+        false,
+        false,
+        null_repr,
+    );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+
+    let elephc_out = assemble_and_run(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    // PHP cross-check (opt-in via ELEPHC_PHP_CHECK=1)
+    if std::env::var("ELEPHC_PHP_CHECK").is_ok() {
+        let php_path = dir.join("test.php");
+        fs::write(&php_path, source).unwrap();
+        if let Ok(php_output) = Command::new("php").arg(&php_path).output() {
+            if php_output.status.success() {
+                let php_out = String::from_utf8_lossy(&php_output.stdout);
+                if elephc_out != php_out.as_ref() {
+                    eprintln!(
+                        "PHP compat note: output differs for tagged test.\n  elephc: {:?}\n  php:    {:?}",
+                        elephc_out, php_out
+                    );
+                }
+            }
+        }
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+    elephc_out
 }

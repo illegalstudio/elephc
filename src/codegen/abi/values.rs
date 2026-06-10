@@ -16,6 +16,7 @@ use crate::types::PhpType;
 use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
 use super::frame::{emit_load_from_address, load_at_offset, store_at_offset};
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
+use crate::codegen::sentinels::tagged_scalar_tag_reg;
 
 /// Stores the current result value (in result registers) of the given type at a stack frame offset.
 ///
@@ -39,6 +40,10 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         }
         PhpType::Void | PhpType::Never => {
             store_at_offset(emitter, int_result_reg(emitter), offset);                  // store null sentinel
+        }
+        PhpType::TaggedScalar => {
+            store_at_offset(emitter, int_result_reg(emitter), offset);                  // store tagged scalar payload word
+            store_at_offset(emitter, tagged_scalar_tag_reg(emitter), offset - 8);       // store tagged scalar tag word
         }
         PhpType::Iterable
         | PhpType::Mixed
@@ -164,6 +169,10 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         }
         PhpType::Void | PhpType::Never => {
             load_at_offset(emitter, int_result_reg(emitter), offset);                   // load null sentinel
+        }
+        PhpType::TaggedScalar => {
+            load_at_offset(emitter, int_result_reg(emitter), offset);                   // load tagged scalar payload word
+            load_at_offset(emitter, tagged_scalar_tag_reg(emitter), offset - 8);        // load tagged scalar tag word
         }
         PhpType::Iterable
         | PhpType::Mixed
@@ -323,6 +332,10 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
         }
         PhpType::Bool | PhpType::Int => {
             emit_call_label(emitter, "__rt_itoa");
+            emit_write_current_string_stdout(emitter);
+        }
+        PhpType::TaggedScalar => {
+            emit_call_label(emitter, "__rt_itoa");                                      // convert the tagged scalar payload; callers suppress the null case first
             emit_write_current_string_stdout(emitter);
         }
         PhpType::Resource(_) => {

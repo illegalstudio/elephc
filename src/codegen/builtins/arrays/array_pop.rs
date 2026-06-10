@@ -11,6 +11,7 @@
 use super::ensure_unique_arg::emit_ensure_unique_arg;
 use super::store_mutating_arg::emit_store_mutating_arg;
 use crate::codegen::abi;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -56,6 +57,8 @@ pub fn emit(
 
     let empty_label = ctx.next_label("array_pop_empty");
     let end_label = ctx.next_label("array_pop_end");
+    let tagged_int_result =
+        crate::codegen::sentinels::null_repr_is_tagged() && matches!(elem_ty, PhpType::Int);
 
     if emitter.target.arch == Arch::X86_64 {
         emit_ensure_unique_arg(emitter, &arr_ty);
@@ -78,12 +81,22 @@ pub fn emit(
                 emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");      // load the removed scalar payload from the last live indexed-array slot
             }
         }
+        if tagged_int_result {
+            crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+        }
         emitter.instruction(&format!("jmp {}", end_label));                     // skip the empty-array null sentinel path after loading the removed payload
 
         emitter.label(&empty_label);
-        abi::emit_load_int_immediate(emitter, "rax", i64::MAX - 1);            // materialize the shared null sentinel as the empty-array result on x86_64
+        if tagged_int_result {
+            crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+        } else {
+            abi::emit_load_int_immediate(emitter, "rax", NULL_SENTINEL);       // materialize the shared null sentinel as the empty-array result on x86_64
+        }
         emitter.label(&end_label);
 
+        if tagged_int_result {
+            return Some(PhpType::TaggedScalar);
+        }
         return Some(elem_ty);
     }
 
@@ -110,16 +123,27 @@ pub fn emit(
         }
         _ => {}
     }
+    if tagged_int_result {
+        crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+    }
     emitter.instruction(&format!("b {}", end_label));                           // skip empty handler
 
     // -- empty array: return null sentinel --
     emitter.label(&empty_label);
-    emitter.instruction("movz x0, #0xFFFE");                                    // load null sentinel bits [15:0]
-    emitter.instruction("movk x0, #0xFFFF, lsl #16");                           // load null sentinel bits [31:16]
-    emitter.instruction("movk x0, #0xFFFF, lsl #32");                           // load null sentinel bits [47:32]
-    emitter.instruction("movk x0, #0x7FFF, lsl #48");                           // load null sentinel bits [63:48] = 0x7FFFFFFFFFFFFFFE
+    if tagged_int_result {
+        crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+    } else {
+        let sentinel = NULL_SENTINEL as u64;
+        emitter.instruction(&format!("movz x0, #0x{:X}", sentinel & 0xFFFF));   // load null sentinel bits [15:0]
+        emitter.instruction(&format!("movk x0, #0x{:X}, lsl #16", (sentinel >> 16) & 0xFFFF)); // load null sentinel bits [31:16]
+        emitter.instruction(&format!("movk x0, #0x{:X}, lsl #32", (sentinel >> 32) & 0xFFFF)); // load null sentinel bits [47:32]
+        emitter.instruction(&format!("movk x0, #0x{:X}, lsl #48", (sentinel >> 48) & 0xFFFF)); // load null sentinel bits [63:48] = 0x7FFFFFFFFFFFFFFE
+    }
 
     emitter.label(&end_label);
 
+    if tagged_int_result {
+        return Some(PhpType::TaggedScalar);
+    }
     Some(elem_ty)
 }

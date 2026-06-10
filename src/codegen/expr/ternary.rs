@@ -197,6 +197,10 @@ fn pop_saved_result_value(emitter: &mut Emitter, ty: &PhpType) {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
         }
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(emitter);
+            abi::emit_pop_reg_pair(emitter, abi::int_result_reg(emitter), tag_reg);
+        }
     }
 }
 

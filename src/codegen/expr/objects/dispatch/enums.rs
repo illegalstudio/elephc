@@ -9,6 +9,7 @@
 //! - Receiver ownership, late/static binding, and vtable slot layout must match class metadata emission.
 
 use crate::codegen::abi;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -377,7 +378,7 @@ fn emit_null_into_x0(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(
         emitter,
         abi::int_result_reg(emitter),
-        0x7fff_ffff_ffff_fffe_u64 as i64,
+        NULL_SENTINEL,
     ); // materialize the shared null sentinel in the active integer result register
 }
 

@@ -42,6 +42,15 @@ pub(super) fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
     if *a == PhpType::Str || *b == PhpType::Str {
         return PhpType::Str;
     }
+    if matches!(a, PhpType::TaggedScalar) || matches!(b, PhpType::TaggedScalar) {
+        let other = if matches!(a, PhpType::TaggedScalar) { b } else { a };
+        return match other {
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::TaggedScalar => {
+                PhpType::TaggedScalar
+            }
+            _ => PhpType::Mixed,
+        };
+    }
     if *a == PhpType::Float || *b == PhpType::Float {
         return PhpType::Float;
     }
@@ -93,6 +102,46 @@ pub(crate) fn coerce_result_to_type(
                 }
             },
             PhpType::Mixed | PhpType::Union(_) => {}
+            PhpType::TaggedScalar => match emitter.target.arch {
+                crate::codegen::platform::Arch::AArch64 => {
+                    crate::codegen::abi::emit_call_label(emitter, "__rt_mixed_unbox");
+                    emitter.instruction("mov x9, x1");                          // stage the unboxed payload while the tag moves into the tag register
+                    emitter.instruction("mov x1, x0");                          // place the unboxed runtime tag in the tagged scalar tag register
+                    emitter.instruction("mov x0, x9");                          // place the unboxed payload in the tagged scalar payload register
+                }
+                crate::codegen::platform::Arch::X86_64 => {
+                    crate::codegen::abi::emit_call_label(emitter, "__rt_mixed_unbox");
+                    emitter.instruction("mov rdx, rax");                        // place the unboxed runtime tag in the tagged scalar tag register
+                    emitter.instruction("mov rax, rdi");                        // place the unboxed payload in the tagged scalar payload register
+                }
+            },
+            _ => {}
+        }
+    } else if matches!(source_ty, PhpType::TaggedScalar) {
+        match target_ty.codegen_repr() {
+            PhpType::Int | PhpType::Bool | PhpType::Resource(_) | PhpType::Pointer(_) => {
+                crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(emitter);
+            }
+            PhpType::Float => {
+                crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(emitter);
+                crate::codegen::abi::emit_int_result_to_float_result(emitter);  // widen the narrowed payload into the float result register
+            }
+            PhpType::Str => {
+                super::coerce_to_string(emitter, ctx, data, source_ty);
+            }
+            PhpType::Mixed | PhpType::Union(_) => {
+                crate::codegen::emit_box_current_value_as_mixed(emitter, source_ty);
+            }
+            _ => {}
+        }
+    } else if matches!(target_ty, PhpType::TaggedScalar) {
+        match source_ty {
+            PhpType::Int | PhpType::Bool => {
+                crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+            }
+            PhpType::Void | PhpType::Never => {
+                crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+            }
             _ => {}
         }
     } else if matches!(target_ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -137,6 +186,25 @@ pub(crate) fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType
                 | PhpType::Object(_)
                 | PhpType::Mixed
                 | PhpType::Union(_)
+        );
+    }
+    if matches!(source_ty, PhpType::TaggedScalar) {
+        return matches!(
+            target_ty.codegen_repr(),
+            PhpType::Int
+                | PhpType::Bool
+                | PhpType::Resource(_)
+                | PhpType::Pointer(_)
+                | PhpType::Float
+                | PhpType::Str
+                | PhpType::Mixed
+                | PhpType::Union(_)
+        );
+    }
+    if matches!(target_ty, PhpType::TaggedScalar) {
+        return matches!(
+            source_ty,
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
         );
     }
     matches!(target_ty, PhpType::Mixed | PhpType::Union(_))

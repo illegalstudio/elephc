@@ -45,6 +45,7 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
         | PhpType::Iterable
         | PhpType::Mixed
         | PhpType::Union(_)
+        | PhpType::TaggedScalar
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Object(_) => {
@@ -90,6 +91,7 @@ pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &Ph
         | PhpType::Iterable
         | PhpType::Mixed
         | PhpType::Union(_)
+        | PhpType::TaggedScalar
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Object(_) => {

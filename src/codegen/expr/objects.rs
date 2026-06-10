@@ -24,6 +24,7 @@ use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::scalars;
 use crate::codegen::abi;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::platform::Arch;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, StaticReceiver};
@@ -760,7 +761,7 @@ pub(super) fn emit_boxed_null(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(
         emitter,
         abi::int_result_reg(emitter),
-        0x7fff_ffff_ffff_fffe,
+        NULL_SENTINEL,
     );
     crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
 }

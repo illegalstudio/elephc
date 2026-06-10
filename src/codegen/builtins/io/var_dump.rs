@@ -9,6 +9,7 @@
 //! - Output is a side effect, and refcounted values must be inspected without consuming ownership.
 
 use crate::codegen::context::Context;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
@@ -123,22 +124,50 @@ fn emit_write_current_string(emitter: &mut Emitter) {
 /// * `ctx` - Codegen context (used for label allocation)
 /// * `data` - Data section for literal strings
 fn emit_var_dump_int(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
+    if crate::codegen::sentinels::null_repr_is_tagged() {
+        // Under the tagged representation a plain Int is never null; print the payload
+        // directly so the full i64 range (including PHP_INT_MAX - 1) round-trips.
+        emit_var_dump_int_payload(emitter, data);
+        return;
+    }
     let not_null = ctx.next_label("vd_not_null");
     let done = ctx.next_label("vd_done");
     let result_reg = abi::int_result_reg(emitter);
     let scratch_reg = abi::symbol_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch_reg, 0x7fff_ffff_ffff_fffe_u64 as i64); // materialize the shared null sentinel used by int-valued locals
+    abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL); // materialize the shared null sentinel used by int-valued locals
     emitter.instruction(&format!("cmp {}, {}", result_reg, scratch_reg));       // compare the incoming integer payload against the null sentinel
     emit_branch_if_ne(emitter, &not_null);                                      // branch to the ordinary int path when the payload is not null
     emit_write_literal(emitter, data, b"NULL\n");
     abi::emit_jump(emitter, &done);                                             // skip the int formatter after printing NULL
     emitter.label(&not_null);
+    emit_var_dump_int_payload(emitter, data);
+    emitter.label(&done);
+}
+
+/// Emits `int(N)\n` for the integer payload in the result register without any null check.
+/// Used directly for values that are statically known to be real ints (tagged scalar
+/// non-null branch), and by `emit_var_dump_int` after its sentinel test.
+fn emit_var_dump_int_payload(emitter: &mut Emitter, data: &mut DataSection) {
+    let result_reg = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, result_reg);                                    // preserve the integer payload before prefix writes clobber the integer result register
     emit_write_literal(emitter, data, b"int(");
     abi::emit_pop_reg(emitter, result_reg);                                     // restore the integer payload after the prefix write
     abi::emit_call_label(emitter, "__rt_itoa");                                 // convert the integer payload to decimal text through the target-aware runtime helper
     emit_write_current_string(emitter);                                         // write the converted decimal text to stdout
     emit_write_literal(emitter, data, b")\n");
+}
+
+/// Emits var_dump output for a tagged scalar: `NULL\n` when the runtime tag is null,
+/// otherwise `int(N)\n` for the payload with no in-band sentinel check (the full i64
+/// range is printable).
+fn emit_var_dump_tagged_scalar(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
+    let null_case = ctx.next_label("vd_tagged_null");
+    let done = ctx.next_label("vd_tagged_done");
+    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(emitter, &null_case);
+    emit_var_dump_int_payload(emitter, data);
+    abi::emit_jump(emitter, &done);                                             // skip the NULL literal after printing the tagged scalar payload
+    emitter.label(&null_case);
+    emit_var_dump_null(emitter, data);
     emitter.label(&done);
 }
 
@@ -437,6 +466,7 @@ pub fn emit(
     let ty = emit_expr(&args[0], emitter, ctx, data);
     match &ty {
         PhpType::Int => emit_var_dump_int(emitter, ctx, data),
+        PhpType::TaggedScalar => emit_var_dump_tagged_scalar(emitter, ctx, data),
         PhpType::Float => emit_var_dump_float(emitter, data),
         PhpType::Str => emit_var_dump_string(emitter, data),
         PhpType::Bool => emit_var_dump_bool(emitter, ctx, data),

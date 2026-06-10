@@ -79,6 +79,11 @@ pub(super) fn prepare_indexed_array_assign(
     coerce_result_to_type(emitter, ctx, data, &index_ty, &PhpType::Int);
     emitter.instruction("str x0, [sp, #-16]!");                                 // push computed index onto stack
     let mut val_ty = emit_expr(value, emitter, ctx, data);
+    if matches!(val_ty, PhpType::TaggedScalar) {
+        // store the tagged scalar payload word as a plain int: a null payload carries the
+        // legacy in-band sentinel, matching the sentinel representation for stored nulls
+        val_ty = PhpType::Int;
+    }
     if matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
         && !matches!(target.elem_ty, PhpType::Mixed | PhpType::Union(_))
         && crate::codegen::expr::can_coerce_result_to_type(&val_ty, &target.elem_ty)
@@ -221,6 +226,11 @@ fn prepare_indexed_array_assign_linux_x86_64(
     coerce_result_to_type(emitter, ctx, data, &index_ty, &PhpType::Int);
     abi::emit_push_reg(emitter, "rax");                                           // preserve the computed target index while evaluating the assigned value
     let mut val_ty = emit_expr(value, emitter, ctx, data);
+    if matches!(val_ty, PhpType::TaggedScalar) {
+        // store the tagged scalar payload word as a plain int: a null payload carries the
+        // legacy in-band sentinel, matching the sentinel representation for stored nulls
+        val_ty = PhpType::Int;
+    }
     if matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
         && !matches!(target.elem_ty, PhpType::Mixed | PhpType::Union(_))
         && crate::codegen::expr::can_coerce_result_to_type(&val_ty, &target.elem_ty)

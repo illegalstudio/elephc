@@ -13,6 +13,7 @@
 //!   runtime paths.
 
 use crate::codegen::abi;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -56,7 +57,7 @@ pub(super) fn emit_dynamic_property_set(
                 emitter.instruction("bl __rt_mixed_from_value");                // box null into an owned Mixed cell
             }
             Arch::X86_64 => {
-                emitter.instruction("mov rdi, 9223372036854775806");            // runtime null sentinel as the boxed null payload low word
+                emitter.instruction(&format!("mov rdi, {}", NULL_SENTINEL));    // runtime null sentinel as the boxed null payload low word
                 emitter.instruction("xor rsi, rsi");                            // null mixed payloads carry no high word
                 emitter.instruction("mov rax, 8");                              // runtime tag 8 = null payload for Mixed boxing
                 emitter.instruction("call __rt_mixed_from_value");              // box null into an owned Mixed cell
@@ -199,7 +200,7 @@ pub(crate) fn emit_dynamic_property_get(
             emitter.instruction("mov rax, rdi");                                // result = mixed cell pointer
             emitter.instruction(&format!("jmp {}", done_label));                // skip the null-return path
             emitter.label(&miss_label);
-            emitter.instruction("mov rdi, 9223372036854775806");                // null sentinel low word for boxed Mixed null
+            emitter.instruction(&format!("mov rdi, {}", NULL_SENTINEL));        // null sentinel low word for boxed Mixed null
             emitter.instruction("xor rsi, rsi");                                // value_hi unused for null
             emitter.instruction("mov rax, 8");                                  // tag 8 = null
             emitter.instruction("call __rt_mixed_from_value");                  // rax = boxed null Mixed cell pointer

@@ -16,7 +16,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::calls::args as call_args;
 use crate::codegen::platform::Arch;
-use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
+use crate::codegen::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
 use crate::names::method_symbol;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
@@ -29,7 +29,6 @@ use super::super::{
 use super::dispatch::emit_dispatch_interface_method;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
-const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
     "Class to downcast to not found or not base class or does not implement Traversable";
 
@@ -238,6 +237,9 @@ pub(super) fn emit_new_object_core(
                 | PhpType::Packed(_) => {
                     abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
                     abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
+                }
+                PhpType::TaggedScalar => {
+                    unreachable!("nullable scalar properties use the boxed Mixed representation")
                 }
                 PhpType::Resource(_) => {
                     abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, offset);

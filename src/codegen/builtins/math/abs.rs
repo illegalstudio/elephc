@@ -42,6 +42,10 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("abs()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
+    if matches!(ty, PhpType::TaggedScalar) {
+        // narrow a tagged scalar (null -> 0) before the integer absolute-value sequence
+        crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(emitter);
+    }
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         // The operand is a boxed Mixed cell pointer, not a raw scalar; the runtime helper
         // unboxes it, applies the integer or float absolute value per the stored tag, and

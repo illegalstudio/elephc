@@ -1202,6 +1202,9 @@ pub(crate) fn emit_loaded_array_callback_call(
             }
         }
         match stored_ty {
+            PhpType::TaggedScalar => {
+                unreachable!("TaggedScalar must be narrowed or boxed before variadic array storage")
+            }
             PhpType::Int
             | PhpType::Bool
             | PhpType::Resource(_)

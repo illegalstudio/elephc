@@ -48,24 +48,56 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("array_shift()");
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
+    let elem_ty = match &arr_ty {
+        PhpType::Array(inner) => (**inner).clone(),
+        _ => PhpType::Int,
+    };
+    let tagged_int_result =
+        crate::codegen::sentinels::null_repr_is_tagged() && matches!(elem_ty, PhpType::Int);
     if emitter.target.arch == Arch::X86_64 {
         emit_ensure_unique_arg(emitter, &arr_ty);
         emit_store_mutating_arg(emitter, ctx, &args[0]);
+        if tagged_int_result {
+            // distinguish the empty-array case by length before the helper consumes the
+            // pointer, so the result can carry a real null tag instead of the sentinel
+            let empty_label = ctx.next_label("array_shift_empty");
+            let end_label = ctx.next_label("array_shift_end");
+            emitter.instruction("mov r10, QWORD PTR [rax]");                    // load the indexed-array length before deciding whether the shift is empty
+            emitter.instruction("test r10, r10");                               // check whether the indexed array currently stores any elements
+            emitter.instruction(&format!("jz {}", empty_label));                // produce a tagged null when array_shift runs on an empty indexed array
+            emitter.instruction("mov rdi, rax");                                // move the unique indexed-array pointer into the first x86_64 runtime argument register
+            abi::emit_call_label(emitter, "__rt_array_shift");                  // remove and return the first scalar indexed-array element through the x86_64 runtime helper
+            crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+            emitter.instruction(&format!("jmp {}", end_label));                 // skip the empty-array tagged-null path after the successful shift
+            emitter.label(&empty_label);
+            crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+            emitter.label(&end_label);
+            return Some(PhpType::TaggedScalar);
+        }
         emitter.instruction("mov rdi, rax");                                    // move the unique indexed-array pointer into the first x86_64 runtime argument register
         abi::emit_call_label(emitter, "__rt_array_shift");                      // remove and return the first scalar indexed-array element through the x86_64 runtime helper
-        return match arr_ty {
-            PhpType::Array(inner) => Some(*inner),
-            _ => Some(PhpType::Int),
-        };
+        return Some(elem_ty);
     }
 
     emit_ensure_unique_arg(emitter, &arr_ty);
     emit_store_mutating_arg(emitter, ctx, &args[0]);
-    // -- call runtime to remove and return first element --
-    emitter.instruction("bl __rt_array_shift");                                 // call runtime: shift first element → x0=removed element
-
-    match arr_ty {
-        PhpType::Array(inner) => Some(*inner),
-        _ => Some(PhpType::Int),
+    if tagged_int_result {
+        // distinguish the empty-array case by length before the helper consumes the
+        // pointer, so the result can carry a real null tag instead of the sentinel
+        let empty_label = ctx.next_label("array_shift_empty");
+        let end_label = ctx.next_label("array_shift_end");
+        emitter.instruction("ldr x9, [x0]");                                    // load the indexed-array length before deciding whether the shift is empty
+        emitter.instruction(&format!("cbz x9, {}", empty_label));               // produce a tagged null when array_shift runs on an empty indexed array
+        emitter.instruction("bl __rt_array_shift");                             // call runtime: shift first element -> x0=removed element
+        crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+        emitter.instruction(&format!("b {}", end_label));                       // skip the empty-array tagged-null path after the successful shift
+        emitter.label(&empty_label);
+        crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+        emitter.label(&end_label);
+        return Some(PhpType::TaggedScalar);
     }
+    // -- call runtime to remove and return first element --
+    emitter.instruction("bl __rt_array_shift");                                 // call runtime: shift first element -> x0=removed element
+
+    Some(elem_ty)
 }

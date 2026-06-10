@@ -29,12 +29,12 @@ use crate::codegen::driver_support::emit_box_current_value_as_mixed;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::codegen::{abi, platform::Arch};
+use crate::codegen::NULL_SENTINEL;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
-const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
 /// Returns true when a `$length`/`$offset` argument is a compile-time literal
 /// meaning "read to EOF" / "do not seek" — i.e. `null` or a negative integer

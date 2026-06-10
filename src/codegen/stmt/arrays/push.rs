@@ -95,6 +95,11 @@ pub(super) fn emit_array_push_stmt(
     };
     let source_owned = expr_result_heap_ownership(value) == HeapOwnership::Owned;
     let mut val_ty = emit_expr(value, emitter, ctx, data);
+    if matches!(val_ty, PhpType::TaggedScalar) {
+        // store the tagged scalar payload word as a plain int: a null payload carries the
+        // legacy in-band sentinel, matching the sentinel representation for stored nulls
+        val_ty = PhpType::Int;
+    }
     let boxed_iterable =
         crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
     let effective_elem_ty = effective_indexed_push_type(&elem_ty, &val_ty, ctx);
@@ -219,6 +224,11 @@ fn emit_assoc_array_push_stmt(
     abi::emit_push_reg(emitter, table_reg);                                    // preserve the hash-table pointer while evaluating the appended value
 
     let mut val_ty = emit_expr(value, emitter, ctx, data);
+    if matches!(val_ty, PhpType::TaggedScalar) {
+        // store the tagged scalar payload word as a plain int: a null payload carries the
+        // legacy in-band sentinel, matching the sentinel representation for stored nulls
+        val_ty = PhpType::Int;
+    }
     if matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
         && !matches!(assoc_value_ty, PhpType::Mixed | PhpType::Union(_))
         && crate::codegen::expr::can_coerce_result_to_type(&val_ty, &assoc_value_ty)
@@ -334,6 +344,11 @@ fn emit_array_push_stmt_linux_x86_64(
     };
     let source_owned = expr_result_heap_ownership(value) == HeapOwnership::Owned;
     let mut val_ty = emit_expr(value, emitter, ctx, data);
+    if matches!(val_ty, PhpType::TaggedScalar) {
+        // store the tagged scalar payload word as a plain int: a null payload carries the
+        // legacy in-band sentinel, matching the sentinel representation for stored nulls
+        val_ty = PhpType::Int;
+    }
     let boxed_iterable =
         crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
     let effective_elem_ty = effective_indexed_push_type(&elem_ty, &val_ty, ctx);

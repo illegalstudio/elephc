@@ -9,6 +9,7 @@
 //! - Property writes must respect declared types, visibility checks, and runtime object layout.
 
 use crate::codegen::context::Context;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, platform::Arch};
@@ -64,7 +65,7 @@ pub(super) fn emit_magic_set_call(
                 emitter.instruction("bl __rt_mixed_from_value");                // box null into an owned Mixed cell for __set
             }
             Arch::X86_64 => {
-                emitter.instruction("mov rdi, 9223372036854775806");            // use the runtime null sentinel as the boxed null payload low word
+                emitter.instruction(&format!("mov rdi, {}", NULL_SENTINEL));    // use the runtime null sentinel as the boxed null payload low word
                 emitter.instruction("xor rsi, rsi");                            // null mixed payloads have no high word
                 emitter.instruction("mov rax, 8");                              // runtime tag 8 = null payload for Mixed boxing
                 emitter.instruction("call __rt_mixed_from_value");              // box null into an owned Mixed cell for __set

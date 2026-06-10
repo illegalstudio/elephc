@@ -187,6 +187,8 @@ Narrowing applies to function and method parameters. A parameter whose call site
 - `??=` is checked against typed assignment storage for variables, object properties, static properties, and non-append array elements. For concrete local variable types, the fallback must keep the same type or be a literal `null`.
 - Plain array numeric casts (`(int)$array`, `(float)$array`) follow elephc's existing array cast semantics (return the element count rather than PHP's `0`/`1`). Direct `iterable` numeric casts use PHP's empty/non-empty `0`/`1` semantics.
 - `__destruct` runs when an object's refcount reaches zero (scope exit, reassignment, `unset`, program end), matching PHP's timing, but **object resurrection is not supported**: re-storing `$this` so the object would outlive the destructor does not keep it alive — the object is still freed once `__destruct` returns.
+- Under the legacy `--null-repr=sentinel` opt-out, the integer `9223372036854775806` (`PHP_INT_MAX - 1`) collides with elephc's internal null marker in unboxed scalar slots and is misread as `null` by `echo`, `var_dump()`, `is_null()`, `??`, and related null checks. The default tagged null representation does not have this collision: the full 64-bit integer range round-trips.
+
 ### Filesystem functions not implemented
 
 These standard PHP filesystem functions are intentionally absent from elephc because they have no meaningful semantics in a compiled native binary:

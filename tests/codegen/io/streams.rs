@@ -2871,14 +2871,17 @@ fn test_fopen_ftp_invalid_url_is_false() {
     assert_eq!(out, "false");
 }
 
-/// Minimal one-shot HTTP/1.0 server for the `http://` codegen test. Binds the
-/// port immediately, then serves one client on a thread: it drains the request
-/// headers and writes a close-framed response whose body is `content`.
-fn spawn_http_server(port: u16, content: &'static [u8]) -> std::thread::JoinHandle<()> {
+/// Minimal one-shot HTTP/1.0 server for the `http://` codegen test. Binds an
+/// ephemeral port immediately (returned alongside the handle, so parallel and
+/// orphaned test processes can never collide), then serves one client on a
+/// thread: it drains the request headers and writes a close-framed response
+/// whose body is `content`.
+fn spawn_http_server(content: &'static [u8]) -> (std::thread::JoinHandle<()>, u16) {
     use std::io::{Read, Write};
     let listener =
-        std::net::TcpListener::bind(("127.0.0.1", port)).expect("http test: bind port");
-    std::thread::spawn(move || {
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("http test: bind port");
+    let port = listener.local_addr().expect("http test: local addr").port();
+    let handle = std::thread::spawn(move || {
         let (mut sock, _) = listener.accept().expect("http test: accept");
         // Drain the request up to the blank line that ends the headers.
         let mut req = Vec::new();
@@ -2896,17 +2899,19 @@ fn spawn_http_server(port: u16, content: &'static [u8]) -> std::thread::JoinHand
         sock.write_all(header.as_bytes()).unwrap();
         sock.write_all(content).unwrap();
         // Dropping the socket closes the connection so the client sees EOF.
-    })
+    });
+    (handle, port)
 }
 
 /// Same shape as `spawn_http_server` but echoes the received request bytes
 /// back as the response body so tests can assert on the exact wire format
 /// (method, path, headers, AND body) the elephc-built request produced.
-fn spawn_http_echo_server(port: u16) -> std::thread::JoinHandle<()> {
+fn spawn_http_echo_server() -> (std::thread::JoinHandle<()>, u16) {
     use std::io::{Read, Write};
     let listener =
-        std::net::TcpListener::bind(("127.0.0.1", port)).expect("http test: bind port");
-    std::thread::spawn(move || {
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("http test: bind port");
+    let port = listener.local_addr().expect("http test: local addr").port();
+    let handle = std::thread::spawn(move || {
         let (mut sock, _) = listener.accept().expect("http test: accept");
         let mut req = Vec::new();
         let mut byte = [0u8; 1];
@@ -2942,7 +2947,8 @@ fn spawn_http_echo_server(port: u16) -> std::thread::JoinHandle<()> {
         );
         sock.write_all(header.as_bytes()).unwrap();
         sock.write_all(&req).unwrap();
-    })
+    });
+    (handle, port)
 }
 
 /// Serves two HTTP responses on the same port: the first is a 302 with a
@@ -2950,15 +2956,17 @@ fn spawn_http_echo_server(port: u16) -> std::thread::JoinHandle<()> {
 /// the second is a 200 with `body`. Used to exercise the follow_location
 /// path through both relative and absolute Location values.
 fn spawn_http_redirect_server(
-    port: u16,
-    location: &'static str,
+    location: &str,
     final_path: &'static str,
     body: &'static [u8],
-) -> std::thread::JoinHandle<()> {
+) -> (std::thread::JoinHandle<()>, u16) {
     use std::io::{Read, Write};
     let listener =
-        std::net::TcpListener::bind(("127.0.0.1", port)).expect("http redirect: bind port");
-    std::thread::spawn(move || {
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("http redirect: bind port");
+    let port = listener.local_addr().expect("http redirect: local addr").port();
+    // the absolute-URL fixture needs the ephemeral port inside the Location header
+    let location = location.replace("{PORT}", &port.to_string());
+    let handle = std::thread::spawn(move || {
         let read_until_double_crlf = |sock: &mut std::net::TcpStream| {
             let mut req = Vec::new();
             let mut byte = [0u8; 1];
@@ -2995,7 +3003,8 @@ fn spawn_http_redirect_server(
         );
         let _ = s2.write_all(r2.as_bytes());
         let _ = s2.write_all(body);
-    })
+    });
+    (handle, port)
 }
 
 /// Naive bytes-substring search — avoids pulling in extra crates for the
@@ -3061,13 +3070,15 @@ MYQgldWOaXCRMQsHgapn+orK7iF89zA+4UDACVNiHEYS9q8CGynLckruklWdiyi3
 ";
 
 /// Minimal one-shot HTTPS server for deterministic `https://` wrapper tests.
-fn spawn_https_server(port: u16, content: &'static [u8]) -> std::thread::JoinHandle<()> {
+/// Binds an ephemeral port and returns it alongside the handle.
+fn spawn_https_server(content: &'static [u8]) -> (std::thread::JoinHandle<()>, u16) {
     use std::io::{Read, Write};
     use std::sync::Arc;
 
     let listener =
-        std::net::TcpListener::bind(("127.0.0.1", port)).expect("https test: bind port");
-    std::thread::spawn(move || {
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("https test: bind port");
+    let port = listener.local_addr().expect("https test: local addr").port();
+    let handle = std::thread::spawn(move || {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let mut cert_reader = TEST_HTTPS_CERT_PEM.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert_reader)
@@ -3094,7 +3105,8 @@ fn spawn_https_server(port: u16, content: &'static [u8]) -> std::thread::JoinHan
         tls.write_all(headers.as_bytes()).expect("https test: write headers");
         tls.write_all(content).expect("https test: write body");
         tls.flush().expect("https test: flush response");
-    })
+    });
+    (handle, port)
 }
 
 /// Verifies compiled PHP output for fopen http method default is get.
@@ -3103,14 +3115,15 @@ fn test_fopen_http_method_default_is_get() {
     // Without a stream context, the request method falls back to "GET".
     // The echo server reflects the request bytes; the response body must
     // start with "GET /path HTTP/1.0\r\n".
-    let _server = spawn_http_echo_server(54995);
+    let (_server, port) = spawn_http_echo_server();
     let out = compile_and_run(
-        r#"<?php
-$f = fopen("http://127.0.0.1:54995/echo", "r");
+        &r#"<?php
+$f = fopen("http://127.0.0.1:PHP_TEST_PORT/echo", "r");
 $req = stream_get_contents($f);
 fclose($f);
 echo substr($req, 0, 19);
-"#,
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "GET /echo HTTP/1.0\r");
 }
@@ -3121,15 +3134,16 @@ fn test_fopen_http_method_overrides_via_context() {
     // Phase 11 B2: stream_context_create(['http' => ['method' => 'POST']])
     // propagates through __rt_http_build_request → the request line
     // starts with "POST" instead of the default "GET".
-    let _server = spawn_http_echo_server(54996);
+    let (_server, port) = spawn_http_echo_server();
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "method", "POST");
-$f = fopen("http://127.0.0.1:54996/api", "r");
+$f = fopen("http://127.0.0.1:PHP_TEST_PORT/api", "r");
 $req = stream_get_contents($f);
 fclose($f);
 echo substr($req, 0, 21);
-"#,
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "POST /api HTTP/1.0\r\nH");
 }
@@ -3140,15 +3154,16 @@ fn test_fopen_http_header_inserted_via_context() {
     // Phase 11 B2: stream_context_create(['http' => ['header' => ...]])
     // propagates through __rt_http_build_request — the supplied header
     // line lands between the Host: line and the Connection: close line.
-    let _server = spawn_http_echo_server(54997);
+    let (_server, port) = spawn_http_echo_server();
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "header", "X-Trace: abc");
-$f = fopen("http://127.0.0.1:54997/path", "r");
+$f = fopen("http://127.0.0.1:PHP_TEST_PORT/path", "r");
 $req = stream_get_contents($f);
 fclose($f);
 echo strpos($req, "\r\nX-Trace: abc\r\n") !== false ? "has-header" : "no-header";
-"#,
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "has-header");
 }
@@ -3159,17 +3174,18 @@ fn test_fopen_http_content_only_emits_body() {
     // Reduced repro of the POST + content gap: set only ['http']['content']
     // without 'method'. If this passes, the bug is in set_option_4's two-call
     // sub-hash merge; if this fails, it's in the content lookup or emission.
-    let _server = spawn_http_echo_server(53999);
+    let (_server, port) = spawn_http_echo_server();
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "content", "x=y");
-$f = fopen("http://127.0.0.1:53999/p", "r");
+$f = fopen("http://127.0.0.1:PHP_TEST_PORT/p", "r");
 $req = stream_get_contents($f);
 fclose($f);
 $has_clen = strpos($req, "\r\nContent-Length: 3\r\n") !== false;
 $has_body = strpos($req, "\r\n\r\nx=y") !== false;
 echo ($has_clen ? "clen-ok" : "clen-MISSING") . "|" . ($has_body ? "body-ok" : "body-MISSING");
-"#,
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "clen-ok|body-ok");
 }
@@ -3181,18 +3197,19 @@ fn test_fopen_http_content_post_body_with_content_length() {
     // ['method' => 'POST'] propagates a Content-Length: N header and writes
     // the body bytes after the blank line. The echo server reflects the
     // raw request bytes so we can grep for both the header and the body.
-    let _server = spawn_http_echo_server(53998);
+    let (_server, port) = spawn_http_echo_server();
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "method", "POST");
 stream_context_set_option(stream_context_get_default(), "http", "content", "foo=bar&baz=qux");
-$f = fopen("http://127.0.0.1:53998/submit", "r");
+$f = fopen("http://127.0.0.1:PHP_TEST_PORT/submit", "r");
 $req = stream_get_contents($f);
 fclose($f);
 $has_clen = strpos($req, "\r\nContent-Length: 15\r\n") !== false;
 $has_body = strpos($req, "\r\n\r\nfoo=bar&baz=qux") !== false;
 echo ($has_clen ? "clen-ok" : "clen-MISSING") . "|" . ($has_body ? "body-ok" : "body-MISSING");
-"#,
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "clen-ok|body-ok");
 }
@@ -3202,14 +3219,14 @@ echo ($has_clen ? "clen-ok" : "clen-MISSING") . "|" . ($has_body ? "body-ok" : "
 fn test_fopen_http_retrieves_body() {
     // fopen("http://...") issues an HTTP GET and exposes the response body
     // with the headers stripped as a readable stream.
-    let _server = spawn_http_server(54971, b"body delivered over http");
-    let out = compile_and_run(
+    let (_server, port) = spawn_http_server(b"body delivered over http");
+    let out = compile_and_run(&format!(
         r#"<?php
-$f = fopen("http://127.0.0.1:54971/page.txt", "r");
+$f = fopen("http://127.0.0.1:{port}/page.txt", "r");
 echo stream_get_contents($f);
 fclose($f);
-"#,
-    );
+"#
+    ));
     assert_eq!(out, "body delivered over http");
 }
 
@@ -3219,12 +3236,12 @@ fclose($f);
 /// The owned-heap copy (via `__rt_str_persist`) survives the concat below.
 #[test]
 fn test_file_get_contents_over_http() {
-    let _server = spawn_http_server(54973, b"fgc over http body");
-    let out = compile_and_run(
+    let (_server, port) = spawn_http_server(b"fgc over http body");
+    let out = compile_and_run(&format!(
         r#"<?php
-echo "[" . file_get_contents("http://127.0.0.1:54973/page.txt") . "]";
-"#,
-    );
+echo "[" . file_get_contents("http://127.0.0.1:{port}/page.txt") . "]";
+"#
+    ));
     assert_eq!(out, "[fgc over http body]");
 }
 
@@ -3232,13 +3249,13 @@ echo "[" . file_get_contents("http://127.0.0.1:54973/page.txt") . "]";
 /// through the HTTP wrapper instead of the plain filesystem reader.
 #[test]
 fn test_file_get_contents_dynamic_http_url() {
-    let _server = spawn_http_server(54974, b"dynamic fgc over http");
-    let out = compile_and_run(
+    let (_server, port) = spawn_http_server(b"dynamic fgc over http");
+    let out = compile_and_run(&format!(
         r#"<?php
-$url = "http://127.0.0.1:54974/page.txt";
+$url = "http://127.0.0.1:{port}/page.txt";
 echo "[" . file_get_contents($url) . "]";
-"#,
-    );
+"#
+    ));
     assert_eq!(out, "[dynamic fgc over http]");
 }
 
@@ -3246,13 +3263,13 @@ echo "[" . file_get_contents($url) . "]";
 /// proving the literal HTTPS wrapper path returns an owned response body.
 #[test]
 fn test_file_get_contents_over_https_local_server() {
-    let _server = spawn_https_server(54975, b"fgc over local https");
-    let out = compile_and_run(
+    let (_server, port) = spawn_https_server(b"fgc over local https");
+    let out = compile_and_run(&format!(
         r#"<?php
 stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
-echo "[" . file_get_contents("https://127.0.0.1:54975/page.txt") . "]";
-"#,
-    );
+echo "[" . file_get_contents("https://127.0.0.1:{port}/page.txt") . "]";
+"#
+    ));
     assert_eq!(out, "[fgc over local https]");
 }
 
@@ -3260,14 +3277,14 @@ echo "[" . file_get_contents("https://127.0.0.1:54975/page.txt") . "]";
 /// `https://`, covering the non-literal dynamic URL dispatcher.
 #[test]
 fn test_file_get_contents_dynamic_https_local_server() {
-    let _server = spawn_https_server(54976, b"dynamic fgc over local https");
-    let out = compile_and_run(
+    let (_server, port) = spawn_https_server(b"dynamic fgc over local https");
+    let out = compile_and_run(&format!(
         r#"<?php
 stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
-$url = "https://127.0.0.1:54976/page.txt";
+$url = "https://127.0.0.1:{port}/page.txt";
 echo "[" . file_get_contents($url) . "]";
-"#,
-    );
+"#
+    ));
     assert_eq!(out, "[dynamic fgc over local https]");
 }
 
@@ -3305,16 +3322,16 @@ echo $r === false ? "false" : "got";
 fn test_fopen_http_follow_location_relative_path() {
     // 302 with a Location: /new redirects to the same host. The redirect
     // loop in __rt_http_open re-issues GET /new and serves the second body.
-    let _server = spawn_http_redirect_server(53901, "/new", "/new", b"after-relative-redirect");
-    let out = compile_and_run(
+    let (_server, port) = spawn_http_redirect_server("/new", "/new", b"after-relative-redirect");
+    let out = compile_and_run(&format!(
         r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "follow_location", "1");
 stream_context_set_option(stream_context_get_default(), "http", "max_redirects", "5");
-$f = fopen("http://127.0.0.1:53901/start", "r");
+$f = fopen("http://127.0.0.1:{port}/start", "r");
 echo stream_get_contents($f);
 fclose($f);
-"#,
-    );
+"#
+    ));
     assert_eq!(out, "after-relative-redirect");
 }
 
@@ -3326,21 +3343,20 @@ fn test_fopen_http_follow_location_absolute_same_host() {
     // redirect. The fixture rejects any path other than /final, so this
     // test fails if the host:port parsing leaves stray prefix bytes in the
     // redirect path buffer.
-    let _server = spawn_http_redirect_server(
-        53902,
-        "http://127.0.0.1:53902/final",
+    let (_server, port) = spawn_http_redirect_server(
+        "http://127.0.0.1:{PORT}/final",
         "/final",
         b"after-absolute-redirect",
     );
-    let out = compile_and_run(
+    let out = compile_and_run(&format!(
         r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "follow_location", "1");
 stream_context_set_option(stream_context_get_default(), "http", "max_redirects", "5");
-$f = fopen("http://127.0.0.1:53902/start", "r");
+$f = fopen("http://127.0.0.1:{port}/start", "r");
 echo stream_get_contents($f);
 fclose($f);
-"#,
-    );
+"#
+    ));
     assert_eq!(out, "after-absolute-redirect");
 }
 
@@ -3351,22 +3367,21 @@ fn test_fopen_http_follow_location_cross_host_is_not_followed() {
     // (cross-host redirect requires reconnecting, deferred for v1). The
     // initial 302 response is surfaced as-is; the body is empty because the
     // redirect response itself has Content-Length: 0.
-    let _server = spawn_http_redirect_server(
-        53903,
+    let (_server, port) = spawn_http_redirect_server(
         "http://other-host.invalid:80/whatever",
         "/never-reached",
         b"unreachable",
     );
-    let out = compile_and_run(
+    let out = compile_and_run(&format!(
         r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "follow_location", "1");
 stream_context_set_option(stream_context_get_default(), "http", "max_redirects", "5");
 stream_context_set_option(stream_context_get_default(), "http", "ignore_errors", "1");
-$f = fopen("http://127.0.0.1:53903/start", "r");
+$f = fopen("http://127.0.0.1:{port}/start", "r");
 echo strlen(stream_get_contents($f));
 fclose($f);
-"#,
-    );
+"#
+    ));
     assert_eq!(out, "0");
 }
 
@@ -5791,12 +5806,12 @@ fn test_fopen_http_content_emits_content_length_header() {
     // landed the body append but left the Content-Length emission stubbed
     // with a TEMPORARILY-DISABLED branch on ARM64; this verifies the
     // re-enabled path puts the right bytes on the wire.)
-    let _server = spawn_http_echo_server(56001);
+    let (_server, port) = spawn_http_echo_server();
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "method", "POST");
 stream_context_set_option(stream_context_get_default(), "http", "content", "hello body");
-$f = fopen("http://127.0.0.1:56001/", "r");
+$f = fopen("http://127.0.0.1:PHP_TEST_PORT/", "r");
 $req = stream_get_contents($f);
 fclose($f);
 // The echo server replays the request headers (bytes up to the blank
@@ -5809,7 +5824,8 @@ for ($i = 0; $i + $nlen <= strlen($req); $i++) {
     if (substr($req, $i, $nlen) === $needle) { $found = true; break; }
 }
 echo $found ? "ok" : "MISS:" . strlen($req);
-"#,
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "ok");
 }
@@ -5854,11 +5870,11 @@ echo (is_string($r) ? "s" : "n") . "|" . ($miss === false ? "f" : "x");
 /// Verifies compiled PHP output for fopen http user agent in request.
 #[test]
 fn test_fopen_http_user_agent_in_request() {
-    let _server = spawn_http_echo_server(56010);
+    let (_server, port) = spawn_http_echo_server();
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "user_agent", "MyApp/2.0");
-$f = fopen("http://127.0.0.1:56010/", "r");
+$f = fopen("http://127.0.0.1:PHP_TEST_PORT/", "r");
 $req = stream_get_contents($f);
 fclose($f);
 $needle = "User-Agent: MyApp/2.0";
@@ -5868,7 +5884,8 @@ for ($i = 0; $i + $nlen <= strlen($req); $i++) {
     if (substr($req, $i, $nlen) === $needle) { $found = true; break; }
 }
 echo $found ? "ok" : "MISS";
-"#,
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "ok");
 }
@@ -5876,11 +5893,11 @@ echo $found ? "ok" : "MISS";
 /// Verifies compiled PHP output for fopen http protocol version 1 1.
 #[test]
 fn test_fopen_http_protocol_version_1_1() {
-    let _server = spawn_http_echo_server(56011);
+    let (_server, port) = spawn_http_echo_server();
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "protocol_version", "1.1");
-$f = fopen("http://127.0.0.1:56011/", "r");
+$f = fopen("http://127.0.0.1:PHP_TEST_PORT/", "r");
 $req = stream_get_contents($f);
 fclose($f);
 $needle = "HTTP/1.1";
@@ -5890,7 +5907,8 @@ for ($i = 0; $i + $nlen <= strlen($req); $i++) {
     if (substr($req, $i, $nlen) === $needle) { $found = true; break; }
 }
 echo $found ? "ok" : "MISS";
-"#,
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "ok");
 }
@@ -5912,21 +5930,22 @@ fclose($f);
 #[test]
 #[ignore = "reliable standalone but flakes in parallel sweep (fixed-port echo server, port-binding race); run with --ignored --test-threads=1. The request_fulluri absolute-form URI now includes the non-default port (fixed in parse_http_url)"]
 fn test_fopen_http_request_fulluri_in_request_line() {
-    let _server = spawn_http_echo_server(56012);
+    let (_server, port) = spawn_http_echo_server();
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 stream_context_set_option(stream_context_get_default(), "http", "request_fulluri", "1");
-$f = fopen("http://127.0.0.1:56012/path", "r");
+$f = fopen("http://127.0.0.1:PHP_TEST_PORT/path", "r");
 $req = stream_get_contents($f);
 fclose($f);
-$needle = "GET http://127.0.0.1:56012/path HTTP/1.0";
+$needle = "GET http://127.0.0.1:PHP_TEST_PORT/path HTTP/1.0";
 $nlen = strlen($needle);
 $found = false;
 for ($i = 0; $i + $nlen <= strlen($req); $i++) {
     if (substr($req, $i, $nlen) === $needle) { $found = true; break; }
 }
 echo $found ? "ok" : "MISS";
-"#,
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "ok");
 }

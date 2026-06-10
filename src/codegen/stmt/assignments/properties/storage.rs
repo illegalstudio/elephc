@@ -9,10 +9,10 @@
 //! - Property writes must respect declared types, visibility checks, and runtime object layout.
 
 use crate::codegen::abi;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::emit::Emitter;
 use crate::types::PhpType;
 
-const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 /// Sentinel value stored in a property slot's first word to represent `Void`
 /// when the upper word is also zeroed. Chosen to be an invalid pointer
 /// representation that avoids confusing null pointers with uninitialized slots.
@@ -69,6 +69,12 @@ pub(super) fn store_property_value(emitter: &mut Emitter, object_reg: &str, val_
             abi::emit_store_to_address(emitter, temp_reg, object_reg, offset);
             abi::emit_load_int_immediate(emitter, temp_reg, 9);
             abi::emit_store_to_address(emitter, temp_reg, object_reg, offset + 8);
+        }
+        PhpType::TaggedScalar => {
+            let tag_temp_reg = abi::tertiary_scratch_reg(emitter);
+            abi::emit_pop_reg_pair(emitter, temp_reg, tag_temp_reg);
+            abi::emit_store_to_address(emitter, temp_reg, object_reg, offset);
+            abi::emit_store_to_address(emitter, tag_temp_reg, object_reg, offset + 8);
         }
         PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
             abi::emit_pop_reg(emitter, temp_reg);
@@ -206,6 +212,9 @@ pub(super) fn store_referenced_value(
         PhpType::Resource(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 0);
+        }
+        PhpType::TaggedScalar => {
+            unreachable!("TaggedScalar must be narrowed or boxed before a by-reference store")
         }
         PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
             abi::emit_pop_reg(emitter, temp_reg);

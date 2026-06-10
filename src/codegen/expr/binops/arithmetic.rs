@@ -142,6 +142,10 @@ pub(super) fn emit_numeric_binop(
     let left_stack_ty = if dynamic_candidate && left_ty == PhpType::Void {
         coerce_null_to_zero(emitter, &left_ty);
         PhpType::Int
+    } else if left_ty == PhpType::TaggedScalar {
+        // narrow a tagged scalar (null -> 0) before the operand is spilled as one word
+        coerce_null_to_zero(emitter, &left_ty);
+        PhpType::Int
     } else if dynamic_candidate {
         left_ty.clone()
     } else {

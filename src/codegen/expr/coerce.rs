@@ -9,6 +9,7 @@
 //! - Coercions may allocate, retain, or box values, so ownership state must be updated with the result.
 
 use crate::codegen::context::Context;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, platform::Arch};
@@ -110,6 +111,24 @@ fn coerce_to_string_inner(
                     emitter.instruction("mov rdx, 0");                          // null produces empty string (length = 0)
                 }
             }
+        }
+        PhpType::TaggedScalar => {
+            // -- tagged scalar: null -> empty string, int payload -> decimal text --
+            let null_label = ctx.next_label("tagged_to_str_null");
+            let done_label = ctx.next_label("tagged_to_str_done");
+            crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(emitter, &null_label);
+            abi::emit_call_label(emitter, "__rt_itoa");                         // convert the non-null tagged scalar payload to decimal text
+            abi::emit_jump(emitter, &done_label);                               // skip the empty-string fallback after conversion
+            emitter.label(&null_label);
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("mov x2, #0");                          // null produces empty string (length = 0)
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("mov rdx, 0");                          // null produces empty string (length = 0)
+                }
+            }
+            emitter.label(&done_label);
         }
         PhpType::Mixed | PhpType::Union(_) => {
             // -- mixed strings dispatch on the boxed payload at runtime --
@@ -232,20 +251,25 @@ pub fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
         // Bool is already 0/1 in x0, compatible with Int arithmetic
     } else if *ty == PhpType::Float {
         // Float is already in d0, no null sentinel to check
+    } else if *ty == PhpType::TaggedScalar {
+        crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(emitter);
+    } else if *ty == PhpType::Int && crate::codegen::sentinels::null_repr_is_tagged() {
+        // Under the tagged representation a plain Int can never hold the null sentinel
     } else if *ty == PhpType::Int {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction("movz x9, #0xFFFE");                        // build null sentinel in x9: bits 0-15
-                emitter.instruction("movk x9, #0xFFFF, lsl #16");               // null sentinel bits 16-31
-                emitter.instruction("movk x9, #0xFFFF, lsl #32");               // null sentinel bits 32-47
-                emitter.instruction("movk x9, #0x7FFF, lsl #48");               // null sentinel bits 48-63, completing value
+                let sentinel = NULL_SENTINEL as u64;
+                emitter.instruction(&format!("movz x9, #0x{:X}", sentinel & 0xFFFF)); // build null sentinel in x9: bits 0-15
+                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #16", (sentinel >> 16) & 0xFFFF)); // null sentinel bits 16-31
+                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #32", (sentinel >> 32) & 0xFFFF)); // null sentinel bits 32-47
+                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #48", (sentinel >> 48) & 0xFFFF)); // null sentinel bits 48-63, completing value
                 emitter.instruction("cmp x0, x9");                              // compare value against null sentinel
                 emitter.instruction("csel x0, xzr, x0, eq");                    // if x0 == sentinel, replace with zero
             }
             Arch::X86_64 => {
                 let sentinel_reg = abi::temp_int_reg(emitter.target);
                 let zero_reg = abi::symbol_scratch_reg(emitter);
-                emitter.instruction(&format!("mov {}, 9223372036854775806", sentinel_reg)); // materialize the runtime null sentinel in a scratch register
+                emitter.instruction(&format!("mov {}, {}", sentinel_reg, NULL_SENTINEL)); // materialize the runtime null sentinel in a scratch register
                 emitter.instruction(&format!("xor {}, {}", zero_reg, zero_reg)); // materialize an integer zero in a second scratch register
                 emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare the current integer result against the runtime null sentinel
                 emitter.instruction(&format!("cmove {}, {}", abi::int_result_reg(emitter), zero_reg)); // replace the sentinel with zero while leaving ordinary integers unchanged

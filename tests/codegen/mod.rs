@@ -12,6 +12,7 @@ mod fibers;
 mod buffers;
 mod preprocessor;
 mod namespaces;
+mod null_sentinel;
 mod case_insensitive_symbols;
 mod cli;
 mod benchmarks;

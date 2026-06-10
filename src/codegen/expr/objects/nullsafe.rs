@@ -14,6 +14,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
 use crate::codegen::platform::Arch;
+use crate::codegen::NULL_SENTINEL;
 use crate::names::php_symbol_key;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -23,7 +24,6 @@ use crate::codegen::expr::emit_expr;
 
 /// Sentinel value representing a plain (non-boxed) null in the runtime.
 /// Uses an unlikely bit pattern to distinguish from valid object pointers.
-const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
 /// Lowers `$obj?->property` with a short-circuit null result when the receiver is null.
 pub(super) fn emit_nullsafe_property_access(

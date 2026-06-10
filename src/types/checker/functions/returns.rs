@@ -442,6 +442,14 @@ impl Checker {
     pub(crate) fn union_param_type(a: &PhpType, b: &PhpType) -> PhpType {
         match (a, b) {
             _ if a == b => a.clone(),
+            // Under the tagged null representation a null call-site argument makes the
+            // parameter genuinely nullable: widen scalar params to int|null instead of
+            // riding null in as the in-band sentinel of a plain Int.
+            (PhpType::Void, PhpType::Int) | (PhpType::Int, PhpType::Void)
+                if crate::codegen::sentinels::null_repr_is_tagged() =>
+            {
+                PhpType::Union(vec![PhpType::Int, PhpType::Void])
+            }
             (PhpType::Void | PhpType::Never, other) | (other, PhpType::Void | PhpType::Never) => {
                 other.clone()
             }

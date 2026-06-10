@@ -305,6 +305,18 @@ pub fn emit(
         return Some(PhpType::Str);
     }
 
+    if matches!(&ty, PhpType::TaggedScalar) {
+        let null_case = ctx.next_label("gettype_tagged_null");
+        let done = ctx.next_label("gettype_tagged_done");
+        crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(emitter, &null_case);
+        emit_type_name_result(emitter, data, b"integer");
+        abi::emit_jump(emitter, &done);                                         // skip the NULL literal after selecting the integer type name
+        emitter.label(&null_case);
+        emit_type_name_result(emitter, data, b"NULL");
+        emitter.label(&done);
+        return Some(PhpType::Str);
+    }
+
     let type_str = match &ty {
         PhpType::Int => b"integer".as_slice(),
         PhpType::Float => b"double".as_slice(),
@@ -320,6 +332,7 @@ pub fn emit(
         PhpType::Resource(_) => b"resource".as_slice(),
         PhpType::Iterable => unreachable!("iterable handled above via runtime heap-kind dispatch"),
         PhpType::Mixed | PhpType::Union(_) => unreachable!("mixed handled above"),
+        PhpType::TaggedScalar => unreachable!("tagged scalar handled above via runtime tag dispatch"),
     };
     emit_type_name_result(emitter, data, type_str)
 }

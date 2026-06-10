@@ -229,6 +229,21 @@ pub(super) fn infer_function_call_type(
                 PhpType::Int
             }
         }
+        "array_pop" | "array_shift" => {
+            // mirror the emitters: int-element pops/shifts evaluate to a tagged scalar
+            // under the tagged null representation (empty array -> tagged null)
+            let elem_ty = match args.first().map(|arg| infer_local_type(arg, sig, ctx)) {
+                Some(PhpType::Array(elem)) => *elem,
+                _ => PhpType::Int,
+            };
+            if matches!(elem_ty, PhpType::Int)
+                && crate::codegen::sentinels::null_repr_is_tagged()
+            {
+                PhpType::TaggedScalar
+            } else {
+                elem_ty
+            }
+        }
         "min" | "max" => {
             if args.len() >= 2 {
                 let t0 = infer_local_type(&args[0], sig, ctx);

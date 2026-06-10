@@ -9,6 +9,7 @@
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
 use crate::codegen::emit::Emitter;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::platform::Arch;
 
 /// Emits the `__rt_array_shift` runtime helper that removes and returns the first
@@ -44,10 +45,11 @@ pub fn emit_array_shift(emitter: &mut Emitter) {
     emitter.instruction("cbnz x9, __rt_array_shift_notempty");                  // if length != 0, proceed normally
 
     // -- empty array: return null sentinel --
-    emitter.instruction("movz x0, #0xFFFE");                                    // load null sentinel bits [15:0]
-    emitter.instruction("movk x0, #0xFFFF, lsl #16");                           // load null sentinel bits [31:16]
-    emitter.instruction("movk x0, #0xFFFF, lsl #32");                           // load null sentinel bits [47:32]
-    emitter.instruction("movk x0, #0x7FFF, lsl #48");                           // load null sentinel bits [63:48] = 0x7FFFFFFFFFFFFFFE
+    let sentinel = NULL_SENTINEL as u64;
+    emitter.instruction(&format!("movz x0, #0x{:X}", sentinel & 0xFFFF));       // load null sentinel bits [15:0]
+    emitter.instruction(&format!("movk x0, #0x{:X}, lsl #16", (sentinel >> 16) & 0xFFFF)); // load null sentinel bits [31:16]
+    emitter.instruction(&format!("movk x0, #0x{:X}, lsl #32", (sentinel >> 32) & 0xFFFF)); // load null sentinel bits [47:32]
+    emitter.instruction(&format!("movk x0, #0x{:X}, lsl #48", (sentinel >> 48) & 0xFFFF)); // load null sentinel bits [63:48] = 0x7FFFFFFFFFFFFFFE
     emitter.instruction("ret");                                                 // return null to caller
 
     // -- array is not empty, proceed --
@@ -101,7 +103,7 @@ fn emit_array_shift_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the current indexed-array length before checking whether the shift operation is empty
     emitter.instruction("test r10, r10");                                       // check whether the indexed array currently stores any live scalar payloads
     emitter.instruction("jnz __rt_array_shift_notempty_x86");                   // continue with the scalar left-shift loop when the indexed array is not empty
-    emitter.instruction("mov rax, 0x7ffffffffffffffe");                         // materialize the shared null sentinel as the empty-array shift result on x86_64
+    emitter.instruction(&format!("mov rax, 0x{:x}", NULL_SENTINEL));            // materialize the shared null sentinel as the empty-array shift result on x86_64
     emitter.instruction("ret");                                                 // return the null sentinel immediately when array_shift runs on an empty indexed array
 
     emitter.label("__rt_array_shift_notempty_x86");

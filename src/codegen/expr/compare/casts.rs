@@ -78,6 +78,9 @@ pub(in crate::codegen::expr) fn emit_cast(
                 PhpType::Mixed | PhpType::Union(_) => {
                     abi::emit_call_label(emitter, "__rt_mixed_cast_int");       // cast the boxed mixed payload to int through the target-aware helper
                 }
+                PhpType::TaggedScalar => {
+                    crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(emitter);
+                }
                 PhpType::Callable
                 | PhpType::Object(_)
                 | PhpType::Buffer(_)
@@ -89,6 +92,10 @@ pub(in crate::codegen::expr) fn emit_cast(
         CastType::Float => {
             match &src_ty {
                 PhpType::Float => {}
+                PhpType::TaggedScalar => {
+                    crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(emitter);
+                    abi::emit_int_result_to_float_result(emitter);              // signed int to double conversion
+                }
                 PhpType::Int | PhpType::Bool => {
                     abi::emit_int_result_to_float_result(emitter);              // signed int to double conversion
                 }

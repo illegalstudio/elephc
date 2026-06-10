@@ -9,6 +9,7 @@
 //! - Local writes must release replaced heap values only when the frame owns the previous value.
 
 use super::super::super::abi;
+use super::super::super::NULL_SENTINEL;
 use super::super::super::callable_descriptor;
 use super::super::super::context::{Context, HeapOwnership};
 use super::super::super::data_section::DataSection;
@@ -186,6 +187,23 @@ pub(crate) fn emit_assign_stmt(
         };
         let offset = var.stack_offset;
         let old_ty = var.ty.clone();
+        let slot_size = var.slot_size;
+        if matches!(ty, PhpType::TaggedScalar)
+            && slot_size < 16
+            && matches!(
+                old_ty,
+                PhpType::Int
+                    | PhpType::Bool
+                    | PhpType::Void
+                    | PhpType::Never
+                    | PhpType::Resource(_)
+            )
+        {
+            // The local slot is one word: keep the tagged scalar payload as a plain int.
+            // A null payload carries the legacy in-band sentinel, so storage matches the
+            // sentinel representation instead of writing the tag into the neighboring slot.
+            ty = PhpType::Int;
+        }
         if matches!(ty, PhpType::Mixed | PhpType::Union(_))
             && !matches!(old_ty, PhpType::Mixed | PhpType::Union(_))
             && super::super::super::expr::can_coerce_result_to_type(&ty, &old_ty)
@@ -855,6 +873,14 @@ fn emit_null_coalesce_assign_stmt(
 /// sentinel. ARM64 and x86_64 produce architecturally appropriate comparison + branch
 /// sequences.
 fn emit_branch_if_result_non_null(ty: &PhpType, keep_label: &str, emitter: &mut Emitter) {
+    if matches!(ty, PhpType::TaggedScalar) {
+        crate::codegen::sentinels::emit_branch_if_tagged_scalar_not_null(emitter, keep_label);
+        return;
+    }
+    if matches!(ty, PhpType::Int) && crate::codegen::sentinels::null_repr_is_tagged() {
+        abi::emit_jump(emitter, keep_label);                                    // a plain Int is never null under the tagged representation; always keep it
+        return;
+    }
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_call_label(emitter, "__rt_mixed_unbox");                      // inspect the boxed value tag before deciding whether ??= should store
         match emitter.target.arch {
@@ -871,7 +897,7 @@ fn emit_branch_if_result_non_null(ty: &PhpType, keep_label: &str, emitter: &mut 
     }
 
     let null_reg = abi::symbol_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, null_reg, 0x7fff_ffff_ffff_fffe_u64 as i64);
+    abi::emit_load_int_immediate(emitter, null_reg, NULL_SENTINEL);
     if ty == &PhpType::Float {
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {

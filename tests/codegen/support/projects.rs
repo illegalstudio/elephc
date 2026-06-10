@@ -228,6 +228,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
         false,
         target(),
         requires_elephc_tls,
+        default_null_repr(),
     );
     let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
 
@@ -312,6 +313,7 @@ pub(crate) fn compile_and_run_files_with_defines(
         false,
         target(),
         requires_elephc_tls,
+        default_null_repr(),
     );
     let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
     // user assembly is already platform-correct (emitters handle platform at emit time)
@@ -429,6 +431,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         false,
         target(),
         requires_elephc_tls,
+        default_null_repr(),
     );
     let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
     // user assembly is already platform-correct (emitters handle platform at emit time)
@@ -541,6 +544,7 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
         false,
         target(),
         requires_elephc_tls,
+        default_null_repr(),
     );
     let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
     // user assembly is already platform-correct (emitters handle platform at emit time)

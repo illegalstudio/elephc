@@ -9,6 +9,7 @@
 //! - Symbol relocations differ by platform and refcounted stores must preserve ownership cleanup.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::NULL_SENTINEL;
 use crate::types::PhpType;
 
 use super::calls::emit_call_label;
@@ -21,7 +22,6 @@ use super::registers::{
 };
 use super::values::{emit_decref_if_refcounted, emit_load_int_immediate};
 
-const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
 /// Stores a local variable from its frame slot into a static/global symbol.
 /// Loads the value from `offset` relative to the frame pointer, then writes it

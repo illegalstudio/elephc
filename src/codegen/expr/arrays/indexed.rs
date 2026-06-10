@@ -25,7 +25,7 @@ pub(crate) fn emit_array_literal(
     data: &mut DataSection,
 ) -> PhpType {
     let literal_elem_ty = infer_indexed_literal_element_type(elems, ctx);
-    if matches!(literal_elem_ty, PhpType::Mixed)
+    if matches!(literal_elem_ty, PhpType::Mixed | PhpType::TaggedScalar)
         && !elems.iter().any(|e| matches!(e.kind, ExprKind::Spread(_)))
     {
         return emit_mixed_array_literal(elems, emitter, ctx, data);
@@ -544,8 +544,8 @@ fn merge_indexed_literal_element_type(
     if matches!(next, PhpType::Never) {
         return existing.clone();
     }
-    if matches!(existing, PhpType::Mixed | PhpType::Union(_))
-        || matches!(next, PhpType::Mixed | PhpType::Union(_))
+    if matches!(existing, PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar)
+        || matches!(next, PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar)
     {
         return PhpType::Mixed;
     }

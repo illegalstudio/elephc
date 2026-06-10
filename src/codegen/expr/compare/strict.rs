@@ -57,6 +57,16 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
         {
             true
         }
+        // Under the tagged representation an Int-peeked expression can evaluate to a
+        // TaggedScalar holding null (array-miss reads), so int/null combinations must be
+        // compared at runtime instead of being constant-folded to a type mismatch.
+        (Some(l), Some(r))
+            if crate::codegen::sentinels::null_repr_is_tagged()
+                && matches!(l, PhpType::Int | PhpType::Void | PhpType::TaggedScalar)
+                && matches!(r, PhpType::Int | PhpType::Void | PhpType::TaggedScalar) =>
+        {
+            true
+        }
         (Some(l), Some(r)) => l == r,
         _ => true,
     };
@@ -75,6 +85,10 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
             PhpType::Mixed => {
                 abi::emit_push_reg(emitter, abi::int_result_reg(emitter));      // push the left boxed mixed pointer for payload-aware strict comparison through the target-aware helper
             }
+            PhpType::TaggedScalar => {
+                let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(emitter);
+                abi::emit_push_reg_pair(emitter, abi::int_result_reg(emitter), tag_reg); // push the left tagged scalar payload/tag pair for later comparison
+            }
             _ => {
                 abi::emit_push_reg(emitter, abi::int_result_reg(emitter));      // push the left scalar or pointer-like value for later comparison through the target-aware helper
             }
@@ -82,8 +96,8 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
 
         let rt = emit_expr(right, emitter, ctx, data);
 
-        if matches!(lt, PhpType::Mixed | PhpType::Union(_))
-            || matches!(rt, PhpType::Mixed | PhpType::Union(_))
+        if matches!(lt, PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar)
+            || matches!(rt, PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar)
         {
             let left_box_temp = !matches!(lt, PhpType::Mixed | PhpType::Union(_));
             let right_box_temp = !matches!(rt, PhpType::Mixed | PhpType::Union(_));
@@ -97,6 +111,10 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
                 PhpType::Str => {
                     let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
                     abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);         // spill the right string payload before reloading the left operand into the same registers
+                }
+                PhpType::TaggedScalar => {
+                    let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(emitter);
+                    abi::emit_push_reg_pair(emitter, abi::int_result_reg(emitter), tag_reg); // spill the right tagged scalar payload/tag pair before reloading the left operand
                 }
                 _ => {
                     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));  // spill the right scalar/pointer/mixed box before reloading the left operand into the same register
@@ -130,6 +148,20 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
                         }
                     }
                 }
+                PhpType::TaggedScalar => {
+                    let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(emitter);
+                    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16); // reload the saved left tagged scalar payload from the lower comparison stack slot
+                    abi::emit_load_temporary_stack_slot(emitter, tag_reg, 24);  // reload the saved left tagged scalar tag from the lower comparison stack slot
+                    crate::codegen::emit_box_current_value_as_mixed(emitter, &lt);  // box the left tagged scalar so mixed comparison can inspect its runtime tag
+                    match emitter.target.arch {
+                        crate::codegen::platform::Arch::AArch64 => {
+                            emitter.instruction("str x0, [sp, #16]");           // replace the old left comparison slot with the boxed left mixed pointer
+                        }
+                        crate::codegen::platform::Arch::X86_64 => {
+                            emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // replace the old left comparison slot with the boxed left mixed pointer
+                        }
+                    }
+                }
                 _ => {
                     abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16); // reload the saved left scalar/pointer operand from the lower comparison stack slot
                     crate::codegen::emit_box_current_value_as_mixed(emitter, &lt);  // box the left operand when it is not already mixed
@@ -152,6 +184,11 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
                     let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
                     abi::emit_load_temporary_stack_slot(emitter, ptr_reg, 0);   // restore the spilled right string pointer after boxing the left operand
                     abi::emit_load_temporary_stack_slot(emitter, len_reg, 8);   // restore the spilled right string length after boxing the left operand
+                }
+                PhpType::TaggedScalar => {
+                    let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(emitter);
+                    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 0); // restore the spilled right tagged scalar payload after boxing the left operand
+                    abi::emit_load_temporary_stack_slot(emitter, tag_reg, 8);   // restore the spilled right tagged scalar tag after boxing the left operand
                 }
                 _ => {
                     abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 0); // restore the spilled right scalar/pointer/mixed box after boxing the left operand
@@ -232,6 +269,9 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
         }
 
         match &lt {
+            PhpType::TaggedScalar => {
+                unreachable!("TaggedScalar strict comparison is routed through the mixed boxing path")
+            }
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::Resource(_) => {
                 let left_reg = abi::symbol_scratch_reg(emitter);
                 abi::emit_pop_reg(emitter, left_reg);                           // pop the saved left scalar or pointer-like value from the temporary comparison stack

@@ -128,6 +128,31 @@ pub fn emit_store_incoming_param(
                 cursor.int_stack_only = true;
             }
         }
+        PhpType::TaggedScalar => {
+            if !cursor.int_stack_only && cursor.int_reg_idx + 1 < int_reg_limit {
+                let payload_reg = int_arg_reg_name(emitter.target, cursor.int_reg_idx);
+                let tag_reg = int_arg_reg_name(emitter.target, cursor.int_reg_idx + 1);
+                emitter.comment(&format!(
+                    "param ${} from {},{}",
+                    name, payload_reg, tag_reg
+                ));
+                store_at_offset(emitter, payload_reg, offset);                         // save the tagged scalar payload from the incoming integer-register pair
+                store_at_offset(emitter, tag_reg, offset - 8);                         // save the tagged scalar tag from the incoming integer-register pair
+                cursor.int_reg_idx += 2;
+            } else {
+                emitter.comment(&format!(
+                    "param ${} from caller stack +{}",
+                    name,
+                    cursor.caller_stack_offset
+                ));
+                load_from_caller_stack(emitter, int_spill_reg, cursor.caller_stack_offset);
+                load_from_caller_stack(emitter, int_hi_spill_reg, cursor.caller_stack_offset + 8);
+                store_at_offset(emitter, int_spill_reg, offset);                       // save the spilled tagged scalar payload into the local param slot
+                store_at_offset(emitter, int_hi_spill_reg, offset - 8);                // save the spilled tagged scalar tag into the local param slot
+                cursor.caller_stack_offset += 16;
+                cursor.int_stack_only = true;
+            }
+        }
         PhpType::Void | PhpType::Never => {}
         PhpType::Iterable
         | PhpType::Mixed

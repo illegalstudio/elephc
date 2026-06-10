@@ -9,6 +9,7 @@
 //! - String temporaries must stay alive through the write and be released only when this path owns them.
 
 use super::super::abi;
+use super::super::NULL_SENTINEL;
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
@@ -58,19 +59,31 @@ pub(crate) fn emit_expr_to_stdout(
             emitter.label(&skip_label);
         }
         PhpType::Int => {
-            let skip_label = ctx.next_label("echo_skip_null");
-            let sentinel_reg = abi::symbol_scratch_reg(emitter);
-            abi::emit_load_int_immediate(emitter, sentinel_reg, 0x7fff_ffff_ffff_fffe);
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
-                    emitter.instruction(&format!("b.eq {}", skip_label));       // skip echo if value is the null sentinel
+            if crate::codegen::sentinels::null_repr_is_tagged() {
+                // Under the tagged representation a plain Int is never null, so the full
+                // i64 range (including PHP_INT_MAX - 1) is printable without a skip check.
+                abi::emit_write_stdout(emitter, &ty);
+            } else {
+                let skip_label = ctx.next_label("echo_skip_null");
+                let sentinel_reg = abi::symbol_scratch_reg(emitter);
+                abi::emit_load_int_immediate(emitter, sentinel_reg, NULL_SENTINEL);
+                match emitter.target.arch {
+                    Arch::AArch64 => {
+                        emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
+                        emitter.instruction(&format!("b.eq {}", skip_label));   // skip echo if value is the null sentinel
+                    }
+                    Arch::X86_64 => {
+                        emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
+                        emitter.instruction(&format!("je {}", skip_label));     // skip echo if value is the null sentinel
+                    }
                 }
-                Arch::X86_64 => {
-                    emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
-                    emitter.instruction(&format!("je {}", skip_label));         // skip echo if value is the null sentinel
-                }
+                abi::emit_write_stdout(emitter, &ty);
+                emitter.label(&skip_label);
             }
+        }
+        PhpType::TaggedScalar => {
+            let skip_label = ctx.next_label("echo_skip_null");
+            crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(emitter, &skip_label);
             abi::emit_write_stdout(emitter, &ty);
             emitter.label(&skip_label);
         }
@@ -153,6 +166,11 @@ fn stabilize_x86_64_echo_result(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Float => {
             abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));  // spill floating-point x86_64 echo results through a temporary slot before helper calls consume them
             abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));   // reload the stabilized x86_64 echo result back into the canonical floating-point result register
+        }
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(emitter);
+            abi::emit_push_reg_pair(emitter, abi::int_result_reg(emitter), tag_reg); // spill the tagged scalar payload/tag pair through a temporary slot before helper calls consume them
+            abi::emit_pop_reg_pair(emitter, abi::int_result_reg(emitter), tag_reg); // reload the stabilized tagged scalar payload/tag pair
         }
         PhpType::Str | PhpType::Void | PhpType::Never => {}
     }

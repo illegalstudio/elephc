@@ -145,6 +145,10 @@ pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
             let (ptr_reg, len_reg) = string_result_regs(emitter);
             emit_push_reg_pair(emitter, ptr_reg, len_reg);                              // push the current string result register pair onto the temporary arg stack
         }
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(emitter);
+            emit_push_reg_pair(emitter, int_result_reg(emitter), tag_reg);              // push the current tagged scalar payload/tag register pair onto the temporary arg stack
+        }
         PhpType::Void | PhpType::Never => {}
     }
 }

@@ -43,8 +43,8 @@ pub fn emit(
     emitter.comment("empty()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
     match &ty {
-        PhpType::Int => {
-            // -- int is empty if it equals zero --
+        PhpType::Int | PhpType::TaggedScalar => {
+            // -- int is empty if it equals zero; a null tagged scalar narrows to zero --
             crate::codegen::expr::coerce_null_to_zero(emitter, &ty);
             match emitter.target.arch {
                 Arch::AArch64 => {

@@ -118,7 +118,7 @@ fn emit_copy_stack_arg_slot(
             emit_load_temporary_stack_slot(emitter, float_reg, src_offset);
             emit_store_to_sp(emitter, float_reg, dst_offset);
         }
-        PhpType::Str => {
+        PhpType::Str | PhpType::TaggedScalar => {
             emit_load_temporary_stack_slot(emitter, int_reg, src_offset);
             emit_load_temporary_stack_slot(emitter, int_hi_reg, src_offset + 8);
             emit_store_to_sp(emitter, int_reg, dst_offset);
@@ -210,7 +210,7 @@ pub fn materialize_outgoing_args(
                     src_offset,
                 );
             }
-            PhpType::Str => {
+            PhpType::Str | PhpType::TaggedScalar => {
                 emit_load_temporary_stack_slot(
                     emitter,
                     int_arg_reg_name(emitter.target, assignment.start_reg),

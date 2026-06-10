@@ -9,6 +9,7 @@
 //! - Unset is mutating and must release owned refcounted values without touching unrelated aliases.
 
 use crate::codegen::abi;
+use crate::codegen::NULL_SENTINEL;
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -99,7 +100,7 @@ fn emit_unset_arg(
         }
 
         // -- set variable to null sentinel value (0x7FFFFFFFFFFFFFFFE) --
-        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::MAX - 1); // materialize the shared null sentinel in the target integer result register
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), NULL_SENTINEL); // materialize the shared null sentinel in the target integer result register
         abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);     // store the null sentinel back into the variable slot
         ctx.update_var_type_and_ownership(name, PhpType::Void, HeapOwnership::NonHeap);
     }

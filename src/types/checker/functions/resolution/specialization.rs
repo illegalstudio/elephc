@@ -220,10 +220,9 @@ impl Checker {
                     .get(seen_idx)
                     .copied()
                     .unwrap_or(false)
-                && !matches!(
-                    actual_ty,
-                    PhpType::Void | PhpType::Never | PhpType::Callable
-                )
+                && !matches!(actual_ty, PhpType::Never | PhpType::Callable)
+                && (!matches!(actual_ty, PhpType::Void)
+                    || crate::codegen::sentinels::null_repr_is_tagged())
             {
                 let key = (name.to_string(), seen_idx);
                 let seen = self.param_specialization_seen.contains(&key);
