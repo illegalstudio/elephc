@@ -637,6 +637,12 @@ binaries never link the bridge.
 
 - [x] Flow-sensitive type-guard narrowing — `if` / `elseif` / `else` chains guarded by `is_int()` / `is_float()` / `is_string()` / `is_bool()` (and the `is_integer` / `is_long` / `is_double` aliases) or `$var instanceof Class` narrow the guarded variable inside the matching branch, with an optional leading `!`, complement accumulation across the chain and `else`, and post-`if` narrowing when every branch diverges (`return` / `throw` / `exit` / `die` / `never`-returning calls); union members are filtered to the guarded type and `Mixed` is refined to it, while concrete non-union types are left unchanged (`src/types/checker/stmt_check/narrowing.rs`, tested in `tests/codegen/types/narrowing.rs`)
 
+### Runtime representation
+
+- [x] Null-sentinel collision groundwork — one canonical `NULL_SENTINEL` constant (`src/codegen/sentinels.rs`) replacing seven file-local duplicates, `i64::MAX - 1` disguises, and raw `movz`/`movk` chains; collision repros locked in `tests/codegen/null_sentinel/` and the incompatibility documented in `docs/php/types.md`
+- [x] Tagged null representation behind `--null-repr=tagged` / `ELEPHC_NULL_REPR` — inline two-word `{payload, tag}` `TaggedScalar` for null-capable scalars (miss-capable int array reads, empty `array_pop`/`array_shift`), tag-aware consumers (`echo`, `var_dump`, `is_null`, `??`, `??=`, `isset`, `empty`, `gettype`, casts, arithmetic narrowing, `===` via Mixed boxing), plain-int sentinel checks removed (full 64-bit int range round-trips, including `9223372036854775806`), local inference and untyped-param widening aligned; covered on all three targets in `tests/codegen/null_sentinel/tagged.rs`
+- [ ] Flip the default null representation to `Tagged` once the full suite forced to `Tagged` and the microbench comparison are green (then drop the `docs/php/types.md` collision bullet); the `{payload, tag}` shape is the convergence point for runtime int-overflow→float promotion
+
 ## v0.24.x — EIR introduction and register allocation
 
 Introduce a domain-specific intermediate representation (EIR) between the

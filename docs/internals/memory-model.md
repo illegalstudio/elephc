@@ -97,10 +97,19 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Buffer` | 8 bytes | Pointer to buffer header |
 | `Packed` | 8 bytes | Metadata-only nominal type, accessed via pointer |
 | `Union` | 8 bytes | Boxed runtime-tagged payload (same storage as Mixed) |
+| `TaggedScalar` | 16 bytes | 8-byte payload + 8-byte runtime tag (tagged null representation) |
 
-### The null sentinel
+### Null representations
 
-`null` is represented as the integer `0x7FFFFFFFFFFFFFFE` — a value chosen to be distinguishable from any real integer (it's near `INT_MAX` but not equal to it). Before arithmetic operations, the codegen checks for this sentinel and replaces it with 0:
+elephc has two representations for PHP `null` in scalar slots, selected per compilation by
+`--null-repr=sentinel|tagged` (or `ELEPHC_NULL_REPR`).
+
+#### The in-band sentinel (legacy)
+
+`null` is represented as the integer `0x7FFFFFFFFFFFFFFE` (`PHP_INT_MAX - 1`). Because every
+64-bit pattern is a valid PHP int, this sentinel collides with the real integer
+`9223372036854775806`, which is misread as `null` by null checks. Before arithmetic
+operations, the codegen checks for this sentinel and replaces it with 0:
 
 ```asm
 ; coerce null to zero
@@ -113,6 +122,33 @@ csel x0, xzr, x0, eq      ; if x0 == sentinel, replace with 0
 ```
 
 See [ARM64 Instruction Reference](arm64-instructions.md#move-and-immediate) for how `movz`/`movk` work.
+
+#### The tagged scalar representation
+
+Under `--null-repr=tagged`, null-capable scalar slots use an inline two-word
+`{payload, tag}` pair (`TaggedScalar`) instead of the in-band sentinel: the payload travels
+in the integer result register (`x0`/`rax`) and the runtime tag in the adjacent register
+(`x1`/`rdx`), mirroring the string pointer/length convention. The tag reuses the runtime
+value tag scheme (0 = int, 8 = null), so a tagged scalar is word-compatible with a boxed
+Mixed cell's tag/payload words. On the stack the payload sits at `offset` and the tag at
+`offset - 8`.
+
+Null-capable producers — miss-capable int array reads, `array_pop`/`array_shift` on int
+arrays — yield a tagged scalar; consumers (`echo`, `var_dump`, `is_null`, `??`, `??=`,
+`isset`, `empty`, `gettype`, casts, arithmetic narrowing, `===` through the Mixed boxing
+path) dispatch on the tag word. A plain non-nullable `Int` is statically never null, so its
+sentinel checks disappear entirely and the full 64-bit range round-trips:
+
+```asm
+; null check on a tagged scalar
+cmp x1, #8                ; runtime tag 8 = PHP null
+b.eq value_is_null
+```
+
+A tagged null carries the legacy sentinel as its payload word, so boxing it into a Mixed
+cell produces exactly the legacy `{tag 8, sentinel}` words and un-audited consumers degrade
+to the legacy behavior. `?int` parameters, returns, and properties keep their boxed Mixed
+representation under both modes.
 
 ### Pointer values
 
