@@ -22,7 +22,6 @@ use super::spl;
 use super::strings;
 use super::system;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::Platform;
 use crate::codegen::RuntimeFeatures;
 
 /// Emits all runtime helper labels in dependency order for supported targets.
@@ -33,7 +32,6 @@ use crate::codegen::RuntimeFeatures;
 /// Each category is emitted before any code that depends on it, ensuring labels
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
-    emit_optional_linux_crypto_decls(emitter);
     diagnostics::emit_diagnostics(emitter);
 
     // String runtime functions
@@ -93,6 +91,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_sha1(emitter);
     strings::emit_crc32(emitter);
     strings::emit_hash(emitter);
+    strings::emit_hash_hmac(emitter);
+    strings::emit_hash_equals(emitter);
+    strings::emit_hash_algos_list(emitter);
+    strings::emit_hash_context(emitter);
+    strings::emit_digest_to_string(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);
     strings::emit_sprintf(emitter);
@@ -469,36 +472,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     fibers::emit_fiber_state_getter(emitter);
 }
 
-/// Emits weak symbol declarations for MD5, SHA1, and SHA256 on Linux targets.
-///
-/// These weak declarations allow the linker to omit the symbols if no other object
-/// file provides them, preventing link errors when crypto features are unused.
-fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
-    if emitter.target.platform == Platform::Linux {
-        emitter.raw(".weak MD5");
-        emitter.raw(".weak SHA1");
-        emitter.raw(".weak SHA256");
-        emitter.blank();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::platform::{Arch, Target};
-
-    /// Verifies that linux runtime marks crypto symbols weak.
-    #[test]
-    fn test_linux_runtime_marks_crypto_symbols_weak() {
-        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
-        emit_runtime(&mut emitter, RuntimeFeatures::all());
-        let asm = emitter.output();
-
-        assert!(asm.contains(".weak MD5\n"));
-        assert!(asm.contains(".weak SHA1\n"));
-        assert!(asm.contains(".weak SHA256\n"));
-        assert!(!asm.contains("arc4random_uniform"));
-    }
+    use crate::codegen::platform::{Arch, Platform, Target};
 
     /// Verifies that AArch64 runtime emits fiber routines.
     #[test]
@@ -563,6 +540,5 @@ mod tests {
                 sym
             );
         }
-        assert!(asm.contains(".weak MD5\n"));
     }
 }

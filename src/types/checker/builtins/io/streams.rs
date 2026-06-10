@@ -59,7 +59,7 @@ pub(super) fn check_builtin(
                     checker.require_builtin_library("bz2");
                 }
                 // phar:// write mode computes a SHA1 signature in
-                // __rt_phar_write_finalize (CC_SHA1 → libcrypto on Linux).
+                // __rt_phar_write_finalize via the elephc-crypto staticlib.
                 // crc32 is pure asm, so reading phar:// needs no crypto lib.
                 if s.starts_with("phar://") {
                     let write_mode = matches!(
@@ -68,7 +68,7 @@ pub(super) fn check_builtin(
                             if matches!(m.as_bytes().first(), Some(b'w') | Some(b'a') | Some(b'c') | Some(b'x'))
                     );
                     if write_mode {
-                        checker.require_linux_builtin_library("crypto");
+                        checker.require_builtin_library("elephc_crypto");
                     }
                 }
             }

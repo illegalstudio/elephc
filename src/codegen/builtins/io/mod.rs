@@ -30,6 +30,7 @@ mod file;
 mod file_exists;
 mod file_get_contents;
 mod file_put_contents;
+mod hash_file;
 mod fileatime;
 mod filectime;
 mod filegroup;
@@ -206,6 +207,7 @@ pub fn emit(
         "rewind" => rewind::emit(name, args, emitter, ctx, data),
         "file_get_contents" => file_get_contents::emit(name, args, emitter, ctx, data),
         "file_put_contents" => file_put_contents::emit(name, args, emitter, ctx, data),
+        "hash_file" => hash_file::emit(name, args, emitter, ctx, data),
         "file" => file::emit(name, args, emitter, ctx, data),
         "file_exists" => file_exists::emit(name, args, emitter, ctx, data),
         "is_file" => is_file::emit(name, args, emitter, ctx, data),

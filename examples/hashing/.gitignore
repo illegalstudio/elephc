@@ -1,0 +1,4 @@
+*.s
+*.o
+main
+greeting.txt

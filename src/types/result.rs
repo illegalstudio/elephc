@@ -68,17 +68,20 @@ mod tests {
         crate::parser::parse(&tokens).expect("parse failed")
     }
 
-    /// Verifies that linux crypto builtin linking tracks target not host.
+    /// Verifies that hashing builtins (here `md5`) require the pure-Rust
+    /// `elephc_crypto` bridge on EVERY target after the Phase 2 migration off
+    /// CommonCrypto/libcrypto — not the old linux-only system `crypto` library
+    /// (which previously left macOS with no required library).
     #[test]
-    fn test_linux_crypto_builtin_linking_tracks_target_not_host() {
+    fn test_hash_builtin_requires_elephc_crypto_on_all_targets() {
         let program = parse_program("<?php echo md5(\"abc\");");
 
         let linux = check_with_target(&program, Target::new(Platform::Linux, Arch::AArch64))
             .expect("linux type check failed");
-        assert_eq!(linux.required_libraries, vec!["crypto"]);
+        assert_eq!(linux.required_libraries, vec!["elephc_crypto"]);
 
         let mac = check_with_target(&program, Target::new(Platform::MacOS, Arch::AArch64))
             .expect("mac type check failed");
-        assert!(mac.required_libraries.is_empty());
+        assert_eq!(mac.required_libraries, vec!["elephc_crypto"]);
     }
 }

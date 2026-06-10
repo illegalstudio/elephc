@@ -107,13 +107,17 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x10", "_phar_write_out");
     abi::emit_symbol_address(emitter, "x9", "_phar_write_len");
     emitter.instruction("ldr x11, [x9]");                                       // length so far (everything before the signature)
-    emitter.instruction("mov x0, x10");                                         // CC_SHA1 data = archive buffer base
-    emitter.instruction("mov w1, w11");                                         // CC_SHA1 length (CC_LONG) = current archive length
-    emitter.instruction("add x2, x10, x11");                                    // CC_SHA1 md = buffer + length (write 20 raw bytes past the data)
-    emitter.bl_c("CC_SHA1");                                                    // compute the raw 20-byte SHA1 digest in place
+    abi::emit_symbol_address(emitter, "x0", "_sha1_algo_name");
+    emitter.instruction("mov x1, #4");                                          // elephc_crypto_hash name length = strlen("sha1")
+    emitter.instruction("mov x2, x10");                                         // elephc_crypto_hash data = archive buffer base
+    emitter.instruction("mov x3, x11");                                         // elephc_crypto_hash data length = current archive length
+    emitter.instruction("add x4, x10, x11");                                    // elephc_crypto_hash out = buffer + length (raw 20 bytes)
+    abi::emit_symbol_address(emitter, "x9", "_elephc_crypto_hash_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the elephc-crypto hash entry pointer
+    emitter.instruction("blr x9");                                              // compute the raw 20-byte SHA1 digest in place
     abi::emit_symbol_address(emitter, "x10", "_phar_write_out");
     abi::emit_symbol_address(emitter, "x9", "_phar_write_len");
-    emitter.instruction("ldr x11, [x9]");                                       // reload length (CC_SHA1 clobbered caller-saved regs)
+    emitter.instruction("ldr x11, [x9]");                                       // reload length (the hash call clobbered caller-saved regs)
     emitter.instruction("add x12, x10, x11");                                   // trailer base = buffer + length (raw digest occupies +0..+20)
     emitter.instruction("mov w13, #2");                                         // signature type 0x0002 = Phar::SHA1
     emitter.instruction("str w13, [x12, #20]");                                 // little-endian signature type after the 20 digest bytes
@@ -216,15 +220,17 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [rcx - 12], eax");                       // patch the manifest crc32 field
     // -- append the SHA1 signature trailer: raw-sha1(20) ++ LE32(0x0002) ++ "GBMB".
     //    PHP hashes stub+manifest+data up to the trailer = _phar_write_out[0.._phar_write_len]. --
-    emitter.instruction("lea rdi, [rip + _phar_write_out]");                    // CC_SHA1 data = archive buffer base
     emitter.instruction("lea r8, [rip + _phar_write_len]");                     // buffer length slot
-    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // current archive length (everything before the signature)
-    emitter.instruction("mov esi, ecx");                                        // CC_SHA1 length (CC_LONG) = low 32 bits of the length
-    emitter.instruction("lea rdx, [rip + _phar_write_out]");                    // CC_SHA1 md base = buffer base ...
-    emitter.instruction("add rdx, rcx");                                        // ... + length (write 20 raw bytes past the data)
-    emitter.bl_c("CC_SHA1");                                                    // compute the raw 20-byte SHA1 digest in place
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // elephc_crypto_hash data length = current archive length
+    emitter.instruction("lea rdi, [rip + _sha1_algo_name]");                    // elephc_crypto_hash name = "sha1"
+    emitter.instruction("mov esi, 4");                                          // elephc_crypto_hash name length = strlen("sha1")
+    emitter.instruction("lea rdx, [rip + _phar_write_out]");                    // elephc_crypto_hash data = archive buffer base
+    emitter.instruction("lea r8, [rip + _phar_write_out]");                     // elephc_crypto_hash out base = archive buffer base ...
+    emitter.instruction("add r8, rcx");                                         // ... + length (raw 20 bytes past the data)
+    emitter.instruction("mov r9, QWORD PTR [rip + _elephc_crypto_hash_fn]");    // load the elephc-crypto hash entry pointer
+    emitter.instruction("call r9");                                             // compute the raw 20-byte SHA1 digest in place
     emitter.instruction("lea r8, [rip + _phar_write_len]");                     // buffer length slot
-    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // reload length (CC_SHA1 clobbered caller-saved regs)
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // reload length (the hash call clobbered caller-saved regs)
     emitter.instruction("lea r9, [rip + _phar_write_out]");                     // buffer base
     emitter.instruction("add r9, rcx");                                         // trailer base = buffer + length (raw digest occupies +0..+20)
     emitter.instruction("mov DWORD PTR [r9 + 20], 2");                          // little-endian signature type 0x0002 = Phar::SHA1

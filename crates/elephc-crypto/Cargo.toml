@@ -1,0 +1,34 @@
+[package]
+name = "elephc-crypto"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pure-Rust hashing/HMAC bridge staticlib (RustCrypto) for the elephc PHP-to-native compiler's hash() family"
+publish = false
+
+# Built as a C-callable staticlib (linked into compiled PHP programs that use
+# the hash family) and an rlib (so the bridge is unit-testable via
+# `cargo test -p elephc-crypto`). Mirrors crates/elephc-tls and crates/elephc-pdo.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# Pure-Rust, musl-friendly (Docker test images). `digest` provides the
+# DynDigest trait + box_clone used to hold a heterogeneous boxed hasher.
+digest = "0.10"
+md-5 = "0.10"
+md2 = "0.10"
+md4 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"
+# ripemd is intentionally "0.1" — the RustCrypto ripemd crate never published 0.10;
+# 0.1.x is digest-0.10 compatible. Do not "fix" this to 0.10.
+ripemd = "0.1"
+whirlpool = "0.10"
+# Non-crypto checksums PHP's hash() exposes. crc32fast = crc32b (ISO-HDLC);
+# the `crc` crate covers PHP's non-`b` "crc32" variant. adler2 is the
+# maintained successor to the archived `adler` crate (same Adler32 API).
+crc32fast = "1"
+crc = "3"
+adler2 = "2"

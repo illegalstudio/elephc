@@ -97,7 +97,7 @@ Proper type system for PHP compatibility.
 - [x] `addslashes()`, `stripslashes()`
 - [x] `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`
 - [x] `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`
-- [x] `md5()`, `sha1()`, `hash()`
+- [x] `md5()`, `sha1()`, `hash()`, `hash_hmac()`, `hash_file()`, `hash_equals()`, `hash_algos()`, `hash_init()`/`hash_update()`/`hash_final()`/`hash_copy()` — full PHP hash family (sha2/sha3/ripemd/whirlpool/crc32/crc32c/adler32/fnv/joaat and more), backed by the pure-Rust `crates/elephc-crypto` staticlib (RustCrypto). Replaces the macOS-CommonCrypto / Linux-libcrypto system-crypto fork: zero system crypto dependency on every target.
 - [x] `base64_encode()`, `base64_decode()`
 - [x] `bin2hex()`, `hex2bin()`
 - [x] `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`
@@ -689,6 +689,7 @@ and 0.x validation rather than by speculative pass work.
 
 - [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
 - [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
+- [ ] Resource scope-cleanup — auto-free tag-9 resource handles that leave scope without their explicit close (today an unclosed `fopen()` leaks its fd and an unfinalized `hash_init()` context leaks its heap state until process exit; `functions/cleanup.rs` skips `Resource`s by design). Prerequisites: a resource-kind subtype in the Mixed cell so the cleanup pass can pick the right destructor (fd → `close()`, HashContext → `elephc_crypto_free`, …), and aliasing safety (resources have no refcount; `$b = $a` would double-free under naive scope-free). Includes wiring the currently-uncalled `elephc_crypto_free` (`_elephc_crypto_free_fn` slot + publish entry + a `__rt_hash_ctx_free` helper) and nulling the Mixed payload in `hash_final` so finalized contexts are skipped — which also defuses the double-final UB documented in `src/codegen/runtime/strings/hash_context.rs`
 - [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling (feeds the EIR effects table)
 - [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
 - [ ] Exception-aware DCE v2 — exact thrown-type / handler reachability, nested try rethrow modeling, and less conservative finally-path invalidation

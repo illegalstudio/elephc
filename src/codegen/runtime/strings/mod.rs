@@ -67,6 +67,11 @@ mod md5;
 mod sha1;
 mod crc32;
 mod hash;
+pub(crate) mod hash_algos;
+mod hash_context;
+mod hash_equals;
+mod hash_hmac;
+mod digest_to_string;
 mod sscanf;
 mod rtrim_mask;
 mod ltrim_mask;
@@ -189,6 +194,16 @@ pub use crc32::emit_crc32;
 /// Emit SHA1 hash helper.
 pub use hash::emit_hash;
 /// Emit generic hash helper.
+pub use hash_hmac::emit_hash_hmac;
+/// Emit keyed-hash HMAC helper.
+pub use hash_algos::emit_hash_algos_list;
+pub use hash_context::emit_hash_context;
+/// Emit the incremental HashContext helpers (hash_init/update/final/copy).
+/// Emit the supported-hash-algorithm-name list helper.
+pub use hash_equals::emit_hash_equals;
+/// Emit timing-safe string-equality helper.
+pub use digest_to_string::emit_digest_to_string;
+/// Emit the shared raw-digest-to-PHP-string formatter used by hash/md5/sha1.
 pub use sscanf::emit_sscanf;
 /// Emit string scanf parsing helper.
 pub use rtrim_mask::emit_rtrim_mask;

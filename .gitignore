@@ -1,2 +1,4 @@
 target/
 .idea/
+# Internal planning docs (specs/plans) — kept locally, not tracked
+docs/superpowers/

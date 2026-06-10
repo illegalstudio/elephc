@@ -65,6 +65,18 @@ const BRIDGES: &[BridgeStaticlib] = &[
         macos_frameworks: &["CoreFoundation", "SystemConfiguration"],
         needs_libdl: true,
     },
+    BridgeStaticlib {
+        lib_name: "elephc_crypto",
+        env_var: "ELEPHC_CRYPTO_LIB_DIR",
+        crate_name: "elephc-crypto",
+        // Pure-Rust hashing: no link-time side effects (unlike rustls' provider
+        // registration), so a plain `-l elephc_crypto` is sufficient.
+        whole_archive: false,
+        // No native transitive deps.
+        macos_frameworks: &[],
+        // Rust runtime/unwinder symbols, like the other bridges.
+        needs_libdl: true,
+    },
 ];
 
 impl BridgeStaticlib {
@@ -422,5 +434,19 @@ mod tests {
     fn valid_sdk_path_is_returned_trimmed() {
         let ok = validate_macos_sdk_path("  /Library/Dev/MacOSX.sdk\n").expect("valid path");
         assert_eq!(ok, "/Library/Dev/MacOSX.sdk");
+    }
+
+    /// Verifies the elephc-crypto bridge is registered and produces the expected
+    /// archive filename, so compiled programs that use hashing can link it.
+    #[test]
+    fn bridges_includes_elephc_crypto() {
+        let entry = BRIDGES
+            .iter()
+            .find(|b| b.lib_name == "elephc_crypto")
+            .expect("elephc_crypto must be a registered bridge");
+        assert_eq!(entry.crate_name, "elephc-crypto");
+        assert_eq!(entry.env_var, "ELEPHC_CRYPTO_LIB_DIR");
+        assert_eq!(entry.archive_filename(), "libelephc_crypto.a");
+        assert!(!entry.whole_archive, "crypto bridge must not force-load (no link-time side effects)");
     }
 }

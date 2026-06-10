@@ -102,7 +102,7 @@ pub fn emit(
 /// on x86_64 in `rax` and `rdx`. A null pointer signals failure — this path emits bool
 /// false (tag 3) via `__rt_mixed_from_value`. On success, the string pointer/length are
 /// stored directly into a heap-allocated mixed cell (tag 1) without copying the buffer.
-fn box_file_get_contents_result(emitter: &mut Emitter, ctx: &mut Context) {
+pub(super) fn box_file_get_contents_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("fgc_false");
     let done_label = ctx.next_label("fgc_done");
 

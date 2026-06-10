@@ -1,6 +1,6 @@
 [package]
 name = "elephc"
-version = "0.23.7"
+version = "0.23.8"
 edition = "2021"
 description = "A PHP-to-native AOT compiler"
 license = "MIT"
@@ -11,12 +11,13 @@ keywords = ["php", "compiler", "aot", "native", "codegen"]
 categories = ["compilers", "command-line-utilities"]
 
 # The bridge staticlibs are default workspace members so plain `cargo build` /
-# `cargo test` materialize libelephc_tls.a (https:// wrapper) and
-# libelephc_pdo.a (PDO: SQLite + PostgreSQL) into target/<profile>/, where
-# linker.rs locates them for programs that use those features.
+# `cargo test` materialize libelephc_tls.a (https:// wrapper),
+# libelephc_pdo.a (PDO: SQLite + PostgreSQL), and libelephc_crypto.a
+# (hash/HMAC family) into target/<profile>/, where linker.rs locates them for
+# programs that use those features.
 [workspace]
-members = [".", "crates/elephc-tls", "crates/elephc-pdo"]
-default-members = [".", "crates/elephc-tls", "crates/elephc-pdo"]
+members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto"]
+default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto"]
 resolver = "2"
 
 [[bin]]
@@ -42,6 +43,7 @@ bzip2-rs = "0.1"
 [dev-dependencies]
 elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
+elephc-crypto = { path = "crates/elephc-crypto" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.
