@@ -57,7 +57,8 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut defines: HashSet<String> = HashSet::new();
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
         Ok("tagged") => crate::codegen::NullRepr::Tagged,
-        _ => crate::codegen::NullRepr::Sentinel,
+        Ok("sentinel") => crate::codegen::NullRepr::Sentinel,
+        _ => crate::codegen::NullRepr::default(),
     };
 
     let mut i = 1;

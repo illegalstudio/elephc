@@ -283,15 +283,10 @@ fn test_sentinel_plain_int_still_emits_sentinel_check() {
     );
 }
 
-/// The legacy in-band behavior is preserved under the default sentinel representation:
-/// the same fixture still misreads PHP_INT_MAX-1 as null (guards the default until Phase 4).
+/// The legacy in-band behavior is preserved under the explicit sentinel opt-out:
+/// the same fixture still misreads PHP_INT_MAX-1 as null when --null-repr=sentinel.
 #[test]
-fn test_sentinel_default_still_suppresses_collision_value() {
-    if default_null_repr() == elephc::codegen::NullRepr::Tagged {
-        // The whole suite is forced to the tagged representation; the legacy default
-        // behavior under test does not apply in this configuration.
-        return;
-    }
-    let out = compile_and_run("<?php echo 9223372036854775806;");
+fn test_sentinel_optout_still_suppresses_collision_value() {
+    let out = compile_and_run_sentinel("<?php echo 9223372036854775806;");
     assert_eq!(out, "");
 }

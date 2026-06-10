@@ -11,6 +11,10 @@
 - **Phase 2** — Tagged representation behind `NullRepr::{Sentinel, Tagged}` flag (default `Sentinel`); audit every producer/consumer; repros pass under `Tagged` on all 3 targets.
 - **Phase 3** — Narrowing: non-nullable `int` slots stay plain i64 (asm-inspection proof); only genuinely-nullable slots widen.
 - **Phase 4** — Flip default to `Tagged`, update docs, converge with the overflow plan.
+  **DONE** except overflow convergence (tracked in the overflow plan): default flipped,
+  `--null-repr=sentinel` kept as documented opt-out, §0 repros un-ignored, docs updated.
+  Evidence: full default-mode suite green pre-flip (3979), full Tagged-forced suite green
+  modulo two since-fixed failures plus green focused reruns, Linux x86_64/ARM64 28/28.
 
 ## Sentinel inventory
 

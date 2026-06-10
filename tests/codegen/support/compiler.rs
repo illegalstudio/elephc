@@ -56,12 +56,13 @@ pub(crate) fn compile_source_to_asm_with_defines(
     )
 }
 
-/// Returns the null representation selected for this test process: `ELEPHC_NULL_REPR=tagged`
-/// forces the tagged scalar representation, anything else keeps the sentinel default.
+/// Returns the null representation selected for this test process: `ELEPHC_NULL_REPR` can
+/// force either mode; without it the compiler default (tagged) applies.
 pub(crate) fn default_null_repr() -> elephc::codegen::NullRepr {
     match std::env::var("ELEPHC_NULL_REPR").as_deref() {
         Ok("tagged") => elephc::codegen::NullRepr::Tagged,
-        _ => elephc::codegen::NullRepr::Sentinel,
+        Ok("sentinel") => elephc::codegen::NullRepr::Sentinel,
+        _ => elephc::codegen::NullRepr::default(),
     }
 }
 
@@ -399,9 +400,20 @@ pub(crate) fn compile_and_run(source: &str) -> String {
     compile_and_run_with_heap_size(source, 8_388_608)
 }
 
+/// Compiles and runs a PHP source with the legacy sentinel null representation forced on,
+/// regardless of `ELEPHC_NULL_REPR`. Used by the sentinel opt-out guard tests.
+pub(crate) fn compile_and_run_sentinel(source: &str) -> String {
+    compile_and_run_with_repr(source, elephc::codegen::NullRepr::Sentinel)
+}
+
 /// Compiles and runs a PHP source with the tagged null representation forced on,
 /// regardless of `ELEPHC_NULL_REPR`. Used by null-sentinel surface tests.
 pub(crate) fn compile_and_run_tagged(source: &str) -> String {
+    compile_and_run_with_repr(source, elephc::codegen::NullRepr::Tagged)
+}
+
+/// Compiles and runs a PHP source with an explicit null representation.
+fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -415,7 +427,7 @@ pub(crate) fn compile_and_run_tagged(source: &str) -> String {
         8_388_608,
         false,
         false,
-        elephc::codegen::NullRepr::Tagged,
+        null_repr,
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
 

@@ -13,7 +13,6 @@ use super::*;
 
 /// Verifies the integer PHP_INT_MAX-1 (== the null sentinel bit pattern) echoes as itself
 /// instead of being suppressed as null.
-#[ignore = "TODO(null-sentinel): misread as null under NullRepr::Sentinel - un-ignore in Phase 2"]
 #[test]
 fn test_int_at_null_sentinel_echoes_as_integer() {
     let out = compile_and_run("<?php echo 9223372036854775806;");
@@ -22,7 +21,6 @@ fn test_int_at_null_sentinel_echoes_as_integer() {
 
 /// Verifies the sentinel-valued integer survives a variable round-trip through echo and
 /// var_dump instead of printing empty / NULL.
-#[ignore = "TODO(null-sentinel): misread as null under NullRepr::Sentinel - un-ignore in Phase 2"]
 #[test]
 fn test_int_at_null_sentinel_var_roundtrips() {
     let out =
@@ -32,7 +30,6 @@ fn test_int_at_null_sentinel_var_roundtrips() {
 
 /// Verifies the sentinel-valued integer read back from an array prints and var_dumps as
 /// int(...), not NULL — the array element store/load path must not misread it as a miss.
-#[ignore = "TODO(null-sentinel): misread as null under NullRepr::Sentinel - un-ignore in Phase 2"]
 #[test]
 fn test_int_at_null_sentinel_in_array_roundtrips() {
     let out = compile_and_run(
@@ -43,7 +40,6 @@ fn test_int_at_null_sentinel_in_array_roundtrips() {
 
 /// Verifies a nullable-int function returning the sentinel-valued integer var_dumps as
 /// int(...), not NULL — the ?int return channel must distinguish the value from null.
-#[ignore = "TODO(null-sentinel): misread as null under NullRepr::Sentinel - un-ignore in Phase 2"]
 #[test]
 fn test_int_at_null_sentinel_nullable_return_is_not_null() {
     let out = compile_and_run(
@@ -53,7 +49,6 @@ fn test_int_at_null_sentinel_nullable_return_is_not_null() {
 }
 
 /// Verifies is_null() rejects the sentinel-valued integer: a real int is never null.
-#[ignore = "TODO(null-sentinel): misread as null under NullRepr::Sentinel - un-ignore in Phase 2"]
 #[test]
 fn test_int_at_null_sentinel_is_not_null() {
     let out = compile_and_run("<?php $x = 9223372036854775806; var_dump(is_null($x));");
@@ -61,7 +56,6 @@ fn test_int_at_null_sentinel_is_not_null() {
 }
 
 /// Verifies ?? does not treat the sentinel-valued integer as null: the left operand wins.
-#[ignore = "TODO(null-sentinel): misread as null under NullRepr::Sentinel - un-ignore in Phase 2"]
 #[test]
 fn test_int_at_null_sentinel_null_coalesce_keeps_value() {
     let out = compile_and_run("<?php $x = 9223372036854775806; echo $x ?? 0;");

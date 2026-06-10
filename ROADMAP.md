@@ -641,7 +641,7 @@ binaries never link the bridge.
 
 - [x] Null-sentinel collision groundwork — one canonical `NULL_SENTINEL` constant (`src/codegen/sentinels.rs`) replacing seven file-local duplicates, `i64::MAX - 1` disguises, and raw `movz`/`movk` chains; collision repros locked in `tests/codegen/null_sentinel/` and the incompatibility documented in `docs/php/types.md`
 - [x] Tagged null representation behind `--null-repr=tagged` / `ELEPHC_NULL_REPR` — inline two-word `{payload, tag}` `TaggedScalar` for null-capable scalars (miss-capable int array reads, empty `array_pop`/`array_shift`), tag-aware consumers (`echo`, `var_dump`, `is_null`, `??`, `??=`, `isset`, `empty`, `gettype`, casts, arithmetic narrowing, `===` via Mixed boxing), plain-int sentinel checks removed (full 64-bit int range round-trips, including `9223372036854775806`), local inference and untyped-param widening aligned; covered on all three targets in `tests/codegen/null_sentinel/tagged.rs`
-- [ ] Flip the default null representation to `Tagged` once the full suite forced to `Tagged` and the microbench comparison are green (then drop the `docs/php/types.md` collision bullet); the `{payload, tag}` shape is the convergence point for runtime int-overflow→float promotion
+- [x] Flip the default null representation to `Tagged` (the collision bullet in `docs/php/types.md` now documents only the `--null-repr=sentinel` opt-out); the `{payload, tag}` shape is the convergence point for runtime int-overflow→float promotion
 
 ## v0.24.x — EIR introduction and register allocation
 

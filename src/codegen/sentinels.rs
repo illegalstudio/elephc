@@ -23,15 +23,16 @@ use super::platform::Arch;
 
 /// Selects how codegen represents PHP `null` in scalar slots.
 ///
-/// `Sentinel` (default) stores the in-band `NULL_SENTINEL` i64, which collides with the real
-/// integer `9223372036854775806`. `Tagged` gives null-capable scalar slots the inline two-word
+/// `Tagged` (default) gives null-capable scalar slots the inline two-word
 /// `PhpType::TaggedScalar` representation, making the full i64 range representable.
+/// `Sentinel` is the legacy opt-out: it stores the in-band `NULL_SENTINEL` i64, which
+/// collides with the real integer `9223372036854775806`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NullRepr {
-    /// In-band `PHP_INT_MAX - 1` sentinel in one-word scalar slots (legacy default).
-    #[default]
+    /// In-band `PHP_INT_MAX - 1` sentinel in one-word scalar slots (legacy opt-out).
     Sentinel,
-    /// Inline two-word `{payload, tag}` scalars for null-capable slots.
+    /// Inline two-word `{payload, tag}` scalars for null-capable slots (default).
+    #[default]
     Tagged,
 }
 
@@ -39,7 +40,7 @@ thread_local! {
     /// Active null representation for the compilation running on this thread. One compilation
     /// is single-threaded, so a thread-local avoids threading the flag through every emitter
     /// signature; `generate`/`generate_user_asm` set it unconditionally at entry.
-    static NULL_REPR: Cell<NullRepr> = const { Cell::new(NullRepr::Sentinel) };
+    static NULL_REPR: Cell<NullRepr> = const { Cell::new(NullRepr::Tagged) };
 }
 
 /// Installs the null representation for the compilation running on this thread. Must run

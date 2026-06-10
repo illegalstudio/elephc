@@ -102,9 +102,10 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 ### Null representations
 
 elephc has two representations for PHP `null` in scalar slots, selected per compilation by
-`--null-repr=sentinel|tagged` (or `ELEPHC_NULL_REPR`).
+`--null-repr=sentinel|tagged` (or `ELEPHC_NULL_REPR`). The tagged representation is the
+default; the sentinel is the legacy opt-out.
 
-#### The in-band sentinel (legacy)
+#### The in-band sentinel (legacy opt-out)
 
 `null` is represented as the integer `0x7FFFFFFFFFFFFFFE` (`PHP_INT_MAX - 1`). Because every
 64-bit pattern is a valid PHP int, this sentinel collides with the real integer
@@ -123,9 +124,9 @@ csel x0, xzr, x0, eq      ; if x0 == sentinel, replace with 0
 
 See [ARM64 Instruction Reference](arm64-instructions.md#move-and-immediate) for how `movz`/`movk` work.
 
-#### The tagged scalar representation
+#### The tagged scalar representation (default)
 
-Under `--null-repr=tagged`, null-capable scalar slots use an inline two-word
+Under the tagged representation, null-capable scalar slots use an inline two-word
 `{payload, tag}` pair (`TaggedScalar`) instead of the in-band sentinel: the payload travels
 in the integer result register (`x0`/`rax`) and the runtime tag in the adjacent register
 (`x1`/`rdx`), mirroring the string pointer/length convention. The tag reuses the runtime
