@@ -2,7 +2,7 @@
 title: "PDO (Databases)"
 description: "PDO database access with the SQLite, PostgreSQL, and MySQL/MariaDB drivers: connections, prepared statements, fetch modes, and transactions."
 sidebar:
-  order: 16
+  order: 17
 ---
 
 elephc supports a practical subset of PHP's PDO database layer, with the

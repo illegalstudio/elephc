@@ -9,6 +9,7 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// `__rt_stat_array` / `__rt_lstat_array` / `__rt_fstat_array`: build a
 /// PHP-compatible associative array describing a path or file descriptor.
@@ -98,8 +99,7 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
 
             // string key insertion
             emitter.instruction(&format!("ldr x0, [sp, #{}]", hash_slot));      // reload hash pointer
-            emitter.adrp("x1", key_sym);                                        // load page of the key literal
-            emitter.add_lo12("x1", "x1", key_sym);                              // resolve full address of the key literal
+            abi::emit_symbol_address(emitter, "x1", key_sym);                   // load page of the key literal
             emitter.instruction(&format!("mov x2, #{}", key_len));              // key length
             emitter.instruction(load_instr);                                    // re-load value (registers were clobbered by the prior call)
             emitter.instruction("mov x3, x9");                                  // value_lo
@@ -252,7 +252,7 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
 
             // string key
             emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", hash_slot_neg)); // hash pointer
-            emitter.instruction(&format!("lea rsi, [rip + {}]", key_sym));      // key pointer
+            abi::emit_symbol_address(emitter, "rsi", key_sym);                  // key pointer
             emitter.instruction(&format!("mov rdx, {}", key_len));              // key length
             emitter.instruction(load_instr);                                    // reload value
             emitter.instruction("mov rcx, rax");                                // value_lo

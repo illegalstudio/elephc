@@ -46,17 +46,21 @@ pub struct PreparedRuntimeObject {
 
 /// Builds (or retrieves from cache) the runtime object file for the given heap size, target, and features.
 /// On cache miss, generates runtime assembly, assembles it to an object file, and caches the result.
-/// The cache key includes compiler version, target, heap size, and a hash of the runtime assembly.
+/// The cache key includes compiler version, target, heap size, the PIC mode, and a hash of the runtime assembly.
+/// `pic` selects position-independent emission for `--emit cdylib` artifacts so the runtime object can be
+/// linked into a shared library without text-segment relocations.
 pub fn prepare_runtime_object(
     heap_size: usize,
     target: Target,
     features: RuntimeFeatures,
+    pic: bool,
 ) -> Result<PreparedRuntimeObject, String> {
     let cache_dir = runtime_cache_dir();
     fs::create_dir_all(&cache_dir)
         .map_err(|err| format!("failed to create runtime cache '{}': {}", cache_dir.display(), err))?;
 
-    let runtime_asm = codegen::generate_runtime_with_features(heap_size, target, features);
+    let runtime_asm =
+        codegen::generate_runtime_with_features_pic(heap_size, target, features, pic);
     let runtime_hash = runtime_asm_hash(&runtime_asm);
     let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, runtime_hash));
     if cache_path.exists() {

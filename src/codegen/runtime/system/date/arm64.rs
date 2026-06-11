@@ -337,8 +337,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // load tm pointer
     emitter.instruction("ldr w0, [x0, #24]");                                   // load tm_wday (0=Sunday)
     emitter.instruction("sxtw x0, w0");                                         // sign-extend
-    emitter.adrp("x1", "_day_names");                            // load page of day names table
-    emitter.add_lo12("x1", "x1", "_day_names");                      // resolve day names address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_day_names");      // load page of day names table
     // Each day name entry is 12 bytes: 10 chars + 1 length byte + 1 padding
     emitter.instruction("mov x2, #12");                                         // entry size
     emitter.instruction("mul x2, x0, x2");                                      // offset = wday * 12
@@ -364,8 +363,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // load tm pointer
     emitter.instruction("ldr w0, [x0, #24]");                                   // load tm_wday
     emitter.instruction("sxtw x0, w0");                                         // sign-extend
-    emitter.adrp("x1", "_day_names");                            // load page of day names
-    emitter.add_lo12("x1", "x1", "_day_names");                      // resolve day names address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_day_names");      // load page of day names
     emitter.instruction("mov x2, #12");                                         // entry size
     emitter.instruction("mul x2, x0, x2");                                      // offset
     emitter.instruction("add x1, x1, x2");                                      // point to entry
@@ -386,8 +384,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // load tm pointer
     emitter.instruction("ldr w0, [x0, #16]");                                   // load tm_mon (0-based)
     emitter.instruction("sxtw x0, w0");                                         // sign-extend
-    emitter.adrp("x1", "_month_names");                          // load page of month names
-    emitter.add_lo12("x1", "x1", "_month_names");                    // resolve month names address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_month_names");    // load page of month names
     // Each month entry is 12 bytes: 10 chars + 1 length byte + 1 padding
     emitter.instruction("mov x2, #12");                                         // entry size
     emitter.instruction("mul x2, x0, x2");                                      // offset = mon * 12
@@ -413,8 +410,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // load tm pointer
     emitter.instruction("ldr w0, [x0, #16]");                                   // load tm_mon
     emitter.instruction("sxtw x0, w0");                                         // sign-extend
-    emitter.adrp("x1", "_month_names");                          // load page of month names
-    emitter.add_lo12("x1", "x1", "_month_names");                    // resolve month names address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_month_names");    // load page of month names
     emitter.instruction("mov x2, #12");                                         // entry size
     emitter.instruction("mul x2, x0, x2");                                      // offset
     emitter.instruction("add x1, x1, x2");                                      // point to entry

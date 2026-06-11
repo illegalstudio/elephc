@@ -426,13 +426,13 @@ fn emit_json_encode_stdclass_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_json_encode_assoc");                          // non-empty → defer to the assoc encoder
 
     // Empty hash: emit "{}" into _concat_buf and return (rax, rdx).
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // r10 = current concat-buffer offset
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // r11 = base of the concat buffer
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // r10 = current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // r11 = base of the concat buffer
     emitter.instruction("add r11, r10");                                        // r11 = output write pointer for this encoder call
     emitter.instruction("mov BYTE PTR [r11], 123");                             // write '{' at the output position
     emitter.instruction("mov BYTE PTR [r11 + 1], 125");                         // write '}' immediately after '{'
     emitter.instruction("add r10, 2");                                          // advance the concat-buffer offset by the two emitted bytes
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r10");              // persist the new offset for any subsequent encoder
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // persist the new offset for any subsequent encoder
     emitter.instruction("mov rax, r11");                                        // result string pointer in the leading x86_64 string register
     emitter.instruction("mov rdx, 2");                                          // result string length in the paired x86_64 string register
     emitter.instruction("ret");                                                 // return (ptr, len) to the caller via the ABI string registers
@@ -458,7 +458,7 @@ fn emit_stdclass_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap header with the object kind
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // park the obj pointer in the local slot
 
-    emitter.instruction("mov r10, QWORD PTR [rip + _stdclass_class_id]");       // load the compile-time stdClass class_id
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class_id at obj+0
 
     emitter.instruction("mov rax, 8");                                          // initial capacity = 8 slots (mixed_from_value first arg)
@@ -496,7 +496,7 @@ fn emit_stdclass_from_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, 0x454C504800000004");                         // x86_64 heap header word: ELPH marker | object kind 4
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap header with the object kind
 
-    emitter.instruction("mov r10, QWORD PTR [rip + _stdclass_class_id]");       // load the compile-time stdClass class_id
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class_id at obj+0
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the saved hash pointer
@@ -582,7 +582,7 @@ fn emit_mixed_property_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // null obj → null result
     emitter.instruction("je __rt_mixed_property_get_null");                     // branch on the current JSON object encoder condition
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load class_id from obj[0]
-    emitter.instruction("mov r12, QWORD PTR [rip + _stdclass_class_id]");       // load the compile-time stdClass class_id sentinel
+    abi::emit_load_symbol_to_reg(emitter, "r12", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id sentinel
     emitter.instruction("cmp r11, r12");                                        // is the receiver a stdClass instance?
     emitter.instruction("jne __rt_mixed_property_get_null");                    // unrelated class → null result
 
@@ -633,7 +633,7 @@ fn emit_mixed_property_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // null obj → drop write
     emitter.instruction("je __rt_mixed_property_set_done");                     // branch on the current JSON object encoder condition
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load class_id from obj[0]
-    emitter.instruction("mov r12, QWORD PTR [rip + _stdclass_class_id]");       // load the compile-time stdClass class_id sentinel
+    abi::emit_load_symbol_to_reg(emitter, "r12", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id sentinel
     emitter.instruction("cmp r11, r12");                                        // is the receiver a stdClass instance?
     emitter.instruction("jne __rt_mixed_property_set_done");                    // unrelated class → drop write
 

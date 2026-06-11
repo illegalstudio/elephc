@@ -47,10 +47,11 @@ pub enum PhpType {
     Pointer(Option<String>),       // opaque ptr or typed ptr<Class>
     Resource(Option<String>),      // generic resource or typed resource such as resource<stream>
     Union(Vec<PhpType>),
+    TaggedScalar,                  // codegen-internal inline nullable scalar: {payload, tag} pair
 }
 ```
 
-This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`), and heterogeneous payloads in either representation widen to boxed `Mixed` elements.
+This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. `TaggedScalar` is never produced by the checker itself: codegen funnels construct it from `int|null` unions under the tagged null representation (the default; see `--null-repr`), storing the value as an inline two-word `{payload, tag}` pair instead of a heap-boxed cell. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`), and heterogeneous payloads in either representation widen to boxed `Mixed` elements.
 
 `Never` is a return-position-only marker: a function annotated `: never` must always diverge (throw, call `exit()`/`die()`, or loop forever). The type checker rejects any reachable `return value;` from such a function, and the runtime size is zero because the value is never materialized. `: never` is rejected as a parameter or local-variable type — same restriction as `: void`.
 

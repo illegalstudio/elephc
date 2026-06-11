@@ -82,6 +82,14 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
+│   Exports    │  src/exports.rs
+│    Scan      │  Collects #[Export]-marked functions and validates their
+│              │  C-ABI signatures for --emit cdylib (warns and ignores
+│              │  them in executable mode).
+└─────┬────────┘
+      │
+      ▼
+┌──────────────┐
 │  Optimizer   │  src/optimize/
 │ (propagate)  │  Propagates scalar locals conservatively after
 │              │  successful checking.
@@ -147,6 +155,7 @@ src/
 ├── main.rs                    CLI binary entry point
 ├── cli.rs                     Command-line option parsing
 ├── pipeline.rs                Frontend/backend compilation pipeline
+├── exports.rs                 #[Export] collection and C-ABI signature validation for --emit cdylib
 ├── linker.rs                  Assembler and linker invocation
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
@@ -287,17 +296,20 @@ src/
 │   │   ├── linux_transform.rs Linux post-emit transforms, syscall mapping, C-symbol remapping
 │   │   └── toolchain.rs       Assembler / linker invocation
 │   ├── ffi.rs                 Extern function/global/class codegen
+│   ├── cdylib.rs              C-ABI export trampolines + lifecycle symbols for --emit cdylib
+│   ├── visibility.rs          ELF .hidden directives for internal globals in cdylib emission
+│   ├── sentinels.rs           Null representation selection (sentinel vs tagged) and constants
 │   ├── context.rs             Variables, labels, loop/finally stacks, ownership lattice
 │   ├── data_section.rs        String/float literal .data section
 │   ├── emit.rs                Assembly text buffer
 │   │
 │   ├── builtins/              Built-in function codegen (one file per language function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
-│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (70 files)
+│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (75 files)
 │   │   ├── arrays/            count, array_push, buffer_len/free, sort, array_map, usort, ... (64 files)
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (33 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, class introspection, ... (27 files)
-│   │   ├── io/                fopen, fwrite, file_get_contents, streams, sockets, scandir, ... (141 files)
+│   │   ├── io/                fopen, fwrite, file_get_contents, streams, sockets, scandir, ... (142 files)
 │   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (16 files)
 │   │   ├── spl/               iterator_to_array, iterator_count, iterator_apply, iterator_common (5 files)
 │   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (32 files)
@@ -307,7 +319,7 @@ src/
 │       ├── data/              Fixed, user-program, and instanceof runtime data tables (4 files)
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (66 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (71 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (127 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed plus callable descriptor release (3 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (108 files)

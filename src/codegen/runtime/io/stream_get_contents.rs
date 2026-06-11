@@ -13,6 +13,7 @@
 
 use crate::codegen::abi::emit_symbol_address;
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// Emits the read-all stream helper.
 ///
@@ -207,9 +208,9 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 64");                                         // reserve aligned locals for read-all accumulation
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source file descriptor
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer offset
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the result start offset
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base address
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base address
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the running byte total to zero
@@ -226,7 +227,7 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // running result length
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // result start offset
     emitter.instruction("add r11, r8");                                         // compact append offset = start + total
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r11");              // make __rt_fread append at the compact tail
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);            // make __rt_fread append at the compact tail
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd for __rt_fread
     emitter.instruction("mov rsi, 4096");                                       // request one read-all chunk
     emitter.instruction("call __rt_fread");                                     // rax=chunk ptr, rdx=chunk len
@@ -235,7 +236,7 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save chunk pointer across the copy
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save chunk length across the copy
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // reload running result length after __rt_fread
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base
     emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // result base pointer
     emitter.instruction("add r10, r8");                                         // destination = result base + total
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // source chunk pointer
@@ -253,7 +254,7 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r8");                        // store the updated result length
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // result start offset
     emitter.instruction("add r11, r8");                                         // compact tail offset after this chunk
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r11");              // publish the compacted concat-buffer tail
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);            // publish the compacted concat-buffer tail
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the chunk pointer
     emitter.instruction("call __rt_decref_any");                                // release owned wrapper/filter chunks; concat slices are ignored
     emitter.instruction("jmp __rt_stream_get_contents_loop_x86");               // read the next chunk
@@ -285,9 +286,9 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve aligned locals for bounded accumulation
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested byte cap
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // snapshot the concat-buffer start offset
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // snapshot the concat-buffer start offset
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the result start offset
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // running result length = 0
@@ -313,7 +314,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmovg rsi, r10");                                      // request min(remaining, 4096)
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // result start offset
     emitter.instruction("add r11, r8");                                         // compact append offset = start + total
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r11");              // make __rt_fread append at the compact tail
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);            // make __rt_fread append at the compact tail
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd for __rt_fread
     emitter.instruction("call __rt_fread");                                     // rax=chunk ptr, rdx=chunk len
     emitter.instruction("test rdx, rdx");                                       // empty chunk?
@@ -325,7 +326,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmova rdx, r9");                                       // clamp the chunk to the remaining cap
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save chunk pointer across the copy
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save chunk length across the copy
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base
     emitter.instruction("add r10, QWORD PTR [rbp - 24]");                       // result base pointer
     emitter.instruction("add r10, r8");                                         // destination = result base + total
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // source chunk pointer
@@ -343,7 +344,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // store the updated result length
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // result start offset
     emitter.instruction("add r11, r8");                                         // compact tail offset after this chunk
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r11");              // publish the compacted concat-buffer tail
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);            // publish the compacted concat-buffer tail
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the chunk pointer
     emitter.instruction("call __rt_decref_any");                                // release owned wrapper/filter chunks; concat slices are ignored
     emitter.instruction("jmp __rt_stream_get_contents_bounded_loop_x86");       // read the next bounded chunk

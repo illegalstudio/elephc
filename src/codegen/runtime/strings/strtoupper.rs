@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits the `__rt_strtoupper` runtime helper for ARM64.
 /// Copies the source string pointed to by `x1` with length `x2` into the concat buffer,
@@ -106,7 +107,7 @@ fn emit_strtoupper_linux_x86_64(emitter: &mut Emitter) {
     // -- update concat_off and return --
     emitter.label("__rt_strtoupper_done_linux_x86_64");
     emitter.instruction("add r9, rsi");                                         // advance the concat-buffer write offset by the original string length that strtoupper() copied
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r9");               // persist the updated concat-buffer write offset after materializing the uppercased string
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // persist the updated concat-buffer write offset after materializing the uppercased string
     emitter.instruction("mov rdx, rsi");                                        // restore the original string length into the x86_64 string result length register before returning
     emitter.instruction("ret");                                                 // return the concat-backed uppercased string in the standard x86_64 string result registers
 }

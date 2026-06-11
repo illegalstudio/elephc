@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits `__rt_strrev` which reverses a PHP byte-string into the concat buffer.
 ///
@@ -85,7 +86,7 @@ fn emit_strrev_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_strrev_done_linux_x86_64");
     emitter.instruction("add r9, rsi");                                         // advance the concat-buffer write offset by the reversed-string length
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r9");               // publish the updated concat-buffer write offset after emitting the reversed string
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated concat-buffer write offset after emitting the reversed string
     emitter.instruction("mov rax, r10");                                        // return the reversed-string start pointer in the primary x86_64 string result register
     emitter.instruction("mov rdx, rsi");                                        // restore the original source-string length into the x86_64 string result-length register
     emitter.instruction("ret");                                                 // return the reversed concat-backed string in the standard x86_64 string result registers

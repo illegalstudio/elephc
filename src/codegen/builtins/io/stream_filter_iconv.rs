@@ -281,7 +281,7 @@ fn emit_x86_64(emitter: &mut Emitter, ctx: &mut Context, from_sym: &str, to_sym:
     emitter.instruction("mov QWORD PTR [rsp + 8], 0");                          // input length = 0
     emitter.label(&slurp);
     emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                        // fd to read from
-    emitter.instruction("lea rsi, [rip + _stream_filter_buf]");                 // scratch base address
+    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf");             // scratch base address
     emitter.instruction("add rsi, QWORD PTR [rsp + 8]");                        // write pointer = scratch base + length
     emitter.instruction(&format!("mov rdx, {}", FILTER_BUF_SIZE));              // scratch capacity
     emitter.instruction("sub rdx, QWORD PTR [rsp + 8]");                        // remaining scratch capacity
@@ -310,15 +310,15 @@ fn emit_x86_64(emitter: &mut Emitter, ctx: &mut Context, from_sym: &str, to_sym:
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // save the output buffer pointer
 
     // -- iconv_open(tocode, fromcode): a -1 result leaves the stream unconverted --
-    emitter.instruction(&format!("lea rdi, [rip + {}]", to_sym));               // arg 0 = tocode
-    emitter.instruction(&format!("lea rsi, [rip + {}]", from_sym));             // arg 1 = fromcode
+    abi::emit_symbol_address(emitter, "rdi", &to_sym);                          // arg 0 = tocode
+    abi::emit_symbol_address(emitter, "rsi", &from_sym);                        // arg 1 = fromcode
     emitter.instruction("call iconv_open");                                     // open the charset conversion descriptor
     emitter.instruction("cmp rax, -1");                                         // is the descriptor (iconv_t)-1?
     emitter.instruction(&format!("je {}", skip));                               // iconv_open failed → skip the conversion
     emitter.instruction("mov QWORD PTR [rsp + 40], rax");                       // save the iconv conversion descriptor
 
     // -- set up the iconv in/out cursors and remaining-byte counts --
-    emitter.instruction("lea r9, [rip + _stream_filter_buf]");                  // scratch base address
+    abi::emit_symbol_address(emitter, "r9", "_stream_filter_buf");              // scratch base address
     emitter.instruction("mov QWORD PTR [rsp + 48], r9");                        // iconv inbuf = scratch base
     emitter.instruction("mov r9, QWORD PTR [rsp + 8]");                         // input length
     emitter.instruction("mov QWORD PTR [rsp + 56], r9");                        // iconv inbytesleft = input length

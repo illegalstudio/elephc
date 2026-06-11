@@ -11,6 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::context::{Context, HeapOwnership};
+use crate::codegen::Emit;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, builtins, functions, runtime, stmt};
@@ -68,7 +69,41 @@ pub(super) fn emit_main_and_finalize(
     gc_stats: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
+    emit: Emit,
 ) -> String {
+    // In cdylib mode the artifact has no process-entry point and no exit syscall —
+    // the host loader (`dlopen`) drives it. We still emit user functions, class
+    // methods, the data section, and runtime metadata above this call, so all
+    // that remains is to finalize the assembly without a `_main` body. Lifecycle
+    // entry points (`elephc_init`, `elephc_shutdown`, ...) are added in a later
+    // emission pass once the export-detection slice lands.
+    if matches!(emit, Emit::Cdylib) {
+        let _ = (
+            global_env,
+            global_constants,
+            requires_elephc_tls,
+            packed_classes,
+            extern_functions,
+            extern_classes,
+            extern_globals,
+            gc_stats,
+            heap_debug,
+            program,
+        );
+        return finish_user_asm(
+            emitter,
+            data,
+            functions,
+            function_variant_groups,
+            all_global_var_names,
+            all_static_vars,
+            interfaces,
+            classes,
+            enums,
+            emitted_class_names,
+        );
+    }
+
     let mut ctx = build_main_context(
         functions,
         callable_param_sigs,

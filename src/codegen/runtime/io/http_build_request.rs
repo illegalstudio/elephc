@@ -442,19 +442,19 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // path_len
 
     // Expose host to __rt_http_open's follow_location loop.
-    emitter.instruction("mov QWORD PTR [rip + _http_active_host_ptr], rdi");    // store runtime value
-    emitter.instruction("mov QWORD PTR [rip + _http_active_host_len], rsi");    // store runtime value
+    abi::emit_store_reg_to_symbol(emitter, "rdi", "_http_active_host_ptr", 0);  // store runtime value
+    abi::emit_store_reg_to_symbol(emitter, "rsi", "_http_active_host_len", 0);  // store runtime value
 
     // Preload method = default ("GET", 3)
-    emitter.instruction("lea r9, [rip + _http_default_method]");                // load runtime data address
+    abi::emit_symbol_address(emitter, "r9", "_http_default_method");            // load runtime data address
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // store runtime value
     emitter.instruction("mov r9, 3");                                           // prepare SysV call argument
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // store runtime value
 
     // Context lookup: __rt_get_string_context_option(http, http_len, method, method_len, &method_ptr_slot, &method_len_slot)
-    emitter.instruction("lea rdi, [rip + _http_key_str]");                      // load runtime data address
+    abi::emit_symbol_address(emitter, "rdi", "_http_key_str");                  // load runtime data address
     emitter.instruction("mov rsi, 4");                                          // strlen("http")
-    emitter.instruction("lea rdx, [rip + _http_method_key_str]");               // load runtime data address
+    abi::emit_symbol_address(emitter, "rdx", "_http_method_key_str");           // load runtime data address
     emitter.instruction("mov rcx, 6");                                          // strlen("method")
     emitter.instruction("lea r8, [rbp - 40]");                                  // out_ptr_addr
     emitter.instruction("lea r9, [rbp - 48]");                                  // out_len_addr
@@ -463,9 +463,9 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     // Context lookup: [http][header]
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // header_ptr = 0
     emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // header_len = 0
-    emitter.instruction("lea rdi, [rip + _http_key_str]");                      // load runtime data address
+    abi::emit_symbol_address(emitter, "rdi", "_http_key_str");                  // load runtime data address
     emitter.instruction("mov rsi, 4");                                          // prepare SysV call argument
-    emitter.instruction("lea rdx, [rip + _http_header_key_str]");               // load runtime data address
+    abi::emit_symbol_address(emitter, "rdx", "_http_header_key_str");           // load runtime data address
     emitter.instruction("mov rcx, 6");                                          // strlen("header")
     emitter.instruction("lea r8, [rbp - 64]");                                  // header_ptr slot
     emitter.instruction("lea r9, [rbp - 72]");                                  // header_len slot
@@ -475,9 +475,9 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     // Context lookup: [http][content]
     emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // store runtime value
     emitter.instruction("mov QWORD PTR [rbp - 96], 0");                         // store runtime value
-    emitter.instruction("lea rdi, [rip + _http_key_str]");                      // load runtime data address
+    abi::emit_symbol_address(emitter, "rdi", "_http_key_str");                  // load runtime data address
     emitter.instruction("mov rsi, 4");                                          // prepare SysV call argument
-    emitter.instruction("lea rdx, [rip + _http_content_key_str]");              // load runtime data address
+    abi::emit_symbol_address(emitter, "rdx", "_http_content_key_str");          // load runtime data address
     emitter.instruction("mov rcx, 7");                                          // strlen("content")
     emitter.instruction("lea r8, [rbp - 88]");                                  // load runtime data address
     emitter.instruction("lea r9, [rbp - 96]");                                  // load runtime data address
@@ -487,9 +487,9 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     // Context lookup: [http][user_agent]
     emitter.instruction("mov QWORD PTR [rbp - 112], 0");                        // store runtime value
     emitter.instruction("mov QWORD PTR [rbp - 120], 0");                        // store runtime value
-    emitter.instruction("lea rdi, [rip + _http_key_str]");                      // load runtime data address
+    abi::emit_symbol_address(emitter, "rdi", "_http_key_str");                  // load runtime data address
     emitter.instruction("mov rsi, 4");                                          // prepare SysV call argument
-    emitter.instruction("lea rdx, [rip + _http_user_agent_key_str]");           // load runtime data address
+    abi::emit_symbol_address(emitter, "rdx", "_http_user_agent_key_str");       // load runtime data address
     emitter.instruction("mov rcx, 10");                                         // strlen("user_agent")
     emitter.instruction("lea r8, [rbp - 112]");                                 // load runtime data address
     emitter.instruction("lea r9, [rbp - 120]");                                 // load runtime data address
@@ -498,9 +498,9 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     // Context lookup: [http][protocol_version]
     emitter.instruction("mov QWORD PTR [rbp - 128], 0");                        // store runtime value
     emitter.instruction("mov QWORD PTR [rbp - 136], 0");                        // store runtime value
-    emitter.instruction("lea rdi, [rip + _http_key_str]");                      // load runtime data address
+    abi::emit_symbol_address(emitter, "rdi", "_http_key_str");                  // load runtime data address
     emitter.instruction("mov rsi, 4");                                          // prepare SysV call argument
-    emitter.instruction("lea rdx, [rip + _http_protocol_version_key_str]");     // load runtime data address
+    abi::emit_symbol_address(emitter, "rdx", "_http_protocol_version_key_str"); // load runtime data address
     emitter.instruction("mov rcx, 16");                                         // strlen("protocol_version")
     emitter.instruction("lea r8, [rbp - 128]");                                 // load runtime data address
     emitter.instruction("lea r9, [rbp - 136]");                                 // load runtime data address
@@ -513,9 +513,9 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     let lookup_str_x = |emitter: &mut Emitter, sym: &str, len: i64, ptr_off: i64| {
         emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", ptr_off));  // store runtime value
         emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", ptr_off + 8)); // store runtime value
-        emitter.instruction("lea rdi, [rip + _http_key_str]");                  // load runtime data address
+        abi::emit_symbol_address(emitter, "rdi", "_http_key_str");              // load runtime data address
         emitter.instruction("mov rsi, 4");                                      // prepare SysV call argument
-        emitter.instruction(&format!("lea rdx, [rip + {}]", sym));              // load runtime data address
+        abi::emit_symbol_address(emitter, "rdx", sym);                          // load runtime data address
         emitter.instruction(&format!("mov rcx, {}", len));                      // prepare SysV call argument
         emitter.instruction(&format!("lea r8, [rbp - {}]", ptr_off));           // load runtime data address
         emitter.instruction(&format!("lea r9, [rbp - {}]", ptr_off + 8));       // load runtime data address
@@ -530,7 +530,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
 
     // -- propagate enforcement-relevant options to globals for __rt_http_open.
     // ignore_errors: truthy when ptr non-zero AND first byte != '0'.
-    emitter.instruction("lea r10, [rip + _http_active_ignore_errors]");         // load runtime data address
+    abi::emit_symbol_address(emitter, "r10", "_http_active_ignore_errors");     // load runtime data address
     emitter.instruction("mov QWORD PTR [r10], 0");                              // store runtime value
     emitter.instruction("mov r11, QWORD PTR [rbp - 184]");                      // ignore_errors_len
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
@@ -543,7 +543,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hbr_skip_ie_x");
     // max_redirects: only honored when follow_location is truthy. Parse the
     // string value (digits), or default to PHP's 20.
-    emitter.instruction("lea r10, [rip + _http_active_max_redirects]");         // load runtime data address
+    abi::emit_symbol_address(emitter, "r10", "_http_active_max_redirects");     // load runtime data address
     emitter.instruction("mov QWORD PTR [r10], 0");                              // store runtime value
     emitter.instruction("mov r11, QWORD PTR [rbp - 216]");                      // follow_location_len
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
@@ -576,7 +576,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], r15");                            // store runtime value
     emitter.label("__rt_hbr_skip_mr_x");
     // timeout: parse seconds as base-10 int.
-    emitter.instruction("lea r10, [rip + _http_active_timeout_seconds]");       // load runtime data address
+    abi::emit_symbol_address(emitter, "r10", "_http_active_timeout_seconds");   // load runtime data address
     emitter.instruction("mov QWORD PTR [r10], 0");                              // store runtime value
     emitter.instruction("mov r11, QWORD PTR [rbp - 168]");                      // timeout_len
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
@@ -601,12 +601,12 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hbr_skip_to_x");
     // proxy: capture ptr/len globals.
     emitter.instruction("mov r11, QWORD PTR [rbp - 192]");                      // proxy_ptr
-    emitter.instruction("mov QWORD PTR [rip + _http_active_proxy_ptr], r11");   // store runtime value
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_http_active_proxy_ptr", 0); // store runtime value
     emitter.instruction("mov r11, QWORD PTR [rbp - 200]");                      // proxy_len
-    emitter.instruction("mov QWORD PTR [rip + _http_active_proxy_len], r11");   // store runtime value
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_http_active_proxy_len", 0); // store runtime value
 
     // running write ptr = _http_req_scratch
-    emitter.instruction("lea r9, [rip + _http_req_scratch]");                   // load runtime data address
+    abi::emit_symbol_address(emitter, "r9", "_http_req_scratch");               // load runtime data address
     emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // store runtime value
 
     // copy method
@@ -639,7 +639,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hbr_no_fulluri_x");                            // branch when the checked value is zero or equal
     emitter.label("__rt_hbr_emit_fulluri_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("lea rsi, [rip + _http_scheme_prefix]");                // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_http_scheme_prefix");            // load runtime data address
     emitter.instruction("mov rdx, 7");                                          // strlen("http://")
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov rdi, rax");                                        // prepare SysV call argument
@@ -659,7 +659,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     // copy " HTTP/1.x\r\nHost: " — pick 1.0 vs 1.1 based on
     // [http][protocol_version] (default = 1.0, "1.1" → 1.1).
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("lea rsi, [rip + _http_version_host]");                 // default = HTTP/1.0
+    abi::emit_symbol_address(emitter, "rsi", "_http_version_host");             // default = HTTP/1.0
     emitter.instruction("mov r10, QWORD PTR [rbp - 136]");                      // proto_version_len
     emitter.instruction("cmp r10, 3");                                          // compare runtime values for the next branch
     emitter.instruction("jne __rt_hbr_proto_default_x");                        // branch when the checked value is nonzero or different
@@ -673,7 +673,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx eax, BYTE PTR [r11 + 2]");                       // load runtime value
     emitter.instruction("cmp al, 49");                                          // '1'
     emitter.instruction("jne __rt_hbr_proto_default_x");                        // branch when the checked value is nonzero or different
-    emitter.instruction("lea rsi, [rip + _http_version_host_11]");              // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_http_version_host_11");          // load runtime data address
     emitter.label("__rt_hbr_proto_default_x");
     emitter.instruction("mov rdx, 17");                                         // prepare SysV call argument
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
@@ -688,7 +688,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
 
     // copy "\r\n" after the Host: value
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("lea rsi, [rip + _http_crlf]");                         // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_http_crlf");                     // load runtime data address
     emitter.instruction("mov rdx, 2");                                          // prepare SysV call argument
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
@@ -698,7 +698,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_hbr_no_ua_x");                                 // branch when the checked value is zero or equal
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("lea rsi, [rip + _http_user_agent_prefix]");            // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_http_user_agent_prefix");        // load runtime data address
     emitter.instruction("mov rdx, 12");                                         // strlen("User-Agent: ")
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov rdi, rax");                                        // prepare SysV call argument
@@ -706,7 +706,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 120]");                      // user_agent_len
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov rdi, rax");                                        // prepare SysV call argument
-    emitter.instruction("lea rsi, [rip + _http_crlf]");                         // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_http_crlf");                     // load runtime data address
     emitter.instruction("mov rdx, 2");                                          // prepare SysV call argument
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
@@ -722,7 +722,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("lea rsi, [rip + _http_crlf]");                         // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_http_crlf");                     // load runtime data address
     emitter.instruction("mov rdx, 2");                                          // prepare SysV call argument
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
@@ -733,7 +733,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_hbr_no_clen_x86");                             // branch when the checked value is zero or equal
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("lea rsi, [rip + _http_content_length_prefix]");        // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_http_content_length_prefix");    // load runtime data address
     emitter.instruction("mov rdx, 16");                                         // strlen("Content-Length: ")
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
@@ -744,7 +744,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("lea rsi, [rip + _http_crlf]");                         // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_http_crlf");                     // load runtime data address
     emitter.instruction("mov rdx, 2");                                          // prepare SysV call argument
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
@@ -752,7 +752,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
 
     // copy "Connection: close\r\n\r\n"
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // prepare SysV call argument
-    emitter.instruction("lea rsi, [rip + _http_trailer]");                      // load runtime data address
+    abi::emit_symbol_address(emitter, "rsi", "_http_trailer");                  // load runtime data address
     emitter.instruction("mov rdx, 21");                                         // prepare SysV call argument
     emitter.instruction("call __rt_http_build_copy_x86");                       // call runtime helper
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
@@ -770,7 +770,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
 
     // total length = write_ptr - scratch_base
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // prepare runtime result value
-    emitter.instruction("lea r9, [rip + _http_req_scratch]");                   // load runtime data address
+    abi::emit_symbol_address(emitter, "r9", "_http_req_scratch");               // load runtime data address
     emitter.instruction("sub rax, r9");                                         // reduce runtime pointer or counter
 
     emitter.instruction("add rsp, 240");                                        // must match the prologue's sub rsp, 240

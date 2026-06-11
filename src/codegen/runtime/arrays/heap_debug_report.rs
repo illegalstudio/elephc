@@ -186,8 +186,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
 
     // -- print summary prefix --
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_stats_prefix");                // load page of the heap-debug summary prefix
-    emitter.add_lo12("x1", "x1", "_heap_dbg_stats_prefix");          // resolve the heap-debug summary prefix address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_stats_prefix"); // load page of the heap-debug summary prefix
     emitter.instruction("mov x2, #19");                                         // "HEAP DEBUG: allocs=" length
     emitter.syscall(4);
 
@@ -199,8 +198,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
 
     // -- print frees label and count --
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_frees_label");                 // load page of the frees label
-    emitter.add_lo12("x1", "x1", "_heap_dbg_frees_label");           // resolve the frees label address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_frees_label"); // load page of the frees label
     emitter.instruction("mov x2, #7");                                          // " frees=" length
     emitter.syscall(4);
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload free count after the previous itoa call
@@ -210,8 +208,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
 
     // -- print live_blocks label and count --
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_live_blocks_label");           // load page of the live-block label
-    emitter.add_lo12("x1", "x1", "_heap_dbg_live_blocks_label");     // resolve the live-block label address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_live_blocks_label"); // load page of the live-block label
     emitter.instruction("mov x2, #13");                                         // " live_blocks=" length
     emitter.syscall(4);
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload live block count for decimal conversion
@@ -221,8 +218,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
 
     // -- print live_bytes label and count --
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_live_bytes_label");            // load page of the live-bytes label
-    emitter.add_lo12("x1", "x1", "_heap_dbg_live_bytes_label");      // resolve the live-bytes label address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_live_bytes_label"); // load page of the live-bytes label
     emitter.instruction("mov x2, #12");                                         // " live_bytes=" length
     emitter.syscall(4);
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload live bytes for decimal conversion
@@ -232,8 +228,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
 
     // -- print peak_live_bytes label and count --
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_peak_label");                  // load page of the peak-live-bytes label
-    emitter.add_lo12("x1", "x1", "_heap_dbg_peak_label");            // resolve the peak-live-bytes label address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_peak_label"); // load page of the peak-live-bytes label
     emitter.instruction("mov x2, #17");                                         // " peak_live_bytes=" length
     emitter.syscall(4);
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_peak");
@@ -242,15 +237,13 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     emitter.syscall(4);
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_newline");                     // load page of the newline label
-    emitter.add_lo12("x1", "x1", "_heap_dbg_newline");               // resolve the newline label address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_newline"); // load page of the newline label
     emitter.instruction("mov x2, #1");                                          // newline length
     emitter.syscall(4);
 
     // -- print leak-summary prefix --
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_leak_prefix");                 // load page of the leak-summary prefix
-    emitter.add_lo12("x1", "x1", "_heap_dbg_leak_prefix");           // resolve the leak-summary prefix address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_leak_prefix"); // load page of the leak-summary prefix
     emitter.instruction("mov x2, #26");                                         // "HEAP DEBUG: leak summary: " length
     emitter.syscall(4);
 
@@ -258,16 +251,14 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload live block count for the leak summary branch
     emitter.instruction("cbnz x9, __rt_heap_debug_report_leak_details");        // nonzero live blocks mean there is still heap state outstanding at exit
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_clean_label");                 // load page of the clean summary label
-    emitter.add_lo12("x1", "x1", "_heap_dbg_clean_label");           // resolve the clean summary label address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_clean_label"); // load page of the clean summary label
     emitter.instruction("mov x2, #6");                                          // "clean\n" length
     emitter.syscall(4);
     emitter.instruction("b __rt_heap_debug_report_done");                       // skip the leak-detail path once the clean summary is written
 
     emitter.label("__rt_heap_debug_report_leak_details");
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_live_blocks_short_label");     // load page of the short live-block label
-    emitter.add_lo12("x1", "x1", "_heap_dbg_live_blocks_short_label"); //resolve the short live-block label address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_live_blocks_short_label"); // load page of the short live-block label
     emitter.instruction("mov x2, #12");                                         // "live_blocks=" length
     emitter.syscall(4);
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload live block count for decimal conversion
@@ -275,8 +266,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     emitter.syscall(4);
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_live_bytes_label");            // load page of the live-bytes label
-    emitter.add_lo12("x1", "x1", "_heap_dbg_live_bytes_label");      // resolve the live-bytes label address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_live_bytes_label"); // load page of the live-bytes label
     emitter.instruction("mov x2, #12");                                         // " live_bytes=" length
     emitter.syscall(4);
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload live bytes for decimal conversion
@@ -284,8 +274,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     emitter.syscall(4);
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_dbg_newline");                     // load page of the newline label
-    emitter.add_lo12("x1", "x1", "_heap_dbg_newline");               // resolve the newline label address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_newline"); // load page of the newline label
     emitter.instruction("mov x2, #1");                                          // newline length
     emitter.syscall(4);
 

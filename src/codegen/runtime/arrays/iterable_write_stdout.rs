@@ -44,8 +44,7 @@ pub fn emit_iterable_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("b __rt_iterable_write_stdout_done");                   // every other heap kind is a silent no-op
 
     emitter.label("__rt_iterable_write_stdout_array");
-    emitter.adrp("x1", "_iterable_array_str");                                  // load the page that contains the literal "Array" bytes
-    emitter.add_lo12("x1", "x1", "_iterable_array_str");                        // resolve the literal "Array" address within that page
+    abi::emit_symbol_address(emitter, "x1", "_iterable_array_str");             // load the page that contains the literal "Array" bytes
     emitter.instruction("mov x2, #5");                                          // pass the 5-byte length of the literal "Array" to write()
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);

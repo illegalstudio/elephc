@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// __rt_json_encode_object: encode a PHP object instance as JSON.
 ///
@@ -439,8 +440,8 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_json_depth_enter");                          // increment _json_active_depth and throw on overflow when requested
 
     // Get the current write position in the concat buffer.
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer offset
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat buffer base
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat buffer base
     emitter.instruction("add r11, r10");                                        // compute the write pointer for the encoded object
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer for the encoder loop
@@ -448,10 +449,10 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     // Bounds-check the class id and resolve the JSON descriptor.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer (depth_enter clobbered rax)
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load class_id from the object header
-    emitter.instruction("mov rdi, QWORD PTR [rip + _class_gc_desc_count]");     // load the total number of registered class descriptors
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_class_gc_desc_count", 0);    // load the total number of registered class descriptors
     emitter.instruction("cmp rcx, rdi");                                        // is the class_id within the descriptor table?
     emitter.instruction("jae __rt_json_obj_open_only_x");                       // an out-of-range class_id falls back to an empty object literal
-    emitter.instruction("lea rdi, [rip + _class_json_desc_ptrs]");              // materialize the descriptor pointer table base
+    abi::emit_symbol_address(emitter, "rdi", "_class_json_desc_ptrs");          // materialize the descriptor pointer table base
     emitter.instruction("mov rdi, QWORD PTR [rdi + rcx*8]");                    // load the descriptor pointer for the current class
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the descriptor pointer for downstream loads
 
@@ -467,22 +468,22 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     // beginning of concat_buf, which would trash any caller prefix already
     // there. Persist the caller's prefix to heap, run jsonSerialize, then
     // copy the prefix back before re-establishing concat_off and encoding.
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // capture the caller-visible concat-buffer offset before the user method runs
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // capture the caller-visible concat-buffer offset before the user method runs
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the captured offset (= prefix length) across the user method invocation
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_last_error]");         // capture the outer JSON error state before user code can run nested JSON calls
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_last_error", 0);        // capture the outer JSON error state before user code can run nested JSON calls
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save _json_last_error across jsonSerialize()
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]");       // capture the outer JSON flag bitmask before user code can change it
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);      // capture the outer JSON flag bitmask before user code can change it
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save _json_active_flags across jsonSerialize()
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_depth]");       // capture the outer JSON depth before user code can reset it
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_depth", 0);      // capture the outer JSON depth before user code can reset it
     emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // save _json_active_depth across jsonSerialize()
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_indent_depth]");       // capture the outer pretty-print depth before user code can reset it
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_indent_depth", 0);      // capture the outer pretty-print depth before user code can reset it
     emitter.instruction("mov QWORD PTR [rbp - 88], r10");                       // save _json_indent_depth across jsonSerialize()
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_depth_limit]");        // capture the outer JSON depth limit before user code can change it
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_depth_limit", 0);       // capture the outer JSON depth limit before user code can change it
     emitter.instruction("mov QWORD PTR [rbp - 96], r10");                       // save _json_depth_limit across jsonSerialize()
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // default the saved prefix heap pointer to null for empty prefixes
     emitter.instruction("test r10, r10");                                       // is there any caller-visible prefix to preserve?
     emitter.instruction("jz __rt_json_obj_jsonserialize_invoke_x");             // skip the prefix copy when the prefix is empty
-    emitter.instruction("lea rax, [rip + _concat_buf]");                        // materialize the concat-buffer base for the str_persist input
+    abi::emit_symbol_address(emitter, "rax", "_concat_buf");                    // materialize the concat-buffer base for the str_persist input
     emitter.instruction("mov rdx, r10");                                        // copy the prefix length into the str_persist length register
     emitter.instruction("call __rt_str_persist");                               // duplicate the caller prefix into a heap-owned buffer
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // remember the heap-owned prefix pointer for the post-call restore
@@ -498,7 +499,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 64]");                       // reload the heap-owned prefix pointer
     emitter.instruction("test r11, r11");                                       // defensive null guard for the heap-owned prefix pointer
     emitter.instruction("jz __rt_json_obj_jsonserialize_after_restore_x");      // skip restore when no heap copy was made
-    emitter.instruction("lea r9, [rip + _concat_buf]");                         // materialize the concat-buffer base for the prefix restore loop
+    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // materialize the concat-buffer base for the prefix restore loop
     emitter.instruction("xor rcx, rcx");                                        // initialize the prefix copy index
     emitter.label("__rt_json_obj_prefix_restore_x");
     emitter.instruction("cmp rcx, r10");                                        // have we copied every prefix byte back?
@@ -509,17 +510,17 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_obj_prefix_restore_x");                  // continue the prefix restore loop
     emitter.label("__rt_json_obj_jsonserialize_after_restore_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the saved pre-call concat-buffer offset
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r10");              // restore the concat-buffer offset so encode_mixed appends at our intended slot
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // restore the concat-buffer offset so encode_mixed appends at our intended slot
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the outer JSON error state after user code returns
-    emitter.instruction("mov QWORD PTR [rip + _json_last_error], r10");         // restore _json_last_error before encoding the serialized value
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_last_error", 0);       // restore _json_last_error before encoding the serialized value
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the outer JSON flag bitmask after user code returns
-    emitter.instruction("mov QWORD PTR [rip + _json_active_flags], r10");       // restore _json_active_flags before encoding the serialized value
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_active_flags", 0);     // restore _json_active_flags before encoding the serialized value
     emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // reload the outer JSON depth after user code returns
-    emitter.instruction("mov QWORD PTR [rip + _json_active_depth], r10");       // restore _json_active_depth before recursive JSON encoding resumes
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_active_depth", 0);     // restore _json_active_depth before recursive JSON encoding resumes
     emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reload the outer pretty-print depth after user code returns
-    emitter.instruction("mov QWORD PTR [rip + _json_indent_depth], r10");       // restore _json_indent_depth before recursive JSON encoding resumes
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_indent_depth", 0);     // restore _json_indent_depth before recursive JSON encoding resumes
     emitter.instruction("mov r10, QWORD PTR [rbp - 96]");                       // reload the outer JSON depth limit after user code returns
-    emitter.instruction("mov QWORD PTR [rip + _json_depth_limit], r10");        // restore _json_depth_limit before recursive JSON encoding resumes
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_depth_limit", 0);      // restore _json_depth_limit before recursive JSON encoding resumes
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore the boxed mixed return value before encoding it
     emitter.instruction("call __rt_json_encode_mixed");                         // encode the boxed mixed return value as JSON
     // Save the (rax, rdx) result across __rt_json_depth_exit.
@@ -611,10 +612,10 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer after the key prefix
 
     // Sync concat_off so nested encoders append after the existing prefix.
-    emitter.instruction("lea rdi, [rip + _concat_buf]");                        // materialize the concat buffer base
+    abi::emit_symbol_address(emitter, "rdi", "_concat_buf");                    // materialize the concat buffer base
     emitter.instruction("mov rcx, r11");                                        // copy the running write pointer for the offset computation
     emitter.instruction("sub rcx, rdi");                                        // compute the absolute concat offset for the prefix tail
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the concat offset for nested value encoders
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the concat offset for nested value encoders
 
     // Load property value from the object instance (slot offset = 8 + prop_index * 16).
     emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // reload the property runtime slot index
@@ -732,10 +733,10 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the encoded-object start pointer
     emitter.instruction("mov rdx, r11");                                        // copy the final write pointer for the length computation
     emitter.instruction("sub rdx, rax");                                        // compute the encoded-object byte length
-    emitter.instruction("lea rdi, [rip + _concat_buf]");                        // materialize the concat buffer base
+    abi::emit_symbol_address(emitter, "rdi", "_concat_buf");                    // materialize the concat buffer base
     emitter.instruction("mov rcx, r11");                                        // copy the final write pointer for the offset update
     emitter.instruction("sub rcx, rdi");                                        // compute the absolute concat-buffer offset after the closing brace
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the concat-buffer offset for the next encoder
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the concat-buffer offset for the next encoder
     emitter.instruction("mov rsp, rbp");                                        // unwind the encoder scratch frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the encoded object slice in the standard string registers

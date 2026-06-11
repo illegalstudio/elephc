@@ -74,8 +74,7 @@ fn emit_store_matches_arg(emitter: &mut Emitter, ctx: &mut Context, arg: &Expr) 
         Arch::AArch64 => {
             if ctx.global_vars.contains(name) || (ctx.in_main && ctx.all_global_var_names.contains(name)) {
                 let label = format!("_gvar_{}", name);
-                emitter.adrp("x9", &label);                                    // load page of the global preg_match matches slot
-                emitter.add_lo12("x9", "x9", &label);                          // resolve the global preg_match matches slot address
+                abi::emit_symbol_address(emitter, "x9", &label);                // load page of the global preg_match matches slot
                 emitter.instruction("str x1, [x9]");                            // store the matches array into the global variable
             } else if ctx.ref_params.contains(name) {
                 let offset = ctx

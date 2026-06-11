@@ -9,6 +9,7 @@
 //! - Base64 helpers depend on fixed encode/decode tables and must report decoded pointer/length pairs consistently.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// Emits the `__rt_base64_encode` runtime helper for PHP's `base64_encode()`.
 ///
@@ -154,13 +155,13 @@ fn emit_base64_encode_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: base64_encode ---");
     emitter.label_global("__rt_base64_encode");
 
-    emitter.instruction("mov r8, QWORD PTR [rip + _concat_off]");               // load the current concat-buffer offset before appending the encoded bytes
-    emitter.instruction("lea r9, [rip + _concat_buf]");                         // load the base address of the shared concat buffer
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer offset before appending the encoded bytes
+    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // load the base address of the shared concat buffer
     emitter.instruction("add r9, r8");                                          // compute the destination pointer at the current concat-buffer tail
     emitter.instruction("mov r10, r9");                                         // preserve the encoded string start pointer for the return value
     emitter.instruction("mov rcx, rdx");                                        // copy the source byte count into a decrementing loop counter
     emitter.instruction("mov rsi, rax");                                        // copy the source pointer into a cursor register for byte-by-byte reads
-    emitter.instruction("lea r11, [rip + _b64_encode_tbl]");                    // load the base64 lookup-table address for the encoding loop
+    abi::emit_symbol_address(emitter, "r11", "_b64_encode_tbl");                // load the base64 lookup-table address for the encoding loop
 
     emitter.label("__rt_b64enc_loop_linux_x86_64");
     emitter.instruction("cmp rcx, 3");                                          // check whether at least one full 3-byte chunk remains
@@ -262,10 +263,10 @@ fn emit_base64_encode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r10");                                        // return the encoded string start pointer in the standard x86_64 string result register
     emitter.instruction("mov rdx, r9");                                         // copy the concat-buffer tail into the length scratch register
     emitter.instruction("sub rdx, r10");                                        // compute the encoded string length from the written byte count
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r9");               // temporarily publish the absolute concat-buffer tail before normalizing the shared offset
-    emitter.instruction("mov r8, QWORD PTR [rip + _concat_off]");               // reload the absolute concat-buffer tail through the shared offset slot
-    emitter.instruction("lea r9, [rip + _concat_buf]");                         // load the concat-buffer base so the shared offset can stay relative
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // temporarily publish the absolute concat-buffer tail before normalizing the shared offset
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload the absolute concat-buffer tail through the shared offset slot
+    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // load the concat-buffer base so the shared offset can stay relative
     emitter.instruction("sub r8, r9");                                          // convert the absolute concat-buffer tail back into the shared relative offset
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r8");               // publish the updated relative concat-buffer offset for later string appenders
+    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated relative concat-buffer offset for later string appenders
     emitter.instruction("ret");                                                 // return the encoded string through the standard x86_64 string result registers
 }

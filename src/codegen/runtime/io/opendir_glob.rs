@@ -159,7 +159,7 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jg __rt_opendir_glob_fail_x86");                       // can't register this fd
 
     // -- register the struct in _glob_handles[fd] --
-    emitter.instruction("lea r9, [rip + _glob_handles]");                       // base of the fd → struct pointer table
+    abi::emit_symbol_address(emitter, "r9", "_glob_handles");                   // base of the fd → struct pointer table
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // struct pointer
     emitter.instruction("mov QWORD PTR [r9 + rax * 8], r10");                   // _glob_handles[fd] = struct ptr
     emitter.instruction("add rsp, 48");                                         // release the frame

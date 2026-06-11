@@ -12,6 +12,7 @@
 
 use crate::codegen::abi::emit_symbol_address;
 use crate::codegen::{emit::Emitter, platform::Arch, platform::Platform};
+use crate::codegen::abi;
 
 /// gethostname: return the system host name.
 /// Input:  (none)
@@ -105,8 +106,8 @@ fn emit_gethostname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rbp - 400]");                                // &utsname
     emitter.instruction("mov eax, 63");                                         // Linux x86_64 syscall 63 = uname
     emitter.instruction("syscall");                                             // read the system information
-    emitter.instruction("mov r9, QWORD PTR [rip + _concat_off]");               // current concat-buffer offset
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // concat-buffer base address
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
     emitter.instruction("lea r11, [r10 + r9]");                                 // result write pointer
     emitter.instruction("lea r8, [rbp - 400]");                                 // utsname base
     emitter.instruction("add r8, 65");                                          // nodename field offset
@@ -120,7 +121,7 @@ fn emit_gethostname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gethostname_copy_x86");                       // continue copying
     emitter.label("__rt_gethostname_copy_done_x86");
     emitter.instruction("add r9, rdx");                                         // reserve the host-name bytes
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r9");               // publish the updated offset
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated offset
     emitter.instruction("mov rax, r11");                                        // result pointer
     emitter.instruction("add rsp, 416");                                        // release the scratch
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

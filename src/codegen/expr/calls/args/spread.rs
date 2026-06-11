@@ -141,8 +141,7 @@ fn emit_spread_too_few_args_abort(emitter: &mut Emitter, data: &mut DataSection)
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // write the spread arity diagnostic to stderr
-            emitter.adrp("x1", &message_label);
-            emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(emitter, "x1", &message_label);
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the diagnostic byte length to write()
             emitter.syscall(4);
             abi::emit_exit(emitter, 1);

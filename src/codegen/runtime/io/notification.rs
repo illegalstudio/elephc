@@ -206,7 +206,7 @@ fn emit_fire_notification_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save bytes_max (the 6th incoming argument)
 
     // -- no-op fast path when no callback is registered --
-    emitter.instruction("lea r10, [rip + _stream_notification_callback]");      // address of the captured-callback global
+    abi::emit_symbol_address(emitter, "r10", "_stream_notification_callback");  // address of the captured-callback global
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the callback descriptor pointer
     emitter.instruction("test r10, r10");                                       // is a callback registered?
     emitter.instruction("jz __rt_hfn_done_x86");                                // no callback → nothing to fire

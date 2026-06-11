@@ -13,6 +13,7 @@ mod cli;
 mod codegen;
 mod conditional;
 mod errors;
+mod exports;
 mod intrinsics;
 mod linker;
 mod lexer;

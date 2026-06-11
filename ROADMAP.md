@@ -719,11 +719,13 @@ and runtime foundation.
 
 ## v0.27.x — Shared and static libraries (C ABI)
 
-- [ ] `--lib` flag, export PHP functions as C-callable symbols
-- [ ] `--export` flag for symbol selection
-- [ ] `.dylib` / `.so` / `.a` output
+- [x] `--emit cdylib` flag, export PHP functions as C-callable symbols via `#[Export]` (shipped early; supersedes the planned `--lib` spelling)
+- [x] `#[Export]` attribute for symbol selection (supersedes the planned `--export` flag spelling)
+- [x] `.dylib` / `.so` output on all supported targets (macOS aarch64, Linux aarch64, Linux x86_64)
+- [ ] `.a` static library output
 - [ ] Multi-file library compilation
-- [ ] Symbol visibility control
+- [x] Symbol visibility control — ELF cdylibs hide every internal global; the dynamic symbol table exposes only `#[Export]` trampolines and the `elephc_init`/`elephc_shutdown`/`elephc_last_error`/`elephc_free` lifecycle entry points
+- [ ] String return values from exported functions (host frees via `elephc_free`)
 - [ ] Auto-generated C header file
 - [ ] Null-terminated string convention for C interop
 - [x] Stateful FFI callback trampolines — generate C-ABI-compatible trampoline symbols for descriptor-backed callables passed to extern `callable` parameters, retaining descriptor/capture/receiver environments for supported scalar/ptr signatures and documenting constraints for C APIs without userdata/context slots

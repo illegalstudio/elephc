@@ -362,7 +362,7 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, rdx");                                        // archive buffer length N
 
     // -- scan the buffer for the "__HALT_COMPILER();" stub terminator --
-    emitter.instruction("lea rbx, [rip + _phar_halt_magic]");                   // terminator literal ptr
+    abi::emit_symbol_address(emitter, "rbx", "_phar_halt_magic");               // terminator literal ptr
     emitter.instruction("xor r8, r8");                                          // scan index i = 0
     emitter.label("__rt_phar_read_halt_scan_x86");
     emitter.instruction("lea r9, [r8 + 18]");                                   // i + 18

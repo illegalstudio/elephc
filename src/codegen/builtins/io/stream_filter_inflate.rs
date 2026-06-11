@@ -199,7 +199,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter, ctx: &mut Context) {
     emitter.instruction("mov QWORD PTR [rsp + 120], 0");                        // slurp offset = 0
     emitter.label(&slurp);
     emitter.instruction("mov rdi, QWORD PTR [rsp + 112]");                      // fd to read compressed bytes from
-    emitter.instruction("lea rsi, [rip + _stream_filter_buf]");                 // scratch base address
+    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf");             // scratch base address
     emitter.instruction("add rsi, QWORD PTR [rsp + 120]");                      // write pointer = scratch base + offset
     emitter.instruction(&format!("mov rdx, {}", FILTER_BUF_SIZE));              // scratch capacity
     emitter.instruction("sub rdx, QWORD PTR [rsp + 120]");                      // remaining scratch capacity
@@ -243,12 +243,12 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter, ctx: &mut Context) {
     // -- inflateInit2_(strm, -15, version, size): -15 selects raw inflate --
     emitter.instruction("mov rdi, rsp");                                        // arg 0 = z_stream pointer
     emitter.instruction("mov esi, -15");                                        // arg 1 = windowBits -15: raw inflate
-    emitter.instruction("lea rdx, [rip + _zlib_version]");                      // arg 2 = the zlib version string
+    abi::emit_symbol_address(emitter, "rdx", "_zlib_version");                  // arg 2 = the zlib version string
     emitter.instruction("mov ecx, 112");                                        // arg 3 = sizeof(z_stream) for the ABI check
     emitter.instruction("call inflateInit2_");                                  // initialize a raw-inflate zlib stream
 
     // -- point the stream at the slurped input and the output buffer --
-    emitter.instruction("lea r9, [rip + _stream_filter_buf]");                  // scratch base address
+    abi::emit_symbol_address(emitter, "r9", "_stream_filter_buf");              // scratch base address
     emitter.instruction("mov QWORD PTR [rsp + 0], r9");                         // z_stream.next_in = scratch base
     emitter.instruction("mov r9, QWORD PTR [rsp + 120]");                       // compressed length
     emitter.instruction("mov DWORD PTR [rsp + 8], r9d");                        // z_stream.avail_in = compressed length

@@ -66,7 +66,7 @@ fn emit_closedir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // scratch slot for the glob fd
 
     // -- glob:// path takes precedence: probe _glob_handles[fd] first --
-    emitter.instruction("lea r9, [rip + _glob_handles]");                       // base of the fd → glob_state pointer table
+    abi::emit_symbol_address(emitter, "r9", "_glob_handles");                   // base of the fd → glob_state pointer table
     emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // glob_state* = _glob_handles[fd]
     emitter.instruction("test r10, r10");                                       // glob handle present?
     emitter.instruction("jz __rt_closedir_libc_x86");                           // no glob handle: fall through to libc closedir
@@ -80,7 +80,7 @@ fn emit_closedir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_closedir_libc_x86");
     // -- look up the DIR* recorded for this descriptor --
-    emitter.instruction("lea r9, [rip + _dir_handles]");                        // base of the fd->DIR* table
+    abi::emit_symbol_address(emitter, "r9", "_dir_handles");                    // base of the fd->DIR* table
     emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // DIR* = _dir_handles[fd]
     emitter.instruction("test r10, r10");                                       // was a DIR* recorded for this descriptor?
     emitter.instruction("jz __rt_closedir_done_x86");                           // nothing recorded: nothing to close

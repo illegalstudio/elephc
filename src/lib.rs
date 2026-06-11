@@ -15,6 +15,8 @@ pub mod codegen;
 pub mod conditional;
 /// Error and warning reporting.
 pub mod errors;
+/// `#[Export]` attribute scan for cdylib emission.
+pub mod exports;
 /// Intrinsic call handling.
 pub mod intrinsics;
 /// Lexer for tokenizing PHP source.

@@ -154,7 +154,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: phar_write open ---");
     emitter.label_global("__rt_phar_write_open");
     // __rt_phar_write_open(rdi = template ptr, rsi = template len).
-    emitter.instruction("lea r8, [rip + _phar_write_out]");                     // phar-write buffer base
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_out");                 // phar-write buffer base
     emitter.instruction("xor r9, r9");                                          // copy index = 0
     emitter.label("__rt_phar_write_open_loop_x86");
     emitter.instruction("cmp r9, rsi");                                         // copied every template byte?
@@ -164,18 +164,18 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r9");                                              // advance the copy index
     emitter.instruction("jmp __rt_phar_write_open_loop_x86");                   // continue copying
     emitter.label("__rt_phar_write_open_done_x86");
-    emitter.instruction("lea r8, [rip + _phar_write_len]");                     // buffer length slot
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov QWORD PTR [r8], rsi");                             // length starts at the template length
-    emitter.instruction("lea r8, [rip + _phar_write_tpl_len]");                 // template length slot
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_tpl_len");             // template length slot
     emitter.instruction("mov QWORD PTR [r8], rsi");                             // record the template length for finalize
     emitter.instruction("ret");                                                 // return to the fopen caller
     emitter.blank();
     emitter.comment("--- runtime: phar_write append ---");
     emitter.label_global("__rt_phar_write_append");
     // __rt_phar_write_append(rsi = payload ptr, rdx = payload len; rdi = fd, ignored).
-    emitter.instruction("lea r8, [rip + _phar_write_len]");                     // buffer length slot
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // current buffer length
-    emitter.instruction("lea r10, [rip + _phar_write_out]");                    // buffer base
+    abi::emit_symbol_address(emitter, "r10", "_phar_write_out");                // buffer base
     emitter.instruction("add r10, r9");                                         // append destination = base + current length
     emitter.instruction("xor r11, r11");                                        // copy index = 0
     emitter.label("__rt_phar_write_append_loop_x86");
@@ -197,13 +197,13 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 16");                                         // reserve a small aligned frame for the crc stash
     // -- compute the content length and the entry anchor --
-    emitter.instruction("lea r8, [rip + _phar_write_len]");                     // buffer length slot
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // total buffer length (template + content)
-    emitter.instruction("lea r8, [rip + _phar_write_tpl_len]");                 // template length slot
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_tpl_len");             // template length slot
     emitter.instruction("mov r10, QWORD PTR [r8]");                             // template prefix length
     emitter.instruction("mov r11, r9");                                         // content length = total ...
     emitter.instruction("sub r11, r10");                                        // ... minus the template length
-    emitter.instruction("lea rcx, [rip + _phar_write_out]");                    // buffer base
+    abi::emit_symbol_address(emitter, "rcx", "_phar_write_out");                // buffer base
     emitter.instruction("add rcx, r10");                                        // entry anchor = base + template length
     // -- patch the manifest size fields (little-endian u32) --
     emitter.instruction("mov DWORD PTR [rcx - 24], r11d");                      // uncompressed size = content length
@@ -213,25 +213,25 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, r11d");                                       // crc32 input length = content length
     emitter.instruction("call __rt_crc32");                                     // rax = CRC-32 of the entry content
     emitter.instruction("mov DWORD PTR [rbp - 8], eax");                        // stash the crc across the address reloads
-    emitter.instruction("lea rcx, [rip + _phar_write_out]");                    // buffer base
-    emitter.instruction("lea r8, [rip + _phar_write_tpl_len]");                 // template length slot
+    abi::emit_symbol_address(emitter, "rcx", "_phar_write_out");                // buffer base
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_tpl_len");             // template length slot
     emitter.instruction("add rcx, QWORD PTR [r8]");                             // recompute the entry anchor
     emitter.instruction("mov eax, DWORD PTR [rbp - 8]");                        // reload the crc
     emitter.instruction("mov DWORD PTR [rcx - 12], eax");                       // patch the manifest crc32 field
     // -- append the SHA1 signature trailer: raw-sha1(20) ++ LE32(0x0002) ++ "GBMB".
     //    PHP hashes stub+manifest+data up to the trailer = _phar_write_out[0.._phar_write_len]. --
-    emitter.instruction("lea r8, [rip + _phar_write_len]");                     // buffer length slot
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // elephc_crypto_hash data length = current archive length
-    emitter.instruction("lea rdi, [rip + _sha1_algo_name]");                    // elephc_crypto_hash name = "sha1"
+    abi::emit_symbol_address(emitter, "rdi", "_sha1_algo_name");                // elephc_crypto_hash name = "sha1"
     emitter.instruction("mov esi, 4");                                          // elephc_crypto_hash name length = strlen("sha1")
-    emitter.instruction("lea rdx, [rip + _phar_write_out]");                    // elephc_crypto_hash data = archive buffer base
-    emitter.instruction("lea r8, [rip + _phar_write_out]");                     // elephc_crypto_hash out base = archive buffer base ...
+    abi::emit_symbol_address(emitter, "rdx", "_phar_write_out");                // elephc_crypto_hash data = archive buffer base
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_out");                 // elephc_crypto_hash out base = archive buffer base ...
     emitter.instruction("add r8, rcx");                                         // ... + length (raw 20 bytes past the data)
-    emitter.instruction("mov r9, QWORD PTR [rip + _elephc_crypto_hash_fn]");    // load the elephc-crypto hash entry pointer
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_hash_fn", 0);   // load the elephc-crypto hash entry pointer
     emitter.instruction("call r9");                                             // compute the raw 20-byte SHA1 digest in place
-    emitter.instruction("lea r8, [rip + _phar_write_len]");                     // buffer length slot
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // reload length (the hash call clobbered caller-saved regs)
-    emitter.instruction("lea r9, [rip + _phar_write_out]");                     // buffer base
+    abi::emit_symbol_address(emitter, "r9", "_phar_write_out");                 // buffer base
     emitter.instruction("add r9, rcx");                                         // trailer base = buffer + length (raw digest occupies +0..+20)
     emitter.instruction("mov DWORD PTR [r9 + 20], 2");                          // little-endian signature type 0x0002 = Phar::SHA1
     emitter.instruction("mov BYTE PTR [r9 + 24], 0x47");                        // 'G' of the "GBMB" phar magic
@@ -241,12 +241,12 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, 28");                                         // grow the archive length by the 28-byte signature trailer
     emitter.instruction("mov QWORD PTR [r8], rcx");                             // commit the signed archive length
     // -- write the finished archive to disk --
-    emitter.instruction("lea r8, [rip + _phar_write_path_ptr]");                // archive path pointer slot
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_path_ptr");            // archive path pointer slot
     emitter.instruction("mov rax, QWORD PTR [r8]");                             // archive path pointer (file_put_contents fname ptr)
-    emitter.instruction("lea r8, [rip + _phar_write_path_len]");                // archive path length slot
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_path_len");            // archive path length slot
     emitter.instruction("mov rdx, QWORD PTR [r8]");                             // archive path length (file_put_contents fname len)
-    emitter.instruction("lea rdi, [rip + _phar_write_out]");                    // archive data pointer (file_put_contents data ptr)
-    emitter.instruction("lea r8, [rip + _phar_write_len]");                     // buffer length slot
+    abi::emit_symbol_address(emitter, "rdi", "_phar_write_out");                // archive data pointer (file_put_contents data ptr)
+    abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov rsi, QWORD PTR [r8]");                             // archive byte count (file_put_contents data len)
     emitter.instruction("call __rt_file_put_contents");                         // write the assembled phar archive to disk
     // -- return true and restore the frame --

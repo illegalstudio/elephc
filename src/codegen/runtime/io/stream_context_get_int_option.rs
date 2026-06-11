@@ -118,7 +118,7 @@ fn emit_get_int_context_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save out_int_addr
 
     // Load top-level options hash.
-    emitter.instruction("mov rdi, QWORD PTR [rip + _stream_context_options]");  // prepare SysV call argument
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_context_options", 0); // prepare SysV call argument
     emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gico_miss_x86");                               // branch when the checked value is zero or equal
 

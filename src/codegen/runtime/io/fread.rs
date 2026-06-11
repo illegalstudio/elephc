@@ -9,6 +9,7 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// Emits the `__rt_fread` runtime helper for reading bytes from a file descriptor.
 ///
@@ -156,22 +157,22 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the file descriptor across the concat-buffer address computation and libc read() call
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested byte count across the concat-buffer address computation and libc read() call
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer absolute offset before appending the fread() result
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base address once for the x86_64 fread() helper
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before appending the fread() result
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base address once for the x86_64 fread() helper
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the start pointer for the bytes that libc read() will append
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the concat-buffer start pointer for the final elephc string result
 
     // -- TLS dispatch: route through elephc_tls_read when fd has an
     //    attached session (Phase 11 B3). --
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd for the TLS table lookup
-    emitter.instruction("lea r11, [rip + _tls_sessions]");                      // load runtime data address
+    abi::emit_symbol_address(emitter, "r11", "_tls_sessions");                  // load runtime data address
     emitter.instruction("mov r12, QWORD PTR [r11 + r10 * 8]");                  // _tls_sessions[fd] handle (0 = plain TCP)
     emitter.instruction("test r12, r12");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_fread_do_syscall_x86");                        // no TLS attached → use libc read
     emitter.instruction("mov rdi, r12");                                        // handle as first arg
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // buf ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // len
-    emitter.instruction("mov r9, QWORD PTR [rip + _elephc_tls_read_fn]");       // prepare SysV call argument
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_read_fn", 0);      // prepare SysV call argument
     emitter.instruction("call r9");                                             // rax = bytes read (>=0) or -1
     emitter.instruction("jmp __rt_fread_after_io_x86");                         // continue at target label
     emitter.label("__rt_fread_do_syscall_x86");
@@ -183,13 +184,13 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 0");                                          // unified non-negative check (covers both libc read and elephc_tls_read)
     emitter.instruction("jle __rt_fread_eof_x86");                              // treat EOF or read failure as an empty result and mark the stream as exhausted
 
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // reload the previous concat-buffer absolute offset before publishing the fread() append
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the previous concat-buffer absolute offset before publishing the fread() append
     emitter.instruction("add r10, rax");                                        // advance the concat-buffer offset by the number of bytes libc read() returned
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r10");              // publish the updated concat-buffer offset for later string appenders
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat-buffer offset for later string appenders
     emitter.instruction("mov rdx, rax");                                        // return the successful byte count in the x86_64 elephc string-length result register
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer in the x86_64 elephc string-pointer result register
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor for the read-filter lookup
-    emitter.instruction("lea r11, [rip + _stream_read_filters]");               // materialize the read-filter table base
+    abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // materialize the read-filter table base
     emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for this descriptor
     emitter.instruction("test rcx, rcx");                                       // is a read filter attached to this stream?
     emitter.instruction("jz __rt_fread_ret_x86");                               // skip when no read filter is attached
@@ -210,7 +211,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fread_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
-    emitter.instruction("lea r11, [rip + _eof_flags]");                         // materialize the eof-flag table base address for the current stream descriptor
+    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
     emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when libc read() reports EOF or failure
     emitter.instruction("xor edx, edx");                                        // return an empty string length when libc read() reports EOF or failure

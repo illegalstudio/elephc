@@ -13,6 +13,7 @@
 //!   pointer/length registers so callers can return them unchanged.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// apply_stream_filter: transform a buffer in place with a built-in filter.
 /// Input:  AArch64 x1 = pointer, x2 = length, x3 = filter id
@@ -959,8 +960,8 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, 49152");                                      // set the maximum input length that fits the scratch buffer
     emitter.instruction("cmp rdx, r11");                                        // check whether the current cursor reached its bound
     emitter.instruction("cmovg rdx, r11");                                      // rdx = MIN(rdx, 49152)
-    emitter.instruction("lea r11, [rip + _stream_grow_scratch]");               // r11 = scratch base
-    emitter.instruction("lea r12, [rip + _b64_encode_tbl]");                    // r12 = alphabet table
+    abi::emit_symbol_address(emitter, "r11", "_stream_grow_scratch");           // r11 = scratch base
+    abi::emit_symbol_address(emitter, "r12", "_b64_encode_tbl");                // r12 = alphabet table
     emitter.instruction("xor r9, r9");                                          // read idx
     emitter.instruction("xor r10, r10");                                        // write idx
     emitter.label("__rt_asf_b64e_loop_x86");
@@ -1078,7 +1079,7 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, 21845");                                      // set the maximum input length that fits the scratch buffer
     emitter.instruction("cmp rdx, r11");                                        // check whether the current cursor reached its bound
     emitter.instruction("cmovg rdx, r11");                                      // rdx = MIN(rdx, 21845)
-    emitter.instruction("lea r11, [rip + _stream_grow_scratch]");               // load the scratch buffer base address
+    abi::emit_symbol_address(emitter, "r11", "_stream_grow_scratch");           // load the scratch buffer base address
     emitter.instruction("xor r9, r9");                                          // initialize the read cursor
     emitter.instruction("xor r10, r10");                                        // initialize the write cursor
     emitter.label("__rt_asf_qpe_loop_x86");

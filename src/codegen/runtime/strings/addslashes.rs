@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits the `__rt_addslashes` runtime helper for PHP's `addslashes()`.
 ///
@@ -85,8 +86,8 @@ fn emit_addslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: addslashes ---");
     emitter.label_global("__rt_addslashes");
 
-    emitter.instruction("mov r8, QWORD PTR [rip + _concat_off]");               // load the current concat-buffer absolute offset before appending the escaped string
-    emitter.instruction("lea r9, [rip + _concat_buf]");                         // materialize the concat-buffer base pointer for the escaped string write
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer absolute offset before appending the escaped string
+    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // materialize the concat-buffer base pointer for the escaped string write
     emitter.instruction("add r9, r8");                                          // compute the current concat-buffer write pointer from the base plus offset
     emitter.instruction("mov r10, r9");                                         // preserve the escaped-string start pointer for the final result slice
     emitter.instruction("mov rcx, rdx");                                        // track how many source bytes remain to be escaped
@@ -117,8 +118,8 @@ fn emit_addslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r10");                                        // return the escaped-string start pointer in the x86_64 string result pointer register
     emitter.instruction("mov rdx, r9");                                         // snapshot the final concat-buffer write pointer before computing the escaped result length
     emitter.instruction("sub rdx, r10");                                        // compute the escaped result length from the write pointer minus the start pointer
-    emitter.instruction("mov r8, QWORD PTR [rip + _concat_off]");               // reload the previous concat-buffer absolute offset before publishing the appended slice
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload the previous concat-buffer absolute offset before publishing the appended slice
     emitter.instruction("add r8, rdx");                                         // advance the concat-buffer absolute offset by the escaped result length
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r8");               // publish the updated concat-buffer absolute offset for later writers
+    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat-buffer absolute offset for later writers
     emitter.instruction("ret");                                                 // return to the caller with the escaped string slice in rax/rdx
 }

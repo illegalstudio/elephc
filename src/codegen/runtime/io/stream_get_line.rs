@@ -12,6 +12,7 @@
 
 use crate::codegen::abi::emit_symbol_address;
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// stream_get_line: read up to a length or an ending delimiter from a stream.
 /// Input:  x0=fd, x1=max length, x2=ending pointer, x3=ending length
@@ -193,8 +194,8 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the ending-delimiter pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the ending-delimiter length
 
-    emitter.instruction("mov r9, QWORD PTR [rip + _concat_off]");               // current concat-buffer offset
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // concat-buffer base address
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
     emitter.instruction("lea r11, [r10 + r9]");                                 // result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // running total starts at zero
@@ -210,8 +211,8 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // reached the byte budget?
     emitter.instruction("jge __rt_stream_get_line_done_x86");                   // stop at the maximum length
 
-    emitter.instruction("mov r9, QWORD PTR [rip + _concat_off]");               // current concat-buffer offset
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // concat-buffer base address
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
     emitter.instruction("lea rsi, [r10 + r9]");                                 // single-byte write pointer
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
     emitter.instruction("mov rdx, 1");                                          // read exactly one byte
@@ -219,9 +220,9 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 0");                                          // did read() return a byte?
     emitter.instruction("jle __rt_stream_get_line_eof_x86");                    // EOF or failure ends the line
 
-    emitter.instruction("mov r9, QWORD PTR [rip + _concat_off]");               // concat-buffer offset
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // concat-buffer offset
     emitter.instruction("inc r9");                                              // advance past the byte just read
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r9");               // publish the updated offset
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated offset
     emitter.instruction("inc QWORD PTR [rbp - 48]");                            // count the new byte
 
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // ending-delimiter length
@@ -250,16 +251,16 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // running total
     emitter.instruction("sub rax, rcx");                                        // drop the delimiter from the result
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // store the stripped total
-    emitter.instruction("mov r9, QWORD PTR [rip + _concat_off]");               // concat-buffer offset
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // concat-buffer offset
     emitter.instruction("sub r9, rcx");                                         // rewind past the consumed delimiter
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r9");               // publish the rewound offset
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the rewound offset
     emitter.instruction("jmp __rt_stream_get_line_done_x86");                   // a delimiter match is not EOF
 
     // -- user-wrapper line read: feof-gated stream_read into _user_wrapper_drain_buf
     //    (a SEPARATE buffer from _concat_buf, which each __rt_fread result may
     //    occupy). [rbp-40] = drain-buf base, [rbp-48] = running length. --
     emitter.label("__rt_sgl_wrapper_entry_x86");
-    emitter.instruction("lea r10, [rip + _user_wrapper_drain_buf]");            // drain-buf base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_drain_buf");        // drain-buf base
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // result start = drain-buf base
     emitter.label("__rt_sgl_wrapper_loop_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // running total
@@ -310,7 +311,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_stream_get_line_eof_x86");
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the file descriptor
-    emitter.instruction("lea r10, [rip + _eof_flags]");                         // eof-flag table base address
+    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // eof-flag table base address
     emitter.instruction("mov BYTE PTR [r10 + r9], 1");                          // record EOF for this descriptor
 
     emitter.label("__rt_stream_get_line_done_x86");

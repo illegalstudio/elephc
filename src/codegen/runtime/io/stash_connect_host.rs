@@ -182,7 +182,7 @@ fn emit_stash_connect_host_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rsi");                                        // str_persist source pointer = host pointer
     emitter.instruction("mov rdx, r11");                                        // str_persist length = trimmed host length
     abi::emit_call_label(emitter, "__rt_str_persist");                          // rax = persisted host ptr, rdx = len (unchanged)
-    emitter.instruction("lea r10, [rip + _stream_connect_host]");               // base of the per-fd connect-host table
+    abi::emit_symbol_address(emitter, "r10", "_stream_connect_host");           // base of the per-fd connect-host table
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the fd for the table index
     emitter.instruction("shl r9, 4");                                           // fd * 16 (ptr, len pair stride)
     emitter.instruction("add r10, r9");                                         // slot address = table + fd * 16

@@ -166,7 +166,7 @@ fn emit_x86_64(emitter: &mut Emitter, zero: &str, zeroed: &str, fail: &str, done
     // -- inflateInit2_(strm, -15, version, size): -15 selects raw inflate --
     emitter.instruction("mov rdi, rsp");                                        // arg 0 = z_stream pointer
     emitter.instruction("mov esi, -15");                                        // arg 1 = windowBits -15: raw inflate
-    emitter.instruction("lea rdx, [rip + _zlib_version]");                      // arg 2 = the zlib version string
+    abi::emit_symbol_address(emitter, "rdx", "_zlib_version");                  // arg 2 = the zlib version string
     emitter.instruction("mov ecx, 112");                                        // arg 3 = sizeof(z_stream) for the ABI check
     emitter.instruction("call inflateInit2_");                                  // initialize a raw-inflate zlib stream
 

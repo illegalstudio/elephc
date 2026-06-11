@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits `__rt_json_throw_error`: records a JSON error code and, when
 /// `JSON_THROW_ON_ERROR` is set in `_json_active_flags`, allocates a
@@ -153,8 +154,8 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve a scratch slot for the error code
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the error code across the helper-call sequence
 
-    emitter.instruction("mov QWORD PTR [rip + _json_last_error], rax");         // record the error code in the runtime's last-error slot
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_active_flags]");       // load the active flag bitmask
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_json_last_error", 0);       // record the error code in the runtime's last-error slot
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_json_active_flags", 0);      // load the active flag bitmask
     emitter.instruction("test rdx, 0x400000");                                  // JSON_THROW_ON_ERROR = 0x400000
     emitter.instruction("je __rt_json_throw_error_return_x");                   // bail out when throwing is not requested
 
@@ -163,7 +164,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, 0x4548504c00000006");                         // x86_64 heap-kind word: HE LP magic + kind 6 (object)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // tag the allocation as an object in the uniform header
 
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_exception_class_id]"); // load JsonException's runtime class id (-1 when absent)
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_exception_class_id", 0); // load JsonException's runtime class id (-1 when absent)
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at the object header slot
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the exception object while formatting its message
 
@@ -176,7 +177,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the saved error code for $code field
     emitter.instruction("mov QWORD PTR [rax + 24], rcx");                       // obj.code (matches Exception's `code` property layout)
 
-    emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");               // _exc_value = JsonException pointer
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // _exc_value = JsonException pointer
     emitter.instruction("mov rsp, rbp");                                        // unwind the helper scratch frame before tail-call
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before tail-call
     emitter.instruction("jmp __rt_throw_current");                              // tail-call the standard exception unwinder
@@ -202,7 +203,7 @@ fn emit_json_set_error_location_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_json_set_error_location");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while scanning the source
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for location calculation
-    emitter.instruction("mov r8, QWORD PTR [rip + _json_error_source_ptr]");    // load the persisted json_decode source pointer
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_json_error_source_ptr", 0);   // load the persisted json_decode source pointer
     emitter.instruction("test r8, r8");                                         // check whether json_decode published an input source pointer
     emitter.instruction("je __rt_json_set_error_location_done_x");              // skip location state when no json_decode source is active
     emitter.instruction("mov r9, 1");                                           // line counter starts at 1
@@ -223,9 +224,9 @@ fn emit_json_set_error_location_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, 1");                                          // reset the one-based column at the start of the next line
     emitter.instruction("jmp __rt_json_set_error_location_loop_x");             // continue scanning after the newline
     emitter.label("__rt_json_set_error_location_store_x");
-    emitter.instruction("mov QWORD PTR [rip + _json_error_line], r9");          // store the calculated one-based line
-    emitter.instruction("mov QWORD PTR [rip + _json_error_column], r10");       // store the calculated one-based column
-    emitter.instruction("mov QWORD PTR [rip + _json_error_location_active], 1"); // publish that the last JSON error has location metadata
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_json_error_line", 0);        // store the calculated one-based line
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_error_column", 0);     // store the calculated one-based column
+    abi::emit_store_imm_to_symbol(emitter, "_json_error_location_active", 0, 1); // publish that the last JSON error has location metadata
     emitter.label("__rt_json_set_error_location_done_x");
     emitter.instruction("mov rsp, rbp");                                        // release location helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

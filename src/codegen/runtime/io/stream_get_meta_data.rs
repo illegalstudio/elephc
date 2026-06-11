@@ -13,6 +13,7 @@
 //!   elephc does not track per-resource open paths.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// stream_get_meta_data: build the metadata hash for a stream descriptor.
 /// Input:  AArch64 x0 = descriptor / x86_64 rdi = descriptor
@@ -50,8 +51,7 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     // -- not seekable: socket-like stream --
     emitter.instruction("mov x9, #0");                                          // seekable = false
     emitter.instruction("str x9, [sp, #16]");                                   // save the seekable flag
-    emitter.adrp("x10", "_meta_stype_socket");  // load page of the "tcp_socket" literal
-    emitter.add_lo12("x10", "x10", "_meta_stype_socket");  // resolve the "tcp_socket" address
+    abi::emit_symbol_address(emitter, "x10", "_meta_stype_socket");             // load page of the "tcp_socket" literal
     emitter.instruction("str x10, [sp, #56]");                                  // save the stream_type pointer
     emitter.instruction("mov x10, #10");                                        // length of "tcp_socket"
     emitter.instruction("str x10, [sp, #64]");                                  // save the stream_type length
@@ -60,8 +60,7 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.label("__rt_sgmd_seekable");
     emitter.instruction("mov x9, #1");                                          // seekable = true
     emitter.instruction("str x9, [sp, #16]");                                   // save the seekable flag
-    emitter.adrp("x10", "_meta_stype_stdio");  // load page of the "STDIO" literal
-    emitter.add_lo12("x10", "x10", "_meta_stype_stdio");  // resolve the "STDIO" address
+    abi::emit_symbol_address(emitter, "x10", "_meta_stype_stdio");              // load page of the "STDIO" literal
     emitter.instruction("str x10, [sp, #56]");                                  // save the stream_type pointer
     emitter.instruction("mov x10, #5");                                         // length of "STDIO"
     emitter.instruction("str x10, [sp, #64]");                                  // save the stream_type length
@@ -82,18 +81,15 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #2");                                          // O_RDWR?
     emitter.instruction("b.eq __rt_sgmd_mode_rw");                              // read-write stream
 
-    emitter.adrp("x10", "_meta_mode_r");  // load page of the "r" literal
-    emitter.add_lo12("x10", "x10", "_meta_mode_r");  // resolve the "r" address
+    abi::emit_symbol_address(emitter, "x10", "_meta_mode_r");                   // load page of the "r" literal
     emitter.instruction("mov x11, #1");                                         // length of "r"
     emitter.instruction("b __rt_sgmd_mode_done");                               // mode resolved
     emitter.label("__rt_sgmd_mode_w");
-    emitter.adrp("x10", "_meta_mode_w");  // load page of the "w" literal
-    emitter.add_lo12("x10", "x10", "_meta_mode_w");  // resolve the "w" address
+    abi::emit_symbol_address(emitter, "x10", "_meta_mode_w");                   // load page of the "w" literal
     emitter.instruction("mov x11, #1");                                         // length of "w"
     emitter.instruction("b __rt_sgmd_mode_done");                               // mode resolved
     emitter.label("__rt_sgmd_mode_rw");
-    emitter.adrp("x10", "_meta_mode_rw");  // load page of the "r+" literal
-    emitter.add_lo12("x10", "x10", "_meta_mode_rw");  // resolve the "r+" address
+    abi::emit_symbol_address(emitter, "x10", "_meta_mode_rw");                  // load page of the "r+" literal
     emitter.instruction("mov x11, #2");                                         // length of "r+"
     emitter.label("__rt_sgmd_mode_done");
     emitter.instruction("str x10, [sp, #40]");                                  // save the mode pointer
@@ -101,8 +97,7 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
 
     // -- end-of-file flag from the _eof_flags table --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the stream descriptor
-    emitter.adrp("x9", "_eof_flags");  // load page of the EOF flag table
-    emitter.add_lo12("x9", "x9", "_eof_flags");  // resolve the EOF flag table address
+    abi::emit_symbol_address(emitter, "x9", "_eof_flags");                      // load page of the EOF flag table
     emitter.instruction("ldrb w10, [x9, x0]");                                  // load _eof_flags[fd]
     emitter.instruction("cmp w10, #0");                                         // has end-of-file been observed?
     emitter.instruction("cset x10, ne");                                        // eof = 1 when the flag byte is set
@@ -134,8 +129,7 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
 /// Emit one `__rt_hash_set` with the value already staged in x3/x4/x5.
 fn emit_hash_put_aarch64(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the hash pointer
-    emitter.adrp("x1", key_sym);  // load page of the key literal
-    emitter.add_lo12("x1", "x1", key_sym);  // resolve the key literal address
+    abi::emit_symbol_address(emitter, "x1", key_sym);                           // load page of the key literal
     emitter.instruction(&format!("mov x2, #{}", key_len));                      // key length
     emitter.instruction("bl __rt_hash_set");                                    // insert the entry; x0 = updated hash
     emitter.instruction("str x0, [sp, #8]");                                    // persist any post-grow hash pointer
@@ -167,8 +161,7 @@ fn emit_set_int_const(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
 
 /// Emits the set str const stream runtime helper.
 fn emit_set_str_const(emitter: &mut Emitter, key_sym: &str, key_len: i64, val_sym: &str, val_len: i64) {
-    emitter.adrp("x3", val_sym);  // load page of the value literal
-    emitter.add_lo12("x3", "x3", val_sym);  // resolve the value literal address
+    abi::emit_symbol_address(emitter, "x3", val_sym);                           // load page of the value literal
     emitter.instruction(&format!("mov x4, #{}", val_len));                      // value_hi = string length
     emitter.instruction("mov x5, #1");                                          // value tag = string
     emit_hash_put_aarch64(emitter, key_sym, key_len);
@@ -208,14 +201,14 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jns __rt_sgmd_seekable_x86");                          // lseek ok: the stream is seekable
 
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // seekable = false
-    emitter.instruction("lea r10, [rip + _meta_stype_socket]");                 // address of the "tcp_socket" literal
+    abi::emit_symbol_address(emitter, "r10", "_meta_stype_socket");             // address of the "tcp_socket" literal
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the stream_type pointer
     emitter.instruction("mov QWORD PTR [rbp - 72], 10");                        // save the stream_type length
     emitter.instruction("jmp __rt_sgmd_seek_done_x86");                         // skip the seekable branch
 
     emitter.label("__rt_sgmd_seekable_x86");
     emitter.instruction("mov QWORD PTR [rbp - 24], 1");                         // seekable = true
-    emitter.instruction("lea r10, [rip + _meta_stype_stdio]");                  // address of the "STDIO" literal
+    abi::emit_symbol_address(emitter, "r10", "_meta_stype_stdio");              // address of the "STDIO" literal
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the stream_type pointer
     emitter.instruction("mov QWORD PTR [rbp - 72], 5");                         // save the stream_type length
     emitter.label("__rt_sgmd_seek_done_x86");
@@ -237,24 +230,24 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 2");                                          // O_RDWR?
     emitter.instruction("je __rt_sgmd_mode_rw_x86");                            // read-write stream
 
-    emitter.instruction("lea r10, [rip + _meta_mode_r]");                       // address of the "r" literal
+    abi::emit_symbol_address(emitter, "r10", "_meta_mode_r");                   // address of the "r" literal
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the mode pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], 1");                         // save the mode length
     emitter.instruction("jmp __rt_sgmd_mode_done_x86");                         // mode resolved
     emitter.label("__rt_sgmd_mode_w_x86");
-    emitter.instruction("lea r10, [rip + _meta_mode_w]");                       // address of the "w" literal
+    abi::emit_symbol_address(emitter, "r10", "_meta_mode_w");                   // address of the "w" literal
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the mode pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], 1");                         // save the mode length
     emitter.instruction("jmp __rt_sgmd_mode_done_x86");                         // mode resolved
     emitter.label("__rt_sgmd_mode_rw_x86");
-    emitter.instruction("lea r10, [rip + _meta_mode_rw]");                      // address of the "r+" literal
+    abi::emit_symbol_address(emitter, "r10", "_meta_mode_rw");                  // address of the "r+" literal
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the mode pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], 2");                         // save the mode length
     emitter.label("__rt_sgmd_mode_done_x86");
 
     // -- end-of-file flag from the _eof_flags table --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the stream descriptor
-    emitter.instruction("lea r10, [rip + _eof_flags]");                         // address of the EOF flag table
+    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // address of the EOF flag table
     emitter.instruction("movzx r11, BYTE PTR [r10 + rdi]");                     // load _eof_flags[fd]
     emitter.instruction("test r11, r11");                                       // has end-of-file been observed?
     emitter.instruction("setne r11b");                                          // eof = 1 when the flag byte is set
@@ -286,7 +279,7 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
 
 /// Emit one `__rt_hash_set` with the value already staged in rcx/r8/r9.
 fn emit_hash_put_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
-    emitter.instruction(&format!("lea rsi, [rip + {}]", key_sym));              // key pointer
+    abi::emit_symbol_address(emitter, "rsi", key_sym);                          // key pointer
     emitter.instruction(&format!("mov rdx, {}", key_len));                      // key length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // hash pointer (first argument)
     emitter.instruction("call __rt_hash_set");                                  // insert the entry; rax = updated hash
@@ -319,7 +312,7 @@ fn emit_set_int_const_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
 
 /// Emits the set str const x86 stream runtime helper.
 fn emit_set_str_const_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64, val_sym: &str, val_len: i64) {
-    emitter.instruction(&format!("lea rcx, [rip + {}]", val_sym));              // value_lo = string pointer
+    abi::emit_symbol_address(emitter, "rcx", val_sym);                          // value_lo = string pointer
     emitter.instruction(&format!("mov r8, {}", val_len));                       // value_hi = string length
     emitter.instruction("mov r9, 1");                                           // value tag = string
     emit_hash_put_x86(emitter, key_sym, key_len);

@@ -123,7 +123,7 @@ fn emit_path_is_wrapper_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_piw_check_x86");
-    emitter.instruction("lea r10, [rip + _user_wrappers]");                     // wrapper table base
+    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_piw_slot_x86");
     emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?

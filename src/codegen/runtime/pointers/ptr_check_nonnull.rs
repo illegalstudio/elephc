@@ -34,8 +34,7 @@ pub(crate) fn emit_ptr_check_nonnull(emitter: &mut Emitter) {
 
     // -- fatal error: null pointer dereference --
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_ptr_null_err_msg");                     // load page of null dereference message
-    emitter.add_lo12("x1", "x1", "_ptr_null_err_msg");               // resolve message address
+    abi::emit_symbol_address(emitter, "x1", "_ptr_null_err_msg");               // load page of null dereference message
     emitter.instruction("mov x2, #38");                                         // message length: "Fatal error: null pointer dereference\n"
     emitter.syscall(4);
     emitter.instruction("mov x0, #1");                                          // exit code 1

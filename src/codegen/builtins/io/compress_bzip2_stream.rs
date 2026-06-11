@@ -243,7 +243,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter, ctx: &mut Context) {
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // slurp offset
     emitter.label(&slurp);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
-    emitter.instruction("lea rsi, [rip + _stream_filter_buf]");                 // slurp buffer base
+    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf");             // slurp buffer base
     emitter.instruction("add rsi, QWORD PTR [rbp - 16]");                       // ptr = buf + offset
     emitter.instruction(&format!("mov rdx, {}", FILTER_BUF_SIZE));              // total slurp buffer capacity
     emitter.instruction("sub rdx, QWORD PTR [rbp - 16]");                       // remaining
@@ -270,7 +270,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter, ctx: &mut Context) {
     // BZ2_bzBuffToBuffDecompress(dest, &destLen, source, sourceLen, 0, 0).
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // dest
     emitter.instruction("lea rsi, [rbp - 48]");                                 // &destLen
-    emitter.instruction("lea rdx, [rip + _stream_filter_buf]");                 // source
+    abi::emit_symbol_address(emitter, "rdx", "_stream_filter_buf");             // source
     emitter.instruction("mov ecx, DWORD PTR [rbp - 16]");                       // sourceLen u32 (compressed len)
     emitter.instruction("xor r8d, r8d");                                        // small = 0
     emitter.instruction("xor r9d, r9d");                                        // verbosity = 0

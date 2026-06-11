@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// __rt_json_encode_float: encode a float as JSON, rejecting Inf/NaN.
 ///
@@ -140,7 +141,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_encode_float_post_x");
     // Decide whether to append `.0`: only when JSON_PRESERVE_ZERO_FRACTION
     // is set AND the formatted slice has no '.' or 'e'/'E' marker.
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]");       // load the active flag bitmask
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);      // load the active flag bitmask
     emitter.instruction("test r10, 1024");                                      // is JSON_PRESERVE_ZERO_FRACTION (bit 1024) set?
     emitter.instruction("je __rt_json_encode_float_done_x");                    // skip the tail polish when the flag is clear
     emitter.instruction("xor rcx, rcx");                                        // initialize the scan index over the formatted slice
@@ -158,13 +159,13 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_encode_float_scan_x");                   // continue scanning
 
     emitter.label("__rt_json_encode_float_append_dot_zero_x");
-    emitter.instruction("mov r9, QWORD PTR [rip + _concat_off]");               // load the current concat-buffer offset
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // load the current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base
     emitter.instruction("add r10, r9");                                         // compute the address of the next free byte
     emitter.instruction("mov BYTE PTR [r10], 46");                              // emit the decimal point
     emitter.instruction("mov BYTE PTR [r10 + 1], 48");                          // emit the trailing zero
     emitter.instruction("add r9, 2");                                           // advance the concat offset by the appended bytes
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r9");               // republish the concat-buffer offset
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // republish the concat-buffer offset
     emitter.instruction("add rdx, 2");                                          // grow the result length to cover the appended `.0`
 
     emitter.label("__rt_json_encode_float_done_x");

@@ -52,12 +52,11 @@ pub fn emit(
     let label = data.add_float(std::f64::consts::PI / 180.0);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.adrp("x9", &format!("{}", label));                           // load the page address that contains the degree-to-radian conversion constant
-            emitter.ldr_lo12("d1", "x9", &format!("{}", label));                // load the degree-to-radian conversion constant into the secondary AArch64 floating-point register
+            abi::emit_load_symbol_to_reg_via_page(emitter, "d1", "x9", &label); // load the degree-to-radian conversion constant into the secondary AArch64 floating-point register
             emitter.instruction("fmul d0, d0, d1");                             // multiply the degree input by the conversion constant in the standard AArch64 floating-point result register
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("movsd xmm1, QWORD PTR [rip + {}]", label)); // load the degree-to-radian conversion constant into the secondary x86_64 floating-point register
+            abi::emit_load_symbol_to_reg(emitter, "xmm1", &label, 0);           // load the degree-to-radian conversion constant into the secondary x86_64 floating-point register
             emitter.instruction("mulsd xmm0, xmm1");                            // multiply the degree input by the conversion constant in the standard x86_64 floating-point result register
         }
     }

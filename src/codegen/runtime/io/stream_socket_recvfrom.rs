@@ -254,9 +254,9 @@ fn emit_stream_socket_recvfrom_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // empty address length
 
     emitter.label("__rt_ssr_stash_addr_x86");
-    emitter.instruction("lea r10, [rip + _recvfrom_addr_ptr]");                 // address of the stashed-pointer global
+    abi::emit_symbol_address(emitter, "r10", "_recvfrom_addr_ptr");             // address of the stashed-pointer global
     emitter.instruction("mov QWORD PTR [r10], rax");                            // stash the sender address pointer
-    emitter.instruction("lea r10, [rip + _recvfrom_addr_len]");                 // address of the stashed-length global
+    abi::emit_symbol_address(emitter, "r10", "_recvfrom_addr_len");             // address of the stashed-length global
     emitter.instruction("mov QWORD PTR [r10], rdx");                            // stash the sender address length
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // owned buffer pointer becomes the result
     emitter.instruction("mov rdx, QWORD PTR [rbp - 176]");                      // received byte count becomes the length
@@ -265,9 +265,9 @@ fn emit_stream_socket_recvfrom_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the received string slice
 
     emitter.label("__rt_ssr_fail_x86");
-    emitter.instruction("lea r10, [rip + _recvfrom_addr_ptr]");                 // address of the stashed-pointer global
+    abi::emit_symbol_address(emitter, "r10", "_recvfrom_addr_ptr");             // address of the stashed-pointer global
     emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the stashed sender address pointer
-    emitter.instruction("lea r10, [rip + _recvfrom_addr_len]");                 // address of the stashed-length global
+    abi::emit_symbol_address(emitter, "r10", "_recvfrom_addr_len");             // address of the stashed-length global
     emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the stashed sender address length
     emitter.instruction("xor eax, eax");                                        // a null pointer signals a failed receive
     emitter.instruction("xor edx, edx");                                        // zero length for the failure case

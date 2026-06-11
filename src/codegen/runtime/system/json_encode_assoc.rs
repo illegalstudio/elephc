@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits the `__rt_json_encode_assoc` runtime helper for encoding PHP associative arrays as JSON objects.
 /// Input:  x0 = hash table pointer.
@@ -452,7 +453,7 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     // Track list-shape while the object form is emitted. If every key is the
     // sequential integer key 0..count-1, the finished buffer is compacted
     // from {"0":...} to [...]. JSON_FORCE_OBJECT disables that compaction.
-    emitter.instruction("mov r15, QWORD PTR [rip + _json_active_flags]");       // cache the active flag bitmask for the whole associative-array encode
+    abi::emit_load_symbol_to_reg(emitter, "r15", "_json_active_flags", 0);      // cache the active flag bitmask for the whole associative-array encode
     emitter.instruction("test r15, 16");                                        // is JSON_FORCE_OBJECT (bit 16) set?
     emitter.instruction("jne __rt_json_assoc_force_object_mode_x");             // FORCE_OBJECT wins → keep object form
     emitter.instruction("mov QWORD PTR [rbp - 96], 1");                         // start optimistic: keys may still be list-shaped
@@ -464,8 +465,8 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     // Enter the recursion-depth check before any output is produced.
     emitter.instruction("call __rt_json_depth_enter");                          // increment _json_active_depth and throw on overflow when requested
 
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer offset before appending the JSON object
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the current JSON append
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer offset before appending the JSON object
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base pointer for the current JSON append
     emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the encoded-object start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the current concat-buffer write pointer for the hash iteration loop
@@ -525,10 +526,10 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
 
     // String key: sync _concat_off and tail-call __rt_json_encode_str.
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base pointer
     emitter.instruction("mov rcx, r11");                                        // copy the write pointer for the absolute-offset computation
     emitter.instruction("sub rcx, r10");                                        // rcx = absolute concat-buffer offset
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // sync _concat_off so __rt_json_encode_str appends in place
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // sync _concat_off so __rt_json_encode_str appends in place
     emitter.instruction("call __rt_json_encode_str");                           // writes "<escaped key>" into concat_buf and returns rax=ptr, rdx=len
     emitter.instruction("mov r11, rax");                                        // recover the start pointer of the encoded key
     emitter.instruction("add r11, rdx");                                        // advance past the closing quote written by encode_str
@@ -543,10 +544,10 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11], 34");                              // write the opening JSON key quote
     emitter.instruction("add r11, 1");                                          // advance past the opening quote
     emitter.instruction("mov QWORD PTR [rbp - 88], r11");                       // park the JSON write pointer across the itoa call
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base before positioning itoa scratch
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base before positioning itoa scratch
     emitter.instruction("mov rcx, r11");                                        // copy the current key write pointer for the concat-offset calculation
     emitter.instruction("sub rcx, r10");                                        // compute scratch-safe concat offset from the current key write position
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // move itoa scratch after the pretty-printed key prefix
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // move itoa scratch after the pretty-printed key prefix
     emitter.instruction("call __rt_itoa");                                      // rax = ptr to digits in itoa's scratch area, rdx = digit count
     emitter.instruction("mov r10, rax");                                        // remember the source pointer before the copy loop
     emitter.instruction("mov rcx, rdx");                                        // remember the digit count for the copy loop bound
@@ -572,10 +573,10 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_assoc_after_key_prefix");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current write pointer (in case we entered via the list-mode skip)
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the global offset update before nested value encoding
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base pointer for the global offset update before nested value encoding
     emitter.instruction("mov rcx, r11");                                        // copy the current write pointer before turning it into an absolute concat offset
     emitter.instruction("sub rcx, r10");                                        // compute the concat-buffer absolute offset for the current JSON value write position
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the concat-buffer offset so nested JSON helpers append after the existing key prefix
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the concat-buffer offset so nested JSON helpers append after the existing key prefix
     emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // reload the saved associative-array runtime value tag for runtime JSON dispatch
     emitter.instruction("cmp r10, 0");                                          // is the associative-array value an integer?
     emitter.instruction("je __rt_json_assoc_value_int");                        // encode integer payloads through the decimal integer helper
@@ -781,10 +782,10 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the encoded-object start pointer in the leading x86_64 string result register
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer write pointer before turning it into a slice length
     emitter.instruction("sub rdx, rax");                                        // compute the final encoded-object length from write_end - write_start
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the global offset update
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base pointer for the global offset update
     emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON object
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the updated concat-buffer offset so later writers append after this JSON object
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated concat-buffer offset so later writers append after this JSON object
     emitter.instruction("mov r15, QWORD PTR [rbp - 104]");                      // restore caller r15 after using it as the flag cache
     emitter.instruction("add rsp, 112");                                        // release the local JSON-assoc scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code

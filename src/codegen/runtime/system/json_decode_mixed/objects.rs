@@ -9,6 +9,7 @@
 //! - Object decoding must honor the caller associative flag and keep property values boxed as Mixed.
 
 use crate::codegen::emit::Emitter;
+use crate::codegen::abi;
 
 /// Generates ARM64 assembly for `__rt_json_decode_mixed_object_real`.
 /// A recursive-descent JSON object parser that walks the slice between the
@@ -484,7 +485,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // key Mixed*
     emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // key_lo = key pointer for the normalizer ABI
     emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // key_hi = key length for the normalizer ABI
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_decode_assoc]");       // load the assoc flag to choose array-key versus property-name semantics
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_decode_assoc", 0);      // load the assoc flag to choose array-key versus property-name semantics
     emitter.instruction("test r10, r10");                                       // determine whether this object becomes an assoc array
     emitter.instruction("je __rt_json_decode_object_real_key_ready_x");         // stdClass mode keeps numeric-looking property names as strings
     emitter.instruction("call __rt_hash_normalize_key");                        // normalize integer-string JSON object keys for assoc-array mode
@@ -527,7 +528,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // rdi = hash pointer
     // PHP json_decode default returns stdClass; assoc=true returns hash.
     // Read the runtime flag set by the json_decode codegen to decide which.
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_decode_assoc]");       // load the assoc flag (0 → stdClass, non-zero → assoc array)
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_decode_assoc", 0);      // load the assoc flag (0 → stdClass, non-zero → assoc array)
     emitter.instruction("test r10, r10");                                       // zero means PHP's default
     emitter.instruction("je __rt_json_decode_object_real_close_stdclass_x");    // dispatch to stdClass wrapping
 

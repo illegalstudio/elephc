@@ -134,8 +134,7 @@ fn emit_store_would_block_result(name: &str, emitter: &mut Emitter, ctx: &mut Co
         let label = format!("_gvar_{}", name);
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.adrp("x9", &format!("{}", label));                      // load page of global would_block storage
-                emitter.add_lo12("x9", "x9", &format!("{}", label));            // resolve global would_block storage address
+                abi::emit_symbol_address(emitter, "x9", &label);                // resolve global would_block storage address
                 emitter.instruction("str x0, [x9]");                            // store would_block into the global slot
             }
             Arch::X86_64 => {

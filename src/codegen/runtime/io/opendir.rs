@@ -170,7 +170,7 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("dirfd");
 
     // -- record the DIR* in the fd->DIR* table for readdir/closedir --
-    emitter.instruction("lea r10, [rip + _dir_handles]");                       // base of the fd->DIR* table
+    abi::emit_symbol_address(emitter, "r10", "_dir_handles");                   // base of the fd->DIR* table
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the DIR* handle
     emitter.instruction("mov QWORD PTR [r10 + rax * 8], r9");                   // _dir_handles[fd] = DIR*
     emitter.instruction("add rsp, 16");                                         // release the frame

@@ -186,7 +186,7 @@ fn emit_x86_64(
     emitter.instruction("mov r8d, 8");                                          // arg 4 = default memLevel
     emitter.instruction("xor r9d, r9d");                                        // arg 5 = Z_DEFAULT_STRATEGY
     emitter.instruction("sub rsp, 16");                                         // reserve the two stack arguments
-    emitter.instruction("lea rax, [rip + _zlib_version]");                      // the zlib version string
+    abi::emit_symbol_address(emitter, "rax", "_zlib_version");                  // the zlib version string
     emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // stack arg 6 = version
     emitter.instruction("mov QWORD PTR [rsp + 8], 112");                        // stack arg 7 = sizeof(z_stream)
     emitter.instruction("call deflateInit2_");                                  // initialize a raw-deflate zlib stream

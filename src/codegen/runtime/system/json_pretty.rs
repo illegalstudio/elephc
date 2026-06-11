@@ -12,6 +12,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits the four JSON pretty-print runtime helpers: `__rt_json_pretty_push`,
 /// `__rt_json_pretty_pop`, `__rt_json_pretty_line`, and `__rt_json_pretty_colon_space`.
@@ -102,34 +103,34 @@ fn emit_json_pretty_helpers_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_pretty_helpers ---");
 
     emitter.label_global("__rt_json_pretty_push");
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]");       // load the active JSON flag bitmask
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);      // load the active JSON flag bitmask
     emitter.instruction("test r10, 128");                                       // is JSON_PRETTY_PRINT active?
     emitter.instruction("je __rt_json_pretty_push_done_x");                     // leave formatting depth unchanged for compact output
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_indent_depth]");       // load the current pretty-print indentation depth
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_indent_depth", 0);      // load the current pretty-print indentation depth
     emitter.instruction("add r10, 1");                                          // enter one emitted JSON container level
-    emitter.instruction("mov QWORD PTR [rip + _json_indent_depth], r10");       // publish the updated indentation depth
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_indent_depth", 0);     // publish the updated indentation depth
     emitter.label("__rt_json_pretty_push_done_x");
     emitter.instruction("ret");                                                 // return to the container encoder
 
     emitter.label_global("__rt_json_pretty_pop");
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]");       // load the active JSON flag bitmask
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);      // load the active JSON flag bitmask
     emitter.instruction("test r10, 128");                                       // is JSON_PRETTY_PRINT active?
     emitter.instruction("je __rt_json_pretty_pop_done_x");                      // compact output does not maintain pretty indentation depth
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_indent_depth]");       // load the current pretty-print indentation depth
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_indent_depth", 0);      // load the current pretty-print indentation depth
     emitter.instruction("test r10, r10");                                       // is the formatting depth already at the root?
     emitter.instruction("je __rt_json_pretty_pop_done_x");                      // avoid underflow after exceptional control flow
     emitter.instruction("sub r10, 1");                                          // leave one emitted JSON container level
-    emitter.instruction("mov QWORD PTR [rip + _json_indent_depth], r10");       // publish the updated indentation depth
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_json_indent_depth", 0);     // publish the updated indentation depth
     emitter.label("__rt_json_pretty_pop_done_x");
     emitter.instruction("ret");                                                 // return to the container encoder
 
     emitter.label_global("__rt_json_pretty_line");
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]");       // load the active JSON flag bitmask
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);      // load the active JSON flag bitmask
     emitter.instruction("test r10, 128");                                       // is JSON_PRETTY_PRINT active?
     emitter.instruction("je __rt_json_pretty_line_done_x");                     // compact output keeps the write pointer unchanged
     emitter.instruction("mov BYTE PTR [r11], 10");                              // append the pretty-print line break
     emitter.instruction("add r11, 1");                                          // advance past the newline byte
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_indent_depth]");       // load the current pretty-print indentation depth
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_indent_depth", 0);      // load the current pretty-print indentation depth
     emitter.instruction("shl r10, 2");                                          // convert depth to PHP's four-space indent width
     emitter.instruction("xor rcx, rcx");                                        // initialize the emitted-space counter
     emitter.label("__rt_json_pretty_line_loop_x");
@@ -143,7 +144,7 @@ fn emit_json_pretty_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return r11 as the updated write pointer
 
     emitter.label_global("__rt_json_pretty_colon_space");
-    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]");       // load the active JSON flag bitmask
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);      // load the active JSON flag bitmask
     emitter.instruction("test r10, 128");                                       // is JSON_PRETTY_PRINT active?
     emitter.instruction("je __rt_json_pretty_colon_space_done_x");              // compact output does not add a key/value space
     emitter.instruction("mov BYTE PTR [r11], 32");                              // append PHP's pretty-print key/value separator space

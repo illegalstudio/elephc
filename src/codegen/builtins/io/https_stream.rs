@@ -118,7 +118,7 @@ pub(crate) fn publish_tls_function_pointers(emitter: &mut Emitter) {
             for (c_name, slot) in ENTRIES {
                 let extern_sym = emitter.target.extern_symbol(c_name);
                 abi::emit_extern_symbol_address(emitter, "r9", &extern_sym);
-                emitter.instruction(&format!("mov QWORD PTR [rip + {}], r9", slot)); // publish the elephc-tls entry into its runtime slot
+                abi::emit_store_reg_to_symbol(emitter, "r9", slot, 0);          // publish the elephc-tls entry into its runtime slot
             }
         }
     }

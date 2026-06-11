@@ -11,10 +11,11 @@
 use std::collections::HashSet;
 use std::process;
 
+pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-asm] [--check] [--null-repr=sentinel|tagged] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -25,6 +26,7 @@ pub(crate) struct CliConfig {
     pub(crate) heap_debug: bool,
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
+    pub(crate) emit: Emit,
     pub(crate) check_only: bool,
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
@@ -46,6 +48,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut gc_stats = false;
     let mut heap_debug = false;
     let mut emit_asm = false;
+    let mut emit = Emit::Executable;
     let mut check_only = false;
     let mut emit_timings = false;
     let mut emit_source_map = false;
@@ -77,6 +80,11 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             heap_debug = true;
         } else if arg == "--emit-asm" {
             emit_asm = true;
+        } else if arg == "--emit" {
+            i += 1;
+            emit = parse_required_emit(args, i);
+        } else if let Some(value) = arg.strip_prefix("--emit=") {
+            emit = parse_emit(value);
         } else if arg == "--check" {
             check_only = true;
         } else if arg == "--timings" {
@@ -144,6 +152,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         heap_debug,
         null_repr,
         emit_asm,
+        emit,
         check_only,
         emit_timings,
         emit_source_map,
@@ -152,6 +161,27 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         extra_link_paths,
         extra_frameworks,
         defines,
+    }
+}
+
+/// Parse the required emit-kind argument at the given index, or fail if missing.
+fn parse_required_emit(args: &[String], index: usize) -> Emit {
+    if index < args.len() {
+        parse_emit(&args[index])
+    } else {
+        fail("Missing emit kind after --emit (expected: executable, cdylib)")
+    }
+}
+
+/// Parse an emit-kind string into an `Emit` value, or fail with an error message.
+fn parse_emit(value: &str) -> Emit {
+    match value {
+        "executable" | "exe" | "bin" => Emit::Executable,
+        "cdylib" | "dylib" | "shared" => Emit::Cdylib,
+        other => fail(&format!(
+            "Invalid --emit kind '{}': expected one of: executable, cdylib",
+            other
+        )),
     }
 }
 
@@ -231,5 +261,22 @@ mod tests {
     #[test]
     fn non_empty_define_symbol_is_accepted() {
         assert!(validate_define_symbol("FEATURE").is_ok());
+    }
+
+    /// Verifies the canonical `--emit` spellings parse to the expected `Emit` variants.
+    #[test]
+    fn emit_kind_parses_canonical_spellings() {
+        assert_eq!(parse_emit("executable"), Emit::Executable);
+        assert_eq!(parse_emit("cdylib"), Emit::Cdylib);
+    }
+
+    /// Verifies the accepted aliases map to their canonical variants so users coming
+    /// from cargo (`cdylib`/`dylib`) and unix toolchains (`shared`, `bin`) all work.
+    #[test]
+    fn emit_kind_accepts_aliases() {
+        assert_eq!(parse_emit("exe"), Emit::Executable);
+        assert_eq!(parse_emit("bin"), Emit::Executable);
+        assert_eq!(parse_emit("dylib"), Emit::Cdylib);
+        assert_eq!(parse_emit("shared"), Emit::Cdylib);
     }
 }

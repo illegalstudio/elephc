@@ -103,7 +103,7 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // spill slots for fd/total/chunk
 
     // -- fopen(path, "r"): path already in rax/rdx, mode in rdi/rsi --
-    emitter.instruction("lea rdi, [rip + _meta_mode_r]");                       // mode pointer "r" (secondary string-arg slot)
+    abi::emit_symbol_address(emitter, "rdi", "_meta_mode_r");                   // mode pointer "r" (secondary string-arg slot)
     emitter.instruction("mov rsi, 1");                                          // strlen("r")
     emitter.instruction("call __rt_fopen");                                     // rax = synthetic wrapper fd, or -1 on failure
     emitter.instruction("cmp rax, 0");                                          // did fopen() fail (negative fd)?

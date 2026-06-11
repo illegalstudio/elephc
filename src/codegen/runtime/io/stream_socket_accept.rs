@@ -325,9 +325,9 @@ fn emit_stream_socket_accept_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // empty address length
 
     emitter.label("__rt_ssa_stash_peer_x86");
-    emitter.instruction("lea r10, [rip + _accept_peer_ptr]");                   // address of the stashed-pointer global
+    abi::emit_symbol_address(emitter, "r10", "_accept_peer_ptr");               // address of the stashed-pointer global
     emitter.instruction("mov QWORD PTR [r10], rax");                            // stash the peer address pointer
-    emitter.instruction("lea r10, [rip + _accept_peer_len]");                   // address of the stashed-length global
+    abi::emit_symbol_address(emitter, "r10", "_accept_peer_len");               // address of the stashed-length global
     emitter.instruction("mov QWORD PTR [r10], rdx");                            // stash the peer address length
     emitter.instruction("mov rax, QWORD PTR [rbp - 192]");                      // return the accepted descriptor
     emitter.instruction("add rsp, 192");                                        // release the helper frame
@@ -335,9 +335,9 @@ fn emit_stream_socket_accept_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the accepted fd
 
     emitter.label("__rt_ssa_fail_clear_x86");
-    emitter.instruction("lea r10, [rip + _accept_peer_ptr]");                   // address of the stashed-pointer global
+    abi::emit_symbol_address(emitter, "r10", "_accept_peer_ptr");               // address of the stashed-pointer global
     emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the stashed peer address pointer
-    emitter.instruction("lea r10, [rip + _accept_peer_len]");                   // address of the stashed-length global
+    abi::emit_symbol_address(emitter, "r10", "_accept_peer_len");               // address of the stashed-length global
     emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the stashed peer address length
     emitter.instruction("mov rax, -1");                                         // -1 reports a failed / timed-out accept
     emitter.instruction("add rsp, 192");                                        // release the helper frame

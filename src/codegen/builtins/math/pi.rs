@@ -14,6 +14,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
+use crate::codegen::abi;
 
 /// Emits the `pi()` builtin as a compile-time float constant loaded into the ABI return register.
 ///
@@ -33,11 +34,10 @@ pub fn emit(
     let label = data.add_float(std::f64::consts::PI);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.adrp("x9", &format!("{}", label));                           // load the page address that contains the M_PI floating constant
-            emitter.ldr_lo12("d0", "x9", &format!("{}", label));                // load the M_PI floating constant into the standard AArch64 floating-point result register
+            abi::emit_load_symbol_to_reg_via_page(emitter, "d0", "x9", &label); // load the M_PI floating constant into the standard AArch64 floating-point result register
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label)); // load the M_PI floating constant into the standard x86_64 floating-point result register
+            abi::emit_load_symbol_to_reg(emitter, "xmm0", &label, 0);           // load the M_PI floating constant into the standard x86_64 floating-point result register
         }
     }
     Some(PhpType::Float)

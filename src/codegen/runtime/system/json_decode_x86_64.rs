@@ -9,6 +9,7 @@
 //! - The JSON decoder is an emitted parser state machine; tags, array/hash construction, and failure paths must stay synchronized.
 
 use crate::codegen::emit::Emitter;
+use crate::codegen::abi;
 
 /// Emits the `__rt_json_decode` and `__rt_json_decode_empty` runtime helper assembly
 /// for Linux x86_64.
@@ -98,8 +99,8 @@ pub(super) fn emit_json_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the trimmed quoted JSON length across the decode loop and concat-buffer writes
 
     // -- get output position in concat_buf --
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer absolute offset before writing decoded string bytes
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the decoded output slice
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before writing decoded string bytes
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base pointer for the decoded output slice
     emitter.instruction("add r11, r10");                                        // compute the concat-buffer write pointer where the decoded string should begin
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the decoded-string start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the current concat-buffer write pointer for the decode loop
@@ -336,10 +337,10 @@ pub(super) fn emit_json_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the decoded-string start pointer in the leading x86_64 string result register
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload the final concat-buffer write pointer before turning it into a slice length
     emitter.instruction("sub rdx, rax");                                        // compute the decoded-string length from write_end - write_start
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the global offset update
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base pointer for the global offset update
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // copy the final concat-buffer write pointer before converting it into an absolute offset
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the decoded string slice
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the updated concat-buffer absolute offset for later writers
+    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated concat-buffer absolute offset for later writers
     emitter.instruction("jmp __rt_json_decode_ret");                            // return the decoded concat-backed string slice through the shared epilogue
 
     // -- empty input decodes to the empty string slice --

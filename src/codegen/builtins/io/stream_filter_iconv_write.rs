@@ -199,11 +199,11 @@ fn emit_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // iconv inbytesleft = payload length
 
     emitter.label(&loop_label);
-    emitter.instruction("lea r9, [rip + _stream_grow_scratch]");                // scratch window base
+    abi::emit_symbol_address(emitter, "r9", "_stream_grow_scratch");            // scratch window base
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // iconv outbuf = scratch window base
     emitter.instruction(&format!("mov QWORD PTR [rbp - 48], {}", ICONV_SCRATCH)); // iconv outbytesleft = scratch capacity
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the descriptor to index the handle table
-    emitter.instruction("lea r9, [rip + _iconv_handles]");                      // iconv handle table base
+    abi::emit_symbol_address(emitter, "r9", "_iconv_handles");                  // iconv handle table base
     emitter.instruction("mov rdi, QWORD PTR [r9 + rdi*8]");                     // arg 0 = the iconv_t for this descriptor
     emitter.instruction("lea rsi, [rbp - 24]");                                 // arg 1 = &inbuf
     emitter.instruction("lea rdx, [rbp - 32]");                                 // arg 2 = &inbytesleft
@@ -217,7 +217,7 @@ fn emit_x86_64(
     emitter.instruction(&format!("jz {}", after_write));                        // nothing produced: skip the write
     emitter.instruction("mov rdx, rax");                                        // produced byte count as the write length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd = the saved descriptor
-    emitter.instruction("lea rsi, [rip + _stream_grow_scratch]");               // write buffer = the scratch window base
+    abi::emit_symbol_address(emitter, "rsi", "_stream_grow_scratch");           // write buffer = the scratch window base
     emitter.instruction("call write");                                          // write the transcoded chunk through libc write()
     emitter.label(&after_write);
     emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // remaining inbytesleft?
@@ -239,7 +239,7 @@ fn emit_x86_64(
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 16");                                         // helper frame: [-8]=fd
-    emitter.instruction("lea r9, [rip + _iconv_handles]");                      // iconv handle table base
+    abi::emit_symbol_address(emitter, "r9", "_iconv_handles");                  // iconv handle table base
     emitter.instruction("mov rsi, QWORD PTR [r9 + rdi*8]");                     // load this descriptor's iconv_t
     emitter.instruction("test rsi, rsi");                                       // anything attached?
     emitter.instruction(&format!("jz {}_done", close_label));                   // nothing attached: nothing to close
@@ -247,7 +247,7 @@ fn emit_x86_64(
     emitter.instruction("mov rdi, rsi");                                        // arg 0 = the iconv_t
     emitter.instruction("call iconv_close");                                    // release the iconv descriptor
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the descriptor
-    emitter.instruction("lea r9, [rip + _iconv_handles]");                      // iconv handle table base
+    abi::emit_symbol_address(emitter, "r9", "_iconv_handles");                  // iconv handle table base
     emitter.instruction("mov QWORD PTR [r9 + rdi*8], 0");                       // clear this descriptor's iconv handle
     emitter.label(&format!("{}_done", close_label));
     emitter.instruction("add rsp, 16");                                         // release the helper frame
@@ -262,21 +262,21 @@ fn emit_x86_64(
     emitter.instruction("mov rbp, rsp");                                        // establish the initialization frame pointer
     emitter.instruction("sub rsp, 24");                                         // frame: [-8]=fd (24: inline entry rsp 16-aligned, push rbp made it 8, +24≡8 mod 16 realigns to 0 at the libc calls)
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the file descriptor
-    emitter.instruction(&format!("lea rdi, [rip + {}]", to_sym));               // arg 0 = tocode
-    emitter.instruction(&format!("lea rsi, [rip + {}]", from_sym));             // arg 1 = fromcode
+    abi::emit_symbol_address(emitter, "rdi", &to_sym);                          // arg 0 = tocode
+    abi::emit_symbol_address(emitter, "rsi", &from_sym);                        // arg 1 = fromcode
     emitter.instruction("call iconv_open");                                     // open the charset conversion descriptor
     emitter.instruction("cmp rax, -1");                                         // is the descriptor (iconv_t)-1?
     emitter.instruction(&format!("je {}", skip_store));                         // iconv_open failed → attach no filter
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
-    emitter.instruction("lea r9, [rip + _iconv_handles]");                      // iconv handle table base
+    abi::emit_symbol_address(emitter, "r9", "_iconv_handles");                  // iconv handle table base
     emitter.instruction("mov QWORD PTR [r9 + rdi*8], rax");                     // store the iconv_t for this descriptor
-    emitter.instruction("lea r9, [rip + _stream_write_filters]");               // write-filter table base
+    abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");           // write-filter table base
     emitter.instruction("mov BYTE PTR [r9 + rdi], 12");                         // write-filter id 12 = convert.iconv write
     emitter.instruction(&format!("lea r10, [rip + {}]", fwrite_label));         // address of the iconv write helper
-    emitter.instruction("lea r9, [rip + _iconv_fwrite_fn]");                    // _iconv_fwrite_fn slot
+    abi::emit_symbol_address(emitter, "r9", "_iconv_fwrite_fn");                // _iconv_fwrite_fn slot
     emitter.instruction("mov QWORD PTR [r9], r10");                             // _iconv_fwrite_fn = the iconv write helper
     emitter.instruction(&format!("lea r10, [rip + {}]", close_label));          // address of the iconv close helper
-    emitter.instruction("lea r9, [rip + _iconv_close_fn]");                     // _iconv_close_fn slot
+    abi::emit_symbol_address(emitter, "r9", "_iconv_close_fn");                 // _iconv_close_fn slot
     emitter.instruction("mov QWORD PTR [r9], r10");                             // _iconv_close_fn = the iconv close helper
     emitter.label(&skip_store);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // resource payload = the descriptor

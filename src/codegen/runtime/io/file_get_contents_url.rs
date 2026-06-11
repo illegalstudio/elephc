@@ -589,7 +589,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r8");                                              // advance scan index
     emitter.instruction("jmp __rt_fgc_url_http_slash_scan_x86");                // keep scanning for path
     emitter.label("__rt_fgc_url_http_no_path_x86");
-    emitter.instruction("lea r10, [rip + _fgc_url_slash]");                     // synthesized "/" path pointer
+    abi::emit_symbol_address(emitter, "r10", "_fgc_url_slash");                 // synthesized "/" path pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save path pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], 1");                         // save path length
     emitter.instruction("mov r8, rdx");                                         // authority end = URL length
@@ -623,8 +623,8 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save host/header pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save host/header length
 
-    emitter.instruction("lea r10, [rip + _fgc_url_addr]");                      // TCP address scratch buffer
-    emitter.instruction("lea r11, [rip + _ftp_tcp_prefix]");                    // "tcp://" prefix source
+    abi::emit_symbol_address(emitter, "r10", "_fgc_url_addr");                  // TCP address scratch buffer
+    abi::emit_symbol_address(emitter, "r11", "_ftp_tcp_prefix");                // "tcp://" prefix source
     emitter.instruction("xor rcx, rcx");                                        // address write index
     emitter.label("__rt_fgc_url_http_tcp_prefix_x86");
     emitter.instruction("cmp rcx, 6");                                          // copied "tcp://" yet?
@@ -666,9 +666,9 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // path pointer
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // path length
     emitter.instruction("call __rt_http_build_request");                        // build request into _http_req_scratch, returning length
-    emitter.instruction("lea rdi, [rip + _fgc_url_addr]");                      // TCP address pointer
+    abi::emit_symbol_address(emitter, "rdi", "_fgc_url_addr");                  // TCP address pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // TCP address length
-    emitter.instruction("lea rdx, [rip + _http_req_scratch]");                  // HTTP request pointer
+    abi::emit_symbol_address(emitter, "rdx", "_http_req_scratch");              // HTTP request pointer
     emitter.instruction("mov rcx, rax");                                        // HTTP request length
     emitter.instruction("call __rt_http_open");                                 // open HTTP response-body fd
     emitter.instruction("cmp rax, 0");                                          // did the URL open fail?
@@ -734,7 +734,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r8");                                              // advance scan index
     emitter.instruction("jmp __rt_fgc_url_https_slash_scan_x86");               // keep scanning for path
     emitter.label("__rt_fgc_url_https_no_path_x86");
-    emitter.instruction("lea r10, [rip + _fgc_url_slash]");                     // synthesized "/" path pointer
+    abi::emit_symbol_address(emitter, "r10", "_fgc_url_slash");                 // synthesized "/" path pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save path pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], 1");                         // save path length
     emitter.instruction("mov r8, rdx");                                         // authority end = URL length
@@ -813,7 +813,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // connect host pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // connect host length
     emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // TCP port
-    emitter.instruction("lea rcx, [rip + _http_req_scratch]");                  // HTTP request pointer
+    abi::emit_symbol_address(emitter, "rcx", "_http_req_scratch");              // HTTP request pointer
     emitter.instruction("call __rt_https_open");                                // open HTTPS response-body fd
     emitter.instruction("cmp rax, 0");                                          // did the URL open fail?
     emitter.instruction("jl __rt_fgc_url_https_fail_x86");                      // failed open returns PHP false
@@ -855,7 +855,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_fgc_url_check_ftp_x86");                      // not ftps://
     emitter.instruction("cmp BYTE PTR [rax + 6], 0x2f");                        // '/'
     emitter.instruction("jne __rt_fgc_url_check_ftp_x86");                      // not ftps://
-    emitter.instruction("mov QWORD PTR [rip + _ftp_use_tls], 1");               // flag this dynamic FTP open for AUTH TLS
+    abi::emit_store_imm_to_symbol(emitter, "_ftp_use_tls", 0, 1);               // flag this dynamic FTP open for AUTH TLS
     emitter.instruction("mov r11, 7");                                          // scheme prefix length = strlen("ftps://")
     emitter.instruction("jmp __rt_fgc_url_ftp_common_x86");                     // parse authority/path with the shared FTP body
 
@@ -875,7 +875,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp BYTE PTR [rax + 5], 0x2f");                        // '/'
     emitter.instruction("jne __rt_fgc_url_plain_x86");                          // not ftp://
 
-    emitter.instruction("mov QWORD PTR [rip + _ftp_use_tls], 0");               // plain ftp:// must not inherit an earlier TLS flag
+    abi::emit_store_zero_to_symbol(emitter, "_ftp_use_tls", 0);                 // plain ftp:// must not inherit an earlier TLS flag
     emitter.instruction("mov r11, 6");                                          // scheme prefix length = strlen("ftp://")
     emitter.label("__rt_fgc_url_ftp_common_x86");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
@@ -922,8 +922,8 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save host pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save host length
 
-    emitter.instruction("lea r10, [rip + _fgc_url_addr]");                      // TCP address scratch buffer
-    emitter.instruction("lea r11, [rip + _ftp_tcp_prefix]");                    // "tcp://" prefix source
+    abi::emit_symbol_address(emitter, "r10", "_fgc_url_addr");                  // TCP address scratch buffer
+    abi::emit_symbol_address(emitter, "r11", "_ftp_tcp_prefix");                // "tcp://" prefix source
     emitter.instruction("xor rcx, rcx");                                        // address write index
     emitter.label("__rt_fgc_url_ftp_tcp_prefix_x86");
     emitter.instruction("cmp rcx, 6");                                          // copied "tcp://" yet?
@@ -960,7 +960,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fgc_url_ftp_addr_done_x86");
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save TCP address length
 
-    emitter.instruction("lea r10, [rip + _fgc_url_retr]");                      // RETR command scratch buffer
+    abi::emit_symbol_address(emitter, "r10", "_fgc_url_retr");                  // RETR command scratch buffer
     emitter.instruction("mov BYTE PTR [r10 + 0], 0x52");                        // 'R'
     emitter.instruction("mov BYTE PTR [r10 + 1], 0x45");                        // 'E'
     emitter.instruction("mov BYTE PTR [r10 + 2], 0x54");                        // 'T'
@@ -983,9 +983,9 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r10 + rcx], 0x0a");                      // append LF
     emitter.instruction("inc rcx");                                             // RETR command length
 
-    emitter.instruction("lea rdi, [rip + _fgc_url_addr]");                      // TCP control address pointer
+    abi::emit_symbol_address(emitter, "rdi", "_fgc_url_addr");                  // TCP control address pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // TCP control address length
-    emitter.instruction("lea rdx, [rip + _fgc_url_retr]");                      // RETR command pointer
+    abi::emit_symbol_address(emitter, "rdx", "_fgc_url_retr");                  // RETR command pointer
     emitter.instruction("call __rt_ftp_open");                                  // open FTP data fd (rcx already holds command length)
     emitter.instruction("cmp rax, 0");                                          // did the FTP open fail?
     emitter.instruction("jl __rt_fgc_url_ftp_fail_x86");                        // failed open returns PHP false
@@ -995,15 +995,15 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save response ptr across close
     emitter.instruction("mov QWORD PTR [rbp - 80], rdx");                       // save response length across close
     emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // reload FTP data fd
-    emitter.instruction("lea r9, [rip + _tls_sessions]");                       // TLS session handle table
+    abi::emit_symbol_address(emitter, "r9", "_tls_sessions");                   // TLS session handle table
     emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // TLS session attached to this data fd?
     emitter.instruction("test r10, r10");                                       // is the data fd plain?
     emitter.instruction("je __rt_fgc_url_ftp_close_plain_x86");                 // plain FTP data fd: close directly
     emitter.instruction("mov rdi, r10");                                        // TLS handle as close helper argument
-    emitter.instruction("mov r9, QWORD PTR [rip + _elephc_tls_close_fn]");      // elephc_tls_close entry pointer
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_close_fn", 0);     // elephc_tls_close entry pointer
     emitter.instruction("call r9");                                             // send close_notify and drop the TLS session
     emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // reload FTP data fd after TLS close
-    emitter.instruction("lea r9, [rip + _tls_sessions]");                       // TLS session handle table
+    abi::emit_symbol_address(emitter, "r9", "_tls_sessions");                   // TLS session handle table
     emitter.instruction("mov QWORD PTR [r9 + rdi * 8], 0");                     // clear the TLS session slot for descriptor reuse
     emitter.label("__rt_fgc_url_ftp_close_plain_x86");
     emitter.instruction("call close");                                          // close the data connection
@@ -1015,7 +1015,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return owned FTP response string
 
     emitter.label("__rt_fgc_url_ftp_fail_x86");
-    emitter.instruction("mov QWORD PTR [rip + _ftp_use_tls], 0");               // clear the one-shot AUTH-TLS flag after any FTP failure
+    abi::emit_store_zero_to_symbol(emitter, "_ftp_use_tls", 0);                 // clear the one-shot AUTH-TLS flag after any FTP failure
     emitter.instruction("xor eax, eax");                                        // null string ptr → PHP false
     emitter.instruction("xor edx, edx");                                        // zero failure length
     emitter.instruction("add rsp, 112");                                        // release helper locals

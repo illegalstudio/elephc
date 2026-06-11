@@ -318,7 +318,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // defensive null guard
     emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // r11 = class_id
-    emitter.instruction("mov r12, QWORD PTR [rip + _stdclass_class_id]");       // r12 = compile-time stdClass class_id
+    abi::emit_load_symbol_to_reg(emitter, "r12", "_stdclass_class_id", 0);      // r12 = compile-time stdClass class_id
     emitter.instruction("cmp r11, r12");                                        // is the receiver a stdClass instance?
     emitter.instruction("jne __rt_mixed_array_get_null");                       // unrelated class → null
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // load key_hi

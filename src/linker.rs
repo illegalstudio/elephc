@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 use crate::codegen::platform::{Platform, Target};
+use crate::codegen::Emit;
 
 /// A non-system elephc bridge staticlib: a Rust `staticlib` crate linked into
 /// compiled PHP programs that use a given feature (e.g. the `https://` TLS
@@ -177,18 +178,24 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
 
 /// Links object files and runtime objects into a final binary.
 /// - `target`: Compiler target (controls platform, linker command, and flags).
-/// - `bin_path`: Output path for the final executable.
+/// - `emit`: Output kind. `Executable` produces a standalone binary; `Cdylib`
+///   produces a loadable shared library (`.dylib` on macOS via `ld -dylib`,
+///   `.so` on Linux via `gcc -shared`) with no `_main` entry point.
+/// - `bin_path`: Output path for the final artifact.
 /// - `obj_path`: Path to the user code object file.
 /// - `runtime_object_path`: Path to the compiler runtime object file.
 /// - `extra_link_libs`: Additional libraries to link against (e.g., `["m", "pthread"]`).
 /// - `extra_link_paths`: Additional `-L` search paths for libraries.
 /// - `extra_frameworks`: Additional macOS frameworks to link against.
-/// On macOS, `-lSystem` is always added. On Linux, `-static` is used when no extra libs are provided.
+/// On macOS, `-lSystem` is always added. On Linux, `-static` is used when no extra libs
+/// are provided in executable mode; cdylib mode never goes static because shared
+/// libraries cannot be statically linked.
 /// Bridge staticlibs named in `extra_link_libs` are located, search-pathed, and
 /// linked (whole-archived when required) via the [`BRIDGES`] table.
 /// Exits with status 1 if linking fails.
 pub(crate) fn link(
     target: Target,
+    emit: Emit,
     bin_path: &Path,
     obj_path: &Path,
     runtime_object_path: &Path,
@@ -211,7 +218,25 @@ pub(crate) fn link(
             let sdk_path = macos_sdk_path();
             let sdk_version = macos_sdk_version();
             let mut cmd = Command::new("ld");
-            cmd.args(["-arch", target.darwin_arch_name(), "-e", "_main", "-o"]);
+            cmd.args(["-arch", target.darwin_arch_name()]);
+            match emit {
+                Emit::Executable => {
+                    cmd.args(["-e", "_main"]);
+                }
+                Emit::Cdylib => {
+                    // `-dylib` selects shared-library output and drops the executable
+                    // entry-point requirement. `-install_name @rpath/<file>` lets
+                    // hosts load us under an rpath-relative name instead of the
+                    // build-time absolute path baked into the LC_ID_DYLIB record.
+                    let install_name = bin_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| format!("@rpath/{}", n))
+                        .unwrap_or_else(|| "@rpath/libelephc_module.dylib".to_string());
+                    cmd.args(["-dylib", "-install_name", &install_name]);
+                }
+            }
+            cmd.arg("-o");
             cmd.arg(bin_path);
             cmd.arg(obj_path);
             cmd.arg(runtime_object_path);
@@ -222,8 +247,21 @@ pub(crate) fn link(
         }
         Platform::Linux => {
             let mut cmd = Command::new(target.linker_cmd());
+            match emit {
+                Emit::Cdylib => {
+                    // `-shared` produces a `.so`. Static linking and shared
+                    // output are mutually exclusive, so we never add `-static`
+                    // here even when no extra libs are requested. User-code
+                    // codegen routes cross-object data references through the
+                    // GOT (`@GOTPCREL` on x86_64, `:got:`/`:got_lo12:` on
+                    // AArch64) in PIC mode so the loader can fix them up at
+                    // dlopen time without text-segment relocations.
+                    cmd.arg("-shared");
+                }
+                Emit::Executable => {}
+            }
             cmd.arg("-o").arg(bin_path).arg(obj_path).arg(runtime_object_path);
-            if extra_link_libs.is_empty() {
+            if matches!(emit, Emit::Executable) && extra_link_libs.is_empty() {
                 cmd.arg("-static");
             }
             if !extra_link_libs.is_empty() {

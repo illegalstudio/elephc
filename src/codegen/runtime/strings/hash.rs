@@ -119,7 +119,7 @@ fn emit_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r8, [rbp - 64]");                                  // C arg4 = stack-backed 64-byte raw-digest output buffer
 
     // -- call elephc_crypto_hash indirectly through the published slot --
-    emitter.instruction("mov r9, QWORD PTR [rip + _elephc_crypto_hash_fn]");    // load the published elephc_crypto_hash function pointer
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_hash_fn", 0);   // load the published elephc_crypto_hash function pointer
     emitter.instruction("test r9, r9");                                         // a null slot means the program never linked elephc-crypto → unknown algo
     emitter.instruction("jz __rt_hash_unknown_linux_x86_64");                   // throw the unknown-algorithm ValueError when the slot is null
     emitter.instruction("call r9");                                             // compute the raw digest into the stack buffer; rax = digest length or -1

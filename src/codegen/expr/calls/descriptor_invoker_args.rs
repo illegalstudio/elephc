@@ -764,8 +764,7 @@ fn emit_invalid_descriptor_prefix_abort(emitter: &mut Emitter, data: &mut DataSe
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #2");                                  // write the descriptor prefix diagnostic to stderr
-            emitter.adrp("x1", &message_label);
-            emitter.add_lo12("x1", "x1", &message_label);
+            abi::emit_symbol_address(emitter, "x1", &message_label);
             emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the descriptor prefix diagnostic byte length to write()
             emitter.syscall(4);
             abi::emit_exit(emitter, 1);
@@ -871,8 +870,7 @@ fn emit_hash_set_current_mixed_named_suffix(
             emitter.instruction("mov x4, xzr");                                 // boxed Mixed hash entries do not use a high payload word
             abi::emit_load_int_immediate(emitter, "x5", crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64);
             abi::emit_load_temporary_stack_slot(emitter, "x0", 0);
-            emitter.adrp("x1", &key_label);
-            emitter.add_lo12("x1", "x1", &key_label);
+            abi::emit_symbol_address(emitter, "x1", &key_label);
             abi::emit_load_int_immediate(emitter, "x2", key_len as i64);
             abi::emit_call_label(emitter, "__rt_hash_set");
             abi::emit_store_to_address(emitter, result_reg, "sp", 0);

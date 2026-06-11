@@ -9,6 +9,7 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// Reads one line from a file descriptor into the concat buffer.
 /// dispatches to `emit_fgets_linux_x86_64` on x86_64; falls through to ARM64
@@ -175,9 +176,9 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the stream read loop temporaries
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the file descriptor across the repeated libc read() calls in the fgets() loop
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer absolute offset before appending the line bytes
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before appending the line bytes
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the starting concat-buffer offset so the final line length can be reconstructed
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base address once for the x86_64 fgets() helper
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base address once for the x86_64 fgets() helper
     emitter.instruction("lea r10, [r11 + r10]");                                // compute the start pointer for the borrowed line slice that fgets() will return
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // preserve the line start pointer for the final elephc string result
 
@@ -188,8 +189,8 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_fgets_wrapper_entry_x86");                    // wrappers read via the feof-gated stream_read loop below
 
     emitter.label("__rt_fgets_loop_x86");
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // reload the current concat-buffer absolute offset before reading one more byte
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // rematerialize the concat-buffer base address for the current one-byte read destination
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the current concat-buffer absolute offset before reading one more byte
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // rematerialize the concat-buffer base address for the current one-byte read destination
     emitter.instruction("lea rsi, [r11 + r10]");                                // compute the address where libc read() should append the next byte
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the tracked file descriptor as the first libc read() argument
     emitter.instruction("mov edx, 1");                                          // request exactly one byte so fgets() can stop on the first newline
@@ -197,17 +198,17 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 0");                                          // did libc read() append a byte into the concat buffer?
     emitter.instruction("jle __rt_fgets_eof_x86");                              // treat EOF or read failure as the end of the current line and mark the stream as exhausted
 
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // reload the previous concat-buffer absolute offset before publishing the appended byte
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the previous concat-buffer absolute offset before publishing the appended byte
     emitter.instruction("add r10, 1");                                          // advance the concat-buffer offset by the one byte that libc read() appended
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r10");              // publish the updated concat-buffer offset for later string appenders
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // rematerialize the concat-buffer base address so the newly appended byte can be inspected
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat-buffer offset for later string appenders
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // rematerialize the concat-buffer base address so the newly appended byte can be inspected
     emitter.instruction("movzx ecx, BYTE PTR [r11 + r10 - 1]");                 // load the byte that was just appended at the new concat-buffer tail
     emitter.instruction("cmp cl, 0x0A");                                        // did the newly appended byte terminate the line with a newline?
     emitter.instruction("jne __rt_fgets_loop_x86");                             // keep reading until fgets() hits newline, EOF, or read failure
 
     emitter.label("__rt_fgets_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer for the borrowed fgets() line slice
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // reload the concat-buffer absolute end offset after the line-read loop finishes
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the concat-buffer absolute end offset after the line-read loop finishes
     emitter.instruction("sub r10, QWORD PTR [rbp - 16]");                       // compute the borrowed line length from the difference between end and start offsets
     emitter.instruction("mov rdx, r10");                                        // return the borrowed line length in the x86_64 elephc string-length result register
     emitter.instruction("add rsp, 32");                                         // release the fgets() spill slots before returning the borrowed line slice
@@ -236,7 +237,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the chunk ptr across the per-chunk release
     emitter.instruction("movzx ecx, BYTE PTR [rax]");                           // load the read byte
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // current line length
-    emitter.instruction("lea r11, [rip + _user_wrapper_drain_buf]");            // line buffer base
+    abi::emit_symbol_address(emitter, "r11", "_user_wrapper_drain_buf");        // line buffer base
     emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // append the byte to the line buffer
     emitter.instruction("add r10, 1");                                          // advance the line length
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // store the updated line length
@@ -248,7 +249,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fgets_wrapper_last_x86");
     emitter.instruction("call __rt_decref_any");                                // release the newline chunk
     emitter.label("__rt_fgets_wrapper_done_x86");
-    emitter.instruction("lea rax, [rip + _user_wrapper_drain_buf]");            // line pointer
+    abi::emit_symbol_address(emitter, "rax", "_user_wrapper_drain_buf");        // line pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // line length
     emitter.instruction("add rsp, 32");                                         // release the fgets() spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -256,7 +257,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fgets_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
-    emitter.instruction("lea r11, [rip + _eof_flags]");                         // materialize the eof-flag table base address for the current stream descriptor
+    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
     emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
     emitter.instruction("jmp __rt_fgets_done_x86");                             // return the possibly empty borrowed slice accumulated before EOF or read failure
 }

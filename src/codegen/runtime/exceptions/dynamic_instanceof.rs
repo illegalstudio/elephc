@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::abi;
 
 /// Emits the `__rt_instanceof_lookup`, `__rt_instanceof_lookup_no`, and
 /// `__rt_instanceof_invalid_target` runtime helpers for dynamic instanceof.
@@ -35,11 +36,9 @@ pub fn emit_dynamic_instanceof(emitter: &mut Emitter) {
 
     // -- scan class/interface target-name metadata --
     emitter.instruction("cbz x1, __rt_instanceof_lookup_no");                   // null string pointers cannot name a class or interface
-    emitter.adrp("x9", "_instanceof_target_count");                            // load the page containing the dynamic instanceof target count
-    emitter.add_lo12("x9", "x9", "_instanceof_target_count");                 // resolve the dynamic instanceof target-count address
+    abi::emit_symbol_address(emitter, "x9", "_instanceof_target_count");        // load the page containing the dynamic instanceof target count
     emitter.instruction("ldr x9, [x9]");                                        // x9 = number of class/interface names available for lookup
-    emitter.adrp("x10", "_instanceof_target_entries");                         // load the page containing the dynamic instanceof target table
-    emitter.add_lo12("x10", "x10", "_instanceof_target_entries");             // resolve the dynamic instanceof target table address
+    abi::emit_symbol_address(emitter, "x10", "_instanceof_target_entries");     // load the page containing the dynamic instanceof target table
     emitter.instruction("mov x11, #0");                                         // x11 = current target-table index
 
     emitter.label("__rt_instanceof_lookup_entry_loop");
@@ -94,8 +93,7 @@ pub fn emit_dynamic_instanceof(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.label_global("__rt_instanceof_invalid_target");
-    emitter.adrp("x1", "_instanceof_target_type_msg");                         // load the page containing the dynamic-target TypeError message
-    emitter.add_lo12("x1", "x1", "_instanceof_target_type_msg");               // resolve the dynamic-target TypeError message address
+    abi::emit_symbol_address(emitter, "x1", "_instanceof_target_type_msg");     // load the page containing the dynamic-target TypeError message
     emitter.instruction("mov x2, #59");                                         // pass the dynamic-target TypeError message length to write()
     emitter.instruction("mov x0, #2");                                          // fd = stderr for the dynamic instanceof TypeError
     emitter.syscall(4);
@@ -121,8 +119,8 @@ fn emit_dynamic_instanceof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_instanceof_lookup_no");                        // report lookup failure for null dynamic target strings
     emitter.instruction("mov r8, rax");                                         // preserve the dynamic target string pointer
     emitter.instruction("mov r9, rdx");                                         // preserve the dynamic target string length
-    emitter.instruction("mov r10, QWORD PTR [rip + _instanceof_target_count]"); // r10 = number of class/interface names available for lookup
-    emitter.instruction("lea r11, [rip + _instanceof_target_entries]");         // r11 = current dynamic-target metadata entry
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_instanceof_target_count", 0); // r10 = number of class/interface names available for lookup
+    abi::emit_symbol_address(emitter, "r11", "_instanceof_target_entries");     // r11 = current dynamic-target metadata entry
 
     emitter.label("__rt_instanceof_lookup_entry_loop");
     emitter.instruction("test r10, r10");                                       // have all target-name metadata entries been scanned?
@@ -176,7 +174,7 @@ fn emit_dynamic_instanceof_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.label_global("__rt_instanceof_invalid_target");
-    emitter.instruction("lea rsi, [rip + _instanceof_target_type_msg]");        // point write() at the dynamic-target TypeError message
+    abi::emit_symbol_address(emitter, "rsi", "_instanceof_target_type_msg");    // point write() at the dynamic-target TypeError message
     emitter.instruction("mov edx, 59");                                         // pass the dynamic-target TypeError message length to write()
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the dynamic instanceof TypeError
     emitter.instruction("mov eax, 1");                                          // Linux syscall 1 = write

@@ -165,8 +165,7 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_debug_validate_free_list_loop");           // continue validating the ordered free list
 
     emitter.label("__rt_heap_debug_validate_free_list_fail");
-    emitter.adrp("x1", "_heap_dbg_free_list_msg");               // load page of the free-list corruption message
-    emitter.add_lo12("x1", "x1", "_heap_dbg_free_list_msg");         // resolve the free-list corruption message address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_free_list_msg"); // load page of the free-list corruption message
     emitter.instruction(&format!("mov x2, #{}", msg.len()));                    // pass the exact free-list corruption message length
     emitter.instruction("b __rt_heap_debug_fail");                              // report corruption and terminate immediately
 

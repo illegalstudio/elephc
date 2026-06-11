@@ -99,7 +99,7 @@ fn emit_chunk_size(
             emitter.instruction(&format!("jl {}", default_label));              // → report the default without storing
             emitter.instruction("cmp rdi, 256");                                // fd outside the per-fd table?
             emitter.instruction(&format!("jge {}", default_label));             // → report the default without storing
-            emitter.instruction("lea r9, [rip + _stream_chunk_size]");          // base of the per-fd chunk-size table
+            abi::emit_symbol_address(emitter, "r9", "_stream_chunk_size");      // base of the per-fd chunk-size table
             emitter.instruction("mov rax, QWORD PTR [r9 + rdi * 8]");           // rax = previous chunk size (0 = unset)
             emitter.instruction("test rax, rax");                               // a stored value exists?
             emitter.instruction(&format!("jnz {}", have_old_label));            // → use it

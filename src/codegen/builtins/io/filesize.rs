@@ -64,7 +64,7 @@ pub fn emit(
             emitter.instruction("mov rsi, rdx");                                // field helper arg1 = path len
             emitter.instruction("xor edx, edx");                                // field selector 0 = 'size'
             abi::emit_call_label(emitter, "__rt_user_wrapper_url_stat_field");  // rax = wrapper 'size' (or -1)
-            emitter.instruction("lea r9, [rip + _url_stat_matched]");           // load runtime data address
+            abi::emit_symbol_address(emitter, "r9", "_url_stat_matched");       // load runtime data address
             emitter.instruction("movzx r9d, BYTE PTR [r9]");                    // did a registered wrapper scheme match?
             emitter.instruction("test r9d, r9d");                               // matched flag set?
             emitter.instruction(&format!("jz {}", fallback));                   // no → real filesystem filesize

@@ -11,6 +11,7 @@
 
 use crate::codegen::abi::emit_symbol_address;
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// inet_pton: parse a dotted-quad IPv4 string into a 4-byte binary string.
 /// Input:  x0 = string pointer, x1 = string length
@@ -71,8 +72,8 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did parsing report an invalid address?
     emitter.instruction("js __rt_inet_pton_false_x86");                         // a -1 sentinel means invalid
 
-    emitter.instruction("mov r9, QWORD PTR [rip + _concat_off]");               // current concat-buffer offset
-    emitter.instruction("lea r10, [rip + _concat_buf]");                        // concat-buffer base address
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
     emitter.instruction("lea r11, [r10 + r9]");                                 // compute the binary write pointer
     emitter.instruction("mov rcx, rax");                                        // keep the packed address for shifting
     emitter.instruction("shr rcx, 24");                                         // extract octet 0
@@ -85,7 +86,7 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11 + 2], cl");                          // write octet 2
     emitter.instruction("mov BYTE PTR [r11 + 3], al");                          // write octet 3 (the low byte)
     emitter.instruction("add r9, 4");                                           // the binary string is four bytes
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r9");               // publish the updated offset
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated offset
     emitter.instruction("mov rax, r11");                                        // return the binary pointer
     emitter.instruction("mov rdx, 4");                                          // return the four-byte length
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

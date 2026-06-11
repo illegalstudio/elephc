@@ -211,7 +211,7 @@ pub fn emit(
             //    back to the hardcoded "localhost". The fd sits at [rsp+64]. --
             let host_default = ctx.next_label("ssec_host_default");
             emitter.instruction("mov r10, QWORD PTR [rsp + 64]");               // reload fd for the connect-host table index
-            emitter.instruction("lea r9, [rip + _stream_connect_host]");        // base of the per-fd connect-host table
+            abi::emit_symbol_address(emitter, "r9", "_stream_connect_host");    // base of the per-fd connect-host table
             emitter.instruction("shl r10, 4");                                  // fd * 16 (ptr/len slot stride)
             emitter.instruction("add r9, r10");                                 // &_stream_connect_host[fd]
             emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                 // stashed host length (0 = unset)
@@ -222,7 +222,7 @@ pub fn emit(
             emitter.instruction("mov QWORD PTR [rsp + 8], r11");                // peer_name len = connection host length
             emitter.instruction(&format!("jmp {}", peer_ok));                   // host defaulted from the connection — skip localhost
             emitter.label(&host_default);
-            emitter.instruction("lea r9, [rip + _tls_peer_name_default]");      // fallback peer-name literal
+            abi::emit_symbol_address(emitter, "r9", "_tls_peer_name_default");  // fallback peer-name literal
             emitter.instruction("mov QWORD PTR [rsp + 0], r9");                 // peer_name ptr = "localhost"
             emitter.instruction("mov r9, 9");                                   // route the immediate through a register so the assembler always emits a 64-bit store
             emitter.instruction("mov QWORD PTR [rsp + 8], r9");                 // peer_name len = strlen("localhost")
@@ -233,16 +233,16 @@ pub fn emit(
             let after_attach = ctx.next_label("ssec_after_attach_x");
             emitter.instruction("mov QWORD PTR [rsp + 24], 0");                 // ssl.local_cert length = 0 (no client cert by default)
             emitter.instruction("mov QWORD PTR [rsp + 40], 0");                 // ssl.local_pk length = 0
-            emitter.instruction("lea rdi, [rip + _ssl_key_str]");               // wrapper key "ssl"
+            abi::emit_symbol_address(emitter, "rdi", "_ssl_key_str");           // wrapper key "ssl"
             emitter.instruction("mov rsi, 3");                                  // strlen("ssl")
-            emitter.instruction("lea rdx, [rip + _ssl_local_cert_key_str]");    // option key "local_cert"
+            abi::emit_symbol_address(emitter, "rdx", "_ssl_local_cert_key_str"); // option key "local_cert"
             emitter.instruction("mov rcx, 10");                                 // strlen("local_cert")
             emitter.instruction("lea r8, [rsp + 16]");                          // local_cert out_ptr address
             emitter.instruction("lea r9, [rsp + 24]");                          // local_cert out_len address
             emitter.instruction("call __rt_get_string_context_option");         // fill [rsp+16]/[rsp+24] on hit
-            emitter.instruction("lea rdi, [rip + _ssl_key_str]");               // wrapper key "ssl"
+            abi::emit_symbol_address(emitter, "rdi", "_ssl_key_str");           // wrapper key "ssl"
             emitter.instruction("mov rsi, 3");                                  // strlen("ssl")
-            emitter.instruction("lea rdx, [rip + _ssl_local_pk_key_str]");      // option key "local_pk"
+            abi::emit_symbol_address(emitter, "rdx", "_ssl_local_pk_key_str");  // option key "local_pk"
             emitter.instruction("mov rcx, 8");                                  // strlen("local_pk")
             emitter.instruction("lea r8, [rsp + 32]");                          // local_pk out_ptr address
             emitter.instruction("lea r9, [rsp + 40]");                          // local_pk out_len address
@@ -264,7 +264,7 @@ pub fn emit(
             emitter.instruction("mov r9, QWORD PTR [rsp + 32]");                // local_pk path ptr → 6th arg
             emitter.instruction("sub rsp, 16");                                 // reserve the 7th stack arg + padding (stays 0-mod-16)
             emitter.instruction("mov QWORD PTR [rsp + 0], rax");                // 7th arg = local_pk path len
-            emitter.instruction("mov r10, QWORD PTR [rip + _elephc_tls_attach_fd_client_cert_fn]"); // mutual-TLS attach function pointer
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_tls_attach_fd_client_cert_fn", 0); // mutual-TLS attach function pointer
             emitter.instruction("call r10");                                    // rax = handle or -1
             emitter.instruction("add rsp, 16");                                 // pop the 7th stack arg
             emitter.instruction(&format!("jmp {}", after_attach));              // skip the plain attach variant
@@ -272,7 +272,7 @@ pub fn emit(
             emitter.instruction("mov rdi, QWORD PTR [rsp + 64]");               // reload fd → 1st arg
             emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                // peer_name ptr → 2nd arg
             emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                // peer_name len → 3rd arg
-            emitter.instruction("mov r9, QWORD PTR [rip + _elephc_tls_attach_fd_fn]"); // server-auth-only attach function pointer
+            abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_attach_fd_fn", 0); // server-auth-only attach function pointer
             emitter.instruction("call r9");                                     // rax = handle or -1
             emitter.label(&after_attach);
             emitter.instruction("mov r10, QWORD PTR [rsp + 64]");               // reload fd
@@ -280,7 +280,7 @@ pub fn emit(
             abi::emit_release_temporary_stack(emitter, 16);                     // pop saved fd
             emitter.instruction("cmp rax, 0");                                  // did TLS attach return a failure handle?
             emitter.instruction(&format!("jl {}", fail_label));                 // report false when attach failed
-            emitter.instruction("lea r11, [rip + _tls_sessions]");              // TLS session handle table
+            abi::emit_symbol_address(emitter, "r11", "_tls_sessions");          // TLS session handle table
             emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rax");          // _tls_sessions[fd] = handle
             emitter.instruction("mov eax, 1");                                  // report successful TLS enablement
             emitter.instruction(&format!("jmp {}", done_label));                // skip the failure result

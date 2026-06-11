@@ -467,3 +467,134 @@ fn test_emit_write_stdout_linux_x86_64_uses_syscall_registers() {
         )
     );
 }
+
+/// Constructs a PIC-mode x86_64/Linux emitter for verifying the GOT-routed
+/// data-reference sequences used by `--emit cdylib` artifacts.
+fn test_emitter_x86_pic() -> Emitter {
+    Emitter::new_pic(Target::new(Platform::Linux, Arch::X86_64))
+}
+
+/// Verifies that a PIC-mode integer symbol load resolves the GOT entry through
+/// the destination register itself, so the sequence clobbers no register the
+/// non-PIC emission would have left intact.
+#[test]
+fn test_pic_load_symbol_to_int_reg_self_scratches_on_linux_x86_64() {
+    let mut emitter = test_emitter_x86_pic();
+    crate::codegen::abi::emit_load_symbol_to_reg(&mut emitter, "r10", "_concat_off", 0);
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    mov r10, QWORD PTR _concat_off@GOTPCREL[rip]\n",
+            "    mov r10, QWORD PTR [r10]\n",
+        )
+    );
+}
+
+/// Verifies that a PIC-mode float symbol load borrows r11 for the GOT address
+/// behind a push/pop pair, preserving the caller-visible register state.
+#[test]
+fn test_pic_load_symbol_to_float_reg_protects_r11_on_linux_x86_64() {
+    let mut emitter = test_emitter_x86_pic();
+    crate::codegen::abi::emit_load_symbol_to_reg(&mut emitter, "xmm0", "_float_slot", 8);
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    push r11\n",
+            "    mov r11, QWORD PTR _float_slot@GOTPCREL[rip]\n",
+            "    movsd xmm0, QWORD PTR [r11 + 8]\n",
+            "    pop r11\n",
+        )
+    );
+}
+
+/// Verifies that a PIC-mode symbol store borrows r11 behind a push/pop, and
+/// falls back to r10 when the stored value itself lives in r11.
+#[test]
+fn test_pic_store_reg_to_symbol_protects_scratch_on_linux_x86_64() {
+    let mut emitter = test_emitter_x86_pic();
+    crate::codegen::abi::emit_store_reg_to_symbol(&mut emitter, "rax", "_concat_off", 0);
+    crate::codegen::abi::emit_store_reg_to_symbol(&mut emitter, "r11", "_concat_off", 0);
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    push r11\n",
+            "    mov r11, QWORD PTR _concat_off@GOTPCREL[rip]\n",
+            "    mov QWORD PTR [r11], rax\n",
+            "    pop r11\n",
+            "    push r10\n",
+            "    mov r10, QWORD PTR _concat_off@GOTPCREL[rip]\n",
+            "    mov QWORD PTR [r10], r11\n",
+            "    pop r10\n",
+        )
+    );
+}
+
+/// Verifies that a PIC-mode zero store writes an immediate zero through the
+/// GOT-resolved address instead of routing a zeroed register through the GOT
+/// scratch (the previous sequence clobbered the zero with the address).
+#[test]
+fn test_pic_store_zero_to_symbol_writes_immediate_on_linux_x86_64() {
+    let mut emitter = test_emitter_x86_pic();
+    crate::codegen::abi::emit_store_zero_to_symbol(&mut emitter, "_eof_flags", 0);
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    push r11\n",
+            "    mov r11, QWORD PTR _eof_flags@GOTPCREL[rip]\n",
+            "    mov QWORD PTR [r11], 0\n",
+            "    pop r11\n",
+        )
+    );
+}
+
+/// Verifies that the symbol-compare helper emits a single memory-operand CMP
+/// in non-PIC mode and a flag-safe push/GOT/cmp/pop sequence in PIC mode.
+#[test]
+fn test_cmp_reg_to_symbol_non_pic_and_pic_on_linux_x86_64() {
+    let mut emitter = test_emitter_x86();
+    crate::codegen::abi::emit_cmp_reg_to_symbol(&mut emitter, "rax", "_class_destruct_count");
+    assert_eq!(
+        emitter.output(),
+        "    cmp rax, QWORD PTR [rip + _class_destruct_count]\n"
+    );
+
+    let mut emitter = test_emitter_x86_pic();
+    crate::codegen::abi::emit_cmp_reg_to_symbol(&mut emitter, "rax", "_class_destruct_count");
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    push r11\n",
+            "    mov r11, QWORD PTR _class_destruct_count@GOTPCREL[rip]\n",
+            "    cmp rax, QWORD PTR [r11]\n",
+            "    pop r11\n",
+        )
+    );
+}
+
+/// Verifies that the symbol-decrement helper emits a single memory-operand DEC
+/// in non-PIC mode and a push/GOT/dec/pop sequence in PIC mode.
+#[test]
+fn test_dec_symbol_non_pic_and_pic_on_linux_x86_64() {
+    let mut emitter = test_emitter_x86();
+    crate::codegen::abi::emit_dec_symbol(&mut emitter, "_http_active_max_redirects");
+    assert_eq!(
+        emitter.output(),
+        "    dec QWORD PTR [rip + _http_active_max_redirects]\n"
+    );
+
+    let mut emitter = test_emitter_x86_pic();
+    crate::codegen::abi::emit_dec_symbol(&mut emitter, "_http_active_max_redirects");
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    push r11\n",
+            "    mov r11, QWORD PTR _http_active_max_redirects@GOTPCREL[rip]\n",
+            "    dec QWORD PTR [r11]\n",
+            "    pop r11\n",
+        )
+    );
+}

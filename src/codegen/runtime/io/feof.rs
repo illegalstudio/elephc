@@ -9,6 +9,7 @@
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
+use crate::codegen::abi;
 
 /// Emits the `__rt_feof` runtime helper.
 /// Dispatches to the target-specific implementation based on `emitter.target`.
@@ -50,7 +51,7 @@ fn emit_feof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdi, r9");                                         // is this a synthetic user-wrapper fd?
     emitter.instruction("jge __rt_user_wrapper_feof");                          // dispatch into the wrapper's stream_eof instead of reading the eof-flag table
 
-    emitter.instruction("lea r10, [rip + _eof_flags]");                         // materialize the eof-flag table base address for the queried file descriptor
+    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table base address for the queried file descriptor
     emitter.instruction("movzx eax, BYTE PTR [r10 + rdi]");                     // load the tracked eof flag byte for the requested file descriptor into the integer result register
     emitter.instruction("ret");                                                 // return the eof flag to the caller using the standard x86_64 integer result register
 }

@@ -34,8 +34,7 @@ pub(crate) fn emit_store_mutating_arg(emitter: &mut Emitter, ctx: &Context, arg:
         let label = format!("_gvar_{}", name);
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.adrp("x9", &format!("{}", label));               // load page of global variable storage for the mutated array/hash
-                emitter.add_lo12("x9", "x9", &format!("{}", label));     // resolve the global variable storage address
+                abi::emit_symbol_address(emitter, "x9", &label);                // resolve the global variable storage address for the mutated array/hash
                 emitter.instruction("str x0, [x9]");                            // overwrite the global slot with the updated container pointer
             }
             Arch::X86_64 => {

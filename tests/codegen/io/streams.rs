@@ -5928,7 +5928,6 @@ fclose($f);
 
 /// Verifies compiled PHP output for fopen http request fulluri in request line.
 #[test]
-#[ignore = "reliable standalone but flakes in parallel sweep (fixed-port echo server, port-binding race); run with --ignored --test-threads=1. The request_fulluri absolute-form URI now includes the non-default port (fixed in parse_http_url)"]
 fn test_fopen_http_request_fulluri_in_request_line() {
     let (_server, port) = spawn_http_echo_server();
     let out = compile_and_run(

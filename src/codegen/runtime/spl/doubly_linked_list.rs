@@ -1662,8 +1662,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish legacy serialization frame
     emitter.instruction("sub rsp, 96");                                         // reserve receiver, cursor, payload, and loop spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver across item unboxing
-    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load current concat-buffer offset
-    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize concat-buffer base
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize concat-buffer base
     emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // save concat-buffer base for final offset update
     emitter.instruction("lea r12, [r11 + r10]");                                // compute start pointer for serialized string
     emitter.instruction("mov QWORD PTR [rbp - 32], r12");                       // save serialized string start pointer
@@ -1786,7 +1786,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload final output cursor
     emitter.instruction("mov r12, r11");                                        // copy final cursor for global offset calculation
     emitter.instruction("sub r12, r10");                                        // compute new concat-buffer offset
-    emitter.instruction("mov QWORD PTR [rip + _concat_off], r12");              // publish updated concat-buffer offset
+    abi::emit_store_reg_to_symbol(emitter, "r12", "_concat_off", 0);            // publish updated concat-buffer offset
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return serialized string pointer
     emitter.instruction("mov rdx, r11");                                        // copy final cursor for length calculation
     emitter.instruction("sub rdx, rax");                                        // return serialized string length
@@ -2527,13 +2527,13 @@ fn emit_throw_exception_x86_64(
     emitter.instruction("call __rt_heap_alloc");                                // allocate the exception object payload
     emitter.instruction("mov r10, 0x4548504c00000006");                         // x86_64 heap-kind word: HE LP magic + kind 6 object
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
-    emitter.instruction(&format!("mov r10, QWORD PTR [rip + {}]", class_id_symbol)); // load the exception class id for this program
+    abi::emit_load_symbol_to_reg(emitter, "r10", class_id_symbol, 0);           // load the exception class id for this program
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at object header
-    emitter.instruction(&format!("lea r10, [rip + {}]", message_symbol));       // materialize static exception message pointer
+    abi::emit_symbol_address(emitter, "r10", message_symbol);                   // materialize static exception message pointer
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static exception message pointer
     emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static exception message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");               // publish the active exception object
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the active exception object
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emitter.instruction("jmp __rt_throw_current");                              // enter the standard exception unwinder
