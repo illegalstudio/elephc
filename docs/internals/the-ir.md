@@ -1,14 +1,14 @@
 ---
 title: "The EIR Design"
-description: "Specification for elephc's planned intermediate representation between AST optimization and assembly emission."
+description: "Specification for elephc's default intermediate representation between AST optimization and assembly emission."
 sidebar:
   order: 13
 ---
 
-**Status:** design specification and `src/ir/` scaffolding are implemented.
-The diagnostic `--emit-ir` path lowers the checked and optimized AST into
-validated textual EIR. The current production pipeline still emits assembly
-directly from the AST until the EIR backend is implemented and soaked.
+**Status:** EIR is the default user-facing backend. The diagnostic `--emit-ir`
+path lowers the checked and optimized AST into validated textual EIR, and the
+normal executable/cdylib path lowers that same EIR into assembly. The legacy
+AST backend remains available only as the temporary `--ast-backend` fallback.
 
 **Implementation phases:** `.plans/eir-*.md`
 
@@ -29,10 +29,10 @@ directly from the AST until the EIR backend is implemented and soaked.
 - `src/codegen/runtime/emitters.rs`
 - `src/optimize/effects.rs` and `src/optimize/effects/`
 
-EIR is elephc's planned intermediate representation. It sits between the
-AST-level optimizer and the assembly emitter, giving the compiler a
-function-wide control-flow and value model without replacing the hand-written
-assembly backend.
+EIR is elephc's intermediate representation. It sits between the AST-level
+optimizer and the assembly emitter, giving the compiler a function-wide
+control-flow and value model without replacing the hand-written assembly
+backend.
 
 EIR is intentionally PHP-shaped. Arrays, hashes, Mixed boxing, callable
 descriptors, copy-on-write checks, fatal paths, exception paths, runtime calls,
@@ -61,7 +61,29 @@ reopening core design questions.
 
 ## Pipeline Position
 
-Current production path:
+Current default production path:
+
+```text
+PHP source
+  -> Lexer
+  -> Parser
+  -> Magic constants
+  -> Conditional compilation
+  -> Resolver
+  -> NameResolver
+  -> Autoload insertion
+  -> AST constant folding
+  -> Type checker / warnings
+  -> AST optimizer passes
+  -> AST -> EIR lowering
+  -> EIR validation
+  -> EIR -> assembly backend
+  -> runtime cache
+  -> assembler / linker
+  -> binary
+```
+
+Temporary legacy fallback path (`--ast-backend`):
 
 ```text
 PHP source
@@ -81,34 +103,24 @@ PHP source
   -> binary
 ```
 
-Planned EIR path:
-
-```text
-PHP source
-  -> Lexer
-  -> Parser
-  -> Magic constants
-  -> Conditional compilation
-  -> Resolver
-  -> NameResolver
-  -> Autoload insertion
-  -> AST constant folding
-  -> Type checker / warnings
-  -> AST optimizer passes
-  -> AST -> EIR lowering
-  -> EIR validation
-  -> EIR local/CFG passes
-  -> EIR -> assembly backend
-  -> runtime cache
-  -> assembler / linker
-  -> binary
-```
-
 The AST optimizer remains in front of EIR. It handles PHP-preserving rewrites
 that are naturally expressed over syntax: constant folding, local scalar
 propagation, control-flow pruning, control-flow normalization, and DCE. EIR
 adds what the AST cannot express well: value identity, basic blocks, block
 parameters, liveness, dominance, register placement, CSE, LICM, and inlining.
+
+## Backend Selection
+
+The compiler currently supports two assembly backends:
+
+- EIR backend, selected by default and also by explicit `--ir-backend`
+- legacy AST backend, selected only by `--ast-backend`
+
+`--ast-backend` is a deprecated escape hatch while the legacy emitter remains
+in-tree. It emits a warning and will be removed after the default EIR path has
+completed its validation window. EIR currently preserves the existing
+hand-written assembly style; register allocation and IR optimization passes are
+planned follow-up work.
 
 ## Design Invariants
 

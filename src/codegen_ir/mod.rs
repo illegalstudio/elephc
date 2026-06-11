@@ -3,12 +3,14 @@
 //! `src/codegen/` while reading from an EIR `Module` instead of an AST.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` when the `--ir-backend` flag is set.
+//! - `crate::pipeline::compile()` when the default EIR backend, or explicit
+//!   `--ir-backend`, is selected.
 //!
 //! Key details:
-//! - Phase 04: 1:1 lowering, no optimization, no register allocation.
-//! - Phase 06 adds linear-scan register allocation.
-//! - Phase 09 replaces `src/codegen/` as the default backend.
+//! - EIR is the default user-facing backend.
+//! - Current lowering is still 1:1, with IR optimization and register allocation
+//!   planned as later passes.
+//! - The legacy `src/codegen/` AST backend remains available through `--ast-backend`.
 
 mod block_emit;
 mod context;

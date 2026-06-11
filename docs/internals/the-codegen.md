@@ -7,9 +7,9 @@ sidebar:
 
 **Source:** `src/codegen/` — `mod.rs`, `driver_support.rs`, `main_emission.rs`, `class_methods.rs`, `function_variants.rs`, `interface_wrappers.rs`, `callables.rs`, `reflection.rs`, `prescan.rs`, `program_usage.rs`, `program_usage/`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `builtins/`, `runtime/`, `ffi.rs`, `abi/`, `platform/`, `context.rs`, `data_section.rs`, `emit.rs`; intrinsic method registry: `src/intrinsics.rs`
 
-The code generator (codegen) is the heart of the compiler. It takes the checked AST after the optimizer's local simplification passes and produces native assembly text for the selected target — the actual instructions the CPU will execute.
+The code generator (codegen) is the heart of the compiler. The default path lowers the checked and optimized AST into EIR first, then emits native assembly text for the selected target from that EIR. The temporary `--ast-backend` fallback still walks the checked AST directly and emits assembly while the legacy emitter remains in-tree.
 
-elephc now supports more than one backend. AArch64 is still the clearest reference path in the codebase and in this document, while Linux `x86_64` is also a supported backend that goes through the same high-level lowering pipeline.
+elephc currently supports more than one backend. AArch64 is still the clearest reference path in the codebase and in this document, while Linux `x86_64` is also a supported backend that goes through the same high-level lowering pipeline.
 
 Most snippets below use AArch64 because the instruction forms are compact and the surrounding docs already explain them in detail. When a section talks about target-specific ABI or runtime behavior, it calls out Linux `x86_64` explicitly.
 
@@ -82,7 +82,7 @@ Statement emission also injects source markers of the form `@src line=<N> col=<M
 
 The compiler's codegen/runtime handoff now has three distinct artifacts:
 
-1. **User assembly** — emitted from the checked AST into the per-build `.s` file
+1. **User assembly** — emitted by the selected backend into the per-build `.s` file
 2. **Runtime object** — assembled from the shared runtime once and cached under `~/.cache/elephc/` (or `XDG_CACHE_HOME`) using the compiler version, target, heap size, and generated runtime assembly hash in the filename
 3. **Optional source map** — a JSON sidecar generated from `@src` markers embedded in the user assembly comments
 
@@ -94,7 +94,7 @@ This means normal CLI builds no longer concatenate the runtime text into every o
 
 The source-map file is intentionally simple. Today it stores a list of `(asm_line, php_line, php_col)` entries so tools and humans can correlate generated assembly back to the original PHP statements without needing full DWARF debug info.
 
-The optimizer intentionally stays at the AST level. By the time codegen runs, constant expressions and some dead control-flow have already been removed, but codegen still sees a normal checked program shape rather than a target-specific IR. Assembly-level peephole cleanup is future work.
+The AST optimizer intentionally still runs before backend selection. By the time the default EIR backend runs, constant expressions and some dead control-flow have already been removed, and EIR adds the function-wide value and control-flow shape needed for later register allocation and IR optimizations. The legacy AST backend sees the same optimized AST when `--ast-backend` is selected.
 
 ## Emit modes: executable vs cdylib
 

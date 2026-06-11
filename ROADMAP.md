@@ -659,8 +659,8 @@ imposed. See `docs/internals/the-ir.md`.
 - [x] AST → EIR lowering pass — every `ExprKind`/`StmtKind` variant
 - [x] `--emit-ir` CLI flag for diagnostics and snapshot testing
 - [x] EIR → ASM backend producing semantically equivalent output to the legacy backend (no optimizations yet)
-- [ ] Default backend switch from AST to EIR, with `--ast-backend` retained as an explicit fallback
-- [ ] CI default-EIR gate, legacy fallback coverage, and IR-only benchmark job for parity and regression tracking
+- [x] Default backend switch from AST to EIR, with `--ast-backend` retained as an explicit fallback
+- [x] CI default-EIR gate, legacy fallback coverage, and IR-only benchmark job for parity and regression tracking
 - [ ] Linear-scan register allocator (Poletto-Sarkar) with liveness analysis, live intervals, allocation table, separate int / float pools, and callee-saved preservation across calls
 - [ ] Register-pressure mitigations: caller-saved reuse for non-call-crossing intervals; better spill heuristic
 
@@ -674,7 +674,7 @@ after Phase 06 by end of v0.24.x.
 Build the IR-level passes that the AST optimizer could not reach now that the
 EIR backend is the user-facing default.
 
-- [ ] Deprecation warning on `--ast-backend` while keeping it available as a fallback for one minor version
+- [x] Deprecation warning on `--ast-backend` while keeping it available as a fallback for one minor version
 - [ ] Backend-switch release notes and documentation updates (`the-codegen.md`, `the-ir.md`)
 - [ ] Fixed-point IR pass driver with validation after each pass in test builds
 - [ ] Identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, etc.)
