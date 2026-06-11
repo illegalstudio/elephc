@@ -4706,7 +4706,7 @@ fn array_fill_builtin_return_type_for_args(
             value: Box::new(PhpType::Mixed),
         });
     }
-    Some(PhpType::Array(Box::new(value_ty)))
+    Some(PhpType::Array(Box::new(array_fill_indexed_element_type(value_ty))))
 }
 
 /// Returns the EIR result metadata for `array_map()` when a callable param signature is known.
@@ -4973,9 +4973,16 @@ fn array_fill_builtin_return_type(
     operands: &[crate::ir::ValueId],
 ) -> Option<PhpType> {
     let value = operands.get(2)?;
-    Some(PhpType::Array(Box::new(
-        ctx.builder.value_php_type(*value).codegen_repr(),
-    )))
+    let value_ty = ctx.builder.value_php_type(*value).codegen_repr();
+    Some(PhpType::Array(Box::new(array_fill_indexed_element_type(value_ty))))
+}
+
+/// Returns the indexed element storage type for EIR `array_fill()` results.
+fn array_fill_indexed_element_type(value_ty: PhpType) -> PhpType {
+    match value_ty.codegen_repr() {
+        PhpType::Void | PhpType::Never => PhpType::Mixed,
+        other => other,
+    }
 }
 
 /// Returns the extracted column element type for `array_column()`.
@@ -6714,9 +6721,12 @@ fn property_get_result_type(
     ctx: &LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
     property: &str,
-    _op: Op,
+    op: Op,
     expr: &Expr,
 ) -> PhpType {
+    if op == Op::NullsafePropGet {
+        return PhpType::Mixed;
+    }
     let object_ty = ctx.builder.value_php_type(object);
     let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
         if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {

@@ -1160,7 +1160,7 @@ fn ir_backend_handles_scalar_builtins() {
             "escape_and_hex_strings",
             r#"<?php echo addslashes("He said \"hi\" and it's ok"); echo ':'; echo stripslashes("He said \\\"hi\\\""); echo ':'; echo nl2br("line1\nline2"); echo ':'; echo wordwrap("The quick brown fox", 10, "|"); echo ':'; echo bin2hex("AB"); echo ':'; echo hex2bin("4142");"#,
             r#"He said \"hi\" and it\'s ok:He said "hi":line1<br />
-line2:The quick |brown fox:4142:AB"#,
+line2:The quick|brown fox:4142:AB"#,
         ),
         (
             "html_entity_strings",
@@ -1624,7 +1624,7 @@ var_dump([1, 2, 3]);
 var_dump(["a" => 1, "b" => 2]);
 "#;
     let expected =
-        "42|hi|1||Array\n---\nint(42)\nstring(2) \"hi\"\nbool(true)\nbool(false)\nNULL\nfloat(3.14)\narray(3) {\n}\narray(2) {\n}\n";
+        "42|hi|1||Array\n---\nint(42)\nstring(2) \"hi\"\nbool(true)\nbool(false)\nNULL\nfloat(3.14)\narray(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\narray(2) {\n}\n";
     assert_eq!(
         compile_and_run_ir_backend("debug_output_builtins", source),
         expected
@@ -1654,7 +1654,7 @@ echo "]";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("debug_output_mixed_values", source),
-        "int(42)\nstring(3) \"cba\"\nfloat(1.5)\nbool(true)\nNULL\narray(2) {\n}\n[42|]"
+        "int(42)\nstring(3) \"cba\"\nfloat(1.5)\nbool(true)\nNULL\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n[42|]"
     );
 }
 
@@ -5106,7 +5106,7 @@ fn ir_backend_handles_array_truthiness() {
     }
 }
 
-/// Verifies iterable echo uses the legacy array literal output while concrete array echo is silent.
+/// Verifies iterable and concrete array echo lower to PHP's "Array" string payload.
 #[test]
 fn ir_backend_handles_iterable_echo() {
     let source = r#"<?php
@@ -5123,7 +5123,7 @@ echo "done";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("iterable_echo", source),
-        "Array|Array|done"
+        "Array|Array|Arraydone"
     );
 }
 

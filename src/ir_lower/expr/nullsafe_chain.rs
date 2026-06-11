@@ -226,7 +226,7 @@ fn lower_nullsafe_postfix_segment(
                 ctx,
                 current,
                 property,
-                Op::PropGet,
+                if nullsafe { Op::NullsafePropGet } else { Op::PropGet },
                 expr,
             ))
         }
