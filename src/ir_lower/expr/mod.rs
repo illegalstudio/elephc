@@ -1493,8 +1493,12 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
-    let php_type = call_return_type_for_args(ctx, canonical, args, &operands)
-        .unwrap_or_else(|| call_return_type(ctx, canonical, &operands));
+    let php_type = if is_extern || is_user_function {
+        call_return_type(ctx, canonical, &operands)
+    } else {
+        call_return_type_for_args(ctx, canonical, args, &operands)
+            .unwrap_or_else(|| call_return_type(ctx, canonical, &operands))
+    };
     if is_extern {
         let data = ctx.intern_function_name(canonical);
         return ctx.emit_value(
@@ -2756,7 +2760,11 @@ fn lower_static_callable_call(
             ))
         }
         StaticCallableBinding::ExternFunction(function_name) => {
-            let operands = lower_args(ctx, callback_args);
+            let sig = ctx
+                .extern_functions
+                .get(&function_name)
+                .map(function_sig_from_extern_for_descriptor);
+            let operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             let data = ctx.intern_function_name(&function_name);
             Some(ctx.emit_value(
@@ -2948,6 +2956,9 @@ fn call_signature(
 ) -> Option<FunctionSig> {
     if let Some(sig) = ctx.functions.get(name) {
         return Some(sig.clone());
+    }
+    if let Some(sig) = ctx.extern_functions.get(name) {
+        return Some(function_sig_from_extern_for_descriptor(sig));
     }
     if crate::types::call_args::has_named_args(args) {
         return builtin_call_signature(name);
@@ -4634,7 +4645,11 @@ fn call_return_type(
     name: &str,
     operands: &[crate::ir::ValueId],
 ) -> PhpType {
-    let php_type = if let Some(php_type) = builtin_return_type_override(name) {
+    let php_type = if let Some(sig) = ctx.functions.get(name) {
+        eir_user_function_return_type(sig)
+    } else if let Some(sig) = ctx.extern_functions.get(name) {
+        sig.return_type.clone()
+    } else if let Some(php_type) = builtin_return_type_override(name) {
         php_type
     } else if let Some(php_type) = pointer_builtin_return_type(ctx, name, operands) {
         php_type
@@ -4646,10 +4661,6 @@ fn call_return_type(
         php_type
     } else if let Some(php_type) = array_builtin_return_type(ctx, name, operands) {
         php_type
-    } else if let Some(sig) = ctx.functions.get(name) {
-        eir_user_function_return_type(sig)
-    } else if let Some(sig) = ctx.extern_functions.get(name) {
-        sig.return_type.clone()
     } else if let Some(sig) = first_class_builtin_signature(name) {
         sig.return_type
     } else if let Some(sig) = builtin_call_signature(name) {
