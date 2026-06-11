@@ -182,6 +182,16 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_wordwrap` | Wrap text at word boundaries | str + width + break + cut | `x1`/`x2` |
 | `__rt_number_format` | Format number with separators | float + decimals + sep | `x1`/`x2` |
 | `__rt_hash` | Hash with algorithm | algo + data | `x1`/`x2` |
+| `__rt_hash_init` / `__rt_hash_update` / `__rt_hash_final` | Incremental hash-context API backing `hash_init()` and friends | context + data | context / `x1`/`x2` |
+| `__rt_hash_copy` | Clone an incremental hash context | context | context |
+| `__rt_hash_hmac` | Keyed HMAC over a message | algo + key + data | `x1`/`x2` |
+| `__rt_hash_equals` | Constant-time string comparison | two strings | `x0` (0 or 1) |
+| `__rt_hash_algos_list` | Build the `hash_algos()` array of supported algorithm names | — | `x0` (array ptr) |
+| `__rt_digest_to_string` | Format a raw digest as lowercase hex | digest | `x1`/`x2` |
+| `__rt_crc32` | CRC32 checksum | `x1`/`x2` | `x0` |
+| `__rt_inet_ntop` / `__rt_inet_pton` | IPv4/IPv6 address ↔ packed-binary conversion | address | `x1`/`x2` |
+| `__rt_long2ip` / `__rt_ip2long` | Dotted-quad string ↔ integer conversion | `x0` or `x1`/`x2` | `x1`/`x2` or `x0` |
+| `__rt_vsprintf` | `vsprintf()` formatting with an argument array | format + array | `x1`/`x2` |
 | `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |
 
 ## Callable routines
@@ -448,7 +458,7 @@ All regex routines use PCRE2 through the PCRE2 POSIX-compatible wrapper (`pcre2_
 
 These routines handle file and filesystem operations through target-aware libc/syscall helpers. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to C or OS APIs — `__rt_cstr` handles the primary buffer and also emits `__rt_cstr2` for routines that need a second simultaneous C string.
 
-The table below covers the file/filesystem core. The same directory also emits the larger stream/networking surface: stream contexts and metadata, stream filters and user-defined stream wrappers, TCP/Unix/IPv6 sockets, TLS/SSL helpers, FTP/HTTP transfer helpers, hostname/service resolution, and `var_dump`.
+The first table covers the file/filesystem core; the subsections after it cover the stream/networking surface emitted from the same directory: stream contexts and metadata, stream filters and user-defined stream wrappers, TCP/Unix/IPv6 sockets, TLS/SSL helpers, FTP/HTTP transfer helpers, hostname/service resolution, phar archives, and `var_dump`.
 
 | Routine | What it does |
 |---|---|
@@ -465,7 +475,6 @@ The table below covers the file/filesystem core. The same directory also emits t
 | `__rt_file_get_contents` | Read entire file into string, or return a null pointer after emitting a suppressible warning on failure |
 | `__rt_file_put_contents` | Write string to file (create/truncate) |
 | `__rt_file` | Read file into array of lines |
-| `__rt_stat` | Get file metadata (size, timestamps) |
 | `__rt_file_exists` / `__rt_is_file` / `__rt_is_dir` | Existence and path-type checks backed by `stat()` |
 | `__rt_is_readable` / `__rt_is_writable` | Access checks backed by `access()` |
 | `__rt_filesize` / `__rt_filemtime` | File size and modification timestamp from stat metadata |
@@ -491,6 +500,58 @@ The table below covers the file/filesystem core. The same directory also emits t
 | `__rt_umask` / `__rt_ftruncate` | Process umask and file truncation helpers |
 | `__rt_fsync` / `__rt_fflush` / `__rt_fdatasync` | File descriptor flush helpers; `fflush()` maps to `fsync()` because elephc has no userspace stdio buffer |
 | `__rt_touch` | Create missing files and update access/modification timestamps |
+
+### Stream and socket routines
+
+| Routine | What it does |
+|---|---|
+| `__rt_stream_socket_client` / `__rt_stream_socket_client_v6` | Open TCP client connections (IPv4/IPv6) with timeout handling |
+| `__rt_stream_socket_server` / `__rt_stream_socket_server_v6` | Bind and listen on TCP server sockets (IPv4/IPv6) |
+| `__rt_unix_socket_client` / `__rt_unix_socket_server` | Unix-domain socket client/server endpoints |
+| `__rt_stream_socket_accept` | Accept a pending connection with optional timeout |
+| `__rt_stream_socket_pair` | Create a connected socket pair |
+| `__rt_stream_socket_recvfrom` / `__rt_stream_socket_sendto` | Datagram receive/send with peer-address formatting |
+| `__rt_stream_socket_get_name` | Local or remote endpoint name for a socket |
+| `__rt_stream_socket_shutdown` | Half/full shutdown of a connected socket |
+| `__rt_socket_backlog` / `__rt_apply_socket_bindto` / `__rt_apply_socket_client_opts` / `__rt_apply_socket_server_opts` | Socket-option plumbing for context-driven behavior |
+| `__rt_stream_select` | `stream_select()` over descriptor arrays via `poll()`/`select()` |
+| `__rt_stream_set_blocking` / `__rt_stream_set_timeout` | Per-descriptor blocking mode and read timeout |
+| `__rt_stream_get_contents` / `__rt_stream_get_contents_bounded` / `__rt_stream_get_line` | Bulk and line-delimited stream reads |
+| `__rt_stream_copy_to_stream` | Copy bytes between two descriptors |
+| `__rt_stream_get_meta_data` | Build the `stream_get_meta_data()` associative array |
+| `__rt_stream_context_set_option_4` | Store context options consumed by the open/transfer helpers |
+| `__rt_stream_isatty` | TTY detection for descriptors |
+| `__rt_data_stream` | `data://` stream payload decoding |
+| `__rt_get_ssl_peer_name` | Peer-certificate name lookup for TLS streams |
+
+### Networking and transfer routines
+
+| Routine | What it does |
+|---|---|
+| `__rt_http_open` / `__rt_https_open` | Open `http://` / `https://` streams (TLS via the elephc-tls bridge) |
+| `__rt_http_build_request` | Assemble the HTTP request from context options (method, headers, body, `request_fulluri`) |
+| `__rt_http_fire_notification` | Invoke the stream-notification callback during transfers |
+| `__rt_ftp_open` / `__rt_ftp_send_recv` / `__rt_ftp_parse_pasv` | `ftp://` stream support (control dialog, passive-mode parsing) |
+| `__rt_resolve_host` / `__rt_resolve_host_v6` | Hostname resolution to IPv4/IPv6 addresses |
+| `__rt_gethostbyname` / `__rt_gethostbyaddr` / `__rt_gethostname` | Host lookup builtins |
+| `__rt_getprotobyname` / `__rt_getprotobynumber` / `__rt_protoent_load` | Protocol-database lookups backed by `/etc/protocols` |
+| `__rt_getservbyname` / `__rt_getservbyport` | Service-database lookups backed by `/etc/services` |
+
+### User stream wrappers and filters
+
+Userspace `streamWrapper` classes registered with `stream_wrapper_register()` dispatch through a vtable of `__rt_user_wrapper_*` routines (`fopen`/`fread`/`fwrite`/`fclose`/`feof`/`fseek`/`ftell`/`fflush`/`fstat`/`ftruncate`/`flock`/`set_option`/`stream_cast`, the `dir_*` family, `path_op`, and `rename`), each bridging the synthetic descriptor back to PHP method calls on the wrapper instance. Stream filters use `__rt_stream_filter_register`, `__rt_apply_stream_filter` / `__rt_apply_user_stream_filter`, `__rt_stream_filter_attach_user`, `__rt_resolve_user_filter_id`, `__rt_user_filter_brigade_invoke`, and `__rt_user_filter_release_fd` to run built-in (`zlib.*`, `bzip2.*`, `convert.iconv.*`, `string.*`) and user-defined filter chains over stream reads and writes.
+
+### Phar archive routines
+
+| Routine | What it does |
+|---|---|
+| `__rt_fopen_maybe_phar` / `__rt_file_get_contents_maybe_phar` | Route `phar://` paths to archive entry reads, falling through to plain file I/O otherwise |
+| `__rt_phar_read_entry` | Locate and read one entry from a phar archive |
+| `__rt_phar_write_open` / `__rt_phar_write_append` / `__rt_phar_write_finalize` | Create phar archives entry by entry with manifest finalization |
+
+### var_dump output routines
+
+`var_dump()` lowering calls a family of `__rt_var_dump_array_*` routines (`int`, `float`, `str`, `bool`, `mixed`) that walk array payloads and a set of `__rt_var_dump_emit_*` helpers that print one typed line (`int(...)`, `float(...)`, `bool(...)`, string headers, indexed keys) with the PHP-compatible indentation.
 
 ## Pointer routines
 
@@ -606,6 +667,7 @@ These helpers back the built-in `Generator` class. Generator functions emit a he
 | `__rt_gen_next_done` | Shared global return label used after `next()` skips or completes a resume | `GeneratorFrame*` | — |
 | `__rt_gen_send` | Store a boxed Mixed sent value, then resume the state machine | `GeneratorFrame*`, boxed `mixed` value | boxed `mixed` payload |
 | `__rt_gen_send_done` | Shared global return label used after `send()` skips or completes a resume | `GeneratorFrame*` | boxed `mixed` payload |
+| `__rt_gen_send_epilogue` | Shared epilogue that boxes and returns the yield produced by a resumed `send()` | `GeneratorFrame*` | boxed `mixed` payload |
 | `__rt_gen_rewind` | Run the generator to its first yield once | `GeneratorFrame*` | — |
 | `__rt_gen_rewind_done` | Shared global return label used when `rewind()` has already run or just finished | `GeneratorFrame*` | — |
 | `__rt_gen_throw` | Mark the generator terminated and throw through the normal exception runtime | `GeneratorFrame*`, throwable object | does not return |
@@ -663,6 +725,8 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_instanceof_lookup`, `__rt_instanceof_invalid_target`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_iterable_write_stdout`, `__rt_iterable_unsupported_kind`, `__rt_class_implements_interface`, `__rt_callable_descriptor_release`, `__rt_spl_dll_new`, `__rt_spl_fixed_new`, `__rt_gen_current`, `__rt_gen_send`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, `__rt_cstr_to_str`, `__rt_fiber_switch`, and `__rt_fiber_entry` in addition to the more user-visible helpers.
 
 Every routine in the selected target runtime slice is linked into the binary, even if unused by the current program. elephc already does AST-side control-flow pruning and dead-code elimination before codegen, but runtime-specific dead stripping is still future work.
+
+The runtime can also be emitted in **position-independent mode** for `--emit cdylib` builds: the emitter's `pic_data_refs` flag makes the `abi::symbols` helpers route every global data reference through the GOT (`@GOTPCREL` on x86_64, `:got:`/`:got_lo12:` on AArch64) instead of direct PC-relative addressing, and on ELF targets every internal global gets a `.hidden` visibility directive. The PIC and non-PIC variants produce different assembly text, so they cache as separate runtime objects. See [The Codegen](the-codegen.md) and [Shared Libraries](../beyond-php/cdylib.md).
 
 ## Runtime data
 

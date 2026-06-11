@@ -96,6 +96,12 @@ The source-map file is intentionally simple. Today it stores a list of `(asm_lin
 
 The optimizer intentionally stays at the AST level. By the time codegen runs, constant expressions and some dead control-flow have already been removed, but codegen still sees a normal checked program shape rather than a target-specific IR. Assembly-level peephole cleanup is future work.
 
+## Emit modes: executable vs cdylib
+
+Codegen runs in one of two emit modes selected by the `--emit` flag. `executable` (the default) produces the standalone-binary shape described throughout this page: a `main` entry point, top-level statements, and a process-exit epilogue. `cdylib` produces a shared library instead: no `main` body is emitted, and after the user functions a set of C-ABI trampolines is appended for every `#[Export]`-marked function plus the four `elephc_*` lifecycle entry points (see [Shared Libraries](../beyond-php/cdylib.md)).
+
+Cdylib emission also switches the emitter into position-independent mode (`pic_data_refs`): global data references emitted through the `abi::symbols` helpers resolve through the GOT (`@GOTPCREL` on x86_64, `:got:`/`:got_lo12:` on AArch64) instead of direct PC-relative addressing, and the runtime object is generated and cached separately in a PIC variant. On ELF targets a final pass (`src/codegen/visibility.rs`) appends `.hidden` directives for every internal global so the `.so` exports only its public ABI and internal runtime state cannot be preempted across loaded modules.
+
 ## The Context
 
 **File:** `src/codegen/context.rs`
