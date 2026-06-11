@@ -1416,6 +1416,7 @@ fn mixed_type_predicate_tag(expected: &PhpType) -> Option<u8> {
     match expected {
         PhpType::Int => Some(0),
         PhpType::Str => Some(1),
+        PhpType::Float => Some(2),
         PhpType::Bool => Some(3),
         _ => None,
     }

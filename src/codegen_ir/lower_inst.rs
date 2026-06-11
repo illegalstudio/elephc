@@ -206,8 +206,15 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
 
 /// Lowers a statement-boundary concat-buffer reset.
 fn lower_concat_reset(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    abi::emit_store_zero_to_symbol(ctx.emitter, "_concat_off", 0);
+    reset_concat_to_frame_base(ctx);
     Ok(())
+}
+
+/// Restores `_concat_off` to the offset inherited by this EIR frame.
+fn reset_concat_to_frame_base(ctx: &mut FunctionContext<'_>) {
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+    abi::load_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_concat_off", 0);
 }
 
 /// Lowers metadata-only NOPs, emitting data-backed messages as assembly comments.
@@ -5394,7 +5401,7 @@ fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         ctx.store_value_to_local(slot, value)?;
     }
     if reset_concat_after_store {
-        abi::emit_store_zero_to_symbol(ctx.emitter, "_concat_off", 0);
+        reset_concat_to_frame_base(ctx);
     }
     Ok(())
 }

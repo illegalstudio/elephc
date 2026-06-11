@@ -8,6 +8,8 @@
 //! Key details:
 //! - Frame size is value-placement bytes plus the target frame footer, rounded to 16 bytes.
 //! - Main currently exits through the process syscall, matching the legacy entry path.
+//! - Each frame stores the inherited concat-buffer offset so statement resets do not clobber
+//!   `_concat_buf` slices that were passed in by the caller.
 
 use std::collections::{HashMap, HashSet};
 
@@ -31,6 +33,7 @@ pub(super) struct FrameLayout {
     pub(super) value_placement: ValuePlacement,
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
+    pub(super) concat_base_offset: usize,
     pub(super) frame_size: usize,
 }
 
@@ -53,11 +56,14 @@ pub(super) fn layout_for_function(function: &Function) -> FrameLayout {
         offset += TRY_HANDLER_SLOT_SIZE;
         try_handler_offsets.insert(token, offset);
     }
+    offset += 8;
+    let concat_base_offset = offset;
     let frame_size = align_to_16(offset + FRAME_FOOTER_BYTES);
     FrameLayout {
         value_placement,
         local_offsets,
         try_handler_offsets,
+        concat_base_offset,
         frame_size,
     }
 }
@@ -87,6 +93,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.entry_label();
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    capture_concat_base(ctx);
     ctx.emitter.comment("save argc/argv to globals");
     abi::emit_store_process_args_to_globals(ctx.emitter);
     if ctx.heap_debug {
@@ -110,6 +117,7 @@ pub(super) fn emit_function_prologue_with_label(
     ctx.emitter.blank();
     ctx.emitter.label_global(entry_label);
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    capture_concat_base(ctx);
     let mut incoming_args = abi::IncomingArgCursor::for_target(ctx.emitter.target, 0);
     for (index, param) in ctx.function.params.iter().enumerate() {
         let slot = LocalSlotId::from_raw(index as u32);
@@ -135,6 +143,13 @@ pub(super) fn emit_function_prologue_with_label(
     zero_initialize_function_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     Ok(())
+}
+
+/// Captures the caller-visible concat-buffer offset as this frame's reset base.
+fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_concat_off", 0);
+    abi::store_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
 }
 
 /// Emits frame teardown and exits the process with status 0.

@@ -32,6 +32,7 @@ pub(super) fn lower_is_numeric(
             emit_string_is_numeric(ctx);
         }
         PhpType::Bool | PhpType::Void | PhpType::Never => emit_static_bool(ctx, false),
+        PhpType::Mixed | PhpType::Union(_) => emit_mixed_is_numeric(ctx, value)?,
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "is_numeric for PHP type {:?}",
@@ -40,6 +41,58 @@ pub(super) fn lower_is_numeric(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Emits runtime `is_numeric()` dispatch for a boxed Mixed value.
+fn emit_mixed_is_numeric(ctx: &mut FunctionContext<'_>, value: crate::ir::ValueId) -> Result<()> {
+    let string_case = ctx.next_label("isnum_mixed_string");
+    let true_case = ctx.next_label("isnum_mixed_true");
+    let false_case = ctx.next_label("isnum_mixed_false");
+    let done = ctx.next_label("isnum_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_on_mixed_tag(ctx, 0, &true_case);
+    emit_branch_on_mixed_tag(ctx, 2, &true_case);
+    emit_branch_on_mixed_tag(ctx, 1, &string_case);
+    abi::emit_jump(ctx.emitter, &false_case);
+
+    ctx.emitter.label(&true_case);
+    emit_static_bool(ctx, true);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&string_case);
+    move_mixed_string_payload_to_string_result(ctx);
+    emit_string_is_numeric(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&false_case);
+    emit_static_bool(ctx, false);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Branches when the unboxed Mixed tag equals the requested runtime tag.
+fn emit_branch_on_mixed_tag(ctx: &mut FunctionContext<'_>, tag: u8, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed Mixed tag against this is_numeric case
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch when the Mixed tag matches this is_numeric case
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {}", tag));              // compare the unboxed Mixed tag against this is_numeric case
+            ctx.emitter.instruction(&format!("je {}", label));                  // branch when the Mixed tag matches this is_numeric case
+        }
+    }
+}
+
+/// Moves an unboxed Mixed string payload into the normal string result registers.
+fn move_mixed_string_payload_to_string_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // move the Mixed string pointer into the string result register
+        }
+    }
 }
 
 /// Emits a boolean immediate into the integer result register.

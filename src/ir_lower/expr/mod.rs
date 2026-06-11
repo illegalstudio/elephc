@@ -4808,11 +4808,7 @@ fn numeric_builtin_return_type(
         "abs" => {
             let value = operands.first()?;
             let ty = ctx.builder.value_php_type(*value).codegen_repr();
-            Some(if ty == PhpType::Float {
-                PhpType::Float
-            } else {
-                PhpType::Int
-            })
+            Some(abs_builtin_return_type(&ty))
         }
         "min" | "max" => {
             let mut saw_float = false;
@@ -4870,6 +4866,15 @@ fn numeric_builtin_return_type(
             }
         }
         _ => None,
+    }
+}
+
+/// Returns the EIR storage type for `abs()` after operand-sensitive narrowing.
+fn abs_builtin_return_type(ty: &PhpType) -> PhpType {
+    match ty {
+        PhpType::Float => PhpType::Float,
+        PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
+        _ => PhpType::Int,
     }
 }
 

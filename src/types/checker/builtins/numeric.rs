@@ -110,10 +110,7 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "abs() takes exactly 1 argument"));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            match ty {
-                PhpType::Float => Ok(Some(PhpType::Float)),
-                _ => Ok(Some(PhpType::Int)),
-            }
+            Ok(Some(abs_result_type(&ty)))
         }
         "floor" | "ceil" | "sqrt" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
         | "sinh" | "cosh" | "tanh" | "log2" | "log10" | "exp" | "deg2rad"
@@ -356,5 +353,20 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Void))
         }
         _ => Ok(None),
+    }
+}
+
+/// Returns the most precise supported result type for `abs($value)`.
+fn abs_result_type(ty: &PhpType) -> PhpType {
+    match ty {
+        PhpType::Float => PhpType::Float,
+        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Float) => {
+            PhpType::Mixed
+        }
+        PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Mixed) => {
+            PhpType::Mixed
+        }
+        _ => PhpType::Int,
     }
 }

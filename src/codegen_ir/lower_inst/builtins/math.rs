@@ -46,6 +46,9 @@ pub(super) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     match ctx.load_value_to_result(value)?.codegen_repr() {
         PhpType::Float => emit_float_abs(ctx),
         PhpType::Int | PhpType::Bool => emit_int_abs(ctx),
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_abs_mixed");
+        }
         PhpType::TaggedScalar => {
             crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
             emit_int_abs(ctx);

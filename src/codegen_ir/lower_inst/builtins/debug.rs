@@ -50,7 +50,7 @@ pub(super) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             Ok(())
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
-            emit_var_dump_array(ctx)
+            emit_var_dump_array(ctx, &ty)
         }
         PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
         PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
@@ -169,7 +169,7 @@ fn emit_var_dump_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
     ctx.emitter.label(&array_case);
     move_mixed_payload_to_int_result(ctx);
-    emit_var_dump_array(ctx)?;
+    emit_var_dump_array(ctx, &PhpType::Mixed)?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&object_case);
@@ -303,11 +303,12 @@ fn emit_var_dump_null(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits `var_dump` output for an array/hash payload in the integer result register.
-fn emit_var_dump_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
+fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     emit_write_literal(ctx, b"array(");
     abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_push_reg(ctx.emitter, result_reg);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x0, [x0]");                            // load the array or hash element count from the heap header
@@ -318,8 +319,30 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
     }
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
     emit_write_current_string(ctx);
-    emit_write_literal(ctx, b") {\n}\n");
+    emit_write_literal(ctx, b") {\n");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    if let Some(walker) = var_dump_array_walker(ty) {
+        if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+            ctx.emitter.instruction("mov rdi, rax");                            // move the array pointer into the SysV first argument register
+        }
+        abi::emit_call_label(ctx.emitter, walker);
+    }
+    emit_write_literal(ctx, b"}\n");
     Ok(())
+}
+
+/// Returns the runtime var_dump walker for homogeneous indexed array element types.
+fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
+    let PhpType::Array(elem_ty) = ty else {
+        return None;
+    };
+    match elem_ty.as_ref() {
+        PhpType::Int => Some("__rt_var_dump_array_int"),
+        PhpType::Str => Some("__rt_var_dump_array_str"),
+        PhpType::Bool => Some("__rt_var_dump_array_bool"),
+        PhpType::Float => Some("__rt_var_dump_array_float"),
+        _ => None,
+    }
 }
 
 /// Emits `var_dump` output for an object pointer in the integer result register.

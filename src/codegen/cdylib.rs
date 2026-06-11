@@ -78,12 +78,12 @@ fn emit_zero_returning_export(
     emitter.label_global(&symbol);
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #0");
-            emitter.instruction("ret");
+            emitter.instruction("mov x0, #0");                                  // return success or NULL through the C integer result register
+            emitter.instruction("ret");                                         // return directly to the embedding host
         }
         Arch::X86_64 => {
-            emitter.instruction("xor eax, eax");
-            emitter.instruction("ret");
+            emitter.instruction("xor eax, eax");                                // return success or NULL through the C integer result register
+            emitter.instruction("ret");                                         // return directly to the embedding host
         }
     }
 }
@@ -97,8 +97,8 @@ fn emit_void_export(emitter: &mut Emitter, target: Target, c_name: &str, comment
     emitter.comment(comment);
     emitter.label_global(&symbol);
     match target.arch {
-        Arch::AArch64 => emitter.instruction("ret"),
-        Arch::X86_64 => emitter.instruction("ret"),
+        Arch::AArch64 => emitter.instruction("ret"),                            // return directly to the embedding host
+        Arch::X86_64 => emitter.instruction("ret"),                             // return directly to the embedding host
     }
 }
 
@@ -107,7 +107,7 @@ fn emit_void_export(emitter: &mut Emitter, target: Target, c_name: &str, comment
 /// directly to whoever invoked the trampoline.
 fn emit_tail_branch(emitter: &mut Emitter, target: Target, target_symbol: &str) {
     match target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("b {}", target_symbol)),
-        Arch::X86_64 => emitter.instruction(&format!("jmp {}", target_symbol)),
+        Arch::AArch64 => emitter.instruction(&format!("b {}", target_symbol)),  // tail-call the internal PHP function body
+        Arch::X86_64 => emitter.instruction(&format!("jmp {}", target_symbol)), // tail-call the internal PHP function body
     }
 }
