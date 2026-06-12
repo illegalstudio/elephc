@@ -527,12 +527,8 @@ fn parse_closure_params(
             false
         };
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-            if type_ann.is_some() {
-                return Err(CompileError::new(
-                    span,
-                    "Typed variadic parameters are not supported yet",
-                ));
-            }
+            // A typed variadic (`int ...$xs`) is accepted on closures/arrow functions too; the
+            // collected array's element type is inferred from the actual call arguments.
             *pos += 1;
             match tokens.get(*pos).map(|(token, _)| token) {
                 Some(Token::Variable(name)) => {

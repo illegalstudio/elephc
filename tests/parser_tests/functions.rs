@@ -665,11 +665,28 @@ fn test_parse_no_variadic() {
 }
 
 #[test]
-// Verifies that `<?php function foo(int ...$xs) { }` fails to parse because typed
-// variadic parameters are not permitted.
-/// Verifies that parse typed variadic param fails.
-fn test_parse_typed_variadic_param_fails() {
-    assert!(parse_fails("<?php function foo(int ...$xs) { }"));
+/// Verifies that a typed variadic parameter (`int ...$xs`) parses: the variadic name is
+/// captured and the declared element type does not block parsing.
+fn test_parse_typed_variadic_param() {
+    let stmts = parse_source("<?php function foo(string $a, int ...$xs) { }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl {
+            params, variadic, ..
+        } => {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "a");
+            assert_eq!(variadic.as_deref(), Some("xs"));
+        }
+        _ => panic!("Expected FunctionDecl"),
+    }
+}
+
+#[test]
+/// Verifies that a typed variadic parses on a closure parameter list as well.
+fn test_parse_typed_variadic_closure_param() {
+    let stmts = parse_source("<?php $f = function (int ...$xs) { return 0; };");
+    // The closure is the RHS of the assignment expression statement; assert it parsed cleanly.
+    assert_eq!(stmts.len(), 1);
 }
 
 #[test]

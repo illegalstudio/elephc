@@ -330,12 +330,9 @@ pub(super) fn parse_params(
             false
         };
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-            if type_ann.is_some() {
-                return Err(CompileError::new(
-                    span,
-                    "Typed variadic parameters are not supported yet",
-                ));
-            }
+            // A type annotation on a variadic (`int ...$xs`) constrains each passed argument.
+            // The collected `$xs` array's element type is inferred from the actual call
+            // arguments, so the declared element type is accepted here without a separate slot.
             *pos += 1;
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(n)) => {

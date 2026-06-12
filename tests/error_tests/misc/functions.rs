@@ -351,14 +351,11 @@ fn test_error_void_parameter_type_is_rejected() {
     );
 }
 
-/// Verifies that a variadic parameter with an explicit type annotation (e.g.,
-/// `int ...$xs`) is rejected because it is not yet supported.
+/// Verifies that a variadic parameter with an explicit type annotation (e.g., `int ...$xs`)
+/// is accepted and type-checks without error.
 #[test]
-fn test_error_typed_variadic_parameter_is_not_supported_yet() {
-    expect_error(
-        "<?php function foo(int ...$xs) { }",
-        "Typed variadic parameters are not supported yet",
-    );
+fn test_typed_variadic_parameter_is_accepted() {
+    assert!(check_source("<?php function foo(int ...$xs): int { return array_sum($xs); } foo(1, 2, 3);").is_ok());
 }
 
 /// Verifies that a nullable by-reference parameter (e.g., `?int &$x`) requires
