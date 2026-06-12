@@ -172,8 +172,11 @@ reads `level` (`-1..9`). `bzip2.compress` reads `blocks` (`1..9`) and `work`
 
 User filters can implement either `filter(string $data): string` or PHP's
 four-argument `filter($in, $out, &$consumed, $closing): int` bucket form.
-Optional `onCreate(): bool` and `onClose(): void` hooks are honored. v1 seeds one
-input bucket per dispatch; `PSFS_FEED_ME` does not request more input, and
+Classes may extend PHP's `php_user_filter` base class; the fourth
+`stream_filter_append`/`prepend` `$params` argument is available as
+`$this->params` before `onCreate()` runs. Optional `onCreate(): bool` and
+`onClose(): void` hooks are honored. v1 seeds one input bucket per dispatch;
+`PSFS_FEED_ME` does not request more input, and
 `PSFS_ERR_FATAL` does not propagate as a stream error.
 
 ## User stream wrappers

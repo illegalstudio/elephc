@@ -579,13 +579,12 @@ items below are intentionally deferred to a later milestone. They are either
 niche, genuinely large (multi-week), or blocked by an upstream-library limit —
 none are needed for typical stream usage.
 
-- [ ] **User stream-filter `$params`** — the 4th `stream_filter_append`/`prepend`
-  argument is honored for the built-in compression filters (Phase 39) but not
-  yet exposed to *userspace* filters as `$this->params`. elephc does not model
-  the PHP `php_user_filter` base class; supporting it needs an object-model
-  decision (model the base class, or inject a dynamic `params` property on the
-  instantiated filter object) plus passing the boxed value through
-  `__rt_stream_filter_attach_user`.
+- [x] **User stream-filter `$params`** — the 4th `stream_filter_append`/`prepend`
+  argument is honored for the built-in compression filters (Phase 39) and is now
+  exposed to *userspace* filters as `$this->params` on classes extending PHP's
+  `php_user_filter` base class. The optional value is boxed once, passed through
+  `__rt_stream_filter_attach_user`, seeded before `onCreate()`, and owned by the
+  instantiated filter object.
 - [ ] **`phar://` compressed runtime reads** — gzip/bzip2 entries decompress at
   *compile time* (literal URLs) but the *runtime* reader (`__rt_phar_read_entry`,
   non-literal paths) handles uncompressed entries only. Needs in-asm inflate or

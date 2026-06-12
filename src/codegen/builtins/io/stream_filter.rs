@@ -221,7 +221,10 @@ fn emit_attach_user(
             } else {
                 emitter.instruction("mov x0, #3");                              // default mode STREAM_FILTER_ALL
             }
-            emitter.instruction("mov x3, x0");                                  // move mode into the helper's 4th arg
+            abi::emit_push_reg(emitter, "x0");                                  // preserve mode while materializing legacy null params
+            emit_legacy_user_filter_null_params(emitter);
+            emitter.instruction("mov x4, x0");                                  // pass null params to the shared attach helper
+            abi::emit_pop_reg(emitter, "x3");                                   // move mode into the helper's 4th arg
             abi::emit_pop_reg_pair(emitter, "x1", "x2");                        // restore filter-name ptr/len → helper's 2nd/3rd args
             // Peek the descriptor: it remains on the stack so we can box
             // it as the filter resource after the helper returns.
@@ -234,7 +237,10 @@ fn emit_attach_user(
             } else {
                 emitter.instruction("mov eax, 3");                              // default mode STREAM_FILTER_ALL
             }
-            emitter.instruction("mov rcx, rax");                                // move mode into the helper's 4th arg
+            abi::emit_push_reg(emitter, "rax");                                 // preserve mode while materializing legacy null params
+            emit_legacy_user_filter_null_params(emitter);
+            emitter.instruction("mov r8, rax");                                 // pass null params to the shared attach helper
+            abi::emit_pop_reg(emitter, "rcx");                                  // move mode into the helper's 4th arg
             abi::emit_pop_reg_pair(emitter, "rsi", "rdx");                      // restore filter-name ptr/len → helper's 2nd/3rd args
             emitter.instruction("mov rdi, QWORD PTR [rsp]");                    // peek the descriptor → helper's 1st arg
         }
@@ -278,6 +284,20 @@ fn emit_attach_user(
         }
     }
     Some(PhpType::Mixed)
+}
+
+/// Materializes a boxed null params value for the frozen AST backend's shared
+/// user-filter attach helper call.
+fn emit_legacy_user_filter_null_params(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #0");                                  // null params have no payload
+        }
+        Arch::X86_64 => {
+            emitter.instruction("xor eax, eax");                                // null params have no payload
+        }
+    }
+    crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
 }
 
 /// Emits `stream_filter_remove`: clears the read and write filters of the

@@ -883,10 +883,12 @@ pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
 /// 0 filter, 1 onCreate, 2 onClose. Slot 3 is a non-method "arity" flag:
 /// 0 = elephc-simplified `filter(string $data): string`, 1 = PHP-canonical
 /// `filter($in, $out, &$consumed, $closing): int` with bucket brigades.
+/// Slot 4 is a non-method byte offset for `php_user_filter::$params`, or zero
+/// when the class has no statically declared params property.
 /// The flag is read by the runtime dispatcher to choose which code path
 /// to invoke. Adding the flag inline in the vtable lets the dispatcher
 /// branch with a single load + cmp.
-pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 4;
+pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 5;
 
 const USER_FILTER_METHOD_NAMES: [&str; 3] = [
     "filter",
@@ -985,6 +987,12 @@ fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
         .map(|sig| sig.params.len() == 4)
         .unwrap_or(false);
     out.push_str(&format!("    .quad {}\n", if brigade_arity { 1 } else { 0 }));
+    let params_offset = class_info
+        .property_offsets
+        .get("params")
+        .copied()
+        .unwrap_or(0);
+    out.push_str(&format!("    .quad {}\n", params_offset));
 }
 
 /// Emits runtime metadata for user wrapper vtable.

@@ -5309,6 +5309,29 @@ fn materialize_stream_filter_mode(ctx: &mut FunctionContext<'_>, inst: &Instruct
     Ok(())
 }
 
+/// Materializes the optional stream-filter params operand as an owned boxed
+/// Mixed cell, defaulting to PHP null when the caller omitted it.
+fn materialize_stream_filter_params(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() < 4 {
+        emit_null_mixed(ctx);
+        return Ok(());
+    }
+    let params = expect_operand(inst, 3)?;
+    let params_ty = ctx.value_php_type(params)?.codegen_repr();
+    ctx.load_value_to_result(params)?;
+    if matches!(params_ty, PhpType::Mixed | PhpType::Union(_)) {
+        if !ctx.value_can_own_mixed_box_source(params)? {
+            abi::emit_incref_if_refcounted(ctx.emitter, &params_ty);
+        }
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, &params_ty);
+    }
+    Ok(())
+}
+
 /// Attaches a user-defined stream filter through the runtime registry.
 fn lower_user_stream_filter_attach(
     ctx: &mut FunctionContext<'_>,
@@ -5323,14 +5346,20 @@ fn lower_user_stream_filter_attach(
         Arch::AArch64 => {
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             materialize_stream_filter_mode(ctx, inst)?;
-            ctx.emitter.instruction("mov x3, x0");                              // pass the selected stream-filter mode to the attach helper
+            abi::emit_push_reg(ctx.emitter, "x0");
+            materialize_stream_filter_params(ctx, inst)?;
+            ctx.emitter.instruction("mov x4, x0");                              // pass the boxed stream-filter params to the attach helper
+            abi::emit_pop_reg(ctx.emitter, "x3");
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
             ctx.emitter.instruction("ldr x0, [sp]");                            // pass the saved stream descriptor without popping it yet
         }
         Arch::X86_64 => {
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             materialize_stream_filter_mode(ctx, inst)?;
-            ctx.emitter.instruction("mov rcx, rax");                            // pass the selected stream-filter mode to the attach helper
+            abi::emit_push_reg(ctx.emitter, "rax");
+            materialize_stream_filter_params(ctx, inst)?;
+            ctx.emitter.instruction("mov r8, rax");                             // pass the boxed stream-filter params to the attach helper
+            abi::emit_pop_reg(ctx.emitter, "rcx");
             abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // pass the saved stream descriptor without popping it yet
         }

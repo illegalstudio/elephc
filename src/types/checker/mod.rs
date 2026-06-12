@@ -18,6 +18,7 @@ mod builtin_spl_exceptions;
 /// builtin_stdclass
 pub(crate) mod builtin_stdclass;
 mod builtin_types;
+mod builtin_user_filter;
 mod callables;
 /// yield_validation
 pub(crate) mod yield_validation;

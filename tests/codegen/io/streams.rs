@@ -4188,6 +4188,32 @@ echo fread($f, 64);
     assert_eq!(out, "hello world");
 }
 
+/// Verifies compiled PHP output for user stream filter params exposed on `$this`.
+#[test]
+fn test_user_stream_filter_params_are_exposed_on_this() {
+    let out = compile_and_run(
+        r#"<?php
+class ParamFilter extends php_user_filter {
+    public function onCreate(): bool {
+        echo $this->params["prefix"];
+        return true;
+    }
+
+    public function filter(string $data): string {
+        return $data . $this->params["suffix"];
+    }
+}
+stream_filter_register("user.params", "ParamFilter");
+$f = fopen("php://memory", "r+");
+stream_filter_append($f, "user.params", STREAM_FILTER_WRITE, ["prefix" => "<", "suffix" => ">"]);
+fwrite($f, "hello");
+rewind($f);
+echo "|" . fread($f, 64);
+"#,
+    );
+    assert_eq!(out, "<|hello>");
+}
+
 /// Verifies compiled PHP output for user stream filter unknown name returns false.
 #[test]
 fn test_user_stream_filter_unknown_name_returns_false() {
