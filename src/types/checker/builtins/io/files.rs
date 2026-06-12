@@ -85,6 +85,8 @@ pub(super) fn check_builtin(
                     checker.require_builtin_library("elephc_phar");
                     checker.require_builtin_library("elephc_crypto");
                 }
+            } else {
+                checker.require_builtin_library("elephc_phar");
             }
             for arg in args {
                 checker.infer_type(arg, env)?;

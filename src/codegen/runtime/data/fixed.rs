@@ -295,6 +295,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // writer bridge. phar:// write paths publish it so finalize can preserve
     // existing native PHAR entries instead of regenerating a single-entry file.
     out.push_str(".p2align 3\n.globl _elephc_phar_put_entry_fn\n_elephc_phar_put_entry_fn:\n    .quad 0\n");
+    // _elephc_phar_put_url_fn: indirect pointer to the elephc-phar native
+    // writer bridge for runtime-built phar:// file_put_contents() URLs.
+    out.push_str(".p2align 3\n.globl _elephc_phar_put_url_fn\n_elephc_phar_put_url_fn:\n    .quad 0\n");
     // _phar_extract_len: output-length scratch written by elephc_phar_extract_url
     // and consumed immediately by __rt_phar_read_entry before __rt_data_stream
     // copies the bytes into a temp-file-backed descriptor.
@@ -541,13 +544,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // Each fread chunk is copied here, building one contiguous result. Drains
     // larger than 1 MiB are truncated (v1).
     out.push_str(".comm _user_wrapper_drain_buf, 1048576, 3\n");
-    // phar:// write (Milestone-1) state. _phar_write_out is the 1 MiB in-memory
-    // archive buffer (template prefix + entry content); _phar_write_len is the
-    // bytes used; _phar_write_tpl_len is the template prefix length finalize uses
-    // to locate the manifest size/crc fields and the content start; the
-    // _phar_write_path_ptr/_len pair holds the on-disk archive path the
-    // fopen("phar://...","w") emitter records for __rt_phar_write_finalize. One
-    // phar-write stream at a time; the synthetic descriptor is 0x50000000.
+    // phar:// write stream state. _phar_write_out is the 1 MiB in-memory
+    // payload buffer (template prefix + entry content); _phar_write_len is the
+    // bytes used; _phar_write_tpl_len locates the entry payload. The path and
+    // entry ptr/len pairs let __rt_phar_write_finalize call the elephc-phar
+    // read-modify-write bridge. One stream at a time; synthetic fd 0x50000000.
     out.push_str(".comm _phar_write_out, 1048576, 3\n");
     out.push_str(".comm _phar_write_len, 8, 3\n");
     out.push_str(".comm _phar_write_tpl_len, 8, 3\n");

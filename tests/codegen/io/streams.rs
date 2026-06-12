@@ -1940,6 +1940,22 @@ echo file_get_contents("phar://" . $archive . "/two.txt");
     assert_eq!(out, "5|6|closed|alpha|stream");
 }
 
+/// Runtime-built phar:// URLs passed to file_put_contents() route through the
+/// native PHAR URL bridge instead of writing a literal filesystem path.
+#[test]
+fn test_file_put_contents_dynamic_phar_url_preserves_existing_entries() {
+    let out = compile_and_run(
+        r#"<?php
+$archive = "dynamic_multi.phar";
+echo file_put_contents("phar://" . $archive . "/one.txt", "alpha") . "|";
+echo file_put_contents("phar://" . $archive . "/dir/two.txt", "bravo") . "|";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/dir/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|5|alpha|bravo");
+}
+
 /// `file_get_contents()` of a literal `phar://` URL decodes the entry at compile
 /// time (like the fopen read fast path) and returns its bytes as a string; a
 /// missing entry returns `false`.

@@ -89,6 +89,17 @@ pub fn put_native_entry(
     Some(payload.len())
 }
 
+/// Inserts or replaces one uncompressed entry described by a full `phar://` URL.
+///
+/// The write splitter mirrors codegen's literal write handling: prefer the
+/// first `.phar/` boundary when present, otherwise use the final slash as the
+/// archive/entry separator.
+pub fn put_url_bytes(url: &[u8], payload: &[u8]) -> Option<usize> {
+    let rest = url.strip_prefix(b"phar://")?;
+    let (archive_path, entry_name) = split_write_url_entry(rest)?;
+    put_native_entry(archive_path, entry_name, payload)
+}
+
 /// C ABI wrapper around [`extract_url_bytes`].
 ///
 /// Returns a pointer to a stable process-global buffer and writes the byte
@@ -135,6 +146,29 @@ pub unsafe extern "C" fn elephc_phar_put_entry(
             slice(entry_ptr, entry_len),
             slice(data_ptr, data_len),
         )
+    });
+    match result {
+        Ok(Some(len)) => len,
+        _ => usize::MAX,
+    }
+}
+
+/// C ABI wrapper around [`put_url_bytes`].
+///
+/// Returns the written payload length on success and `usize::MAX` on failure.
+///
+/// # Safety
+/// Each pointer must be valid for its paired byte length unless that length is
+/// zero. `url_ptr` must point to a complete `phar://archive/entry` URL.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_phar_put_url(
+    url_ptr: *const u8,
+    url_len: usize,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> usize {
+    let result = std::panic::catch_unwind(|| {
+        put_url_bytes(slice(url_ptr, url_len), slice(data_ptr, data_len))
     });
     match result {
         Ok(Some(len)) => len,
@@ -190,6 +224,19 @@ fn split_archive_entry(rest: &[u8]) -> Option<(&[u8], &[u8])> {
         }
     }
     None
+}
+
+/// Splits `phar://` URL body bytes for writes, including missing archives.
+fn split_write_url_entry(rest: &[u8]) -> Option<(&[u8], &[u8])> {
+    if let Some(idx) = find_subslice(rest, b".phar/") {
+        let split = idx.checked_add(b".phar".len())?;
+        return Some((rest.get(..split)?, rest.get(split + 1..)?));
+    }
+    let idx = rest.iter().rposition(|&byte| byte == b'/')?;
+    if idx == 0 || idx + 1 >= rest.len() {
+        return None;
+    }
+    Some((rest.get(..idx)?, rest.get(idx + 1..)?))
 }
 
 /// Parses a native PHAR archive and returns a decoded entry payload.
@@ -691,6 +738,30 @@ mod tests {
         assert_eq!(
             extract_entry_bytes(&archive, b"one.txt").as_deref(),
             Some(&b"updated"[..])
+        );
+        assert_eq!(
+            extract_entry_bytes(&archive, b"dir/two.txt").as_deref(),
+            Some(&b"bravo"[..])
+        );
+    }
+
+    /// Verifies full phar:// URL writes split archive and entry names at run time.
+    #[test]
+    fn writes_native_phar_entries_from_url() {
+        let path = std::env::temp_dir().join(format!(
+            "elephc_phar_put_url_{}_{}.phar",
+            std::process::id(),
+            "unit"
+        ));
+        let url = format!("phar://{}/one.txt", path.display());
+        assert_eq!(put_url_bytes(url.as_bytes(), b"alpha"), Some(5));
+        let nested_url = format!("phar://{}/dir/two.txt", path.display());
+        assert_eq!(put_url_bytes(nested_url.as_bytes(), b"bravo"), Some(5));
+        let archive = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            extract_entry_bytes(&archive, b"one.txt").as_deref(),
+            Some(&b"alpha"[..])
         );
         assert_eq!(
             extract_entry_bytes(&archive, b"dir/two.txt").as_deref(),

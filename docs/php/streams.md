@@ -82,9 +82,9 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 `phar://` write streams buffer one uncompressed entry in memory. `fclose()` and
 `file_put_contents("phar://archive.phar/entry", $data)` insert or replace that
 entry in a native, SHA1-signed PHAR archive while preserving existing native PHAR
-entries. Current limits: one PHAR write stream at a time, uncompressed entry
-payloads only, no key/private-key signing variants, and no tar/zip write
-variants.
+entries. `file_put_contents()` also accepts runtime-built `phar://` URLs. Current
+limits: one PHAR write stream at a time, uncompressed entry payloads only, no
+key/private-key signing variants, and no tar/zip write variants.
 
 `file_get_contents($url)` recognizes runtime `http://`, `https://`, `ftp://`,
 and `ftps://` strings before falling back to `phar://`/filesystem handling.

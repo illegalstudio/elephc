@@ -34,6 +34,16 @@ $archive = "examples/phar-reader/app.phar";
 $runtime_notes = file_get_contents("phar://" . $archive . "/notes.txt");
 echo "runtime notes: " . strlen($runtime_notes) . " bytes\n";
 
+// Runtime-built phar:// URLs can also write native PHAR archives. Existing
+// entries are preserved when later writes update another path in the same
+// archive.
+$out_archive = "examples/phar-reader/runtime-write.phar";
+@unlink($out_archive);
+echo file_put_contents("phar://" . $out_archive . "/generated.txt", "created at runtime\n") . " bytes written\n";
+echo file_put_contents("phar://" . $out_archive . "/nested/info.txt", "nested payload\n") . " bytes written\n";
+echo file_get_contents("phar://" . $out_archive . "/generated.txt");
+echo file_get_contents("phar://" . $out_archive . "/nested/info.txt");
+
 // A missing entry returns false, like any failed fopen().
 $missing = @fopen("phar://examples/phar-reader/app.phar/does-not-exist.txt", "r");
 echo $missing === false ? "missing entry -> false\n" : "unexpected\n";

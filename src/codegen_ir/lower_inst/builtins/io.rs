@@ -102,6 +102,22 @@ fn publish_phar_write_function_pointer(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Publishes the native PHAR writer bridge used by runtime-built phar:// URLs.
+fn publish_dynamic_phar_write_function_pointer(ctx: &mut FunctionContext<'_>) {
+    let extern_sym = ctx.emitter.target.extern_symbol("elephc_phar_put_url");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_extern_symbol_address(ctx.emitter, "x9", &extern_sym);
+            abi::emit_symbol_address(ctx.emitter, "x10", "_elephc_phar_put_url_fn");
+            ctx.emitter.instruction("str x9, [x10]");                           // publish the PHAR URL writer bridge into its runtime slot
+        }
+        Arch::X86_64 => {
+            abi::emit_extern_symbol_address(ctx.emitter, "r9", &extern_sym);
+            abi::emit_store_reg_to_symbol(ctx.emitter, "r9", "_elephc_phar_put_url_fn", 0); // publish the PHAR URL writer bridge into its runtime slot
+        }
+    }
+}
+
 
 /// Lowers `hash_file(algo, filename, binary?)` by reading bytes then hashing them.
 pub(super) fn lower_hash_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -3429,14 +3445,21 @@ pub(super) fn lower_file_put_contents(
     super::ensure_arg_count(inst, "file_put_contents", 2)?;
     let path = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
-    if let Some(path_literal) = optional_const_string_operand(ctx, path)? {
+    let path_literal = optional_const_string_operand(ctx, path)?;
+    if let Some(path_literal) = path_literal.as_deref() {
         if path_literal.starts_with("phar://") {
-            return lower_literal_phar_file_put_contents(ctx, inst, &path_literal, data);
+            return lower_literal_phar_file_put_contents(ctx, inst, path_literal, data);
         }
     }
+    let helper = if path_literal.is_none() {
+        publish_dynamic_phar_write_function_pointer(ctx);
+        "__rt_file_put_contents_maybe_phar"
+    } else {
+        "__rt_file_put_contents"
+    };
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data)?,
-        Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data)?,
+        Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, helper)?,
+        Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, helper)?,
     }
     store_if_result(ctx, inst)
 }
@@ -7325,6 +7348,7 @@ fn lower_file_put_contents_arm64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    helper: &str,
 ) -> Result<()> {
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
@@ -7332,7 +7356,7 @@ fn lower_file_put_contents_arm64(
     ctx.emitter.instruction("mov x3, x1");                                      // pass the data pointer in the runtime helper's second string slot
     ctx.emitter.instruction("mov x4, x2");                                      // pass the data length in the runtime helper's second string slot
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
-    abi::emit_call_label(ctx.emitter, "__rt_file_put_contents");
+    abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
 
@@ -7341,6 +7365,7 @@ fn lower_file_put_contents_x86_64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    helper: &str,
 ) -> Result<()> {
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
@@ -7348,7 +7373,7 @@ fn lower_file_put_contents_x86_64(
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the data pointer while the filename remains on the temporary stack
     ctx.emitter.instruction("mov rsi, rdx");                                    // pass the data length while the filename remains on the temporary stack
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
-    abi::emit_call_label(ctx.emitter, "__rt_file_put_contents");
+    abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
 

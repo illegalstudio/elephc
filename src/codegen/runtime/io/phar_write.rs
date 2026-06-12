@@ -10,6 +10,8 @@
 //! - `__rt_phar_write_append` from `__rt_fwrite` when the descriptor is the phar-
 //!   write synthetic fd `0x50000000`.
 //! - `__rt_phar_write_finalize` from the `fclose` emitter for that same fd.
+//! - `__rt_file_put_contents_maybe_phar` from non-literal `file_put_contents()`
+//!   lowering when a runtime string may be a `phar://` URL.
 //!
 //! Key details:
 //! - State lives in fixed `.bss` globals for the buffered payload, the target
@@ -18,6 +20,9 @@
 //!   entry into a SHA1-signed native PHAR so existing entries are preserved. The
 //!   assembly fallback still emits a single-entry SHA1-signed archive for paths
 //!   that do not publish the bridge.
+//! - Runtime-built `file_put_contents()` URLs use a separate bridge entry that
+//!   receives the complete `phar://archive/entry` string and performs the split
+//!   in Rust.
 //! - Current limits: one phar-write stream at a time, uncompressed payloads only,
 //!   no tar/zip writes, and no private-key signing variants.
 
@@ -168,6 +173,61 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the frame
     emitter.instruction("ret");                                                 // return to the fclose caller
+
+    emit_file_put_contents_maybe_phar_aarch64(emitter);
+}
+
+/// Emits the AArch64 dynamic `file_put_contents()` gate for runtime phar:// URLs.
+fn emit_file_put_contents_maybe_phar_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: file_put_contents_maybe_phar ---");
+    emitter.label_global("__rt_file_put_contents_maybe_phar");
+    emitter.instruction("cmp x2, #7");                                          // filename at least "phar://" long?
+    emitter.instruction("b.lt __rt_fpc_maybe_phar_plain");                      // too short: use ordinary filesystem writes
+    emitter.instruction("ldrb w9, [x1, #0]");                                   // filename byte 0
+    emitter.instruction("cmp w9, #0x70");                                       // 'p'
+    emitter.instruction("b.ne __rt_fpc_maybe_phar_plain");                      // not phar://: use ordinary filesystem writes
+    emitter.instruction("ldrb w9, [x1, #1]");                                   // filename byte 1
+    emitter.instruction("cmp w9, #0x68");                                       // 'h'
+    emitter.instruction("b.ne __rt_fpc_maybe_phar_plain");                      // not phar://: use ordinary filesystem writes
+    emitter.instruction("ldrb w9, [x1, #2]");                                   // filename byte 2
+    emitter.instruction("cmp w9, #0x61");                                       // 'a'
+    emitter.instruction("b.ne __rt_fpc_maybe_phar_plain");                      // not phar://: use ordinary filesystem writes
+    emitter.instruction("ldrb w9, [x1, #3]");                                   // filename byte 3
+    emitter.instruction("cmp w9, #0x72");                                       // 'r'
+    emitter.instruction("b.ne __rt_fpc_maybe_phar_plain");                      // not phar://: use ordinary filesystem writes
+    emitter.instruction("ldrb w9, [x1, #4]");                                   // filename byte 4
+    emitter.instruction("cmp w9, #0x3a");                                       // ':'
+    emitter.instruction("b.ne __rt_fpc_maybe_phar_plain");                      // not phar://: use ordinary filesystem writes
+    emitter.instruction("ldrb w9, [x1, #5]");                                   // filename byte 5
+    emitter.instruction("cmp w9, #0x2f");                                       // '/'
+    emitter.instruction("b.ne __rt_fpc_maybe_phar_plain");                      // not phar://: use ordinary filesystem writes
+    emitter.instruction("ldrb w9, [x1, #6]");                                   // filename byte 6
+    emitter.instruction("cmp w9, #0x2f");                                       // '/'
+    emitter.instruction("b.ne __rt_fpc_maybe_phar_plain");                      // not phar://: use ordinary filesystem writes
+    abi::emit_symbol_address(emitter, "x9", "_elephc_phar_put_url_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the optional PHAR URL writer bridge pointer
+    emitter.instruction("cbz x9, __rt_fpc_maybe_phar_fail");                    // phar:// without a bridge cannot be written
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a call frame for the Rust bridge
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    emitter.instruction("mov x0, x1");                                          // bridge arg 0 = full phar:// URL pointer
+    emitter.instruction("mov x1, x2");                                          // bridge arg 1 = full phar:// URL length
+    emitter.instruction("mov x2, x3");                                          // bridge arg 2 = payload pointer
+    emitter.instruction("mov x3, x4");                                          // bridge arg 3 = payload length
+    emitter.instruction("blr x9");                                              // insert/update the entry through the Rust PHAR bridge
+    emitter.instruction("cmn x0, #1");                                          // did the bridge report usize::MAX failure?
+    emitter.instruction("b.ne __rt_fpc_maybe_phar_return");                     // successful bridge write already returned the byte count
+    emitter.instruction("mov x0, #-1");                                         // failure follows file_put_contents' negative result convention
+    emitter.label("__rt_fpc_maybe_phar_return");
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the bridge call frame
+    emitter.instruction("ret");                                                 // return the write result to the caller
+    emitter.label("__rt_fpc_maybe_phar_fail");
+    emitter.instruction("mov x0, #-1");                                         // report failure for phar:// when the bridge is unavailable
+    emitter.instruction("ret");                                                 // return the failure result
+    emitter.label("__rt_fpc_maybe_phar_plain");
+    emitter.instruction("b __rt_file_put_contents");                            // tail-call the ordinary filesystem writer
 }
 
 /// Emits the x86_64 Linux variant of the phar-write runtime routines.
@@ -296,4 +356,48 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the fclose caller
+
+    emit_file_put_contents_maybe_phar_linux_x86_64(emitter);
+}
+
+/// Emits the x86_64 dynamic `file_put_contents()` gate for runtime phar:// URLs.
+fn emit_file_put_contents_maybe_phar_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: file_put_contents_maybe_phar ---");
+    emitter.label_global("__rt_file_put_contents_maybe_phar");
+    emitter.instruction("cmp rdx, 7");                                          // filename at least "phar://" long?
+    emitter.instruction("jl __rt_fpc_maybe_phar_plain_x86");                    // too short: use ordinary filesystem writes
+    emitter.instruction("cmp BYTE PTR [rax + 0], 0x70");                        // 'p'
+    emitter.instruction("jne __rt_fpc_maybe_phar_plain_x86");                   // not phar://: use ordinary filesystem writes
+    emitter.instruction("cmp BYTE PTR [rax + 1], 0x68");                        // 'h'
+    emitter.instruction("jne __rt_fpc_maybe_phar_plain_x86");                   // not phar://: use ordinary filesystem writes
+    emitter.instruction("cmp BYTE PTR [rax + 2], 0x61");                        // 'a'
+    emitter.instruction("jne __rt_fpc_maybe_phar_plain_x86");                   // not phar://: use ordinary filesystem writes
+    emitter.instruction("cmp BYTE PTR [rax + 3], 0x72");                        // 'r'
+    emitter.instruction("jne __rt_fpc_maybe_phar_plain_x86");                   // not phar://: use ordinary filesystem writes
+    emitter.instruction("cmp BYTE PTR [rax + 4], 0x3a");                        // ':'
+    emitter.instruction("jne __rt_fpc_maybe_phar_plain_x86");                   // not phar://: use ordinary filesystem writes
+    emitter.instruction("cmp BYTE PTR [rax + 5], 0x2f");                        // '/'
+    emitter.instruction("jne __rt_fpc_maybe_phar_plain_x86");                   // not phar://: use ordinary filesystem writes
+    emitter.instruction("cmp BYTE PTR [rax + 6], 0x2f");                        // '/'
+    emitter.instruction("jne __rt_fpc_maybe_phar_plain_x86");                   // not phar://: use ordinary filesystem writes
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_phar_put_url_fn", 0); // load the optional PHAR URL writer bridge pointer
+    emitter.instruction("test r10, r10");                                       // was the writer bridge published?
+    emitter.instruction("jz __rt_fpc_maybe_phar_fail_x86");                     // phar:// without a bridge cannot be written
+    emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("mov r8, rdi");                                         // preserve payload pointer while arranging bridge args
+    emitter.instruction("mov r9, rsi");                                         // preserve payload length while arranging bridge args
+    emitter.instruction("mov rdi, rax");                                        // bridge arg 0 = full phar:// URL pointer
+    emitter.instruction("mov rsi, rdx");                                        // bridge arg 1 = full phar:// URL length
+    emitter.instruction("mov rdx, r8");                                         // bridge arg 2 = payload pointer
+    emitter.instruction("mov rcx, r9");                                         // bridge arg 3 = payload length
+    emitter.instruction("call r10");                                            // insert/update the entry through the Rust PHAR bridge
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the bridge byte count or -1 failure
+    emitter.label("__rt_fpc_maybe_phar_fail_x86");
+    emitter.instruction("mov rax, -1");                                         // report failure for phar:// when the bridge is unavailable
+    emitter.instruction("ret");                                                 // return the failure result
+    emitter.label("__rt_fpc_maybe_phar_plain_x86");
+    emitter.instruction("jmp __rt_file_put_contents");                          // tail-call the ordinary filesystem writer
 }
