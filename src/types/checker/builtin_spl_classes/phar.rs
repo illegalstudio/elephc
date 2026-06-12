@@ -1,6 +1,6 @@
 //! Purpose:
 //! Injects the supported `Phar` and `PharData` builtin class metadata.
-//! Provides the first OOP archive surface by mapping ArrayAccess methods onto `phar://` URLs.
+//! Provides the first OOP archive surface by mapping methods and ArrayAccess onto `phar://` URLs.
 //!
 //! Called from:
 //! - `super::inject_builtin_spl_classes()`.
@@ -47,7 +47,7 @@ fn phar_properties() -> Vec<ClassProperty> {
     vec![storage_property("path", TypeExpr::Str)]
 }
 
-/// Builds the supported constructor and ArrayAccess methods for PHAR objects.
+/// Builds the supported constructor, write helper, and ArrayAccess methods for PHAR objects.
 fn phar_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -67,6 +67,15 @@ fn phar_methods() -> Vec<ClassMethod> {
             vec![param("offset", mixed_type())],
             Some(mixed_type()),
             phar_offset_get_body(),
+        ),
+        method_with_body(
+            "addFromString",
+            vec![
+                param("localName", TypeExpr::Str),
+                param("contents", TypeExpr::Str),
+            ],
+            Some(TypeExpr::Void),
+            phar_add_from_string_body(),
         ),
         method_with_body(
             "offsetSet",
@@ -103,6 +112,14 @@ fn phar_offset_get_body() -> Vec<crate::parser::ast::Stmt> {
         "file_get_contents",
         vec![phar_entry_url_expr(var_expr("offset"))],
     ))
+}
+
+/// Builds `addFromString()` as a typed `file_put_contents()` archive write.
+fn phar_add_from_string_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![expr_stmt(function_call(
+        "file_put_contents",
+        vec![phar_entry_url_expr(var_expr("localName")), var_expr("contents")],
+    ))]
 }
 
 /// Builds `offsetSet()` as a `file_put_contents()` write.

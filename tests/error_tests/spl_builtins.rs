@@ -228,6 +228,15 @@ fn test_error_phar_cannot_be_redeclared() {
     );
 }
 
+/// Verifies that `Phar::addFromString()` enforces its two required arguments.
+#[test]
+fn test_error_phar_add_from_string_wrong_args() {
+    expect_error(
+        "<?php $p = new Phar(\"x.phar\"); $p->addFromString(\"entry.txt\");",
+        "expects 2 arguments, got 1",
+    );
+}
+
 /// Verifies that `SplHeap` stays abstract and cannot be instantiated directly.
 #[test]
 fn test_error_spl_heap_is_abstract() {

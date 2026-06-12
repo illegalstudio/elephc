@@ -2054,6 +2054,25 @@ echo Phar::GZ . "|" . PharData::TAR;
     );
 }
 
+/// `Phar::addFromString()` and `PharData::addFromString()` use the same runtime
+/// writer as ArrayAccess assignment for native PHAR and tar containers.
+#[test]
+fn test_phar_oop_add_from_string_writes_entries() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("add.phar");
+$p->addFromString("one.txt", "alpha");
+$p->addFromString("dir/two.txt", "bravo");
+echo $p["one.txt"] . "|";
+echo $p["dir/two.txt"] . "|";
+$pd = new PharData("add.tar");
+$pd->addFromString("note.txt", "tar");
+echo $pd["note.txt"];
+"#,
+    );
+    assert_eq!(out, "alpha|bravo|tar");
+}
+
 /// `file_get_contents()` of a literal `phar://` URL decodes the entry at compile
 /// time (like the fopen read fast path) and returns its bytes as a string; a
 /// missing entry returns `false`.

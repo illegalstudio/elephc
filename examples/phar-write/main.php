@@ -27,6 +27,11 @@ echo $ok ? "wrote hello.phar (" . $written . " bytes of content)\n"
 $n = file_put_contents("phar://note.phar/readme.txt", "single-call phar write\n");
 echo "wrote note.phar (" . $n . " bytes)\n";
 
+// The OOP surface writes through the same phar:// runtime path.
+$oop = new Phar("oop.phar");
+$oop->addFromString("hello.txt", "written through addFromString\n");
+$oop["array-access.txt"] = "written through ArrayAccess\n";
+
 // Read the archive back. Using a runtime (non-literal) path goes through the
 // runtime phar reader, so a program can read a phar it just wrote in the same run.
 $archive = "hello.phar";
@@ -37,3 +42,6 @@ fclose($in);
 // file_get_contents() on a non-literal phar:// URL takes the same runtime path —
 // it slurps the whole entry in one call.
 echo "via file_get_contents: " . file_get_contents("phar://" . $archive . "/greeting.txt");
+
+echo "oop addFromString: " . $oop["hello.txt"];
+echo "oop array access: " . $oop["array-access.txt"];
