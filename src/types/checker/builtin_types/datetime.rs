@@ -1931,10 +1931,6 @@ if ($utc) { return gmdate($out, $timestamp); }
 return date($out, $timestamp);
 "#;
 
-/// Builds the internal static `__elephc_strftime($format, $timestamp, $utc)` method on `DateTime`
-/// backing the `strftime()`/`gmstrftime()` procedural functions (the name resolver desugars the
-/// calls to it, injecting `time()` for the default timestamp and the local/UTC flag). Self-contained
-/// parsed source.
 /// PHP source for `DateTime::__elephc_extract_micros($s)` — returns the
 /// microseconds (0..999999) of a trailing fractional second `HH:MM:SS.ffffff`, or
 /// 0 when absent. The dot must follow `:SS` so a `DD.MM.YYYY` separator is never
@@ -2105,6 +2101,10 @@ fn datetime_strip_micros() -> ClassMethod {
     }
 }
 
+/// Builds the internal static `DateTime::__elephc_strftime($format, $timestamp, $utc)` method
+/// backing the `strftime()`/`gmstrftime()` procedural functions (the name resolver desugars the
+/// calls to it, injecting `time()` for the default timestamp and the local/UTC flag). Self-contained
+/// parsed source.
 fn datetime_strftime() -> ClassMethod {
     let tokens =
         crate::lexer::tokenize(STRFTIME_SRC).expect("strftime body source must tokenize");

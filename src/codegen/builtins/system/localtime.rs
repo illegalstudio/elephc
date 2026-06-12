@@ -44,7 +44,7 @@ pub fn emit(
                 emitter.instruction("mov x1, #0");                              // associative flag defaults to 0 (numeric keys)
             } else {
                 emitter.instruction("mov x0, #-1");                             // -1 sentinel → runtime uses the current time
-                emitter.instruction("mov x1, #0");                             // associative flag defaults to 0 (numeric keys)
+                emitter.instruction("mov x1, #0");                              // associative flag defaults to 0 (numeric keys)
             }
         }
         Arch::X86_64 => {
@@ -61,7 +61,7 @@ pub fn emit(
                 emitter.instruction("mov rsi, 0");                              // associative flag defaults to 0 (numeric keys)
             } else {
                 emitter.instruction("mov rax, -1");                             // -1 sentinel → runtime uses the current time
-                emitter.instruction("mov rsi, 0");                             // associative flag defaults to 0 (numeric keys)
+                emitter.instruction("mov rsi, 0");                              // associative flag defaults to 0 (numeric keys)
             }
         }
     }

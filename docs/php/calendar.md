@@ -2,7 +2,7 @@
 title: "Calendar"
 description: "The ext/calendar functions: Julian Day conversions for the Gregorian, Julian, French Republican and Jewish calendars, plus Easter and calendar metadata."
 sidebar:
-  order: 17
+  order: 19
 ---
 
 elephc implements PHP's `ext/calendar` extension. Every function is pure integer Julian-Day-Number arithmetic (a faithful port of PHP's `sdncal` algorithms), so results are byte-identical to PHP.

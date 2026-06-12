@@ -1359,6 +1359,22 @@ echo r(DateTime::createFromFormat("D d M Y H:i", "Tue 01 Jul 2024 09:30"));
     );
 }
 
+/// Verifies `createFromFormat()` parses the no-pad hour specifiers `G` (24-hour) and `g`
+/// (12-hour, with lowercase `a` am/pm), and that a backslash-escaped `\T` matches a literal `T`
+/// in the subject. Cross-checked against PHP 8.5: `09:05|21:05|2024-07-01 09:05`.
+#[test]
+fn test_create_from_format_no_pad_hours_and_escape() {
+    let out = compile_and_run(
+        r#"<?php
+$a = DateTime::createFromFormat("Y-m-d G:i", "2024-07-01 9:05");
+$b = DateTime::createFromFormat("Y-m-d g:i a", "2024-07-01 9:05 pm");
+$c = DateTime::createFromFormat('Y-m-d\TH:i', "2024-07-01T09:05");
+echo $a->format("H:i"), "|", $b->format("H:i"), "|", $c->format("Y-m-d H:i");
+"#,
+    );
+    assert_eq!(out, "09:05|21:05|2024-07-01 09:05");
+}
+
 /// Verifies the PHP 8.3 date/time exception hierarchy: `DateMalformed*`/`DateInvalid*` extend
 /// `DateException` (and thus `Exception`), while `DateObjectError`/`DateRangeError` extend
 /// `DateError` (and thus `Error`). A subclass throw is catchable at every ancestor level.

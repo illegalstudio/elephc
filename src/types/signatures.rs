@@ -835,6 +835,42 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             sig.declared_return = true;
             Some(sig)
         }
+        // Date/time helpers that return scalars or arrays. Like `date`/`gmdate`,
+        // they reuse the catalog parameter contract and override only the return
+        // type, so first-class-callable references (`checkdate(...)`, etc.) match PHP.
+        "checkdate" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Bool;
+            sig.declared_return = true;
+            Some(sig)
+        }
+        "mktime" | "gmmktime" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Int;
+            sig.declared_return = true;
+            Some(sig)
+        }
+        "strtotime" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Union(vec![PhpType::Int, PhpType::Bool]);
+            sig.declared_return = true;
+            Some(sig)
+        }
+        "getdate" | "localtime" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            };
+            sig.declared_return = true;
+            Some(sig)
+        }
+        "hrtime" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Mixed;
+            sig.declared_return = true;
+            Some(sig)
+        }
         "json_encode" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Mixed, PhpType::Int, PhpType::Int],

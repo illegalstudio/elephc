@@ -2763,6 +2763,20 @@ echo $a . "|" . $b;
     );
 }
 
+/// Verifies the no-leading-zero specifiers `n` (month) and `G` (24-hour) render without padding,
+/// next to their zero-padded counterparts `m`/`H`. Cross-checked against PHP 8.5: `7|07|9|09`.
+#[test]
+fn test_date_specifiers_n_and_g_no_pad() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$ts = gmmktime(9, 5, 0, 7, 1, 2024);
+echo date("n", $ts), "|", date("m", $ts), "|", date("G", $ts), "|", date("H", $ts);
+"#,
+    );
+    assert_eq!(out, "7|07|9|09");
+}
+
 /// Verifies gmmktime() builds a Unix timestamp interpreting the components as UTC (libc timegm),
 /// independent of the configured default zone — unlike mktime() which uses the local zone.
 #[test]
@@ -2879,6 +2893,57 @@ echo $n[2], ",", $n[4], ",", $n[5], ",", $n[6], "|",
 "#,
     );
     assert_eq!(out, "12,6,124,1|12,6,124,1|9");
+}
+
+/// Verifies the scalar-returning date builtins work as first-class callables
+/// (`checkdate(...)`, `gmmktime(...)`, `strtotime(...)`) — i.e. they are accepted by
+/// `first_class_callable_builtin_sig` and dispatch correctly when stored and invoked.
+#[test]
+fn test_first_class_callable_date_scalars() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$cd = checkdate(...);
+$gm = gmmktime(...);
+$st = strtotime(...);
+echo $cd(2, 29, 2024) ? "y" : "n";
+echo $cd(2, 29, 2023) ? "y" : "n";
+echo "|", $gm(0, 0, 0, 1, 1, 2000);
+echo "|", $st("@946684800");
+"#,
+    );
+    assert_eq!(out, "yn|946684800|946684800");
+}
+
+/// Verifies the array-returning date builtins work as first-class callables
+/// (`getdate(...)`, `localtime(...)`), preserving PHP's associative key names through
+/// the stored-callable invocation path.
+#[test]
+fn test_first_class_callable_date_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$gd = getdate(...);
+$lt = localtime(...);
+$g = $gd(1719835200);
+$a = $lt(1719835200, true);
+echo $g["year"], "-", $g["mon"], "-", $g["mday"], "|", $a["tm_year"], ",", $a["tm_mon"];
+"#,
+    );
+    assert_eq!(out, "2024-7-1|124,6");
+}
+
+/// Verifies `hrtime(...)` works as a first-class callable and that the stored callable
+/// returns a positive nanosecond count when invoked with `$as_number = true`.
+#[test]
+fn test_first_class_callable_hrtime() {
+    let out = compile_and_run(
+        r#"<?php
+$hr = hrtime(...);
+echo $hr(true) > 0 ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "y");
 }
 
 /// Verifies hrtime() returns a [seconds, nanoseconds] pair by default and the total nanoseconds as

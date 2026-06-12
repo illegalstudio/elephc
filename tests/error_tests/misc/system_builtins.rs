@@ -194,6 +194,16 @@ fn test_error_strtotime_too_many_args() {
     );
 }
 
+/// Verifies that `checkdate()` with two arguments yields a wrong-args diagnostic
+/// (it requires exactly month, day, and year).
+#[test]
+fn test_error_checkdate_wrong_args() {
+    expect_error(
+        "<?php checkdate(1, 2);",
+        "checkdate() takes exactly 3 arguments",
+    );
+}
+
 // -- JSON error tests --
 
 /// Verifies that `json_encode()` with no arguments yields a wrong-args diagnostic.
