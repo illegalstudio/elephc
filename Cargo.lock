@@ -506,6 +506,7 @@ dependencies = [
  "elephc-crypto",
  "elephc-pdo",
  "elephc-tls",
+ "elephc-tz",
  "flate2",
  "rustls",
  "rustls-pemfile",
@@ -552,6 +553,10 @@ dependencies = [
  "rustls-pemfile",
  "webpki-roots 0.26.11",
 ]
+
+[[package]]
+name = "elephc-tz"
+version = "0.1.0"
 
 [[package]]
 name = "equivalent"

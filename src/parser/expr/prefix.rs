@@ -405,8 +405,11 @@ fn parse_variable(
 
 /// Parses a grouped expression `(...)` or a type cast `(type) expr`. If `peek_cast` detects
 /// a cast, consumes the cast syntax and returns a `Cast` node with the target type and inner
-/// expression parsed at binding power 27. Otherwise parses as a grouped expression: consumes
-/// `(` and `)`, then checks for an immediate call (`inner(args)`) to support expression-call syntax.
+/// expression parsed at binding power 35 (the unary-operator level). This makes a cast bind
+/// tighter than `* / % + - .` and the comparison/logical operators — so `(int)$x + 3` parses
+/// as `((int)$x) + 3`, matching PHP — while `**` (left bp 37) still binds tighter than the cast.
+/// Otherwise parses as a grouped expression: consumes `(` and `)`, then checks for an immediate
+/// call (`inner(args)`) to support expression-call syntax.
 fn parse_group_or_cast(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -414,7 +417,7 @@ fn parse_group_or_cast(
 ) -> Result<Expr, CompileError> {
     if let Some(cast_ty) = peek_cast(tokens, *pos) {
         *pos += 3;
-        let inner = parse_expr_bp(tokens, pos, 27)?;
+        let inner = parse_expr_bp(tokens, pos, 35)?;
         return Ok(Expr::new(
             ExprKind::Cast {
                 target: cast_ty,

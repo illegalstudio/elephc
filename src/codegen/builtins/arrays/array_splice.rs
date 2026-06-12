@@ -14,7 +14,7 @@ use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_int, emit_expr};
 use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -59,10 +59,12 @@ pub fn emit(
         matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
     if emitter.target.arch == Arch::X86_64 {
         abi::emit_push_reg(emitter, "rax");                                     // preserve the unique indexed-array pointer while evaluating the splice offset
-        emit_expr(&args[1], emitter, ctx, data);
+        let offset_ty = emit_expr(&args[1], emitter, ctx, data);
+        coerce_to_int(emitter, &offset_ty);                                     // unbox a Mixed/Union splice offset into a raw integer
         if args.len() > 2 {
             abi::emit_push_reg(emitter, "rax");                                 // preserve the requested splice offset while evaluating the removal length
-            emit_expr(&args[2], emitter, ctx, data);
+            let length_ty = emit_expr(&args[2], emitter, ctx, data);
+            coerce_to_int(emitter, &length_ty);                                 // unbox a Mixed/Union removal length into a raw integer
             emitter.instruction("mov rdx, rax");                                // move the removal length into the third x86_64 runtime argument register
             abi::emit_pop_reg(emitter, "rsi");                                  // restore the splice offset into the second x86_64 runtime argument register
             abi::emit_pop_reg(emitter, "rdi");                                  // restore the unique indexed-array pointer into the first x86_64 runtime argument register
@@ -85,11 +87,13 @@ pub fn emit(
 
     // -- save array pointer, evaluate offset --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
-    emit_expr(&args[1], emitter, ctx, data);
+    let offset_ty = emit_expr(&args[1], emitter, ctx, data);
+    coerce_to_int(emitter, &offset_ty);                                         // unbox a Mixed/Union splice offset into a raw integer
     if args.len() > 2 {
         // -- save offset, evaluate length --
         emitter.instruction("str x0, [sp, #-16]!");                             // push offset onto stack
-        emit_expr(&args[2], emitter, ctx, data);
+        let length_ty = emit_expr(&args[2], emitter, ctx, data);
+        coerce_to_int(emitter, &length_ty);                                     // unbox a Mixed/Union removal length into a raw integer
         // -- set up three-arg call: array, offset, length --
         emitter.instruction("mov x2, x0");                                      // move length to x2 (third arg)
         emitter.instruction("ldr x1, [sp], #16");                               // pop offset into x1 (second arg)

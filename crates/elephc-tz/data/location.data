@@ -1,0 +1,598 @@
+Africa/Abidjan	CI	5.316659999999999	-4.03334000000001	
+Africa/Accra	GH	5.549999999999997	-0.21666999999999348	
+Africa/Addis_Ababa	ET	9.033330000000007	38.69999999999999	
+Africa/Algiers	DZ	36.78333000000001	3.0500000000000114	
+Africa/Asmara	ER	15.333330000000004	38.88333	
+Africa/Asmera	??	-90	-180	
+Africa/Bamako	ML	12.650000000000006	-8	
+Africa/Bangui	CF	4.366659999999996	18.58332999999999	
+Africa/Banjul	GM	13.466660000000005	-16.650000000000006	
+Africa/Bissau	GW	11.849999999999994	-15.583339999999993	
+Africa/Blantyre	MW	-15.783339999999995	35	
+Africa/Brazzaville	CG	-4.266670000000005	15.283330000000007	
+Africa/Bujumbura	BI	-3.383340000000004	29.366659999999996	
+Africa/Cairo	EG	30.049999999999997	31.25	
+Africa/Casablanca	MA	33.650000000000006	-7.583339999999993	
+Africa/Ceuta	ES	35.88333	-5.316669999999988	Ceuta, Melilla
+Africa/Conakry	GN	9.516660000000002	-13.716669999999993	
+Africa/Dakar	SN	14.666659999999993	-17.433339999999987	
+Africa/Dar_es_Salaam	TZ	-6.799999999999997	39.28333000000001	
+Africa/Djibouti	DJ	11.599999999999994	43.150000000000006	
+Africa/Douala	CM	4.049999999999997	9.699999999999989	
+Africa/El_Aaiun	EH	27.150000000000006	-13.199999999999989	
+Africa/Freetown	SL	8.5	-13.25	
+Africa/Gaborone	BW	-24.650009999999995	25.916660000000007	
+Africa/Harare	ZW	-17.833340000000007	31.05000000000001	
+Africa/Johannesburg	ZA	-26.25	28	
+Africa/Juba	SS	4.849999999999994	31.616659999999996	
+Africa/Kampala	UG	0.31665999999999883	32.41666000000001	
+Africa/Khartoum	SD	15.599999999999994	32.53333000000001	
+Africa/Kigali	RW	-1.9500000000000028	30.066660000000013	
+Africa/Kinshasa	CD	-4.299999999999997	15.300000000000011	Dem. Rep. of Congo (west)
+Africa/Lagos	NG	6.450000000000003	3.4000000000000057	
+Africa/Libreville	GA	0.38333000000000084	9.449999999999989	
+Africa/Lome	TG	6.133330000000001	1.2166599999999903	
+Africa/Luanda	AO	-8.799999999999997	13.233329999999995	
+Africa/Lubumbashi	CD	-11.666669999999996	27.46665999999999	Dem. Rep. of Congo (east)
+Africa/Lusaka	ZM	-15.416669999999996	28.283330000000007	
+Africa/Malabo	GQ	3.75	8.783330000000007	
+Africa/Maputo	MZ	-25.966669999999993	32.58332999999999	
+Africa/Maseru	LS	-29.46667	27.5	
+Africa/Mbabane	SZ	-26.299999999999997	31.099999999999994	
+Africa/Mogadishu	SO	2.066659999999999	45.366659999999996	
+Africa/Monrovia	LR	6.299999999999997	-10.78334000000001	
+Africa/Nairobi	KE	-1.2833399999999955	36.81666000000001	
+Africa/Ndjamena	TD	12.116659999999996	15.050000000000011	
+Africa/Niamey	NE	13.516660000000002	2.116659999999996	
+Africa/Nouakchott	MR	18.099999999999994	-15.949999999999989	
+Africa/Ouagadougou	BF	12.366659999999996	-1.5166700000000048	
+Africa/Porto-Novo	BJ	6.483329999999995	2.616659999999996	
+Africa/Sao_Tome	ST	0.3333300000000037	6.733329999999995	
+Africa/Timbuktu	??	-90	-180	
+Africa/Tripoli	LY	32.900000000000006	13.183330000000012	
+Africa/Tunis	TN	36.8	10.183330000000012	
+Africa/Windhoek	NA	-22.566670000000002	17.099999999999994	
+America/Adak	US	51.879999999999995	-176.65806	Alaska - western Aleutians
+America/Anchorage	US	61.218050000000005	-149.90028	Alaska (most areas)
+America/Anguilla	AI	18.200000000000003	-63.06667	
+America/Antigua	AG	17.049999999999997	-61.8	
+America/Araguaina	BR	-7.200000000000003	-48.19999999999999	Tocantins
+America/Argentina/Buenos_Aires	AR	-34.6	-58.45	Buenos Aires (BA, CF)
+America/Argentina/Catamarca	AR	-28.46667	-65.78334	Catamarca (CT), Chubut (CH)
+America/Argentina/ComodRivadavia	??	-90	-180	
+America/Argentina/Cordoba	AR	-31.4	-64.18334	Argentina (most areas: CB, CC, CN, ER, FM, MN, SE, SF)
+America/Argentina/Jujuy	AR	-24.18334	-65.3	Jujuy (JY)
+America/Argentina/La_Rioja	AR	-29.43334	-66.85	La Rioja (LR)
+America/Argentina/Mendoza	AR	-32.88334	-68.81667	Mendoza (MZ)
+America/Argentina/Rio_Gallegos	AR	-51.63334	-69.21667	Santa Cruz (SC)
+America/Argentina/Salta	AR	-24.783339999999995	-65.41667	Salta (SA, LP, NQ, RN)
+America/Argentina/San_Juan	AR	-31.533340000000003	-68.51667	San Juan (SJ)
+America/Argentina/San_Luis	AR	-33.31667	-66.35	San Luis (SL)
+America/Argentina/Tucuman	AR	-26.816670000000002	-65.21667	Tucuman (TM)
+America/Argentina/Ushuaia	AR	-54.8	-68.3	Tierra del Fuego (TF)
+America/Aruba	AW	12.5	-69.96667	
+America/Asuncion	PY	-25.266670000000005	-57.666669999999996	
+America/Atikokan	CA	48.758610000000004	-91.62167	EST - ON (Atikokan), NU (Coral H)
+America/Atka	??	-90	-180	
+America/Bahia	BR	-12.983339999999998	-38.516670000000005	Bahia
+America/Bahia_Banderas	MX	20.799999999999997	-105.25	Bahia de Banderas
+America/Barbados	BB	13.099999999999994	-59.61667	
+America/Belem	BR	-1.4500000000000028	-48.48334	Para (east), Amapa
+America/Belize	BZ	17.5	-88.2	
+America/Blanc-Sablon	CA	51.41666000000001	-57.11667	AST - QC (Lower North Shore)
+America/Boa_Vista	BR	2.816659999999999	-60.666669999999996	Roraima
+America/Bogota	CO	4.599999999999994	-74.08334	
+America/Boise	US	43.613609999999994	-116.2025	Mountain - ID (south), OR (east)
+America/Buenos_Aires	??	-90	-180	
+America/Cambridge_Bay	CA	69.11388	-105.05278	Mountain - NU (west)
+America/Campo_Grande	BR	-20.450000000000003	-54.61667	Mato Grosso do Sul
+America/Cancun	MX	21.083330000000004	-86.76667	Quintana Roo
+America/Caracas	VE	10.5	-66.93334	
+America/Catamarca	??	-90	-180	
+America/Cayenne	GF	4.933329999999998	-52.33334000000001	
+America/Cayman	KY	19.299999999999997	-81.38334	
+America/Chicago	US	41.849999999999994	-87.65	Central (most areas)
+America/Chihuahua	MX	28.63333	-106.08334	Chihuahua (most areas)
+America/Ciudad_Juarez	MX	31.733329999999995	-106.48334	Chihuahua (US border - west)
+America/Coral_Harbour	??	-90	-180	
+America/Cordoba	??	-90	-180	
+America/Costa_Rica	CR	9.933329999999998	-84.08334	
+America/Coyhaique	CL	-45.56667	-72.06667	Aysen Region
+America/Creston	CA	49.099999999999994	-116.51667	MST - BC (Creston)
+America/Cuiaba	BR	-15.583340000000007	-56.08334000000001	Mato Grosso
+America/Curacao	CW	12.183329999999998	-69	
+America/Danmarkshavn	GL	76.76666	-18.66667000000001	National Park (east coast)
+America/Dawson	CA	64.06666000000001	-139.41667	MST - Yukon (west)
+America/Dawson_Creek	CA	55.76666	-120.23334	MST - BC (Dawson Cr, Ft St John)
+America/Denver	US	39.73916	-104.98417	Mountain (most areas)
+America/Detroit	US	42.331379999999996	-83.04584	Eastern - MI (most areas)
+America/Dominica	DM	15.299999999999997	-61.400000000000006	
+America/Edmonton	CA	53.55000000000001	-113.46667	Mountain - AB, BC(E), NT(E), SK(W)
+America/Eirunepe	BR	-6.666669999999996	-69.86667	Amazonas (west)
+America/El_Salvador	SV	13.700000000000003	-89.2	
+America/Ensenada	??	-90	-180	
+America/Fort_Nelson	CA	58.80000000000001	-122.7	MST - BC (Ft Nelson)
+America/Fort_Wayne	??	-90	-180	
+America/Fortaleza	BR	-3.7166699999999935	-38.5	Brazil (northeast: MA, PI, CE, RN, PB)
+America/Glace_Bay	CA	46.199990000000014	-59.95	Atlantic - NS (Cape Breton)
+America/Godthab	??	-90	-180	
+America/Goose_Bay	CA	53.33332999999999	-60.416669999999996	Atlantic - Labrador (most areas)
+America/Grand_Turk	TC	21.466660000000005	-71.13334	
+America/Grenada	GD	12.049999999999997	-61.75	
+America/Guadeloupe	GP	16.233329999999995	-61.533339999999995	
+America/Guatemala	GT	14.63333	-90.51667	
+America/Guayaquil	EC	-2.1666699999999963	-79.83334	Ecuador (mainland)
+America/Guyana	GY	6.799999999999997	-58.166669999999996	
+America/Halifax	CA	44.650000000000006	-63.599999999999994	Atlantic - NS (most areas), PE
+America/Havana	CU	23.13333	-82.36667	
+America/Hermosillo	MX	29.06666	-110.96667	Sonora
+America/Indiana/Indianapolis	US	39.76832999999999	-86.15806	Eastern - IN (most areas)
+America/Indiana/Knox	US	41.295829999999995	-86.625	Central - IN (Starke)
+America/Indiana/Marengo	US	38.375550000000004	-86.34473	Eastern - IN (Crawford)
+America/Indiana/Petersburg	US	38.49194	-87.27862	Eastern - IN (Pike)
+America/Indiana/Tell_City	US	37.953050000000005	-86.76139	Central - IN (Perry)
+America/Indiana/Vevay	US	38.74777	-85.06723	Eastern - IN (Switzerland)
+America/Indiana/Vincennes	US	38.677220000000005	-87.52862	Eastern - IN (Da, Du, K, Mn)
+America/Indiana/Winamac	US	41.051379999999995	-86.60306	Eastern - IN (Pulaski)
+America/Indianapolis	??	-90	-180	
+America/Inuvik	CA	68.34971999999999	-133.71667	Mountain - NT (west)
+America/Iqaluit	CA	63.733329999999995	-68.46667	Eastern - NU (most areas)
+America/Jamaica	JM	17.968050000000005	-76.79334	
+America/Jujuy	??	-90	-180	
+America/Juneau	US	58.30194	-134.41973000000002	Alaska - Juneau area
+America/Kentucky/Louisville	US	38.25416000000001	-85.75945	Eastern - KY (Louisville area)
+America/Kentucky/Monticello	US	36.829719999999995	-84.84917	Eastern - KY (Wayne)
+America/Knox_IN	??	-90	-180	
+America/Kralendijk	BQ	12.15083	-68.27667	
+America/La_Paz	BO	-16.5	-68.15	
+America/Lima	PE	-12.049999999999997	-77.05	
+America/Los_Angeles	US	34.052220000000005	-118.24278000000001	Pacific
+America/Louisville	??	-90	-180	
+America/Lower_Princes	SX	18.051379999999995	-63.04723	
+America/Maceio	BR	-9.666669999999996	-35.71666999999999	Alagoas, Sergipe
+America/Managua	NI	12.150000000000006	-86.28334	
+America/Manaus	BR	-3.133340000000004	-60.016670000000005	Amazonas (east)
+America/Marigot	MF	18.06666	-63.08334000000001	
+America/Martinique	MQ	14.599999999999994	-61.08334000000001	
+America/Matamoros	MX	25.833330000000004	-97.5	Coahuila, Nuevo Leon, Tamaulipas (US border)
+America/Mazatlan	MX	23.216660000000005	-106.41667	Baja California Sur, Nayarit (most areas), Sinaloa
+America/Mendoza	??	-90	-180	
+America/Menominee	US	45.10776999999999	-87.61417	Central - MI (Wisconsin border)
+America/Merida	MX	20.966660000000005	-89.61667	Campeche, Yucatan
+America/Metlakatla	US	55.12693999999999	-131.57639	Alaska - Annette Island
+America/Mexico_City	MX	19.400000000000006	-99.15001	Central Mexico
+America/Miquelon	PM	47.05000000000001	-56.33334000000001	
+America/Moncton	CA	46.099999999999994	-64.78334	Atlantic - New Brunswick
+America/Monterrey	MX	25.666659999999993	-100.31667	Durango; Coahuila, Nuevo Leon, Tamaulipas (most areas)
+America/Montevideo	UY	-34.90917	-56.212500000000006	
+America/Montreal	??	-90	-180	
+America/Montserrat	MS	16.716660000000005	-62.21666999999999	
+America/Nassau	BS	25.083330000000004	-77.35	
+America/New_York	US	40.71415999999999	-74.00639	Eastern (most areas)
+America/Nipigon	??	-90	-180	
+America/Nome	US	64.50111000000001	-165.40639	Alaska (west)
+America/Noronha	BR	-3.8499999999999943	-32.41667000000001	Atlantic islands
+America/North_Dakota/Beulah	US	47.264160000000004	-101.77778	Central - ND (Mercer)
+America/North_Dakota/Center	US	47.11637999999999	-101.29917	Central - ND (Oliver)
+America/North_Dakota/New_Salem	US	46.845	-101.41084	Central - ND (Morton rural)
+America/Nuuk	GL	64.18333000000001	-51.73334	most of Greenland
+America/Ojinaga	MX	29.56666	-104.41667	Chihuahua (US border - east)
+America/Panama	PA	8.966660000000005	-79.53334	
+America/Pangnirtung	??	-90	-180	
+America/Paramaribo	SR	5.833330000000004	-55.166669999999996	
+America/Phoenix	US	33.44833	-112.07334	MST - AZ (except Navajo)
+America/Port-au-Prince	HT	18.533330000000007	-72.33334	
+America/Port_of_Spain	TT	10.650000000000006	-61.516670000000005	
+America/Porto_Acre	??	-90	-180	
+America/Porto_Velho	BR	-8.766670000000005	-63.900000000000006	Rondonia
+America/Puerto_Rico	PR	18.468329999999995	-66.10612	
+America/Punta_Arenas	CL	-53.15	-70.91667	Magallanes Region
+America/Rainy_River	??	-90	-180	
+America/Rankin_Inlet	CA	62.81666000000001	-92.08306	Central - NU (central)
+America/Recife	BR	-8.049999999999997	-34.900000000000006	Pernambuco
+America/Regina	CA	50.400000000000006	-104.65001	CST - SK (most areas)
+America/Resolute	CA	74.69555	-94.82917	Central - NU (Resolute)
+America/Rio_Branco	BR	-9.966669999999993	-67.8	Acre
+America/Rosario	??	-90	-180	
+America/Santa_Isabel	??	-90	-180	
+America/Santarem	BR	-2.433340000000001	-54.86667	Para (west)
+America/Santiago	CL	-33.45	-70.66667	most of Chile
+America/Santo_Domingo	DO	18.466660000000005	-69.9	
+America/Sao_Paulo	BR	-23.533339999999995	-46.61667	Brazil (southeast: GO, DF, MG, ES, RJ, SP, PR, SC, RS)
+America/Scoresbysund	GL	70.48333	-21.966669999999993	Scoresbysund/Ittoqqortoormiit
+America/Shiprock	??	-90	-180	
+America/Sitka	US	57.176379999999995	-135.30195	Alaska - Sitka area
+America/St_Barthelemy	BL	17.88333	-62.849999999999994	
+America/St_Johns	CA	47.56666000000001	-52.71666999999999	Newfoundland, Labrador (SE)
+America/St_Kitts	KN	17.299999999999997	-62.71666999999999	
+America/St_Lucia	LC	14.016660000000002	-61	
+America/St_Thomas	VI	18.349999999999994	-64.93334	
+America/St_Vincent	VC	13.150000000000006	-61.23334	
+America/Swift_Current	CA	50.28333000000001	-107.83334	CST - SK (midwest)
+America/Tegucigalpa	HN	14.099999999999994	-87.21667	
+America/Thule	GL	76.56666000000001	-68.78334	Thule/Pituffik
+America/Thunder_Bay	??	-90	-180	
+America/Tijuana	MX	32.53333000000001	-117.01667	Baja California
+America/Toronto	CA	43.650000000000006	-79.38334	Eastern - ON & QC (most areas)
+America/Tortola	VG	18.450000000000003	-64.61667	
+America/Vancouver	CA	49.26666	-123.11667	Pacific - BC (most areas)
+America/Virgin	??	-90	-180	
+America/Whitehorse	CA	60.71665999999999	-135.05001	MST - Yukon (east)
+America/Winnipeg	CA	49.88333	-97.15001	Central - ON (west), Manitoba
+America/Yakutat	US	59.546940000000006	-139.72723	Alaska - Yakutat
+America/Yellowknife	??	-90	-180	
+Antarctica/Casey	AQ	-66.28334	110.51666	Casey
+Antarctica/Davis	AQ	-68.58333999999999	77.96665999999999	Davis
+Antarctica/DumontDUrville	AQ	-66.66667	140.01666	Dumont-d'Urville
+Antarctica/Macquarie	AU	-54.5	158.95	Macquarie Island
+Antarctica/Mawson	AQ	-67.6	62.88333	Mawson
+Antarctica/McMurdo	AQ	-77.83333999999999	166.60000000000002	New Zealand time - McMurdo, South Pole
+Antarctica/Palmer	AQ	-64.8	-64.1	Palmer
+Antarctica/Rothera	AQ	-67.56667	-68.13334	Rothera
+Antarctica/South_Pole	??	-90	-180	
+Antarctica/Syowa	AQ	-69.00612	39.59	Syowa
+Antarctica/Troll	AQ	-72.01139	2.5349999999999966	Troll
+Antarctica/Vostok	AQ	-78.40001	106.89999	Vostok
+Arctic/Longyearbyen	SJ	78	16	
+Asia/Aden	YE	12.75	45.19999999999999	
+Asia/Almaty	KZ	43.25	76.94999999999999	most of Kazakhstan
+Asia/Amman	JO	31.950000000000003	35.93333000000001	
+Asia/Anadyr	RU	64.75	177.48333000000002	MSK+09 - Bering Sea
+Asia/Aqtau	KZ	44.51666	50.26666	Mangghystau/Mankistau
+Asia/Aqtobe	KZ	50.28333000000001	57.16666000000001	Aqtobe/Aktobe
+Asia/Ashgabat	TM	37.95	58.38333	
+Asia/Ashkhabad	??	-90	-180	
+Asia/Atyrau	KZ	47.116659999999996	51.93333000000001	Atyrau/Atirau/Gur'yev
+Asia/Baghdad	IQ	33.349999999999994	44.41666000000001	
+Asia/Bahrain	BH	26.38333	50.58332999999999	
+Asia/Baku	AZ	40.38333	49.849999999999994	
+Asia/Bangkok	TH	13.75	100.51666	
+Asia/Barnaul	RU	53.366659999999996	83.75	MSK+04 - Altai
+Asia/Beirut	LB	33.88333	35.5	
+Asia/Bishkek	KG	42.900000000000006	74.6	
+Asia/Brunei	BN	4.933329999999998	114.91665999999998	
+Asia/Calcutta	??	-90	-180	
+Asia/Chita	RU	52.05000000000001	113.46665999999999	MSK+06 - Zabaykalsky
+Asia/Choibalsan	??	-90	-180	
+Asia/Chongqing	??	-90	-180	
+Asia/Chungking	??	-90	-180	
+Asia/Colombo	LK	6.933329999999998	79.85000000000002	
+Asia/Dacca	??	-90	-180	
+Asia/Damascus	SY	33.5	36.30000000000001	
+Asia/Dhaka	BD	23.716660000000005	90.41665999999998	
+Asia/Dili	TL	-8.549999999999997	125.58332999999999	
+Asia/Dubai	AE	25.299999999999997	55.30000000000001	
+Asia/Dushanbe	TJ	38.58332999999999	68.80000000000001	
+Asia/Famagusta	CY	35.116659999999996	33.94999999999999	Northern Cyprus
+Asia/Gaza	PS	31.5	34.46665999999999	Gaza Strip
+Asia/Harbin	??	-90	-180	
+Asia/Hebron	PS	31.533330000000007	35.095	West Bank
+Asia/Ho_Chi_Minh	VN	10.75	106.66665999999998	
+Asia/Hong_Kong	HK	22.283330000000007	114.14999	
+Asia/Hovd	MN	48.01666	91.64999	Bayan-Olgii, Hovd, Uvs
+Asia/Irkutsk	RU	52.26666	104.33332999999999	MSK+05 - Irkutsk, Buryatia
+Asia/Istanbul	??	-90	-180	
+Asia/Jakarta	ID	-6.166669999999996	106.80000000000001	Java, Sumatra
+Asia/Jayapura	ID	-2.5333399999999955	140.7	New Guinea (West Papua / Irian Jaya), Malukus/Moluccas
+Asia/Jerusalem	IL	31.780550000000005	35.22388000000001	
+Asia/Kabul	AF	34.51666	69.19999999999999	
+Asia/Kamchatka	RU	53.01666	158.64999999999998	MSK+09 - Kamchatka
+Asia/Karachi	PK	24.866659999999996	67.05000000000001	
+Asia/Kashgar	??	-90	-180	
+Asia/Kathmandu	NP	27.716660000000005	85.31666000000001	
+Asia/Katmandu	??	-90	-180	
+Asia/Khandyga	RU	62.65638000000001	135.55388	MSK+06 - Tomponsky, Ust-Maysky
+Asia/Kolkata	IN	22.533330000000007	88.36666000000002	
+Asia/Krasnoyarsk	RU	56.01666	92.83332999999999	MSK+04 - Krasnoyarsk area
+Asia/Kuala_Lumpur	MY	3.166659999999993	101.69999999999999	Malaysia (peninsula)
+Asia/Kuching	MY	1.5499999999999972	110.33332999999999	Sabah, Sarawak
+Asia/Kuwait	KW	29.333330000000004	47.983329999999995	
+Asia/Macao	??	-90	-180	
+Asia/Macau	MO	22.19722	113.54165999999998	
+Asia/Magadan	RU	59.56666000000001	150.8	MSK+08 - Magadan
+Asia/Makassar	ID	-5.116669999999999	119.39999	Borneo (east, south), Sulawesi/Celebes, Bali, Nusa Tengarra, Timor (west)
+Asia/Manila	PH	14.586659999999995	120.96776999999997	
+Asia/Muscat	OM	23.599999999999994	58.58332999999999	
+Asia/Nicosia	CY	35.16665999999999	33.366659999999996	most of Cyprus
+Asia/Novokuznetsk	RU	53.75	87.11666000000002	MSK+04 - Kemerovo
+Asia/Novosibirsk	RU	55.03333000000001	82.91665999999998	MSK+04 - Novosibirsk
+Asia/Omsk	RU	55	73.4	MSK+03 - Omsk
+Asia/Oral	KZ	51.21665999999999	51.349999999999994	West Kazakhstan
+Asia/Phnom_Penh	KH	11.549999999999997	104.91665999999998	
+Asia/Pontianak	ID	-0.033339999999995484	109.33332999999999	Borneo (west, central)
+Asia/Pyongyang	KP	39.01666	125.75	
+Asia/Qatar	QA	25.283330000000007	51.53333000000001	
+Asia/Qostanay	KZ	53.199990000000014	63.616659999999996	Qostanay/Kostanay/Kustanay
+Asia/Qyzylorda	KZ	44.80000000000001	65.46665999999999	Qyzylorda/Kyzylorda/Kzyl-Orda
+Asia/Rangoon	??	-90	-180	
+Asia/Riyadh	SA	24.63333	46.71665999999999	
+Asia/Saigon	??	-90	-180	
+Asia/Sakhalin	RU	46.96665999999999	142.7	MSK+08 - Sakhalin Island
+Asia/Samarkand	UZ	39.66666000000001	66.80000000000001	Uzbekistan (west)
+Asia/Seoul	KR	37.55	126.96665999999999	
+Asia/Shanghai	CN	31.233329999999995	121.46665999999999	Beijing Time
+Asia/Singapore	SG	1.2833300000000065	103.85000000000002	
+Asia/Srednekolymsk	RU	67.46665999999999	153.71666	MSK+08 - Sakha (E), N Kuril Is
+Asia/Taipei	TW	25.049999999999997	121.5	
+Asia/Tashkent	UZ	41.33332999999999	69.30000000000001	Uzbekistan (east)
+Asia/Tbilisi	GE	41.71665999999999	44.81666000000001	
+Asia/Tehran	IR	35.66665999999999	51.43333000000001	
+Asia/Tel_Aviv	??	-90	-180	
+Asia/Thimbu	??	-90	-180	
+Asia/Thimphu	BT	27.466660000000005	89.64999	
+Asia/Tokyo	JP	35.654439999999994	139.74471999999997	
+Asia/Tomsk	RU	56.5	84.96665999999999	MSK+04 - Tomsk
+Asia/Ujung_Pandang	??	-90	-180	
+Asia/Ulaanbaatar	MN	47.91666000000001	106.88333	most of Mongolia
+Asia/Ulan_Bator	??	-90	-180	
+Asia/Urumqi	CN	43.80000000000001	87.58332999999999	Xinjiang Time
+Asia/Ust-Nera	RU	64.56027	143.22665999999998	MSK+07 - Oymyakonsky
+Asia/Vientiane	LA	17.966660000000005	102.60000000000002	
+Asia/Vladivostok	RU	43.16666000000001	131.93333	MSK+07 - Amur River
+Asia/Yakutsk	RU	62	129.66665999999998	MSK+06 - Lena River
+Asia/Yangon	MM	16.783330000000007	96.16665999999998	
+Asia/Yekaterinburg	RU	56.849999999999994	60.599999999999994	MSK+02 - Urals
+Asia/Yerevan	AM	40.18333000000001	44.5	
+Atlantic/Azores	PT	37.733329999999995	-25.66667000000001	Azores
+Atlantic/Bermuda	BM	32.28333000000001	-64.76667	
+Atlantic/Canary	ES	28.099999999999994	-15.400000000000006	Canary Islands
+Atlantic/Cape_Verde	CV	14.916659999999993	-23.516670000000005	
+Atlantic/Faeroe	??	-90	-180	
+Atlantic/Faroe	FO	62.01666	-6.766670000000005	
+Atlantic/Jan_Mayen	??	-90	-180	
+Atlantic/Madeira	PT	32.63333	-16.900000000000006	Madeira Islands
+Atlantic/Reykjavik	IS	64.15	-21.849999999999994	
+Atlantic/South_Georgia	GS	-54.26667	-36.53334000000001	
+Atlantic/St_Helena	SH	-15.916669999999996	-5.699999999999989	
+Atlantic/Stanley	FK	-51.70001	-57.849999999999994	
+Australia/ACT	??	-90	-180	
+Australia/Adelaide	AU	-34.91667	138.58333	South Australia
+Australia/Brisbane	AU	-27.46667	153.03332999999998	Queensland (most areas)
+Australia/Broken_Hill	AU	-31.950000000000003	141.45	New South Wales (Yancowinna)
+Australia/Canberra	??	-90	-180	
+Australia/Currie	??	-90	-180	
+Australia/Darwin	AU	-12.466669999999993	130.83333	Northern Territory
+Australia/Eucla	AU	-31.71667	128.86666000000002	Western Australia (Eucla)
+Australia/Hobart	AU	-42.88334	147.31666	Tasmania
+Australia/LHI	??	-90	-180	
+Australia/Lindeman	AU	-20.266670000000005	149	Queensland (Whitsunday Islands)
+Australia/Lord_Howe	AU	-31.549999999999997	159.08333	Lord Howe Island
+Australia/Melbourne	AU	-37.81667	144.96666	Victoria
+Australia/North	??	-90	-180	
+Australia/NSW	??	-90	-180	
+Australia/Perth	AU	-31.950000000000003	115.85000000000002	Western Australia (most areas)
+Australia/Queensland	??	-90	-180	
+Australia/South	??	-90	-180	
+Australia/Sydney	AU	-33.86667	151.21666	New South Wales (most areas)
+Australia/Tasmania	??	-90	-180	
+Australia/Victoria	??	-90	-180	
+Australia/West	??	-90	-180	
+Australia/Yancowinna	??	-90	-180	
+Brazil/Acre	??	-90	-180	
+Brazil/DeNoronha	??	-90	-180	
+Brazil/East	??	-90	-180	
+Brazil/West	??	-90	-180	
+Canada/Atlantic	??	-90	-180	
+Canada/Central	??	-90	-180	
+Canada/Eastern	??	-90	-180	
+Canada/Mountain	??	-90	-180	
+Canada/Newfoundland	??	-90	-180	
+Canada/Pacific	??	-90	-180	
+Canada/Saskatchewan	??	-90	-180	
+Canada/Yukon	??	-90	-180	
+CET	F
+Chile/Continental	??	-90	-180	
+Chile/EasterIsland	??	-90	-180	
+CST6CDT	??	-90	-180	
+Cuba	??	-90	-180	
+EET	F
+Egypt	??	-90	-180	
+Eire	??	-90	-180	
+EST	F
+EST5EDT	??	-90	-180	
+Etc/GMT	??	-90	-180	
+Etc/GMT+0	??	-90	-180	
+Etc/GMT+1	??	-90	-180	
+Etc/GMT+10	??	-90	-180	
+Etc/GMT+11	??	-90	-180	
+Etc/GMT+12	??	-90	-180	
+Etc/GMT+2	??	-90	-180	
+Etc/GMT+3	??	-90	-180	
+Etc/GMT+4	??	-90	-180	
+Etc/GMT+5	??	-90	-180	
+Etc/GMT+6	??	-90	-180	
+Etc/GMT+7	??	-90	-180	
+Etc/GMT+8	??	-90	-180	
+Etc/GMT+9	??	-90	-180	
+Etc/GMT-0	??	-90	-180	
+Etc/GMT-1	??	-90	-180	
+Etc/GMT-10	??	-90	-180	
+Etc/GMT-11	??	-90	-180	
+Etc/GMT-12	??	-90	-180	
+Etc/GMT-13	??	-90	-180	
+Etc/GMT-14	??	-90	-180	
+Etc/GMT-2	??	-90	-180	
+Etc/GMT-3	??	-90	-180	
+Etc/GMT-4	??	-90	-180	
+Etc/GMT-5	??	-90	-180	
+Etc/GMT-6	??	-90	-180	
+Etc/GMT-7	??	-90	-180	
+Etc/GMT-8	??	-90	-180	
+Etc/GMT-9	??	-90	-180	
+Etc/GMT0	??	-90	-180	
+Etc/Greenwich	??	-90	-180	
+Etc/UCT	??	-90	-180	
+Etc/Universal	??	-90	-180	
+Etc/UTC	??	-90	-180	
+Etc/Zulu	??	-90	-180	
+Europe/Amsterdam	NL	52.366659999999996	4.900000000000006	
+Europe/Andorra	AD	42.5	1.5166600000000017	
+Europe/Astrakhan	RU	46.349999999999994	48.05000000000001	MSK+01 - Astrakhan
+Europe/Athens	GR	37.966660000000005	23.71665999999999	
+Europe/Belfast	??	-90	-180	
+Europe/Belgrade	RS	44.83332999999999	20.5	
+Europe/Berlin	DE	52.5	13.366659999999996	most of Germany
+Europe/Bratislava	SK	48.150000000000006	17.116659999999996	
+Europe/Brussels	BE	50.83332999999999	4.3333299999999895	
+Europe/Bucharest	RO	44.43333000000001	26.099999999999994	
+Europe/Budapest	HU	47.5	19.08332999999999	
+Europe/Busingen	DE	47.699990000000014	8.683330000000012	Busingen
+Europe/Chisinau	MD	47	28.83332999999999	
+Europe/Copenhagen	DK	55.66666000000001	12.58332999999999	
+Europe/Dublin	IE	53.33332999999999	-6.25	
+Europe/Gibraltar	GI	36.13333	-5.349999999999994	
+Europe/Guernsey	GG	49.45472000000001	-2.536120000000011	
+Europe/Helsinki	FI	60.16666000000001	24.96665999999999	
+Europe/Isle_of_Man	IM	54.150000000000006	-4.4666699999999935	
+Europe/Istanbul	TR	41.01666	28.96665999999999	
+Europe/Jersey	JE	49.18360999999999	-2.1066700000000083	
+Europe/Kaliningrad	RU	54.71665999999999	20.5	MSK-01 - Kaliningrad
+Europe/Kiev	??	-90	-180	
+Europe/Kirov	RU	58.599999999999994	49.650000000000006	MSK+00 - Kirov
+Europe/Kyiv	UA	50.43333000000001	30.51666	most of Ukraine
+Europe/Lisbon	PT	38.71665999999999	-9.133340000000004	Portugal (mainland)
+Europe/Ljubljana	SI	46.05000000000001	14.516660000000002	
+Europe/London	GB	51.50833	-0.1252800000000036	
+Europe/Luxembourg	LU	49.599999999999994	6.150000000000006	
+Europe/Madrid	ES	40.400000000000006	-3.683339999999987	Spain (mainland)
+Europe/Malta	MT	35.900000000000006	14.516660000000002	
+Europe/Mariehamn	AX	60.099999999999994	19.94999999999999	
+Europe/Minsk	BY	53.900000000000006	27.566660000000013	
+Europe/Monaco	MC	43.699990000000014	7.383330000000001	
+Europe/Moscow	RU	55.75583	37.61777000000001	MSK+00 - Moscow area
+Europe/Nicosia	??	-90	-180	
+Europe/Oslo	NO	59.91666000000001	10.75	
+Europe/Paris	FR	48.866659999999996	2.3333299999999895	
+Europe/Podgorica	ME	42.43333000000001	19.26666	
+Europe/Prague	CZ	50.08332999999999	14.433330000000012	
+Europe/Riga	LV	56.949990000000014	24.099999999999994	
+Europe/Rome	IT	41.900000000000006	12.483329999999995	
+Europe/Samara	RU	53.199990000000014	50.150000000000006	MSK+01 - Samara, Udmurtia
+Europe/San_Marino	SM	43.91666000000001	12.46665999999999	
+Europe/Sarajevo	BA	43.866659999999996	18.416660000000007	
+Europe/Saratov	RU	51.56666000000001	46.03333000000001	MSK+01 - Saratov
+Europe/Simferopol	UA	44.949990000000014	34.099999999999994	Crimea
+Europe/Skopje	MK	41.983329999999995	21.433330000000012	
+Europe/Sofia	BG	42.68333000000001	23.316660000000013	
+Europe/Stockholm	SE	59.33332999999999	18.05000000000001	
+Europe/Tallinn	EE	59.41666000000001	24.75	
+Europe/Tirane	AL	41.33332999999999	19.83332999999999	
+Europe/Tiraspol	??	-90	-180	
+Europe/Ulyanovsk	RU	54.33332999999999	48.400000000000006	MSK+01 - Ulyanovsk
+Europe/Uzhgorod	??	-90	-180	
+Europe/Vaduz	LI	47.150000000000006	9.516660000000002	
+Europe/Vatican	VA	41.90222	12.45304999999999	
+Europe/Vienna	AT	48.21665999999999	16.33332999999999	
+Europe/Vilnius	LT	54.68333000000001	25.316660000000013	
+Europe/Volgograd	RU	48.733329999999995	44.41666000000001	MSK+00 - Volgograd
+Europe/Warsaw	PL	52.25	21	
+Europe/Zagreb	HR	45.80000000000001	15.96665999999999	
+Europe/Zaporozhye	??	-90	-180	
+Europe/Zurich	CH	47.38333	8.533330000000007	
+Factory	??	-90	-180	
+GB	??	-90	-180	
+GB-Eire	??	-90	-180	
+GMT	F
+GMT+0	F
+GMT-0	F
+GMT0	??	-90	-180	
+Greenwich	??	-90	-180	
+Hongkong	??	-90	-180	
+HST	F
+Iceland	??	-90	-180	
+Indian/Antananarivo	MG	-18.916669999999996	47.51666	
+Indian/Chagos	IO	-7.333340000000007	72.41666000000001	
+Indian/Christmas	CX	-10.416669999999996	105.71665999999999	
+Indian/Cocos	CC	-12.166669999999996	96.91665999999998	
+Indian/Comoro	KM	-11.683340000000001	43.26666	
+Indian/Kerguelen	TF	-49.35278	70.2175	
+Indian/Mahe	SC	-4.666669999999996	55.46665999999999	
+Indian/Maldives	MV	4.166659999999993	73.5	
+Indian/Mauritius	MU	-20.166669999999996	57.5	
+Indian/Mayotte	YT	-12.783339999999995	45.233329999999995	
+Indian/Reunion	RE	-20.86667	55.46665999999999	
+Iran	??	-90	-180	
+Israel	??	-90	-180	
+Jamaica	??	-90	-180	
+Japan	??	-90	-180	
+Kwajalein	??	-90	-180	
+Libya	??	-90	-180	
+MET	F
+Mexico/BajaNorte	??	-90	-180	
+Mexico/BajaSur	??	-90	-180	
+Mexico/General	??	-90	-180	
+MST	F
+MST7MDT	??	-90	-180	
+Navajo	??	-90	-180	
+NZ	??	-90	-180	
+NZ-CHAT	??	-90	-180	
+Pacific/Apia	WS	-13.833340000000007	-171.73334	
+Pacific/Auckland	NZ	-36.86667	174.76666	most of New Zealand
+Pacific/Bougainville	PG	-6.2166699999999935	155.56666	Bougainville
+Pacific/Chatham	NZ	-43.95	-176.55001	Chatham Islands
+Pacific/Chuuk	FM	7.416659999999993	151.78332999999998	Chuuk/Truk, Yap
+Pacific/Easter	CL	-27.15	-109.43334	Easter Island
+Pacific/Efate	VU	-17.666669999999996	168.41665999999998	
+Pacific/Enderbury	??	-90	-180	
+Pacific/Fakaofo	TK	-9.36667	-171.23334	
+Pacific/Fiji	FJ	-18.133340000000004	178.41665999999998	
+Pacific/Funafuti	TV	-8.516670000000005	179.21666	
+Pacific/Galapagos	EC	-0.9000000000000057	-89.6	Galapagos Islands
+Pacific/Gambier	PF	-23.133340000000004	-134.95	Gambier Islands
+Pacific/Guadalcanal	SB	-9.533339999999995	160.2	
+Pacific/Guam	GU	13.466660000000005	144.75	
+Pacific/Honolulu	US	21.306939999999997	-157.85834	Hawaii
+Pacific/Johnston	??	-90	-180	
+Pacific/Kanton	KI	-2.7833399999999955	-171.71667	Phoenix Islands
+Pacific/Kiritimati	KI	1.866659999999996	-157.33334	Line Islands
+Pacific/Kosrae	FM	5.316659999999999	162.98333000000002	Kosrae
+Pacific/Kwajalein	MH	9.083330000000004	167.33333	Kwajalein
+Pacific/Majuro	MH	7.150000000000006	171.2	most of Marshall Islands
+Pacific/Marquesas	PF	-9	-139.5	Marquesas Islands
+Pacific/Midway	UM	28.216660000000005	-177.36667	Midway Islands
+Pacific/Nauru	NR	-0.5166700000000048	166.91665999999998	
+Pacific/Niue	NU	-19.016670000000005	-169.91667	
+Pacific/Norfolk	NF	-29.049999999999997	167.96666	
+Pacific/Noumea	NC	-22.266670000000005	166.45	
+Pacific/Pago_Pago	AS	-14.266670000000005	-170.7	
+Pacific/Palau	PW	7.333330000000004	134.48333000000002	
+Pacific/Pitcairn	PN	-25.066670000000002	-130.08334	
+Pacific/Pohnpei	FM	6.9666600000000045	158.21666	Pohnpei/Ponape
+Pacific/Ponape	??	-90	-180	
+Pacific/Port_Moresby	PG	-9.5	147.16665999999998	most of Papua New Guinea
+Pacific/Rarotonga	CK	-21.23334	-159.76667	
+Pacific/Saipan	MP	15.200000000000003	145.75	
+Pacific/Samoa	??	-90	-180	
+Pacific/Tahiti	PF	-17.533339999999995	-149.56667	Society Islands
+Pacific/Tarawa	KI	1.4166599999999931	173	Gilbert Islands
+Pacific/Tongatapu	TO	-21.133340000000004	-175.2	
+Pacific/Truk	??	-90	-180	
+Pacific/Wake	UM	19.283330000000007	166.61666000000002	Wake Island
+Pacific/Wallis	WF	-13.299999999999997	-176.16667	
+Pacific/Yap	??	-90	-180	
+Poland	??	-90	-180	
+Portugal	??	-90	-180	
+PRC	??	-90	-180	
+PST8PDT	??	-90	-180	
+ROC	??	-90	-180	
+ROK	??	-90	-180	
+Singapore	??	-90	-180	
+Turkey	??	-90	-180	
+UCT	F
+Universal	??	-90	-180	
+US/Alaska	??	-90	-180	
+US/Aleutian	??	-90	-180	
+US/Arizona	??	-90	-180	
+US/Central	??	-90	-180	
+US/East-Indiana	??	-90	-180	
+US/Eastern	??	-90	-180	
+US/Hawaii	??	-90	-180	
+US/Indiana-Starke	??	-90	-180	
+US/Michigan	??	-90	-180	
+US/Mountain	??	-90	-180	
+US/Pacific	??	-90	-180	
+US/Samoa	??	-90	-180	
+UTC	??	-90	-180	
+W-SU	??	-90	-180	
+WET	F
+Zulu	??	-90	-180	

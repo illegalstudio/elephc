@@ -11,7 +11,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_int, emit_expr};
 use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -26,6 +26,8 @@ use crate::types::PhpType;
 /// - `args`: Two expressions evaluated left-to-right; dividend first, divisor second.
 ///
 /// # Behavior
+/// - Coerces each operand to a raw integer via `coerce_to_int` (unboxing `Mixed`/`Union` values
+///   through `__rt_mixed_cast_int`) so a boxed operand is never divided as if it were a raw int.
 /// - Evaluates `args[0]` (dividend) and preserves it across evaluation of `args[1]` (divisor).
 /// - On x86_64, the preserved dividend is held in `r11` during divisor evaluation, then moved
 ///   into `rax` before `idiv` (which uses the fixed `rax:rdx` pair for the dividend).
@@ -49,9 +51,11 @@ pub fn emit(
     match emitter.target.arch {
         Arch::AArch64 => {
             // -- integer division: dividend / divisor --
-            emit_expr(&args[0], emitter, ctx, data);
+            let dividend_ty = emit_expr(&args[0], emitter, ctx, data);
+            coerce_to_int(emitter, &dividend_ty);                               // unbox a Mixed/Union dividend into a raw integer before saving it
             abi::emit_push_reg(emitter, "x0");                                  // preserve the dividend while evaluating the divisor expression
-            emit_expr(&args[1], emitter, ctx, data);
+            let divisor_ty = emit_expr(&args[1], emitter, ctx, data);
+            coerce_to_int(emitter, &divisor_ty);                                // unbox a Mixed/Union divisor into a raw integer before the division
             abi::emit_pop_reg(emitter, "x1");                                   // restore the dividend into the left-hand division register
 
             // -- division by zero guard --
@@ -61,9 +65,11 @@ pub fn emit(
         }
         Arch::X86_64 => {
             // -- integer division: dividend / divisor --
-            emit_expr(&args[0], emitter, ctx, data);
+            let dividend_ty = emit_expr(&args[0], emitter, ctx, data);
+            coerce_to_int(emitter, &dividend_ty);                               // unbox a Mixed/Union dividend into a raw integer before saving it
             abi::emit_push_reg(emitter, "rax");                                 // preserve the dividend while evaluating the divisor expression
-            emit_expr(&args[1], emitter, ctx, data);
+            let divisor_ty = emit_expr(&args[1], emitter, ctx, data);
+            coerce_to_int(emitter, &divisor_ty);                                // unbox a Mixed/Union divisor into a raw integer before the division
             abi::emit_pop_reg(emitter, "r11");                                  // restore the dividend into a scratch register before idiv clobbers rax/rdx
 
             // -- division by zero guard --

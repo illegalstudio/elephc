@@ -50,6 +50,10 @@ pub(in crate::codegen) fn collect_required_class_names_in_stmts(
 ///   Each catch's `exception_types` are inserted.
 /// - Control-flow statements (`If`, `While`, `Foreach`, `Switch`, etc.) recurse into their bodies
 ///   and also process any embedded expressions that may contain class references.
+/// - Wrapper statements (`Synthetic`, `NamespaceBlock`, `IncludeOnceGuard`) recurse into their
+///   inner statement bodies. This matters for `Synthetic`, which is how PHP's multi-argument
+///   `echo a, b;` is lowered (a sequence of single-value `Echo` statements): without it, a class
+///   used only inside a multi-value `echo` is never collected and its methods are never emitted.
 /// - Property/static assignments with named `StaticReceiver`: inserts the receiver class name.
 /// - Statement variants that are purely expression-based delegate to
 ///   `collect_required_class_names_in_expr` for their expression(s).
@@ -98,6 +102,9 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
                 collect_required_class_names_in_body(body, names);
             }
             StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_required_class_names_in_body(body, names);
+            }
+            StmtKind::Synthetic(body) => {
                 collect_required_class_names_in_body(body, names);
             }
             StmtKind::IncludeOnceMark { .. } => {}

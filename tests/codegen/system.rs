@@ -104,6 +104,183 @@ fn test_date_literal_text() {
     assert_eq!(out, "2023/11/14");
 }
 
+/// Verifies `date("y")` returns the zero-padded two-digit year. Built via `mktime()` so the
+/// timestamp round-trips through the same local timezone and the result is machine-independent.
+#[test]
+fn test_date_two_digit_year() {
+    let out = compile_and_run("<?php echo date(\"y\", mktime(0, 0, 0, 6, 15, 2024));");
+    assert_eq!(out, "24");
+}
+
+/// Verifies `date("h")` returns the zero-padded 12-hour clock value, mapping 15:00 → "03"
+/// and midnight → "12". Uses `mktime()` for a timezone-independent round-trip.
+#[test]
+fn test_date_12_hour_padded() {
+    let out = compile_and_run(
+        "<?php echo date(\"h\", mktime(15, 30, 0, 6, 15, 2024)) . date(\"h\", mktime(0, 0, 0, 6, 15, 2024));",
+    );
+    assert_eq!(out, "0312");
+}
+
+/// Verifies `date("w")` returns the numeric weekday with Sunday=0; 2024-06-15 is a Saturday → "6".
+#[test]
+fn test_date_numeric_weekday() {
+    let out = compile_and_run("<?php echo date(\"w\", mktime(12, 0, 0, 6, 15, 2024));");
+    assert_eq!(out, "6");
+}
+
+/// Verifies `date("z")` returns the zero-based day of year: Jan 1 → "0" and 2024-03-01 → "60"
+/// (31 January + 29 leap February days). Uses `mktime()` for a timezone-independent round-trip.
+#[test]
+fn test_date_day_of_year() {
+    let out = compile_and_run(
+        "<?php echo date(\"z\", mktime(0, 0, 0, 1, 1, 2024)) . \"|\" . date(\"z\", mktime(12, 0, 0, 3, 1, 2024));",
+    );
+    assert_eq!(out, "0|60");
+}
+
+/// Verifies `date("S")` appends the correct English ordinal suffix, covering the st/nd/rd cases,
+/// the 11–13 "th" exception, and the 21 → "st" wrap. Combined with `j` to mirror typical usage.
+#[test]
+fn test_date_ordinal_suffix() {
+    let out = compile_and_run(
+        "<?php \
+echo date(\"jS\", mktime(12, 0, 0, 6, 1, 2024)) . \"|\" \
+. date(\"jS\", mktime(12, 0, 0, 6, 2, 2024)) . \"|\" \
+. date(\"jS\", mktime(12, 0, 0, 6, 3, 2024)) . \"|\" \
+. date(\"jS\", mktime(12, 0, 0, 6, 11, 2024)) . \"|\" \
+. date(\"jS\", mktime(12, 0, 0, 6, 21, 2024));",
+    );
+    assert_eq!(out, "1st|2nd|3rd|11th|21st");
+}
+
+/// Verifies `date("t")` returns the number of days in the month, including the leap-year
+/// February adjustment (29 vs 28) and the 30/31-day months.
+#[test]
+fn test_date_days_in_month() {
+    let out = compile_and_run(
+        "<?php \
+echo date(\"t\", mktime(12, 0, 0, 2, 15, 2024)) . \"|\" \
+. date(\"t\", mktime(12, 0, 0, 2, 15, 2023)) . \"|\" \
+. date(\"t\", mktime(12, 0, 0, 4, 15, 2024)) . \"|\" \
+. date(\"t\", mktime(12, 0, 0, 1, 15, 2024));",
+    );
+    assert_eq!(out, "29|28|30|31");
+}
+
+/// Verifies `date("L")` returns the leap-year flag, exercising the divisible-by-4 (2024 → 1),
+/// common-year (2023 → 0), and divisible-by-400 (2000 → 1) branches of the leap-year rule.
+#[test]
+fn test_date_leap_year_flag() {
+    let out = compile_and_run(
+        "<?php \
+echo date(\"L\", mktime(12, 0, 0, 6, 15, 2024)) \
+. date(\"L\", mktime(12, 0, 0, 6, 15, 2023)) \
+. date(\"L\", mktime(12, 0, 0, 6, 15, 2000));",
+    );
+    assert_eq!(out, "101");
+}
+
+/// Verifies `date("W")` returns the zero-padded ISO-8601 week number for a mid-year date
+/// (2024-06-15 is in ISO week 24).
+#[test]
+fn test_date_iso_week() {
+    let out = compile_and_run("<?php echo date(\"W\", mktime(12, 0, 0, 6, 15, 2024));");
+    assert_eq!(out, "24");
+}
+
+/// Verifies `date("W")`/`date("o")` at the year boundaries, where the ISO week-numbering year
+/// differs from the calendar year: 2024-12-31 is in week 01 of 2025; 2021-01-01 is in week 53 of
+/// 2020; 2023-01-01 is in week 52 of 2022.
+#[test]
+fn test_date_iso_week_year_boundaries() {
+    let out = compile_and_run(
+        "<?php \
+echo date(\"W\", mktime(12, 0, 0, 12, 31, 2024)) . \"/\" . date(\"o\", mktime(12, 0, 0, 12, 31, 2024)) . \"|\" \
+. date(\"W\", mktime(12, 0, 0, 1, 1, 2021)) . \"/\" . date(\"o\", mktime(12, 0, 0, 1, 1, 2021)) . \"|\" \
+. date(\"W\", mktime(12, 0, 0, 1, 1, 2023)) . \"/\" . date(\"o\", mktime(12, 0, 0, 1, 1, 2023));",
+    );
+    assert_eq!(out, "01/2025|53/2020|52/2022");
+}
+
+/// Verifies `gmdate()` formats a fixed timestamp in UTC. 1700000000 is 2023-11-14 22:13:20 UTC,
+/// so the result is exact and machine-timezone-independent (unlike `date()`).
+#[test]
+fn test_gmdate_full_format() {
+    let out = compile_and_run("<?php echo gmdate(\"Y-m-d H:i:s\", 1700000000);");
+    assert_eq!(out, "2023-11-14 22:13:20");
+}
+
+/// Verifies `gmdate()` uses UTC regardless of the machine timezone: the Unix epoch (0) formats
+/// to 1970-01-01 00:00:00, which would shift a day/hour under `date()` in a non-UTC zone.
+#[test]
+fn test_gmdate_epoch_is_utc() {
+    let out = compile_and_run("<?php echo gmdate(\"Y-m-d H:i:s\", 0);");
+    assert_eq!(out, "1970-01-01 00:00:00");
+}
+
+/// Verifies `gmdate()` formats the leap day 2024-02-29 (timestamp 1709251199 = 23:59:59 UTC).
+#[test]
+fn test_gmdate_leap_day() {
+    let out = compile_and_run("<?php echo gmdate(\"Y-m-d\", 1709251199);");
+    assert_eq!(out, "2024-02-29");
+}
+
+/// Verifies the newly added specifiers (`y`, `n`, `j`, `g`, `i`, `A`) resolve through `gmdate()`
+/// against a fixed UTC timestamp (2023-11-14 22:13:20 → 10:13 PM in 12-hour form).
+#[test]
+fn test_gmdate_new_specifiers() {
+    let out = compile_and_run("<?php echo gmdate(\"y n j g i A\", 1700000000);");
+    assert_eq!(out, "23 11 14 10 13 PM");
+}
+
+/// Verifies the calendar specifiers (`N`, `w`, `z`, `t`, `L`) through `gmdate()`: 2023-11-14 is a
+/// Tuesday (N=2, w=2), day-of-year 317, November has 30 days, and 2023 is not a leap year.
+#[test]
+fn test_gmdate_calendar_specifiers() {
+    let out = compile_and_run("<?php echo gmdate(\"N w z t L\", 1700000000);");
+    assert_eq!(out, "2 2 317 30 0");
+}
+
+/// Verifies `gmdate()` is recognized case-insensitively like every PHP builtin (`GmDate`).
+#[test]
+fn test_gmdate_case_insensitive() {
+    let out = compile_and_run("<?php echo GmDate(\"Y-m-d\", 1700000000);");
+    assert_eq!(out, "2023-11-14");
+}
+
+/// Verifies a backslash in the format string escapes the next character so it is emitted
+/// literally — here the ISO 8601 literal `T` between the date and time parts.
+#[test]
+fn test_date_format_escape_iso8601() {
+    let out = compile_and_run("<?php echo gmdate('Y-m-d\\TH:i:s', 1700000000);");
+    assert_eq!(out, "2023-11-14T22:13:20");
+}
+
+/// Verifies escaped specifier letters are emitted literally inside words (`\o\f` → "of"),
+/// while unescaped specifiers still expand (`jS` → "14th", `F` → "November").
+#[test]
+fn test_date_format_escape_words() {
+    let out = compile_and_run("<?php echo gmdate('jS \\o\\f F', 1700000000);");
+    assert_eq!(out, "14th of November");
+}
+
+/// Verifies an escaped specifier is a literal while the same unescaped letter still expands:
+/// `\Y` → "Y" but `Y` → "2023".
+#[test]
+fn test_date_format_escaped_vs_real_specifier() {
+    let out = compile_and_run("<?php echo gmdate('\\Y=Y', 1700000000);");
+    assert_eq!(out, "Y=2023");
+}
+
+/// Verifies escapes work through `date()` too: an all-literal escaped format is timezone
+/// independent, so `\Y\e\s` renders "Yes" regardless of the machine timezone.
+#[test]
+fn test_date_format_escape_all_literal() {
+    let out = compile_and_run("<?php echo date('\\Y\\e\\s', 1700000000);");
+    assert_eq!(out, "Yes");
+}
+
 /// Verifies `mktime()` constructs a timestamp for a given date (2000-01-01 00:00:00) and
 /// `date("Y-m-d")` formats it back to the same date.
 #[test]
@@ -117,6 +294,38 @@ echo date(\"Y-m-d\", $ts);
     assert_eq!(out, "2000-01-01");
 }
 
+/// Verifies `mktime`/`gmmktime` handle years before 1900 (which libc rejects) via a 400-year
+/// Gregorian-cycle shift, matching PHP's negative timestamps; an in-range year (1900) is unchanged.
+#[test]
+fn test_mktime_pre_1900() {
+    let out = compile_and_run(
+        "<?php
+date_default_timezone_set(\"UTC\");
+echo mktime(0, 0, 0, 3, 15, 1850), \"|\", date(\"Y-m-d\", mktime(0, 0, 0, 3, 15, 1850)), \"|\",
+     gmmktime(0, 0, 0, 7, 4, 1776), \"|\", gmdate(\"Y-m-d\", gmmktime(0, 0, 0, 7, 4, 1776)), \"|\",
+     mktime(0, 0, 0, 1, 1, 1900);
+",
+    );
+    assert_eq!(out, "-3780518400|1850-03-15|-6106060800|1776-07-04|-2208988800");
+}
+
+/// Verifies `mktime()`/`gmmktime()` apply PHP's two-digit-year shorthand: years
+/// 0-69 map to 2000-2069, years 70-100 map to 1970-2000, and years >= 101 are
+/// taken literally (101 stays year 101, not 2001).
+#[test]
+fn test_mktime_2digit_year() {
+    let out = compile_and_run(
+        "<?php
+date_default_timezone_set(\"UTC\");
+echo mktime(0, 0, 0, 1, 1, 99), \"|\", date(\"Y\", mktime(0, 0, 0, 1, 1, 99)), \"|\",
+     mktime(0, 0, 0, 1, 1, 50), \"|\", date(\"Y\", mktime(0, 0, 0, 1, 1, 50)), \"|\",
+     mktime(0, 0, 0, 1, 1, 70), \"|\", mktime(0, 0, 0, 1, 1, 69), \"|\",
+     gmmktime(0, 0, 0, 6, 15, 99);
+",
+    );
+    assert_eq!(out, "915148800|1999|2524608000|2050|0|3124224000|929404800");
+}
+
 /// Verifies `mktime(hour, minute, second, month, day, year)` preserves the full time down to the second.
 #[test]
 fn test_mktime_specific_time() {
@@ -127,6 +336,36 @@ echo date(\"H:i:s\", $ts);
 ",
     );
     assert_eq!(out, "12:30:45");
+}
+
+/// Regression: `mktime()` must unbox `Mixed`/`Union` arguments before building the timestamp.
+/// Heterogeneous-array values (`$a["d"]`, `$b["mo"]`) are boxed Mixed cells; before the fix the
+/// emitter pushed the boxed pointer as a raw integer, producing wildly wrong timestamps. The
+/// subtraction is timezone-independent (both calls use the same zone), so the result must be 0.
+#[test]
+fn test_mktime_unboxes_mixed_args() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["d" => 15, "tag" => "x"];
+$b = ["mo" => 6, "tag" => "y"];
+echo mktime(0, 0, 0, $b["mo"], $a["d"], 2020) - mktime(0, 0, 0, 6, 15, 2020);
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+/// Regression: `date()` must unbox a `Mixed`/`Union` timestamp argument before formatting.
+/// `$a["ts"]` is a boxed Mixed cell; before the fix the emitter passed the boxed pointer as the
+/// raw timestamp. Comparing `date(..., Mixed)` to `date(..., literal)` is timezone-independent.
+#[test]
+fn test_date_unboxes_mixed_timestamp() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["ts" => 0, "tag" => "x"];
+echo date("Y", $a["ts"]) === date("Y", 0) ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
 }
 
 /// Verifies `strtotime("YYYY-MM-DD")` parses a plain ISO date string.
@@ -179,20 +418,38 @@ echo date("Y-m-d H:i:s", $lower);
     assert_eq!(out, "2024-06-15 12:00:00,2024-06-15 12:30:00");
 }
 
-/// Verifies `strtotime` returns -1 for malformed ISO-like strings that have extra junk after the datetime.
+/// Verifies `strtotime` returns `false` (PHP's failure value) for malformed ISO-like strings
+/// that have extra junk after the datetime; a strict `=== false` check distinguishes failure
+/// from any valid timestamp.
 #[test]
 fn test_strtotime_rejects_malformed_iso_datetime() {
     let out = compile_and_run(
         r#"<?php
-echo strtotime("2024-06-15 12:30:45 extra") . ",";
-echo strtotime("2024-06-15abc") . ",";
-echo strtotime("2024-06-15 12:30x") . ",";
-echo strtotime("2024-06-15 12") . ",";
-echo strtotime("2024/06/15") . ",";
-echo strtotime("2024-0x-15");
+echo (strtotime("2024-06-15 12:30:45 extra") === false ? "F" : "x") . ",";
+echo (strtotime("2024-06-15abc") === false ? "F" : "x") . ",";
+echo (strtotime("2024-06-15 12:30x") === false ? "F" : "x") . ",";
+echo (strtotime("2024-06-15 12") === false ? "F" : "x") . ",";
+echo (strtotime("2024/06/15") === false ? "F" : "x") . ",";
+echo (strtotime("2024-0x-15") === false ? "F" : "x");
 "#,
     );
-    assert_eq!(out, "-1,-1,-1,-1,-1,-1");
+    assert_eq!(out, "F,F,F,F,F,F");
+}
+
+/// Verifies the strtotime() failure value is `false`, not `-1`: a failed parse echoes as the
+/// empty string and satisfies `=== false`, while `-1` remains a real timestamp — one second
+/// before the epoch — reachable via an explicit UTC date string.
+#[test]
+fn test_strtotime_false_on_failure_minus_one_is_valid() {
+    let out = compile_and_run(
+        r#"<?php
+echo strtotime("complete garbage"), "|";
+echo (strtotime("complete garbage") === false ? "1" : "0"), "|";
+echo strtotime("1969-12-31 23:59:59 UTC"), "|";
+echo (strtotime("1969-12-31 23:59:59 UTC") === -1 ? "1" : "0");
+"#,
+    );
+    assert_eq!(out, "|1|-1|1");
 }
 
 /// Verifies a round-trip: `mktime` and `strtotime("YYYY-MM-DD HH:MM:SS")` produce identical timestamps.
@@ -208,6 +465,226 @@ if ($ts1 == $ts2) {
 "#,
     );
     assert_eq!(out, "match");
+}
+
+/// Verifies the 2-argument `strtotime(modifier, base)`: `"now"` relative to a base timestamp
+/// returns the base unchanged (timezone-independent).
+#[test]
+fn test_strtotime_base_now_returns_base() {
+    let out = compile_and_run("<?php echo strtotime(\"now\", 1700000000);");
+    assert_eq!(out, "1700000000");
+}
+
+/// Verifies `strtotime("+2 hours", base)` offsets from the supplied base timestamp. 2023-11-14
+/// is clear of any DST transition, so the result is exactly base + 7200 in every timezone.
+#[test]
+fn test_strtotime_base_hour_offset() {
+    let out = compile_and_run("<?php echo strtotime(\"+2 hours\", 1700000000);");
+    assert_eq!(out, "1700007200");
+}
+
+/// Verifies `strtotime("+1 day", base)` offsets a whole day from the base (DST-free date, so
+/// exactly base + 86400 in every timezone).
+#[test]
+fn test_strtotime_base_day_offset() {
+    let out = compile_and_run("<?php echo strtotime(\"+1 day\", 1700000000);");
+    assert_eq!(out, "1700086400");
+}
+
+/// Verifies the `@<timestamp>` epoch form returns the literal UNIX timestamp (UTC, no parsing
+/// against the current time).
+#[test]
+fn test_strtotime_epoch() {
+    let out = compile_and_run("<?php echo strtotime(\"@1700000000\");");
+    assert_eq!(out, "1700000000");
+}
+
+/// Verifies the `@<timestamp>` epoch form accepts zero and negative (pre-epoch) values.
+#[test]
+fn test_strtotime_epoch_zero_and_negative() {
+    let out = compile_and_run("<?php echo strtotime(\"@0\"), \"|\", strtotime(\"@-5\");");
+    assert_eq!(out, "0|-5");
+}
+
+/// Verifies the `@<timestamp>` epoch form truncates a fractional part (matching PHP).
+#[test]
+fn test_strtotime_epoch_truncates_fraction() {
+    let out = compile_and_run("<?php echo strtotime(\"@1700000000.999\");");
+    assert_eq!(out, "1700000000");
+}
+
+/// Verifies a malformed epoch (`@` with no digits) reports strtotime's `false` failure value.
+#[test]
+fn test_strtotime_epoch_invalid() {
+    let out = compile_and_run("<?php echo strtotime(\"@abc\") === false ? \"F\" : \"x\";");
+    assert_eq!(out, "F");
+}
+
+/// Verifies the American `MM/DD/YYYY` slash-date form. The result is built with `mktime` and
+/// reformatted with `date()`, so the date round-trips through the local zone (machine-independent).
+#[test]
+fn test_strtotime_slash_date() {
+    let out = compile_and_run("<?php echo date(\"Y-m-d\", strtotime(\"12/25/2024\"));");
+    assert_eq!(out, "2024-12-25");
+}
+
+/// Verifies single-digit month/day slash dates (`M/D/YYYY`).
+#[test]
+fn test_strtotime_slash_single_digit() {
+    let out = compile_and_run("<?php echo date(\"Y-m-d\", strtotime(\"1/5/2024\"));");
+    assert_eq!(out, "2024-01-05");
+}
+
+/// Verifies PHP's 2-digit-year windowing for slash dates: `24` → 2024 but `70` → 1970.
+#[test]
+fn test_strtotime_slash_two_digit_year() {
+    let out = compile_and_run(
+        "<?php echo date(\"Y\", strtotime(\"12/25/24\")) . \"|\" . date(\"Y\", strtotime(\"12/25/70\"));",
+    );
+    assert_eq!(out, "2024|1970");
+}
+
+/// Verifies a slash date with an `HH:MM` time suffix sets the clock.
+#[test]
+fn test_strtotime_slash_with_time() {
+    let out = compile_and_run(
+        "<?php echo date(\"Y-m-d H:i:s\", strtotime(\"6/15/2024 8:05\"));",
+    );
+    assert_eq!(out, "2024-06-15 08:05:00");
+}
+
+/// Verifies a slash date with an out-of-range month is rejected with the `false` failure value.
+#[test]
+fn test_strtotime_slash_rejects_bad_month() {
+    let out = compile_and_run("<?php echo strtotime(\"13/01/2024\") === false ? \"F\" : \"x\";");
+    assert_eq!(out, "F");
+}
+
+/// Verifies the textual day-first form `D Month Y` (full month name).
+#[test]
+fn test_strtotime_textual_day_first() {
+    let out = compile_and_run("<?php echo date(\"Y-m-d\", strtotime(\"25 December 2024\"));");
+    assert_eq!(out, "2024-12-25");
+}
+
+/// Verifies the textual month-first form `Month D, Y` (with and without the comma).
+#[test]
+fn test_strtotime_textual_month_first() {
+    let out = compile_and_run(
+        "<?php echo date(\"Y-m-d\", strtotime(\"December 25, 2024\")) . \"|\" . date(\"Y-m-d\", strtotime(\"December 25 2024\"));",
+    );
+    assert_eq!(out, "2024-12-25|2024-12-25");
+}
+
+/// Verifies abbreviated and mixed-case month names parse (matching is case-insensitive).
+#[test]
+fn test_strtotime_textual_abbrev_and_case() {
+    let out = compile_and_run(
+        "<?php echo date(\"Y-m-d\", strtotime(\"25 Dec 2024\")) . \"|\" . date(\"Y-m-d\", strtotime(\"25 DECEMBER 2024\"));",
+    );
+    assert_eq!(out, "2024-12-25|2024-12-25");
+}
+
+/// Verifies a textual date with an `HH:MM` time suffix sets the clock.
+#[test]
+fn test_strtotime_textual_with_time() {
+    let out = compile_and_run(
+        "<?php echo date(\"Y-m-d H:i:s\", strtotime(\"25 December 2024 14:30\"));",
+    );
+    assert_eq!(out, "2024-12-25 14:30:00");
+}
+
+/// Verifies a textual date with an out-of-range day is normalized by `mktime` (`31 feb` → Mar 2),
+/// matching PHP (no day validation for textual dates).
+#[test]
+fn test_strtotime_textual_normalizes_overflow() {
+    let out = compile_and_run("<?php echo date(\"Y-m-d\", strtotime(\"31 feb 2024\"));");
+    assert_eq!(out, "2024-03-02");
+}
+
+/// Verifies the day-first textual path falls back to the relative-offset parser when the word
+/// after the number is a unit rather than a month: `strtotime("2 weeks", base)` = base + 14 days.
+#[test]
+fn test_strtotime_textual_offset_fallback() {
+    let out = compile_and_run("<?php echo strtotime(\"2 weeks\", 1700000000);");
+    assert_eq!(out, "1701209600");
+}
+
+/// Verifies `first/last day of this month` resolve to day 1 and the month's last day. The base is
+/// built with `mktime` so the result round-trips through the local zone (machine-independent).
+#[test]
+fn test_strtotime_first_last_day_of_this_month() {
+    let out = compile_and_run(
+        "<?php $b = mktime(0, 0, 0, 6, 15, 2024); echo date(\"Y-m-d\", strtotime(\"first day of this month\", $b)) . \"|\" . date(\"Y-m-d\", strtotime(\"last day of this month\", $b));",
+    );
+    assert_eq!(out, "2024-06-01|2024-06-30");
+}
+
+/// Verifies the month modifiers `next` and `last`/`previous` shift the target month.
+#[test]
+fn test_strtotime_first_last_day_of_other_month() {
+    let out = compile_and_run(
+        "<?php $b = mktime(0, 0, 0, 6, 15, 2024); echo date(\"Y-m-d\", strtotime(\"first day of next month\", $b)) . \"|\" . date(\"Y-m-d\", strtotime(\"last day of next month\", $b)) . \"|\" . date(\"Y-m-d\", strtotime(\"last day of previous month\", $b));",
+    );
+    assert_eq!(out, "2024-07-01|2024-07-31|2024-05-31");
+}
+
+/// Verifies `first/last day of` preserves the base time of day (it only changes the calendar day).
+#[test]
+fn test_strtotime_first_day_preserves_time() {
+    let out = compile_and_run(
+        "<?php echo date(\"Y-m-d H:i:s\", strtotime(\"first day of this month\", mktime(14, 30, 45, 6, 15, 2024)));",
+    );
+    assert_eq!(out, "2024-06-01 14:30:45");
+}
+
+/// Verifies that routing `last` through the first/last-day strategy still falls back to the
+/// weekday parser, so `last monday` keeps working (2024-06-15 is a Saturday → the 10th).
+#[test]
+fn test_strtotime_last_weekday_still_works() {
+    let out = compile_and_run(
+        "<?php echo date(\"Y-m-d\", strtotime(\"last monday\", mktime(0, 0, 0, 6, 15, 2024)));",
+    );
+    assert_eq!(out, "2024-06-10");
+}
+
+/// Verifies `nth weekday of <modifier> month`: the first, second, and last Monday of June 2024
+/// (the 3rd, 10th, and 24th). Anchored with `mktime` so it round-trips through the local zone.
+#[test]
+fn test_strtotime_nth_weekday_of_month() {
+    let out = compile_and_run(
+        "<?php $b = mktime(12, 0, 0, 6, 15, 2024); echo date(\"Y-m-d\", strtotime(\"first monday of this month\", $b)) . \"|\" . date(\"Y-m-d\", strtotime(\"second monday of this month\", $b)) . \"|\" . date(\"Y-m-d\", strtotime(\"last monday of this month\", $b));",
+    );
+    assert_eq!(out, "2024-06-03|2024-06-10|2024-06-24");
+}
+
+/// Verifies the month modifier and other weekdays/ordinals: `last friday of this month` (28th),
+/// `third tuesday of next month` (2024-07-16), and `last sunday of last month` (2024-05-26).
+#[test]
+fn test_strtotime_nth_weekday_modifiers() {
+    let out = compile_and_run(
+        "<?php $b = mktime(12, 0, 0, 6, 15, 2024); echo date(\"Y-m-d\", strtotime(\"last friday of this month\", $b)) . \"|\" . date(\"Y-m-d\", strtotime(\"third tuesday of next month\", $b)) . \"|\" . date(\"Y-m-d\", strtotime(\"last sunday of last month\", $b));",
+    );
+    assert_eq!(out, "2024-06-28|2024-07-16|2024-05-26");
+}
+
+/// Verifies a `fifth` occurrence that overflows the month rolls into the next month, matching
+/// PHP: June 2024 has only four Mondays, so `fifth monday of this month` is 2024-07-01.
+#[test]
+fn test_strtotime_nth_weekday_overflow() {
+    let out = compile_and_run(
+        "<?php echo date(\"Y-m-d\", strtotime(\"fifth monday of this month\", mktime(12, 0, 0, 6, 15, 2024)));",
+    );
+    assert_eq!(out, "2024-07-01");
+}
+
+/// Verifies nth-weekday resets the time to midnight (unlike `first day of`, which preserves it).
+#[test]
+fn test_strtotime_nth_weekday_resets_time() {
+    let out = compile_and_run(
+        "<?php echo date(\"H:i:s\", strtotime(\"first monday of this month\", mktime(14, 30, 45, 6, 15, 2024)));",
+    );
+    assert_eq!(out, "00:00:00");
 }
 
 /// Verifies `strtotime("now")` returns a timestamp within a few seconds of the current time.
@@ -343,31 +820,32 @@ echo date("Y", $now);
     assert!(val >= 2024, "expected current year >= 2024, got {}", out);
 }
 
-/// Verifies `strtotime` returns -1 for a non-parseable string like "garbage".
+/// Verifies `strtotime` returns `false` for a non-parseable string like "garbage": the value
+/// echoes as the empty string and satisfies a strict `=== false` comparison through a local.
 #[test]
 fn test_strtotime_invalid() {
     let out = compile_and_run(
         r#"<?php
 $ts = strtotime("garbage");
-echo $ts;
+echo $ts, "|", ($ts === false ? "F" : "x");
 "#,
     );
-    assert_eq!(out, "-1");
+    assert_eq!(out, "|F");
 }
 
 /// Verifies `strtotime` rejects keywords and weekday names with trailing junk characters
-/// (e.g. "today123", "today!", "Monday2", "next Monday2") by returning -1.
+/// (e.g. "today123", "today!", "Monday2", "next Monday2") by returning `false`.
 #[test]
 fn test_strtotime_rejects_keyword_and_weekday_suffix_junk() {
     let out = compile_and_run(
         r#"<?php
-echo strtotime("today123") . ",";
-echo strtotime("today!") . ",";
-echo strtotime("Monday2") . ",";
-echo strtotime("next Monday2");
+echo (strtotime("today123") === false ? "F" : "x") . ",";
+echo (strtotime("today!") === false ? "F" : "x") . ",";
+echo (strtotime("Monday2") === false ? "F" : "x") . ",";
+echo (strtotime("next Monday2") === false ? "F" : "x");
 "#,
     );
-    assert_eq!(out, "-1,-1,-1,-1");
+    assert_eq!(out, "F,F,F,F");
 }
 
 /// Verifies `strtotime("HH:MM")` (time-only, no seconds) parses and normalizes to HH:MM:00.
@@ -406,18 +884,18 @@ echo date("H:i:s", $ts);
     assert_eq!(out, "09:30:00");
 }
 
-/// Verifies `strtotime` returns -1 for invalid time-only shapes (junk suffix, out-of-range values, malformed separator).
+/// Verifies `strtotime` returns `false` for invalid time-only shapes (junk suffix, out-of-range values, malformed separator).
 #[test]
 fn test_strtotime_rejects_invalid_time_only_shapes() {
     let out = compile_and_run(
         r#"<?php
-echo strtotime("14:30abc") . ",";
-echo strtotime("14:30:99") . ",";
-echo strtotime("99:99") . ",";
-echo strtotime("14:30:");
+echo (strtotime("14:30abc") === false ? "F" : "x") . ",";
+echo (strtotime("14:30:99") === false ? "F" : "x") . ",";
+echo (strtotime("99:99") === false ? "F" : "x") . ",";
+echo (strtotime("14:30:") === false ? "F" : "x");
 "#,
     );
-    assert_eq!(out, "-1,-1,-1,-1");
+    assert_eq!(out, "F,F,F,F");
 }
 
 /// Verifies `strtotime` follows PHP's permissive upper-bound behavior for time-only inputs:
@@ -692,6 +1170,100 @@ if ($diff >= 259200 - 3700 && $diff <= 259200 + 3700) echo "ok";
 "#,
     );
     assert_eq!(out, "ok");
+}
+
+/// Verifies the relative `this/next/last <unit>` forms for non-week units: `this`=+0, `next`=+1,
+/// `last`=-1 of the unit applied to the base timestamp (calendar arithmetic for month/year),
+/// previously unsupported (returned -1). Also confirms the fall-back still parses
+/// `next <weekday>` correctly (the unit intercept must not break the weekday strategy).
+#[test]
+fn test_strtotime_this_next_last_unit() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$b = 1710511800;
+echo strtotime("next month", $b), "|", strtotime("last year", $b), "|",
+     strtotime("this hour", $b), "|", strtotime("next day", $b), "|",
+     strtotime("last minute", $b), "|", strtotime("next monday", $b);
+"#,
+    );
+    assert_eq!(
+        out,
+        "1713190200|1678889400|1710511800|1710598200|1710511740|1710720000"
+    );
+}
+
+/// Verifies the Monday-anchored `this/next/last week` relative forms: the result is the Monday
+/// of this/next/last week (this = `-((ISO weekday)-1)` days; next/last add ±1 week) keeping the
+/// time-of-day, per PHP. Base is a Friday (2024-03-15 14:10 UTC).
+#[test]
+fn test_strtotime_relative_week() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$b = 1710511800;
+echo strtotime("this week", $b), "|", strtotime("next week", $b), "|",
+     strtotime("last week", $b);
+"#,
+    );
+    assert_eq!(out, "1710166200|1710771000|1709561400");
+}
+
+/// Verifies a trailing `UTC`/`GMT` word on ISO 8601 input is treated as explicit UTC (offset 0),
+/// overriding a non-UTC default zone, while a bare parse still uses the default. Base default is
+/// Europe/Paris (+02:00 in summer), so the bare value is offset from the UTC ones.
+#[test]
+fn test_strtotime_zone_word_utc_gmt() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("Europe/Paris");
+echo strtotime("2024-06-15 12:00:00 UTC"), "|", strtotime("2024-06-15 12:00:00 GMT"),
+     "|", strtotime("2024-06-15 12:00:00");
+"#,
+    );
+    assert_eq!(out, "1718452800|1718452800|1718445600");
+}
+
+/// Verifies `strtotime()` parses a trailing IANA timezone name (e.g. `America/New_York`,
+/// `Europe/Paris`) and interprets the wall-clock in that zone, restoring the previous default
+/// afterwards. June 15 is EDT (UTC-4) in New York and CEST (UTC+2) in Paris, so the two named
+/// results bracket the bare parse, which keeps the default UTC zone — the bare case also proves
+/// the zone scan ignores the digit-only time token (no letter) instead of treating it as a zone.
+/// Requires IANA tzdata (present on macOS; mounted into the Linux test images).
+#[test]
+fn test_strtotime_iana_zone_name() {
+    let out = compile_and_run(
+        r#"<?php
+echo strtotime("2024-06-15 12:00:00 America/New_York"), "|",
+     strtotime("2024-06-15 12:00:00 Europe/Paris"), "|",
+     strtotime("2024-06-15 12:00:00"), "|",
+     date_default_timezone_get();
+"#,
+    );
+    assert_eq!(out, "1718467200|1718445600|1718452800|UTC");
+}
+
+/// Verifies `strtotime()` honors an explicit trailing timezone offset in ISO 8601 input:
+/// `+HH:MM`, `-HH:MM`, space-separated `+HHMM`, and `Z` (UTC). The wall-clock is interpreted
+/// in the stated offset (so the result is offset from a bare parse), overriding the default
+/// zone — confirmed by repeating `Z` and a bare parse under a non-UTC default. Previously these
+/// returned -1.
+#[test]
+fn test_strtotime_iso_explicit_offset() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$a = strtotime("2024-06-15T12:00:00+02:00") . "|" . strtotime("2024-06-15T12:00:00-05:00")
+   . "|" . strtotime("2024-06-15 12:00:00 +0200") . "|" . strtotime("2024-06-15T12:00:00Z")
+   . "|" . strtotime("2024-06-15 12:00:00");
+date_default_timezone_set("Europe/Paris");
+echo $a . "|" . strtotime("2024-06-15T12:00:00Z") . "|" . strtotime("2024-06-15 12:00:00");
+"#,
+    );
+    assert_eq!(
+        out,
+        "1718445600|1718470800|1718445600|1718452800|1718452800|1718452800|1718445600"
+    );
 }
 
 /// Verifies `date()` with no timestamp argument uses the current time and returns a year >= 2024.
@@ -1974,4 +2546,467 @@ fn test_is_callable_plain_object_returns_false() {
         "#,
     );
     assert_eq!(out, "n");
+}
+
+/// Verifies date_default_timezone_get() returns "UTC" when no default timezone has been set.
+#[test]
+fn test_date_default_timezone_get_defaults_to_utc() {
+    let out = compile_and_run(r#"<?php echo date_default_timezone_get();"#);
+    assert_eq!(out, "UTC");
+}
+
+/// Verifies date_default_timezone_set() stores the identifier and date_default_timezone_get()
+/// returns it verbatim.
+#[test]
+fn test_date_default_timezone_set_get_roundtrip() {
+    let out = compile_and_run(
+        r#"<?php date_default_timezone_set("Europe/Paris"); echo date_default_timezone_get();"#,
+    );
+    assert_eq!(out, "Europe/Paris");
+}
+
+/// Verifies date_default_timezone_set() makes date() format in the chosen IANA zone with correct
+/// DST offsets (via libc + the system tz database). 2024-07-01 12:00 UTC is summer, so Paris is
+/// CEST (+2 → 14:00) and New York is EDT (-4 → 08:00); UTC stays 12:00.
+#[test]
+fn test_date_default_timezone_set_shifts_date_with_dst() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("Europe/Paris");
+echo date("H:i", 1719835200), ",";
+date_default_timezone_set("America/New_York");
+echo date("H:i", 1719835200), ",";
+date_default_timezone_set("UTC");
+echo date("H:i", 1719835200);
+"#,
+    );
+    assert_eq!(out, "14:00,08:00,12:00");
+}
+
+/// Verifies date_default_timezone_set() returns the PHP boolean true.
+#[test]
+fn test_date_default_timezone_set_returns_true() {
+    let out =
+        compile_and_run(r#"<?php echo date_default_timezone_set("Europe/Paris") ? "y" : "n";"#);
+    assert_eq!(out, "y");
+}
+
+/// Verifies the date() 'P' specifier (UTC offset as +hh:mm) reflects the configured zone and its
+/// daylight-saving state: Europe/Paris is CEST (+02:00) on 2024-07-01 but CET (+01:00) on 2024-01-01.
+#[test]
+fn test_date_offset_specifier_p_paris_summer_winter() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("Europe/Paris");
+echo date("P", 1719835200), ",", date("P", 1704110400);
+"#,
+    );
+    assert_eq!(out, "+02:00,+01:00");
+}
+
+/// Verifies the date() 'p' specifier: like 'P' for a non-zero offset (+02:00 in Paris summer)
+/// but the literal 'Z' when the offset is zero (gmdate, or a UTC default zone).
+#[test]
+fn test_date_offset_specifier_lower_p_z_for_utc() {
+    let out = compile_and_run(
+        r#"<?php
+echo gmdate("p", 0), ",", date("p", 0), ",";
+date_default_timezone_set("Europe/Paris");
+echo date("p", 1719835200), ",", date("p", 1704110400);
+"#,
+    );
+    assert_eq!(out, "Z,Z,+02:00,+01:00");
+}
+
+/// Verifies the date() 'B' specifier (Swatch Internet Time): beats of the UTC+1 day,
+/// zero-padded to three digits, independent of the configured timezone, with floor-mod
+/// semantics for pre-epoch timestamps. Values cross-checked against PHP.
+#[test]
+fn test_date_swatch_beats_specifier() {
+    let out = compile_and_run(
+        r#"<?php
+echo date("B", 0), ",", date("B", -3600), ",", date("B", -7200), ",", date("B", 1719837000), ",";
+date_default_timezone_set("Europe/Paris");
+echo date("B", 1719837000), ",", gmdate("B", 1719837000);
+"#,
+    );
+    assert_eq!(out, "041,000,958,562,562,562");
+}
+
+/// Verifies the date() 'O' (+hhmm, no colon) and 'Z' (offset in seconds) specifiers for a positive
+/// (east-of-UTC) zone: Europe/Paris in summer is +0200 / 7200 seconds.
+#[test]
+fn test_date_offset_specifiers_o_and_z_paris() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("Europe/Paris");
+echo date("O", 1719835200), ",", date("Z", 1719835200);
+"#,
+    );
+    assert_eq!(out, "+0200,7200");
+}
+
+/// Verifies the offset specifiers render the leading minus sign for a negative (west-of-UTC) zone:
+/// America/New_York in summer is EDT, i.e. -04:00 / -0400 / -14400 seconds.
+#[test]
+fn test_date_offset_specifiers_negative_new_york() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("America/New_York");
+echo date("P", 1719835200), ",", date("O", 1719835200), ",", date("Z", 1719835200);
+"#,
+    );
+    assert_eq!(out, "-04:00,-0400,-14400");
+}
+
+/// Verifies gmdate()'s offset specifiers are always the UTC zero offset regardless of the configured
+/// default zone: '+00:00' / '+0000' / '0'.
+#[test]
+fn test_gmdate_offset_specifiers_are_utc() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("Europe/Paris");
+echo gmdate("P", 1719835200), ",", gmdate("O", 1719835200), ",", gmdate("Z", 1719835200);
+"#,
+    );
+    assert_eq!(out, "+00:00,+0000,0");
+}
+
+/// Verifies the offset specifier composes into a full ISO-8601 timestamp (the common date() use case
+/// for 'P'). The escaped \T is a literal separator; Paris summer yields the +02:00 offset.
+#[test]
+fn test_date_offset_specifier_iso8601() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("Europe/Paris");
+echo date('Y-m-d\TH:i:sP', 1719835200);
+"#,
+    );
+    assert_eq!(out, "2024-07-01T14:00:00+02:00");
+}
+
+/// Verifies elephc defaults the timezone to UTC (matching PHP) when date_default_timezone_set was
+/// never called: date()/strtotime()/mktime() of a known UTC instant use the UTC wall clock rather
+/// than the host machine's local zone, so output is deterministic regardless of the build host.
+#[test]
+fn test_timezone_defaults_to_utc_without_set() {
+    // 1719835200 = 2024-07-01 12:00:00 UTC. PHP prints 12:00 here without any tz configuration.
+    let out = compile_and_run(r#"<?php echo date("Y-m-d H:i", 1719835200);"#);
+    assert_eq!(out, "2024-07-01 12:00");
+    // mktime() builds the timestamp in the same default (UTC) zone, so it round-trips exactly.
+    let rt = compile_and_run(r#"<?php echo mktime(12, 0, 0, 7, 1, 2024);"#);
+    assert_eq!(rt, "1719835200");
+}
+
+/// Verifies the date() 'e' (timezone identifier) and 'T' (abbreviation) specifiers reflect the
+/// configured zone and its daylight-saving state: Europe/Paris is "Europe/Paris" with "CEST" in
+/// summer and "CET" in winter.
+#[test]
+fn test_date_timezone_name_specifiers_paris() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("Europe/Paris");
+echo date("e", 1719835200), "|", date("T", 1719835200), "|", date("T", 1704110400);
+"#,
+    );
+    assert_eq!(out, "Europe/Paris|CEST|CET");
+}
+
+/// Verifies the 'e' identifier follows the configured zone for date() but is always "UTC" for
+/// gmdate() (which formats in UTC regardless of the default zone).
+#[test]
+fn test_date_e_specifier_gmdate_is_utc() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("America/New_York");
+echo date("e", 1719835200), "|", gmdate("e", 1719835200);
+"#,
+    );
+    assert_eq!(out, "America/New_York|UTC");
+}
+
+/// Verifies the `I` (daylight-saving flag), `u` (microseconds), and `v` (milliseconds)
+/// `date()` specifiers: `I` is 1 only when the zone is in DST at that instant, and `u`/`v`
+/// are always all-zero for whole-second Unix timestamps. Previously these emitted the literal
+/// specifier letter.
+#[test]
+fn test_date_specifiers_i_u_v() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("Europe/Paris");
+echo date("I", 1705320000), "|", date("I", 1721044800), "|",
+     date("u", 1721044800), "|", date("v", 1721044800);
+"#,
+    );
+    assert_eq!(out, "0|1|000000|000");
+}
+
+/// Verifies the composite `c` (ISO 8601) and `r` (RFC 2822) `date()` specifiers, which re-run the
+/// formatter over a sub-format and so must compose the date, time, and timezone-offset tokens —
+/// including the timezone offset (`+02:00` / `+0200`) and correct restoration of the surrounding
+/// format (the `[c]` case puts literal brackets around the expansion). Previously both emitted the
+/// literal specifier letter.
+#[test]
+fn test_date_specifiers_c_and_r() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$a = date("c", 951782400) . "|" . date("r", 951782400);
+date_default_timezone_set("Europe/Paris");
+$b = date("c", 1719835200) . "|" . date("r", 1719835200) . "|" . date("[c]", 1719835200);
+echo $a . "|" . $b;
+"#,
+    );
+    assert_eq!(
+        out,
+        "2000-02-29T00:00:00+00:00|Tue, 29 Feb 2000 00:00:00 +0000|2024-07-01T14:00:00+02:00|Mon, 01 Jul 2024 14:00:00 +0200|[2024-07-01T14:00:00+02:00]"
+    );
+}
+
+/// Verifies the no-leading-zero specifiers `n` (month) and `G` (24-hour) render without padding,
+/// next to their zero-padded counterparts `m`/`H`. Cross-checked against PHP 8.5: `7|07|9|09`.
+#[test]
+fn test_date_specifiers_n_and_g_no_pad() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$ts = gmmktime(9, 5, 0, 7, 1, 2024);
+echo date("n", $ts), "|", date("m", $ts), "|", date("G", $ts), "|", date("H", $ts);
+"#,
+    );
+    assert_eq!(out, "7|07|9|09");
+}
+
+/// Verifies gmmktime() builds a Unix timestamp interpreting the components as UTC (libc timegm),
+/// independent of the configured default zone — unlike mktime() which uses the local zone.
+#[test]
+fn test_gmmktime_is_utc() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("Europe/Paris");
+echo gmmktime(12, 0, 0, 7, 1, 2024), "|", mktime(12, 0, 0, 7, 1, 2024);
+"#,
+    );
+    assert_eq!(out, "1719835200|1719828000");
+}
+
+/// Verifies checkdate() validates Gregorian dates with the full leap-year rule: Feb 29 is valid in
+/// 2024 and 2000 (÷400) but not 2023 or 1900 (÷100, not ÷400); April has only 30 days; an
+/// out-of-range month is rejected.
+#[test]
+fn test_checkdate_validates_gregorian_dates() {
+    let out = compile_and_run(
+        r#"<?php
+$r = (checkdate(2, 29, 2024) ? "1" : "0")
+   . (checkdate(2, 29, 2023) ? "1" : "0")
+   . (checkdate(2, 29, 2000) ? "1" : "0")
+   . (checkdate(2, 29, 1900) ? "1" : "0")
+   . (checkdate(4, 31, 2024) ? "1" : "0")
+   . (checkdate(12, 31, 2024) ? "1" : "0")
+   . (checkdate(13, 1, 2024) ? "1" : "0");
+echo $r;
+"#,
+    );
+    assert_eq!(out, "1010010");
+}
+
+/// Verifies getdate() returns PHP's associative array (string keys plus the integer key 0)
+/// decomposing a timestamp: 2024-07-01 12:00 UTC is a Monday in July, day-of-year 182.
+#[test]
+fn test_getdate_decomposes_timestamp() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$g = getdate(1719835200);
+echo $g["seconds"], "|", $g["minutes"], "|", $g["hours"], "|", $g["mday"], "|", $g["wday"], "|",
+     $g["mon"], "|", $g["year"], "|", $g["yday"], "|", $g["weekday"], "|", $g["month"], "|",
+     $g[0], "|", count($g);
+"#,
+    );
+    assert_eq!(out, "0|0|12|1|1|7|2024|182|Monday|July|1719835200|11");
+}
+
+/// Verifies gettimeofday() returns PHP's `[sec, usec, minuteswest, dsttime]` array (4 keys; sec and
+/// usec in range) and that gettimeofday(true) returns a float. Asserted against the UTC zone where
+/// `minuteswest`/`dsttime` are always 0 (UTC has no DST), so the test is season-independent; the
+/// current-time components are checked by range, not exact value.
+#[test]
+fn test_gettimeofday_array_and_float() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$tv = gettimeofday();
+$ok = ($tv["sec"] > 1700000000) && ($tv["usec"] >= 0) && ($tv["usec"] < 1000000)
+    && ($tv["minuteswest"] === 0) && ($tv["dsttime"] === 0) && (count($tv) === 4);
+echo $ok ? "array_ok" : "array_bad";
+echo "|", ((gettimeofday(true) > 1700000000.0) ? "float_ok" : "float_bad");
+"#,
+    );
+    assert_eq!(out, "array_ok|float_ok");
+}
+
+/// Verifies strftime()/gmstrftime() translate `%`-specifiers to formatted output: 1:1 mappings,
+/// composites (`%T`), the computed day-of-year (`%j`) and century (`%C`), surrounding literal text
+/// (letters are escaped so `date()` keeps them literal), and `%%`. 2024-06-15 12:00:00 UTC is a
+/// Saturday, day-of-year 167; an explicit timestamp keeps the result deterministic.
+#[test]
+fn test_strftime_specifiers() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$ts = 1718452800;
+echo strftime("%Y-%m-%d %H:%M:%S", $ts), "|", strftime("%A %B %d", $ts), "|", strftime("%j", $ts),
+     "|", strftime("Day %d", $ts), "|", strftime("%C", $ts), "|", strftime("100%%", $ts),
+     "|", gmstrftime("%T", $ts);
+"#,
+    );
+    assert_eq!(out, "2024-06-15 12:00:00|Saturday June 15|167|Day 15|20|100%|12:00:00");
+}
+
+/// Verifies idate() returns the integer value of a single date() specifier (not a string), so the
+/// result is usable directly in arithmetic. 2024-06-15 12:00:00 UTC: year 2024, month 6, day 15,
+/// hour 12, the raw timestamp for `U`, ISO weekday 6 (Saturday), and leap-year flag 1.
+#[test]
+fn test_idate_integer_specifiers() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$ts = 1718452800;
+echo idate("Y", $ts), "|", idate("m", $ts), "|", idate("d", $ts), "|", idate("H", $ts), "|",
+     idate("U", $ts), "|", idate("N", $ts), "|", idate("L", $ts), "|", (idate("Y", $ts) + 1);
+"#,
+    );
+    assert_eq!(out, "2024|6|15|12|1718452800|6|1|2025");
+}
+
+/// Verifies localtime() returns the raw struct-tm fields: numeric-indexed by default (tm_mon is
+/// 0-based, tm_year is years-since-1900), or tm_*-keyed when the second argument is true.
+#[test]
+fn test_localtime_numeric_and_associative() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$n = localtime(1719835200);
+$a = localtime(1719835200, true);
+echo $n[2], ",", $n[4], ",", $n[5], ",", $n[6], "|",
+     $a["tm_hour"], ",", $a["tm_mon"], ",", $a["tm_year"], ",", $a["tm_wday"], "|", count($n);
+"#,
+    );
+    assert_eq!(out, "12,6,124,1|12,6,124,1|9");
+}
+
+/// Verifies the scalar-returning date builtins work as first-class callables
+/// (`checkdate(...)`, `gmmktime(...)`, `strtotime(...)`) — i.e. they are accepted by
+/// `first_class_callable_builtin_sig` and dispatch correctly when stored and invoked.
+#[test]
+fn test_first_class_callable_date_scalars() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$cd = checkdate(...);
+$gm = gmmktime(...);
+$st = strtotime(...);
+echo $cd(2, 29, 2024) ? "y" : "n";
+echo $cd(2, 29, 2023) ? "y" : "n";
+echo "|", $gm(0, 0, 0, 1, 1, 2000);
+echo "|", $st("@946684800");
+"#,
+    );
+    assert_eq!(out, "yn|946684800|946684800");
+}
+
+/// Verifies the array-returning date builtins work as first-class callables
+/// (`getdate(...)`, `localtime(...)`), preserving PHP's associative key names through
+/// the stored-callable invocation path.
+#[test]
+fn test_first_class_callable_date_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$gd = getdate(...);
+$lt = localtime(...);
+$g = $gd(1719835200);
+$a = $lt(1719835200, true);
+echo $g["year"], "-", $g["mon"], "-", $g["mday"], "|", $a["tm_year"], ",", $a["tm_mon"];
+"#,
+    );
+    assert_eq!(out, "2024-7-1|124,6");
+}
+
+/// Verifies `hrtime(...)` works as a first-class callable and that the stored callable
+/// returns a positive nanosecond count when invoked with `$as_number = true`.
+#[test]
+fn test_first_class_callable_hrtime() {
+    let out = compile_and_run(
+        r#"<?php
+$hr = hrtime(...);
+echo $hr(true) > 0 ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "y");
+}
+
+/// Verifies hrtime() returns a [seconds, nanoseconds] pair by default and the total nanoseconds as
+/// an int when $as_number is true, with a monotonic (non-decreasing) clock.
+#[test]
+fn test_hrtime_array_and_nanoseconds() {
+    let out = compile_and_run(
+        r#"<?php
+$a = hrtime();
+$b = hrtime(true);
+$c = hrtime(true);
+echo count($a), "|",
+     ((is_int($a[0]) && is_int($a[1]) && $a[1] >= 0 && $a[1] < 1000000000) ? "1" : "0"), "|",
+     (is_int($b) ? "1" : "0"), "|",
+     (($b > 0 && $c >= $b) ? "1" : "0");
+"#,
+    );
+    assert_eq!(out, "2|1|1|1");
+}
+
+/// Verifies `function_exists()` returns `true` for the procedural date/time aliases that the
+/// name resolver rewrites into OOP/built-in expressions (e.g. `date_create`, `idate`,
+/// `gmstrftime`). PHP's introspection must recognize the same surface that the resolver sees.
+#[test]
+fn test_function_exists_date_procedural_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+echo function_exists("date_create") ? "1" : "0";
+echo function_exists("date_create_immutable") ? "1" : "0";
+echo function_exists("date_create_from_format") ? "1" : "0";
+echo function_exists("date_create_immutable_from_format") ? "1" : "0";
+echo function_exists("date_diff") ? "1" : "0";
+echo function_exists("date_format") ? "1" : "0";
+echo function_exists("date_add") ? "1" : "0";
+echo function_exists("date_sub") ? "1" : "0";
+echo function_exists("date_modify") ? "1" : "0";
+echo function_exists("date_timestamp_get") ? "1" : "0";
+echo function_exists("date_timestamp_set") ? "1" : "0";
+echo function_exists("date_timezone_get") ? "1" : "0";
+echo function_exists("date_timezone_set") ? "1" : "0";
+echo function_exists("date_offset_get") ? "1" : "0";
+echo function_exists("date_date_set") ? "1" : "0";
+echo function_exists("date_isodate_set") ? "1" : "0";
+echo function_exists("date_time_set") ? "1" : "0";
+echo function_exists("date_interval_format") ? "1" : "0";
+echo function_exists("date_interval_create_from_date_string") ? "1" : "0";
+echo function_exists("date_parse") ? "1" : "0";
+echo function_exists("date_parse_from_format") ? "1" : "0";
+echo function_exists("date_get_last_errors") ? "1" : "0";
+echo function_exists("idate") ? "1" : "0";
+echo function_exists("gettimeofday") ? "1" : "0";
+echo function_exists("strftime") ? "1" : "0";
+echo function_exists("gmstrftime") ? "1" : "0";
+echo function_exists("timezone_open") ? "1" : "0";
+echo function_exists("timezone_identifiers_list") ? "1" : "0";
+echo function_exists("timezone_name_get") ? "1" : "0";
+echo function_exists("timezone_offset_get") ? "1" : "0";
+echo function_exists("Date_Create") ? "1" : "0";
+echo function_exists("IDATE") ? "1" : "0";
+echo function_exists("\\date_create") ? "1" : "0";
+echo function_exists("\\foo\\bar\\idate") ? "1" : "0";
+echo function_exists("does_not_exist_alias_xyz") ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "1".repeat(34) + "0");
 }

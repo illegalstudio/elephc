@@ -132,7 +132,8 @@ pub(in crate::codegen::expr::objects) fn emit_method_call(
             // runtime (a `Mixed` value, or a union of object classes), dispatch
             // on the runtime class id instead of giving up.
             let method_key = php_symbol_key(method);
-            let candidates = dynamic_dispatch_candidates(&obj_ty, &method_key, ctx);
+            let candidates =
+                dynamic_dispatch_candidates(&obj_ty, &method_key, args.len(), ctx);
             if !candidates.is_empty() {
                 return emit_dynamic_method_call(
                     object, method, args, &candidates, emitter, ctx, data,
@@ -207,6 +208,19 @@ pub(in crate::codegen::expr::objects) fn emit_method_call(
     )
 }
 
+/// Returns whether `sig` can accept `arg_count` positional arguments: at least the number of
+/// required parameters (those without a default) and at most the declared parameter count, unless
+/// the signature is variadic (in which case any count at or above the required minimum is accepted).
+fn sig_accepts_arg_count(sig: &FunctionSig, arg_count: usize) -> bool {
+    let required = (0..sig.params.len())
+        .filter(|i| sig.defaults.get(*i).map_or(true, Option::is_none))
+        .count();
+    if arg_count < required {
+        return false;
+    }
+    sig.variadic.is_some() || arg_count <= sig.params.len()
+}
+
 /// Collects the candidate classes for a dynamic method call whose receiver type
 /// does not name a single class.
 ///
@@ -214,22 +228,31 @@ pub(in crate::codegen::expr::objects) fn emit_method_call(
 /// for a union, the object members that define it are. Returns `(class_name,
 /// class_id)` pairs sorted by class id (and de-duplicated) so the emitted dispatch
 /// chain is deterministic.
+///
+/// Candidates are also filtered to those whose method can accept `arg_count`
+/// positional arguments. The dispatch marshals arguments once using the first
+/// candidate's signature, so candidates with an incompatible arity would corrupt
+/// the call — e.g. a user `add(int, int)` and `DateTime::add(DateInterval)` share
+/// the name `add` but not the shape. Filtering by arity keeps the shared argument
+/// layout valid and makes the candidate set independent of class-id ordering.
 fn dynamic_dispatch_candidates(
     obj_ty: &PhpType,
     method_key: &str,
+    arg_count: usize,
     ctx: &Context,
 ) -> Vec<(String, u64)> {
-    // A class is a usable candidate only when it declares the method and that
-    // method is a normal vtable method, not an intrinsic. Intrinsic methods
-    // (e.g. SPL containers) carry their own argument shapes and special lowering,
-    // so a single shared argument layout cannot serve them — including them would
-    // corrupt the call. Their classes are excluded; a `Mixed` value holding such
-    // an object faults cleanly as "undefined method" rather than miscompiling.
+    // A class is a usable candidate only when it declares the method, the method
+    // is a normal vtable method (not an intrinsic — SPL containers carry their own
+    // argument shapes and special lowering, so a single shared argument layout
+    // cannot serve them), and the method accepts `arg_count` arguments. Excluded
+    // classes leave a `Mixed` value holding such an object to fault cleanly as
+    // "undefined method" rather than miscompiling.
     let dispatchable = |name: &str| -> bool {
-        ctx.classes
-            .get(name)
-            .is_some_and(|info| info.methods.contains_key(method_key))
-            && IntrinsicCall::instance_method(name, method_key).is_none()
+        ctx.classes.get(name).is_some_and(|info| {
+            info.methods
+                .get(method_key)
+                .is_some_and(|sig| sig_accepts_arg_count(sig, arg_count))
+        }) && IntrinsicCall::instance_method(name, method_key).is_none()
     };
     let mut out: Vec<(String, u64)> = Vec::new();
     match obj_ty {

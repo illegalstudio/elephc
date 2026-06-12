@@ -163,7 +163,12 @@ pub(crate) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static 
 }
 
 /// Returns builtin class names that should not be mistaken for user classes.
-fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
+///
+/// These synthetic builtin classes are emitted on demand (only when used), so their method symbols
+/// are not guaranteed to exist in every program. Besides gating dynamic `new $x()`, this list is
+/// also used to keep their static methods out of the dynamic-callable descriptor (see
+/// `crate::codegen::callable_dispatch`), which would otherwise reference an unemitted symbol.
+pub(crate) fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
     &[
         "AppendIterator",
         "ArrayIterator",
@@ -172,6 +177,12 @@ fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
         "BadMethodCallException",
         "CachingIterator",
         "CallbackFilterIterator",
+        "DateInterval",
+        "DatePeriod",
+        "DateTime",
+        "DateTimeImmutable",
+        "DateTimeInterface",
+        "DateTimeZone",
         "DirectoryIterator",
         "DomainException",
         "EmptyIterator",

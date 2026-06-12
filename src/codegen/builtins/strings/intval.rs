@@ -22,7 +22,9 @@ use crate::types::PhpType;
 /// Dispatches on the argument type:
 /// - `Str`: calls `__rt_str_to_int` to parse the string with PHP cast rules
 /// - `Mixed`/`Union`: calls `__rt_mixed_cast_int` for runtime type coercion
-/// - Other types: no-op (PHP scalar-to-int coercion is a no-op at codegen level)
+/// - `Float`: truncates the floating-point result into the integer register (toward zero), matching
+///   the `(int)` cast — without this the raw IEEE-754 bits would be returned as a bogus integer
+/// - Other scalar types (`Int`/`Bool`/`Null`): no-op (already in the integer register)
 ///
 /// Returns `PhpType::Int` unconditionally, matching PHP's `intval()` return type.
 pub fn emit(
@@ -49,6 +51,11 @@ pub fn emit(
             if release_arg_after_cast {
                 release_preserved_mixed_arg_after_int_cast(emitter);
             }
+        }
+        PhpType::Float => {
+            // -- truncate the float result toward zero into the integer register (like the `(int)`
+            // cast); otherwise the raw IEEE-754 bits would be reinterpreted as a bogus integer --
+            abi::emit_float_result_to_int_result(emitter);
         }
         _ => {}
     }

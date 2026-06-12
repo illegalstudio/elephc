@@ -13,6 +13,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
+use crate::name_resolver::is_date_procedural_alias;
 use crate::names::function_variant_active_symbol;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
@@ -52,6 +53,13 @@ pub fn emit(
     };
 
     // -- emit constant true/false based on whether function is known --
+    // Procedural date/time aliases (date_create, idate, gmstrftime, ...) are recognized as
+    // existing functions even though the resolver rewrites them into OOP/built-in expressions
+    // before they reach the builtin catalog. Mirrors PHP's function_exists() behavior.
+    if is_date_procedural_alias(&func_name) {
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
+        return Some(PhpType::Bool);
+    }
     match lookup_function(ctx, &func_name) {
         Some(FunctionLookup::IncludeVariant(variant_name)) => {
             emit_variant_function_exists(&variant_name, emitter, data);

@@ -100,3 +100,18 @@ foreach ($a as $v) { echo $v; }
     );
     assert_eq!(out, "1:3");
 }
+
+/// Regression: `range()` and `array_slice()` must unbox a `Mixed`/`Union` integer argument
+/// (range end, slice offset) instead of using the boxed heap pointer as a raw int. The int args
+/// here are read from a heterogeneous (Mixed-valued) associative array. Before the fix these
+/// produced empty results or "heap memory exhausted" (a pointer used as a count).
+#[test]
+fn test_range_and_slice_unbox_mixed_int_args() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["n" => 2, "t" => "x"];
+echo implode(",", range(1, $m["n"])), "|", implode(",", array_slice([10, 20, 30, 40], $m["n"]));
+"#,
+    );
+    assert_eq!(out, "1,2|30,40");
+}

@@ -12,7 +12,7 @@ use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_int, emit_expr};
 use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -50,7 +50,8 @@ pub fn emit(
     let uses_refcounted_runtime = matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
     if emitter.target.arch == Arch::X86_64 {
         abi::emit_push_reg(emitter, "rax");                                     // preserve the source indexed array while evaluating the requested chunk size expression
-        emit_expr(&args[1], emitter, ctx, data);
+        let size_ty = emit_expr(&args[1], emitter, ctx, data);
+        coerce_to_int(emitter, &size_ty);                                       // unbox a Mixed/Union chunk size into a raw integer
         emitter.instruction("mov rsi, rax");                                    // place the requested chunk size in the second x86_64 runtime argument register
         abi::emit_pop_reg(emitter, "rdi");                                      // restore the source indexed array into the first x86_64 runtime argument register
         if uses_refcounted_runtime {
@@ -67,7 +68,8 @@ pub fn emit(
 
     // -- save array pointer, evaluate chunk size --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
-    emit_expr(&args[1], emitter, ctx, data);
+    let size_ty = emit_expr(&args[1], emitter, ctx, data);
+    coerce_to_int(emitter, &size_ty);                                           // unbox a Mixed/Union chunk size into a raw integer
     // -- call runtime to split array into chunks --
     emitter.instruction("mov x1, x0");                                          // move chunk size to x1 (second arg)
     emitter.instruction("ldr x0, [sp], #16");                                   // pop array pointer into x0 (first arg)

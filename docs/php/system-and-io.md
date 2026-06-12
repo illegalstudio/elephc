@@ -13,6 +13,7 @@ sidebar:
 | `die()` | `die($code = 0): void` | Alias for `exit()` |
 | `time()` | `time(): int` | Unix timestamp |
 | `microtime()` | `microtime($as_float = false): float` | Time with microsecond precision |
+| `hrtime()` | `hrtime($as_number = false): array\|int` | High-resolution monotonic time (`CLOCK_MONOTONIC`). Returns `[seconds, nanoseconds]`, or the total nanoseconds as an int when `$as_number` is true — for benchmarking elapsed time. |
 | `sleep()` | `sleep($seconds): int` | Sleep for seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
 | `getenv()` | `getenv($name): string` | Get environment variable |
@@ -43,19 +44,71 @@ sidebar:
 
 | Function | Signature | Description |
 |---|---|---|
-| `date()` | `date($format [, $timestamp]): string` | Format timestamp. Chars: Y, m, d, H, i, s, l, F, D, M, N, j, n, G, g, A, a, U. |
-| `mktime()` | `mktime($h, $m, $s, $mon, $day, $yr): int` | Create timestamp from components |
-| `strtotime()` | `strtotime($datetime): int` | Parse a date/time string into a Unix timestamp. Supports ISO dates, time-only, relative offsets, named weekdays, and bare keywords. Returns `-1` on failure. |
+| `date()` | `date($format [, $timestamp]): string` | Format a timestamp (or the current time) in the default timezone using the specifiers below. |
+| `gmdate()` | `gmdate($format [, $timestamp]): string` | Same as `date()` but formats in UTC, so the result is independent of the configured timezone. |
+| `idate()` | `idate($format [, $timestamp]): int` | Like `date()` for a single integer-valued specifier, returning an `int` instead of a string (e.g. `idate("Y")`, `idate("U")`). Equivalent to `(int) date($format, $timestamp)`. |
+| `date_default_timezone_set()` | `date_default_timezone_set($timezoneId): bool` | Set the default timezone used by `date()` (and `DateTime::format()`). Accepts any IANA identifier (e.g. `"Europe/Paris"`, `"UTC"`); the UTC offset and daylight-saving transitions are resolved from the system timezone database. Returns `true`. |
+| `date_default_timezone_get()` | `date_default_timezone_get(): string` | Return the current default timezone identifier (defaults to `"UTC"` when none has been set). |
+| `mktime()` | `mktime($h, $m, $s, $mon, $day, $yr): int` | Create a timestamp from components, interpreted in the default timezone. |
+| `gmmktime()` | `gmmktime($h, $m, $s, $mon, $day, $yr): int` | Like `mktime()` but interprets the components as UTC (independent of the default timezone). |
+| `checkdate()` | `checkdate($month, $day, $year): bool` | Validate a Gregorian date — leap-year aware; month 1–12, day within the month, year 1–32767. |
+| `getdate()` | `getdate($timestamp = time()): array` | Decompose a timestamp into an associative array: `seconds`, `minutes`, `hours`, `mday`, `wday`, `mon`, `year`, `yday`, `weekday`, `month`, and `0` (the timestamp). |
+| `localtime()` | `localtime($timestamp = time(), $associative = false): array` | Decompose a timestamp into the raw `struct tm` fields — numeric-indexed `0`–`8` by default, or `tm_sec`…`tm_isdst` keys when `$associative` is true (`tm_mon` is 0-based, `tm_year` is years since 1900). |
+| `gettimeofday()` | `gettimeofday($as_float = false): array\|float` | Current time as `['sec' => int, 'usec' => int, 'minuteswest' => int, 'dsttime' => int]` (minuteswest/dsttime from the default zone), or a float of seconds when `$as_float` is true. `usec` is derived from `microtime()`. |
+| `strftime()` / `gmstrftime()` | `strftime($format [, $timestamp]): string` | Format a timestamp with C `strftime` `%`-specifiers (deprecated in PHP 8.1). Specifiers match PHP exactly, including the week numbers `%U` (Sunday-based), `%W` (Monday-based) and `%V` (ISO), the space-padded `%e`/`%k`/`%l`, `%c` (with its space-padded day), and the two-digit ISO year `%g`. `%x`/`%X` use the default C-locale forms (`%m/%d/%y`, `%H:%M:%S`). One known difference: `%P` yields lowercase `am`/`pm` here, whereas PHP's `strftime` emits a literal `P` (it never implemented the GNU lowercase extension). `gmstrftime()` formats in UTC. |
+| `strptime()` | `strptime($timestamp, $format): array\|false` | Inverse of `strftime()`: parse a string against C `strftime` `%`-specifiers (`%Y %y %m %d %e %H %M %S %j %B %b %A %a %p`, `%n`/`%t`, `%%`) into a `struct tm` array (`tm_sec`/`tm_min`/`tm_hour`/`tm_mday`/`tm_mon` 0-based/`tm_year` since 1900/`tm_wday`/`tm_yday`/`unparsed`), or `false` on mismatch. Deprecated in PHP 8.1. |
+| `strtotime()` | `strtotime($datetime [, $baseTimestamp]): int\|false` | Parse a date/time string into a Unix timestamp. Supports ISO dates, time-only, relative offsets, named weekdays, and bare keywords. When `$baseTimestamp` is given, relative/keyword/time-only forms resolve against it instead of the current time. Returns `false` on failure (use `=== false`; `-1` is the valid timestamp one second before the epoch). |
+
+When `date_default_timezone_set()` has not been called, the default timezone is **UTC** (matching PHP), so `date()`, `strtotime()`, `mktime()`, and `DateTime` produce host-independent output rather than following the build machine's local zone.
+
+Procedural date/time aliases (`date_create`, `date_create_immutable`, `date_create_from_format`, `date_create_immutable_from_format`, `date_diff`, `date_format`, `date_add`, `date_sub`, `date_modify`, `date_timestamp_get`, `date_timestamp_set`, `date_timezone_get`, `date_timezone_set`, `date_offset_get`, `date_date_set`, `date_isodate_set`, `date_time_set`, `date_interval_format`, `date_interval_create_from_date_string`, `date_parse`, `date_parse_from_format`, `date_get_last_errors`, `date_sun_info`, `date_sunrise`, `date_sunset`, `strptime`, `idate`, `gettimeofday`, `strftime`, `gmstrftime`, `timezone_open`, `timezone_identifiers_list`, `timezone_name_get`, `timezone_offset_get`, `timezone_name_from_abbr`, `timezone_location_get`, `timezone_transitions_get`, `timezone_abbreviations_list`, `timezone_version_get`) are recognized by `function_exists()` even though the name resolver rewrites them into OOP calls or built-in expressions; comparison is case-insensitive on the last namespace segment.
+
+`date()` and `gmdate()` support these format specifiers (any other character is copied through verbatim):
+
+| Specifier | Output |
+|---|---|
+| `Y` / `y` | 4-digit year / 2-digit year |
+| `m` / `n` | month 01–12 / 1–12 |
+| `d` / `j` | day of month 01–31 / 1–31 |
+| `D` / `l` | short weekday name (`Mon`) / full weekday name (`Monday`) |
+| `N` / `w` | ISO weekday 1–7 (Mon=1) / numeric weekday 0–6 (Sun=0) |
+| `F` / `M` | full month name (`January`) / short month name (`Jan`) |
+| `H` / `G` | hour 00–23 / 0–23 |
+| `h` / `g` | hour 01–12 / 1–12 |
+| `i` / `s` | minutes 00–59 / seconds 00–59 |
+| `A` / `a` | `AM`/`PM` / `am`/`pm` |
+| `S` | English ordinal suffix for the day of month (`st`, `nd`, `rd`, `th`) |
+| `z` | day of year, 0–365 |
+| `W` / `o` | ISO-8601 week number (01–53) / ISO-8601 week-numbering year |
+| `t` | number of days in the month, 28–31 |
+| `L` | leap year flag, `1` or `0` |
+| `U` | Unix timestamp |
+| `O` / `P` | UTC offset `±hhmm` (`+0200`) / `±hh:mm` (`+02:00`) |
+| `p` | like `P`, but the literal `Z` when the offset is zero |
+| `Z` | UTC offset in seconds, `-43200`–`50400` (`7200`, `-18000`) |
+| `B` | Swatch Internet Time, `000`–`999` beats of the UTC+1 day |
+| `T` / `e` | timezone abbreviation (`CEST`) / identifier (`Europe/Paris`); `gmdate()` reports `UTC` |
+| `I` | daylight-saving flag, `1` if DST is in effect at the instant, else `0` |
+| `c` / `r` | ISO 8601 datetime (`2024-07-01T14:00:00+02:00`) / RFC 2822 datetime (`Mon, 01 Jul 2024 14:00:00 +0200`) |
+| `u` / `v` | microseconds / milliseconds; always `000000` / `000` (whole-second timestamps) |
+
+A backslash escapes the next character so it is emitted literally instead of being treated as a specifier (e.g. `date('Y-m-d\TH:i:s')` → `2023-11-14T22:13:20`). Use single-quoted format strings so PHP's double-quoted escapes (`\t`, `\n`, …) don't interfere. (A lone trailing backslash emits nothing, rather than PHP's NUL byte.)
 
 `strtotime()` accepts the following shapes (input is case-insensitive for keywords/unit names/weekday names, and leading/trailing ASCII whitespace is trimmed):
 
 - **ISO date / datetime** — `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DDTHH:MM`, or `YYYY-MM-DDTHH:MM:SS`. Lowercase `t` is also accepted as the date/time separator.
+- **`@<timestamp>`** — a UNIX timestamp (e.g. `"@1700000000"`); an optional sign and a truncated fractional part are accepted. Returned verbatim (UTC), independent of the current time.
+- **American `M/D/Y`** — `MM/DD/YYYY` or single-digit `M/D/Y`, with an optional `HH:MM[:SS]` time suffix (e.g. `"12/25/2024"`, `"6/15/2024 8:05"`). A 2-digit year windows to 2000–2069 (`0`–`69`) or 1970–1999 (`70`–`99`). Month must be `<= 12` and day `<= 31`.
+- **Textual dates** — `D Month Y` (`"25 December 2024"`) or `Month D[,] Y` (`"December 25, 2024"`, `"July 4 2024"`), with full or 3-letter month names (case-insensitive) and an optional `HH:MM[:SS]` time suffix. The day is not range-checked, so `"31 feb 2024"` normalizes to March 2 as in PHP. A 2-digit year follows the same windowing as slash dates.
 - **Bare keywords** — `now`, `today`, `tomorrow`, `yesterday`, `midnight`, `noon`. (`midnight` is an alias for `today`.)
 - **Time-only** — `H:MM`, `HH:MM`, `H:MM:SS`, `HH:MM:SS` — combined with today's date.
 - **Relative offsets** — `[+-]?N unit [N unit ...]`, `a/an unit`, and `N unit ago` / `a/an unit ago` (negates the whole expression). Units: `sec(s)`, `second(s)`, `min(s)`, `minute(s)`, `hour(s)`, `day(s)`, `week(s)`, `month(s)`, `year(s)`. Composite forms like `"+1 day 2 hours"`, `"an hour"`, and `"a day ago"` are supported. Day/week offsets honor DST through libc `mktime` normalization.
+- **Relative units** — `this <unit>` (no change), `next <unit>` (+1), and `last <unit>` (-1) for the units `second`, `minute`, `hour`, `day`, `week`, `month`, `year` (e.g. `"next month"`, `"last year"`, `"this hour"`, `"next week"`), preserving the time of day with calendar arithmetic. The `week` unit is Monday-anchored, matching PHP.
 - **Named weekdays** — `Monday`..`Sunday` and 3-letter abbreviations `Mon`..`Sun`. Modifiers: `next <weekday>` (next future occurrence; today + 7 if today matches), `last <weekday>` (most recent past; today - 7 if today matches), `this <weekday>` (delta may be zero when today matches). Result is midnight of the target day.
+- **`first/last day of <modifier> month`** — `this`, `next`, `last`/`previous`/`prev` select the month; `first day of` sets the 1st and `last day of` the final day. The time of day is preserved (e.g. `"last day of next month"`).
+- **`<ordinal> <weekday> of <modifier> month`** — `first`..`fifth` or `last` of a named weekday (e.g. `"first monday of next month"`, `"last friday of this month"`, `"third tuesday of next month"`). A `fifth` occurrence that overflows rolls into the next month; the time resets to midnight.
 
-Currently out of scope (not accepted): timezone offsets (`+0200`, `UTC`, ...), `@unix_timestamp` form, `first/last day of` patterns, `MM/DD/YYYY` and `DD-Mon-YYYY` alternative date shapes, `nth <weekday> of <month>` patterns. Malformed input returns `-1`.
+An ISO 8601 datetime may carry a trailing explicit timezone: a **numeric UTC offset** `+HH:MM`, `-HH:MM`, `+HHMM` (optionally space-separated), `Z`, or the words `UTC`/`GMT` (e.g. `"2024-06-15T12:00:00+02:00"`, `"2024-06-15 12:00:00 +0200"`, `"...Z"`, `"... UTC"`). The wall-clock is then interpreted at that offset (`Z`/`UTC`/`GMT` = UTC offset 0), overriding the configured default zone. A trailing **IANA zone name** is also accepted (e.g. `"2024-06-15 12:00:00 America/New_York"`): the date/time is interpreted in that zone with full daylight-saving handling resolved from the system timezone database (so the example is `12:00` EDT = `16:00` UTC), and the previous default zone is restored afterwards. The zone name is the final space-separated token, distinguished from the time by containing a letter, so a bare `"YYYY-MM-DD HH:MM:SS"` is unaffected. Bare ordinal weekdays without `of <month>` (`"first monday"`) are not accepted (use `next monday` or the `of <month>` form). Malformed input returns `false` (use `=== false` to detect failure). Pre-1900 year handling is described under [Date and Time](datetime.md).
 
 ## JSON
 

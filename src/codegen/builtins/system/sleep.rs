@@ -11,7 +11,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_int, emit_expr};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -37,7 +37,8 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("sleep()");
     // -- evaluate seconds argument --
-    emit_expr(&args[0], emitter, ctx, data);
+    let seconds_ty = emit_expr(&args[0], emitter, ctx, data);
+    coerce_to_int(emitter, &seconds_ty);                                        // unbox a Mixed/Union seconds argument into a raw integer
     // -- call libc sleep (x0 = seconds) --
     emitter.bl_c("sleep");                                           // sleep for x0 seconds, returns 0 on success
     Some(PhpType::Int)

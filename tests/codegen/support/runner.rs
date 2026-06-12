@@ -121,16 +121,16 @@ pub(crate) fn link_binary(
 ) {
     let actual_link_libs = effective_link_libs(extra_link_libs);
 
-    // The elephc-tls, elephc-pdo, and elephc-crypto bridge staticlibs all live in
-    // `<target>/debug` alongside the test binaries; surface that directory on the
-    // linker search path automatically whenever a compiled program links any
-    // bridge, so PDO/crypto tests get the same robust, absolute `-L` as TLS
-    // instead of depending on a cwd-relative lookup. The Docker scripts override
-    // CARGO_TARGET_DIR to point at a shared volume, so honour that envvar before
-    // falling back to the in-tree target/.
-    let needs_bridge_staticlib = actual_link_libs
-        .iter()
-        .any(|l| *l == "elephc_tls" || *l == "elephc_pdo" || *l == "elephc_crypto");
+    // The elephc-tls, elephc-pdo, elephc-crypto, and elephc-tz bridge staticlibs
+    // all live in `<target>/debug` alongside the test binaries; surface that
+    // directory on the linker search path automatically whenever a compiled
+    // program links any bridge, so PDO/crypto/tz tests get the same robust,
+    // absolute `-L` as TLS instead of depending on a cwd-relative lookup. The
+    // Docker scripts override CARGO_TARGET_DIR to point at a shared volume, so
+    // honour that envvar before falling back to the in-tree target/.
+    let needs_bridge_staticlib = actual_link_libs.iter().any(|l| {
+        *l == "elephc_tls" || *l == "elephc_pdo" || *l == "elephc_crypto" || *l == "elephc_tz"
+    });
     let bridge_staticlib_dir = match std::env::var("CARGO_TARGET_DIR") {
         Ok(dir) if !dir.is_empty() => format!("{}/debug", dir),
         _ => format!("{}/target/debug", env!("CARGO_MANIFEST_DIR")),
