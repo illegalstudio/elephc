@@ -418,9 +418,12 @@ pub(super) fn emit_loose_equality_binop(
     if left_ty == PhpType::Str {
         return emit_string_left_loose_equality(op, right, emitter, ctx, data);
     }
+    // `TaggedScalar` counts as numeric: `coerce_null_to_zero` below narrows it to a plain int
+    // (sentinel → 0), so it must not also hit `coerce_to_int_for_loose_cmp`, whose default arm
+    // would overwrite the narrowed value with 0.
     let left_numeric = matches!(
         left_ty,
-        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::TaggedScalar
     );
     coerce_null_to_zero(emitter, &left_ty);
     let use_float = left_ty == PhpType::Float;
@@ -433,9 +436,10 @@ pub(super) fn emit_loose_equality_binop(
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     }
     let right_ty = emit_expr(right, emitter, ctx, data);
+    // `TaggedScalar` counts as numeric for the same reason as the left operand above.
     let right_numeric = matches!(
         right_ty,
-        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::TaggedScalar
     );
     coerce_null_to_zero(emitter, &right_ty);
 

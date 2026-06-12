@@ -1,7 +1,7 @@
 //! Purpose:
 //! End-to-end coverage of the tagged null representation (`NullRepr::Tagged`): the §0
 //! collision repros plus the tag-aware consumer surface (echo, var_dump, is_null, ??, ??=,
-//! isset, strict comparison, arithmetic, string coercion) over null-capable int reads.
+//! isset, strict and loose comparison, arithmetic, string coercion) over null-capable int reads.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -289,4 +289,26 @@ fn test_sentinel_plain_int_still_emits_sentinel_check() {
 fn test_sentinel_optout_still_suppresses_collision_value() {
     let out = compile_and_run_sentinel("<?php echo 9223372036854775806;");
     assert_eq!(out, "");
+}
+
+/// Regression: loose `==`/`!=` with one tagged-scalar operand (a miss-capable int-array read, or a
+/// local holding one) and one plain int must compare the narrowed payload, not the tagged
+/// representation. The operand is narrowed once by `coerce_null_to_zero`; classifying TaggedScalar
+/// as numeric prevents a second `coerce_to_int_for_loose_cmp` from reloading 0 over the narrowed
+/// value. Before the fix `$m[1] == 13` evaluated false.
+#[test]
+fn test_tagged_scalar_loose_equality_against_plain_int() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+$m = [12, 13, 12];
+echo ($m[1] == 13) ? "y" : "n";
+echo (13 == $m[1]) ? "y" : "n";
+$x = $m[1];
+echo ($x == 13) ? "y" : "n";
+echo ($m[1] != 13) ? "y" : "n";
+echo ($m[0] == 13) ? "y" : "n";
+echo ($m[0] != 13) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "yyynny");
 }
