@@ -289,6 +289,11 @@ pub fn coerce_to_int(emitter: &mut Emitter, ty: &PhpType) {
     coerce_null_to_zero(emitter, ty);
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_call_label(emitter, "__rt_mixed_cast_int");                   // normalize boxed int|bool|string values into a raw integer
+    } else if *ty == PhpType::Str {
+        // A string operand lives in the string-result registers; on x86_64 the pointer also
+        // occupies the integer result register, so an unconverted string would be compared as a
+        // raw pointer. Parse it through PHP string-to-int rules into the integer register.
+        abi::emit_call_label(emitter, "__rt_str_to_int");                       // numeric value of the string operand in the int register
     }
 }
 
