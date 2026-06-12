@@ -15,7 +15,7 @@ use crate::types::{PhpType, TypeEnv};
 use super::common::BuiltinResult;
 use super::super::super::Checker;
 
-/// Type-checks path builtins (`basename`, `dirname`, `fnmatch`, `realpath`, `pathinfo`)
+/// Type-checks path builtins (`basename`, `dirname`, `fnmatch`, `realpath`, cache helpers, `pathinfo`)
 /// and returns the return `PhpType` on success, `BuiltinResult` with diagnostic on failure.
 ///
 /// Arity and argument types are validated; `checker.infer_type()` is called on each argument
@@ -74,6 +74,27 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Union(vec![PhpType::Str, PhpType::Bool])))
+        }
+        "realpath_cache_get" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "realpath_cache_get() takes exactly 0 arguments",
+                ));
+            }
+            Ok(Some(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }))
+        }
+        "realpath_cache_size" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    "realpath_cache_size() takes exactly 0 arguments",
+                ));
+            }
+            Ok(Some(PhpType::Int))
         }
         "pathinfo" => check_pathinfo(checker, args, span, env).map(Some),
         _ => Ok(None),

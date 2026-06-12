@@ -3250,6 +3250,33 @@ pub(super) fn lower_realpath(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     store_if_result(ctx, inst)
 }
 
+/// Lowers `realpath_cache_get()` to elephc's empty realpath-cache view.
+pub(super) fn lower_realpath_cache_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "realpath_cache_get", 0)?;
+    emit_empty_mixed_hash(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `realpath_cache_size()` to zero because elephc has no realpath cache.
+pub(super) fn lower_realpath_cache_size(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "realpath_cache_size", 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #0");                              // report an empty realpath cache size
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor rax, rax");                            // report an empty realpath cache size
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `file_put_contents(path, data)` through the target-aware runtime writer.
 pub(super) fn lower_file_put_contents(
     ctx: &mut FunctionContext<'_>,

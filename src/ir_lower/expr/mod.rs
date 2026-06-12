@@ -5174,7 +5174,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "crc32" | "get_resource_id" | "isset" | "linkinfo" | "mktime" | "sleep"
         | "pclose" | "spl_object_id" | "stream_select" | "stream_set_chunk_size"
         | "stream_set_read_buffer" | "stream_set_write_buffer" | "strtotime" | "time"
-        | "umask" | "vfprintf" | "vprintf" => {
+        | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size" => {
             Some(PhpType::Int)
         }
         "spl_object_hash" => Some(PhpType::Str),
@@ -5182,7 +5182,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         "stream_context_create" | "stream_context_get_default" | "stream_context_set_default" => {
             Some(PhpType::stream_resource())
         }
-        "stream_context_get_options" | "stream_context_get_params" | "stream_get_meta_data" => Some(PhpType::AssocArray {
+        "realpath_cache_get" | "stream_context_get_options" | "stream_context_get_params"
+        | "stream_get_meta_data" => Some(PhpType::AssocArray {
             key: Box::new(PhpType::Str),
             value: Box::new(PhpType::Mixed),
         }),

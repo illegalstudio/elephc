@@ -210,6 +210,8 @@ wrappers are documented in [Streams](streams.md).
 | `dirname()` | `dirname($path [, $levels = 1]): string` | Parent directory. Repeats the parent lookup when `$levels` is greater than 1. |
 | `pathinfo()` | `pathinfo($path [, $flag]): array\|string` | Without a flag, or with `PATHINFO_ALL`: associative array with keys `dirname`, `basename`, `extension` (when the basename contains a dot), `filename`. With component flags (`DIRNAME`, `BASENAME`, `EXTENSION`, `FILENAME`): the corresponding string. Runtime-computed flags are supported. |
 | `realpath()` | `realpath($path): string\|false` | Canonicalized absolute path, or `false` when the path does not exist. |
+| `realpath_cache_get()` | `realpath_cache_get(): array` | Empty array; elephc does not maintain a realpath cache. |
+| `realpath_cache_size()` | `realpath_cache_size(): int` | `0`; elephc does not maintain a realpath cache. |
 | `fnmatch()` | `fnmatch($pattern, $filename [, $flags = 0]): bool` | Shell-glob match. Supports `*`, `?`, `[abc]`, `[a-z]`, `[!abc]`/`[^abc]`, `\\<char>`, and PHP flags. |
 
 > `pathinfo()` accepts `PATHINFO_DIRNAME` (1), `PATHINFO_BASENAME` (2), `PATHINFO_EXTENSION` (4), `PATHINFO_FILENAME` (8), and `PATHINFO_ALL` (15) constants, integer literals, variables, and bitmasks such as `PATHINFO_DIRNAME | PATHINFO_EXTENSION`. Component bitmasks follow PHP priority: dirname, basename, extension, then filename. The component-flag form returns the requested component as a string (or empty string when it is absent, for example `pathinfo("foo", PATHINFO_EXTENSION)` returns `""`). The no-flag and exact `PATHINFO_ALL` forms return an associative array; the `extension` key is omitted only when the basename has no dot, matching PHP's behaviour.

@@ -136,6 +136,19 @@ fn test_error_realpath_wrong_args() {
     expect_error("<?php realpath();", "realpath() takes exactly 1 argument");
 }
 
+/// Verifies the error diagnostics for realpath cache helper wrong args.
+#[test]
+fn test_error_realpath_cache_wrong_args() {
+    expect_error(
+        "<?php realpath_cache_get(true);",
+        "realpath_cache_get() takes exactly 0 arguments",
+    );
+    expect_error(
+        "<?php realpath_cache_size(true);",
+        "realpath_cache_size() takes exactly 0 arguments",
+    );
+}
+
 /// Verifies the error diagnostic for touch rejects invalid timestamp args.
 #[test]
 fn test_error_touch_rejects_invalid_timestamp_args() {
@@ -155,4 +168,3 @@ touch("file.txt", $mtime, 1000);
         "touch() mtime cannot be null when atime is provided",
     );
 }
-

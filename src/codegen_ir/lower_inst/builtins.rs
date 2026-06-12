@@ -237,6 +237,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "stream_socket_sendto" => io::lower_stream_socket_sendto(ctx, inst),
         "file" => io::lower_file(ctx, inst),
         "realpath" => io::lower_realpath(ctx, inst),
+        "realpath_cache_get" => io::lower_realpath_cache_get(ctx, inst),
+        "realpath_cache_size" => io::lower_realpath_cache_size(ctx, inst),
         "file_put_contents" => io::lower_file_put_contents(ctx, inst),
         "file_exists" => io::lower_file_exists(ctx, inst),
         "copy" => io::lower_copy(ctx, inst),

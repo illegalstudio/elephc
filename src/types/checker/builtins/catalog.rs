@@ -269,6 +269,8 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "readline",
     "readlink",
     "realpath",
+    "realpath_cache_get",
+    "realpath_cache_size",
     "rename",
     "rewind",
     "rmdir",
