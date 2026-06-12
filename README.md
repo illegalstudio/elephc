@@ -123,6 +123,12 @@ xattr -cr elephc
 
 ## Usage
 
+> **Important:** Starting with v0.23.10, elephc uses the new EIR backend by default.
+> The legacy AST backend is frozen: it will not receive new language or runtime
+> features, and it is scheduled for complete removal in v0.26.0. If you need to
+> compare behavior with the old backend during the transition, compile with
+> `--ast-backend`.
+
 ```bash
 # Compile a PHP file to a native binary
 elephc hello.php
