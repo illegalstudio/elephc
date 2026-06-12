@@ -96,7 +96,10 @@ override trust with `ssl.cafile` or `ssl.capath`, set `ssl.peer_name`, or relax
 verification with `ssl.verify_peer = "0"`, `ssl.allow_self_signed`, or
 `ssl.verify_peer_name = "0"`. Client certificates are supported when both
 `ssl.local_cert` and `ssl.local_pk` point at readable PEM files; encrypted keys
-and `ssl.passphrase` are not supported.
+and `ssl.passphrase` are not supported. `ssl.ciphers` and
+`ssl.security_level` are accepted as context options for source compatibility
+but are no-ops: rustls does not consume OpenSSL cipher-list strings and chooses
+its TLS 1.2/1.3 policy internally.
 
 ## Stream contexts
 

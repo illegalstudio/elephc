@@ -597,11 +597,12 @@ none are needed for typical stream usage.
   supported; the tar- and zip-based PHAR containers are not.
 - [ ] **`Phar` / `PharData` OOP API** — the object-oriented archive API is not
   implemented (multi-week; depends on the advanced read/write items above).
-- [ ] **TLS `ciphers` / `security_level`** — accepted without error but *not
+- [x] **TLS `ciphers` / `security_level`** — accepted without error but *not
   honored*: rustls has no OpenSSL-cipher-string equivalent and selects TLS
   1.2/1.3 automatically. Honest no-op by design (upstream limitation), not a
-  planned change. (`ssl.passphrase` is likewise unsupported — rustls reads only
-  unencrypted keys.)
+  planned change. Covered by Phase 32 and a focused context-option regression.
+  (`ssl.passphrase` is likewise unsupported — rustls reads only unencrypted
+  keys.)
 - [ ] **Misc lower-level gaps** — true non-blocking semantics (beyond the
   `O_NONBLOCK` fcntl), `realpath_cache_*`, and `lchown`/`lchgrp`.
 

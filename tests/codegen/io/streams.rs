@@ -4046,6 +4046,26 @@ echo $out;
     assert_eq!(out, "wrappers:2|http:2|ssl:1");
 }
 
+/// Verifies compiled PHP output for TLS cipher/security-level options accepted as no-ops.
+#[test]
+fn test_stream_context_ssl_cipher_options_are_accepted_noops() {
+    let out = compile_and_run(
+        r#"<?php
+$ctx = stream_context_create();
+$a = stream_context_set_option($ctx, "ssl", "ciphers", "DEFAULT@SECLEVEL=1");
+$b = stream_context_set_option($ctx, "ssl", "security_level", "1");
+$count = 0;
+foreach (stream_context_get_options($ctx) as $wrapper => $sub) {
+    if ($wrapper === "ssl") {
+        $count = count($sub);
+    }
+}
+echo ($a && $b ? "ok" : "FAIL") . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "ok|2");
+}
+
 /// Verifies compiled PHP output for stream context set option two arg replaces options.
 #[test]
 fn test_stream_context_set_option_two_arg_replaces_options() {
