@@ -2026,6 +2026,34 @@ echo file_get_contents("phar://" . $archive . "/dir/two.txt");
     assert_eq!(out, "5|5|alpha|bravo");
 }
 
+/// `Phar` and `PharData` expose a minimal OOP ArrayAccess surface that maps
+/// bracket reads/writes/isset to the existing runtime `phar://` reader/writer.
+#[test]
+fn test_phar_oop_array_access_read_write() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("oop.phar");
+$p["one.txt"] = "alpha";
+$p["dir/two.txt"] = "bravo";
+echo class_exists("phar") ? "class|" : "missing|";
+echo ($p instanceof ArrayAccess) ? "aa|" : "no-aa|";
+echo $p["one.txt"] . "|";
+echo $p["dir/two.txt"] . "|";
+echo ($p["missing.txt"] === false ? "missing|" : "bad|");
+echo (isset($p["one.txt"]) ? "yes|" : "no|");
+echo (isset($p["missing.txt"]) ? "bad|" : "no|");
+$pd = new PharData("oop.tar");
+$pd["note.txt"] = "tar";
+echo $pd["note.txt"] . "|";
+echo Phar::GZ . "|" . PharData::TAR;
+"#,
+    );
+    assert_eq!(
+        out,
+        "class|aa|alpha|bravo|missing|yes|no|tar|4096|2"
+    );
+}
+
 /// `file_get_contents()` of a literal `phar://` URL decodes the entry at compile
 /// time (like the fopen read fast path) and returns its bytes as a string; a
 /// missing entry returns `false`.

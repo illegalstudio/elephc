@@ -34,7 +34,7 @@ pub(crate) use callables::{
 
 impl Checker {
     /// Records an external link library required on every target.
-    fn require_builtin_library(&mut self, library: &str) {
+    pub(crate) fn require_builtin_library(&mut self, library: &str) {
         if !self.required_libraries.iter().any(|lib| lib == library) {
             self.required_libraries.push(library.to_string());
         }

@@ -53,6 +53,9 @@ impl Checker {
         if class_name == "Fiber" {
             self.validate_fiber_constructor_args(args, expr, env)?;
         }
+        if is_phar_archive_class(&class_name) {
+            self.require_phar_archive_libraries();
+        }
         if matches!(
             class_name.as_str(),
             "CallbackFilterIterator" | "RecursiveCallbackFilterIterator"
@@ -157,6 +160,13 @@ impl Checker {
             }
         }
         Ok(PhpType::Object(class_name))
+    }
+
+    /// Records the PHAR bridge and decompression libraries needed by PHAR archive helpers.
+    pub(crate) fn require_phar_archive_libraries(&mut self) {
+        self.require_builtin_library("elephc_phar");
+        self.require_builtin_library("z");
+        self.require_builtin_library("bz2");
     }
 
     /// Returns true when construct internal iterator from builtin get iterator.
@@ -870,6 +880,11 @@ fn is_reflection_owner_class(class_name: &str) -> bool {
         class_name,
         "ReflectionClass" | "ReflectionMethod" | "ReflectionProperty"
     )
+}
+
+/// Returns `true` if `class_name` is backed by the PHAR bridge.
+fn is_phar_archive_class(class_name: &str) -> bool {
+    matches!(class_name, "Phar" | "PharData")
 }
 
 /// Returns `true` if the attribute name/arg slices are mismatched or any

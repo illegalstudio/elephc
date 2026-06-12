@@ -219,6 +219,15 @@ fn test_error_spl_object_storage_cannot_be_redeclared() {
     );
 }
 
+/// Verifies that `Phar` cannot be redeclared as a user class.
+#[test]
+fn test_error_phar_cannot_be_redeclared() {
+    expect_error(
+        "<?php class Phar {}",
+        "Cannot redeclare built-in class: Phar",
+    );
+}
+
 /// Verifies that `SplHeap` stays abstract and cannot be instantiated directly.
 #[test]
 fn test_error_spl_heap_is_abstract() {

@@ -498,6 +498,7 @@ impl Checker {
                     ));
                 }
                 self.infer_new_object_type(fallback_class.as_str(), args, expr, env)?;
+                self.require_phar_archive_libraries();
                 Ok(PhpType::Object(fallback_class.as_str().to_string()))
             }
             ExprKind::PropertyAccess { object, property } => {

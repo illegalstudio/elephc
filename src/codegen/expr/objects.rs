@@ -197,6 +197,8 @@ fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
         "OutOfRangeException",
         "OverflowException",
         "ParentIterator",
+        "Phar",
+        "PharData",
         "RangeException",
         "RecursiveArrayIterator",
         "RecursiveCachingIterator",

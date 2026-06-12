@@ -10,6 +10,8 @@
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex
 //!   helpers because generated SPL methods can call them.
+//! - Emitted stream/archive classes enable PHAR bridge libraries because their
+//!   generated methods route dynamic paths through `__rt_*_maybe_phar` helpers.
 //! - The dynamic builtin dispatcher (descriptor invoker) emits per-builtin
 //!   wrappers — including md5/sha1/hash — that reference the `elephc_crypto`
 //!   staticlib, so its detection forces that crate to link.
@@ -28,6 +30,7 @@ use super::program_usage::{collect_required_class_names, program_has_dynamic_ins
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeFeatures {
     pub regex: bool,
+    pub phar_archive: bool,
     /// True when codegen can emit the runtime callable dispatcher (descriptor
     /// invoker) that builds per-builtin wrappers referencing `elephc_crypto`.
     pub descriptor_invoker: bool,
@@ -38,6 +41,7 @@ impl RuntimeFeatures {
     pub const fn none() -> Self {
         Self {
             regex: false,
+            phar_archive: false,
             descriptor_invoker: false,
         }
     }
@@ -47,6 +51,7 @@ impl RuntimeFeatures {
     pub const fn all() -> Self {
         Self {
             regex: true,
+            phar_archive: true,
             descriptor_invoker: true,
         }
     }
@@ -73,6 +78,11 @@ pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec
         libs.push("pcre2-posix".to_string());
         libs.push("pcre2-8".to_string());
     }
+    if features.phar_archive {
+        libs.push("elephc_phar".to_string());
+        libs.push("z".to_string());
+        libs.push("bz2".to_string());
+    }
     if features.descriptor_invoker {
         // The dynamic builtin dispatcher emits md5/sha1/hash wrappers that
         // reference `elephc_crypto_hash`; force the crate to link on all targets.
@@ -88,6 +98,7 @@ fn runtime_features_for_program_and_classes_opt(
 ) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
     features.regex = program_requires_regex(program, classes);
+    features.phar_archive = class_emission_can_reference_phar_archive(program, classes);
     features.descriptor_invoker = program_requires_descriptor_invoker(program);
     features
 }
@@ -133,6 +144,45 @@ fn is_regex_iterator_name(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
         "regexiterator" | "recursiveregexiterator"
+    )
+}
+
+/// Returns true when class method emission can reference PHAR bridge helpers.
+fn class_emission_can_reference_phar_archive(
+    program: &Program,
+    classes: Option<&HashMap<String, ClassInfo>>,
+) -> bool {
+    match classes {
+        Some(classes) => emitted_classes_include_phar_archive_helpers(program, classes),
+        None => required_classes_include_phar_archive_helpers(program),
+    }
+}
+
+/// Returns true when the actual emitted class set includes stream/archive helpers.
+fn emitted_classes_include_phar_archive_helpers(
+    program: &Program,
+    classes: &HashMap<String, ClassInfo>,
+) -> bool {
+    if program_has_dynamic_instanceof(program) {
+        return classes.keys().any(|name| is_phar_archive_helper_class_name(name));
+    }
+    super::collect_emitted_class_names(program, classes)
+        .iter()
+        .any(|name| is_phar_archive_helper_class_name(name))
+}
+
+/// Returns true when required class metadata includes stream/archive helpers.
+fn required_classes_include_phar_archive_helpers(program: &Program) -> bool {
+    collect_required_class_names(program)
+        .iter()
+        .any(|name| is_phar_archive_helper_class_name(name))
+}
+
+/// Returns true when a class has generated methods that publish PHAR bridge pointers.
+fn is_phar_archive_helper_class_name(name: &str) -> bool {
+    matches!(
+        php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        "phar" | "phardata" | "splfileobject" | "spltempfileobject"
     )
 }
 
@@ -813,7 +863,7 @@ mod tests {
     fn test_runtime_features_include_regex_for_preg_call() {
         assert_eq!(
             features_for("<?php echo preg_match(\"/a/\", \"cat\");"),
-            RuntimeFeatures { regex: true, descriptor_invoker: false }
+            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
         );
     }
 
@@ -821,7 +871,10 @@ mod tests {
     #[test]
     fn test_regex_runtime_features_require_pcre2_libraries() {
         assert_eq!(
-            required_libraries_for_runtime_features(RuntimeFeatures { regex: true, descriptor_invoker: false }),
+            required_libraries_for_runtime_features(RuntimeFeatures {
+                regex: true,
+                ..RuntimeFeatures::none()
+            }),
             vec!["pcre2-posix".to_string(), "pcre2-8".to_string()]
         );
         assert!(required_libraries_for_runtime_features(RuntimeFeatures::none()).is_empty());
@@ -832,11 +885,11 @@ mod tests {
     fn test_runtime_features_include_regex_for_call_user_func_literal() {
         assert_eq!(
             features_for("<?php echo call_user_func(\"preg_match\", \"/a/\", \"cat\");"),
-            RuntimeFeatures { regex: true, descriptor_invoker: false }
+            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
         );
         assert_eq!(
             features_for("<?php echo call_user_func_array(\"preg_split\", [\"/,/\", \"a,b\"]);"),
-            RuntimeFeatures { regex: true, descriptor_invoker: false }
+            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
         );
     }
 
@@ -845,7 +898,7 @@ mod tests {
     fn test_runtime_features_include_regex_for_first_class_callable() {
         assert_eq!(
             features_for("<?php $cb = preg_replace_callback(...);"),
-            RuntimeFeatures { regex: true, descriptor_invoker: false }
+            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
         );
     }
 
@@ -854,7 +907,7 @@ mod tests {
     fn test_runtime_features_include_regex_for_dynamic_instanceof() {
         assert_eq!(
             features_for("<?php echo $value instanceof $className;"),
-            RuntimeFeatures { regex: true, descriptor_invoker: false }
+            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
         );
     }
 
@@ -865,16 +918,31 @@ mod tests {
             features_for(
                 "<?php $it = new RegexIterator(new ArrayIterator([\"a\"]), \"/a/\");"
             ),
-            RuntimeFeatures { regex: true, descriptor_invoker: false }
+            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() }
         );
     }
 
-    /// Verifies class-aware emission omits regex helpers for non-regex SPL filesystem classes.
+    /// Verifies class-aware filesystem emission requests PHAR libraries without regex helpers.
     #[test]
-    fn test_runtime_features_omit_regex_for_spl_filesystem_class_expansion() {
+    fn test_runtime_features_include_phar_for_spl_filesystem_class_expansion() {
         assert_eq!(
             checked_features_for("<?php $file = new SplTempFileObject();"),
-            RuntimeFeatures::none()
+            RuntimeFeatures {
+                phar_archive: true,
+                ..RuntimeFeatures::none()
+            }
+        );
+    }
+
+    /// Verifies class-aware PHAR emission requests the PHAR bridge libraries.
+    #[test]
+    fn test_runtime_features_include_phar_for_phar_class_expansion() {
+        assert_eq!(
+            checked_features_for("<?php $phar = new Phar(\"archive.phar\");"),
+            RuntimeFeatures {
+                phar_archive: true,
+                ..RuntimeFeatures::none()
+            }
         );
     }
 
@@ -932,6 +1000,7 @@ mod tests {
     fn test_descriptor_invoker_runtime_features_require_elephc_crypto_library() {
         assert!(required_libraries_for_runtime_features(RuntimeFeatures {
             regex: false,
+            phar_archive: false,
             descriptor_invoker: true,
         })
         .iter()
