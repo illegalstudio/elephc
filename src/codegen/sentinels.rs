@@ -69,6 +69,10 @@ pub(crate) const TAGGED_SCALAR_TAG_INT: i64 = 0;
 /// `runtime_value_tag(PhpType::Void)`).
 pub(crate) const TAGGED_SCALAR_TAG_NULL: i64 = 8;
 
+/// Indexed-array header value_type for inline `{payload, tag}` tagged-scalar slots.
+/// This is an internal array-storage tag, not a boxed Mixed runtime value tag.
+pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
+
 /// Returns the register holding a tagged scalar's tag word; the payload word lives in the
 /// integer result register. AArch64: `x1`. x86_64: `rdx` (mirrors the `Str` second word).
 pub(crate) fn tagged_scalar_tag_reg(emitter: &Emitter) -> &'static str {

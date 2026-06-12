@@ -4210,6 +4210,11 @@ fn ir_backend_handles_basic_indexed_arrays() {
             "10:20",
         ),
         (
+            "array_literal_preserves_nullable_int_null",
+            "<?php function maybe_int(int $x): ?int { if ($x) { return 7; } return null; } $a = [maybe_int(1), maybe_int(0)]; var_dump($a[0]); var_dump($a[1]);",
+            "int(7)\nNULL\n",
+        ),
+        (
             "array_push_builtin_mutates_local",
             "<?php $a = [10]; array_push($a, 20); echo count($a); echo ' '; echo $a[1];",
             "2 20",

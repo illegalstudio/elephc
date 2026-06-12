@@ -184,6 +184,20 @@ echo $b[1.2];
     );
 }
 
+/// Verifies nullable integer array literals preserve null tags when boxed as mixed values.
+#[test]
+fn parity_nullable_int_array_literal_preserves_nulls() {
+    assert_backend_parity(
+        "nullable_int_array_literal_preserves_nulls",
+        r#"<?php
+$items = [1, null, 3];
+var_dump($items);
+echo json_encode($items);
+"#,
+        &[],
+    );
+}
+
 /// Verifies by-reference indexed-array append stores unboxed Mixed payloads and writes back growth.
 #[test]
 fn parity_ref_array_push_unboxes_mixed_value() {

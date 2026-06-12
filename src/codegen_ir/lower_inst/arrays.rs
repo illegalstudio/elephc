@@ -14,6 +14,7 @@ use crate::codegen::{
     emit_release_pushed_refcounted_temp_after_array_push, runtime_value_tag,
 };
 use crate::codegen::platform::Arch;
+use crate::codegen::sentinels::TAGGED_SCALAR_ARRAY_VALUE_TYPE;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
@@ -38,11 +39,15 @@ pub(super) fn lower_array_new(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    let result_reg = abi::int_result_reg(ctx.emitter);
     crate::codegen::emit_array_value_type_stamp(
         ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
+        result_reg,
         &elem_ty,
     );
+    if matches!(elem_ty, PhpType::TaggedScalar) {
+        emit_tagged_scalar_array_value_type_stamp(ctx, result_reg);
+    }
     store_if_result(ctx, inst)
 }
 
@@ -483,6 +488,14 @@ fn emit_array_get_in_bounds_aarch64(
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
         }
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            ctx.emitter.instruction(&format!("lsl {}, {}, #4", index_reg, index_reg)); // scale the tagged-scalar offset by the payload-plus-tag slot size
+            ctx.emitter.instruction(&format!("add {}, {}, {}", array_reg, array_reg, index_reg)); // move to the selected tagged-scalar slot within the indexed array
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header before loading the tagged-scalar slot
+            abi::emit_load_from_address(ctx.emitter, index_reg, array_reg, 0);
+            abi::emit_load_from_address(ctx.emitter, tag_reg, array_reg, 8);
+        }
         other if other.is_refcounted() => {
             ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
             ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
@@ -527,6 +540,14 @@ fn emit_array_get_in_bounds_x86_64(
             ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the string slot
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
+        }
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            ctx.emitter.instruction(&format!("shl {}, 4", index_reg));          // scale the tagged-scalar offset by the payload-plus-tag slot size
+            ctx.emitter.instruction(&format!("add {}, {}", array_reg, index_reg)); // move to the selected tagged-scalar slot within the indexed array
+            ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the tagged-scalar slot
+            abi::emit_load_from_address(ctx.emitter, index_reg, array_reg, 0);
+            abi::emit_load_from_address(ctx.emitter, tag_reg, array_reg, 8);
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
@@ -605,6 +626,9 @@ fn lower_array_push_aarch64(
         return lower_mixed_array_push_aarch64(ctx, array, value, &value_ty);
     }
     match value_ty {
+        PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
+            lower_array_push_tagged_scalar_aarch64(ctx, array, value)?;
+        }
         PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
@@ -670,6 +694,9 @@ fn lower_array_push_x86_64(
         return lower_mixed_array_push_x86_64(ctx, array, value, &value_ty);
     }
     match value_ty {
+        PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
+            lower_array_push_tagged_scalar_x86_64(ctx, array, value)?;
+        }
         PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_reg(array, "r11")?;
             ctx.load_value_to_reg(value, "rsi")?;
@@ -730,6 +757,100 @@ fn array_push_value_needs_mixed_box(elem_ty: &PhpType, value_ty: &PhpType) -> bo
 fn array_push_value_needs_mixed_unbox(elem_ty: &PhpType, value_ty: &PhpType) -> bool {
     !matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         && matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Appends an inline tagged scalar into a 16-byte tagged-scalar indexed array on AArch64.
+fn lower_array_push_tagged_scalar_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    let check_label = ctx.next_label("array_push_tagged_check");
+    let grow_label = ctx.next_label("array_push_tagged_grow");
+    let done_label = ctx.next_label("array_push_tagged_done");
+    ctx.load_value_to_result(value)?;
+    ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve spill slots for the tagged payload and mutable array pointer
+    ctx.emitter.instruction("str x0, [sp, #0]");                                // save the tagged-scalar payload across uniqueness and growth calls
+    ctx.emitter.instruction("str x1, [sp, #8]");                                // save the tagged-scalar runtime tag across uniqueness and growth calls
+    ctx.load_value_to_reg(array, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+    ctx.emitter.instruction("str x0, [sp, #16]");                               // preserve the unique indexed-array pointer across the capacity check
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // load length before first-write tagged-scalar shape specialization
+    ctx.emitter.instruction(&format!("cbnz x9, {}", check_label));              // existing arrays already have their tagged-scalar shape fixed
+    ctx.emitter.instruction("mov x10, #16");                                    // tagged-scalar slots store payload and runtime tag words
+    ctx.emitter.instruction("str x10, [x0, #16]");                              // elem_size = 16 before growth can copy tagged-scalar slots
+    emit_tagged_scalar_array_value_type_stamp(ctx, "x0");
+    ctx.emitter.label(&check_label);
+    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // reload the current indexed-array pointer before checking capacity
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the current logical length
+    ctx.emitter.instruction("ldr x10, [x0, #8]");                               // load the current capacity
+    ctx.emitter.instruction("cmp x9, x10");                                     // is the tagged-scalar array already full?
+    ctx.emitter.instruction(&format!("b.ge {}", grow_label));                   // grow before writing when the append would exceed capacity
+    ctx.emitter.instruction("lsl x10, x9, #4");                                 // convert length to a byte offset for 16-byte tagged-scalar slots
+    ctx.emitter.instruction("add x10, x0, x10");                                // move to the selected append slot base
+    ctx.emitter.instruction("add x10, x10, #24");                               // skip the indexed-array header before storing the slot
+    ctx.emitter.instruction("ldr x11, [sp, #0]");                               // reload the tagged-scalar payload for the appended slot
+    ctx.emitter.instruction("ldr x12, [sp, #8]");                               // reload the tagged-scalar runtime tag for the appended slot
+    ctx.emitter.instruction("str x11, [x10]");                                  // store the tagged-scalar payload word in the append slot
+    ctx.emitter.instruction("str x12, [x10, #8]");                              // store the tagged-scalar runtime tag word in the append slot
+    ctx.emitter.instruction("add x9, x9, #1");                                  // advance the indexed-array logical length
+    ctx.emitter.instruction("str x9, [x0]");                                    // publish the updated logical length
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the growth path after storing the tagged-scalar slot
+    ctx.emitter.label(&grow_label);
+    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // reload the unique indexed-array pointer for growth
+    abi::emit_call_label(ctx.emitter, "__rt_array_grow");
+    ctx.emitter.instruction("str x0, [sp, #16]");                               // preserve the grown indexed-array pointer before retrying the append
+    ctx.emitter.instruction(&format!("b {}", check_label));                     // retry the capacity check against the grown storage
+    ctx.emitter.label(&done_label);
+    ctx.emitter.instruction("add sp, sp, #32");                                 // release tagged-scalar append spill slots
+    Ok(())
+}
+
+/// Appends an inline tagged scalar into a 16-byte tagged-scalar indexed array on x86_64.
+fn lower_array_push_tagged_scalar_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    let check_label = ctx.next_label("array_push_tagged_check");
+    let grow_label = ctx.next_label("array_push_tagged_grow");
+    let done_label = ctx.next_label("array_push_tagged_done");
+    ctx.load_value_to_result(value)?;
+    ctx.emitter.instruction("sub rsp, 32");                                     // reserve spill slots for the tagged payload and mutable array pointer
+    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the tagged-scalar payload across uniqueness and growth calls
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                    // save the tagged-scalar runtime tag across uniqueness and growth calls
+    ctx.load_value_to_reg(array, "rdi")?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // preserve the unique indexed-array pointer across the capacity check
+    ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load length before first-write tagged-scalar shape specialization
+    ctx.emitter.instruction("test r10, r10");                                   // is this the first append into a tagged-scalar array?
+    ctx.emitter.instruction(&format!("jnz {}", check_label));                   // existing arrays already have their tagged-scalar shape fixed
+    ctx.emitter.instruction("mov QWORD PTR [rax + 16], 16");                    // elem_size = 16 before growth can copy tagged-scalar slots
+    emit_tagged_scalar_array_value_type_stamp(ctx, "rax");
+    ctx.emitter.label(&check_label);
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // reload the current indexed-array pointer before checking capacity
+    ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the current logical length
+    ctx.emitter.instruction("mov r11, QWORD PTR [rax + 8]");                    // load the current capacity
+    ctx.emitter.instruction("cmp r10, r11");                                    // is the tagged-scalar array already full?
+    ctx.emitter.instruction(&format!("jae {}", grow_label));                    // grow before writing when the append would exceed capacity
+    ctx.emitter.instruction("mov rcx, r10");                                    // copy the logical length before scaling it into a byte offset
+    ctx.emitter.instruction("shl rcx, 4");                                      // convert length to a byte offset for 16-byte tagged-scalar slots
+    ctx.emitter.instruction("lea rcx, [rax + rcx + 24]");                       // compute the address of the next tagged-scalar append slot
+    ctx.emitter.instruction("mov r8, QWORD PTR [rsp]");                         // reload the tagged-scalar payload for the appended slot
+    ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");                     // reload the tagged-scalar runtime tag for the appended slot
+    ctx.emitter.instruction("mov QWORD PTR [rcx], r8");                         // store the tagged-scalar payload word in the append slot
+    ctx.emitter.instruction("mov QWORD PTR [rcx + 8], r9");                     // store the tagged-scalar runtime tag word in the append slot
+    ctx.emitter.instruction("add r10, 1");                                      // advance the indexed-array logical length
+    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // publish the updated logical length
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the growth path after storing the tagged-scalar slot
+    ctx.emitter.label(&grow_label);
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the unique indexed-array pointer to the growth helper
+    abi::emit_call_label(ctx.emitter, "__rt_array_grow");
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // preserve the grown indexed-array pointer before retrying the append
+    ctx.emitter.instruction(&format!("jmp {}", check_label));                   // retry the capacity check against the grown storage
+    ctx.emitter.label(&done_label);
+    ctx.emitter.instruction("add rsp, 32");                                     // release tagged-scalar append spill slots
+    Ok(())
 }
 
 /// Appends an unboxed Mixed payload into a typed indexed array on AArch64.
@@ -1079,6 +1200,9 @@ fn require_array_get_result(elem_ty: &PhpType, inst: &Instruction) -> Result<()>
     {
         return Ok(());
     }
+    if matches!(elem_ty, PhpType::TaggedScalar) && result_ty == PhpType::TaggedScalar {
+        return Ok(());
+    }
     if matches!(elem_ty, PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Str)
         && result_ty == *elem_ty
     {
@@ -1178,14 +1302,42 @@ fn source_load_local_slot(
 /// Returns the runtime element-slot width for an indexed-array PHP type.
 fn array_element_size(ty: &PhpType) -> Result<i64> {
     match ty {
-        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Str | PhpType::Never) => {
-            Ok(16)
+        PhpType::Array(elem) => {
+            if matches!(
+                elem.codegen_repr(),
+                PhpType::Str | PhpType::TaggedScalar | PhpType::Never
+            ) {
+                Ok(16)
+            } else {
+                Ok(8)
+            }
         }
-        PhpType::Array(_) => Ok(8),
         other => Err(CodegenIrError::unsupported(format!(
             "array_new result PHP type {:?}",
             other
         ))),
+    }
+}
+
+/// Stamps an indexed array as carrying inline tagged-scalar `{payload, tag}` slots.
+fn emit_tagged_scalar_array_value_type_stamp(ctx: &mut FunctionContext<'_>, array_reg: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg)); // load the packed indexed-array metadata before replacing value_type bits
+            ctx.emitter.instruction("mov x11, #0x80ff");                        // preserve heap kind and persistent COW metadata only
+            ctx.emitter.instruction("and x10, x10, x11");                       // clear stale indexed-array value_type bits
+            ctx.emitter.instruction(&format!("mov x11, #{}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)); // value_type 11 = inline tagged-scalar slots
+            ctx.emitter.instruction("lsl x11, x11, #8");                        // move the tagged-scalar value_type into the packed kind word
+            ctx.emitter.instruction("orr x10, x10, x11");                       // combine stable metadata with the tagged-scalar value_type tag
+            ctx.emitter.instruction(&format!("str x10, [{}, #-8]", array_reg)); // publish tagged-scalar indexed-array metadata
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed indexed-array metadata before replacing value_type bits
+            ctx.emitter.instruction("mov r11, 0xffffffff000080ff");             // preserve heap marker, indexed-array kind, and persistent COW metadata
+            ctx.emitter.instruction("and r10, r11");                            // clear stale indexed-array value_type bits
+            ctx.emitter.instruction(&format!("or r10, 0x{:x}", TAGGED_SCALAR_ARRAY_VALUE_TYPE << 8)); // add value_type 11 for inline tagged-scalar slots
+            ctx.emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // publish tagged-scalar indexed-array metadata
+        }
     }
 }
 

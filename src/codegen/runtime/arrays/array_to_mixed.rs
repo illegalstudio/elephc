@@ -11,6 +11,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::sentinels::TAGGED_SCALAR_ARRAY_VALUE_TYPE;
 
 /// x86_64 heap kind magic: upper 32 bits of the ELEPHC signature baked into
 /// boxed Mixed heap words. Combined with low byte 5 at runtime to form the
@@ -52,12 +53,23 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_array_to_mixed_stamp");                      // stamp the array once every live slot is boxed
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the unique indexed-array pointer
     emitter.instruction("ldr x12, [sp, #0]");                                   // reload the source value_type tag
+    emitter.instruction(&format!("cmp x12, #{}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)); // do source slots contain inline tagged scalars?
+    emitter.instruction("b.eq __rt_array_to_mixed_load_tagged_scalar");         // tagged-scalar slots need payload-plus-tag loads
     emitter.instruction("cmp x12, #1");                                         // do source slots contain string pointer/length pairs?
     emitter.instruction("b.eq __rt_array_to_mixed_load_string");                // string slots need a 16-byte load
     emitter.instruction("add x13, x11, #24");                                   // compute the pointer-sized source payload base
     emitter.instruction("ldr x1, [x13, x9, lsl #3]");                           // load the low payload word from the source slot
     emitter.instruction("mov x2, xzr");                                         // pointer-sized and scalar slots do not use a high payload word
     emitter.instruction("b __rt_array_to_mixed_box");                           // allocate a Mixed box for the loaded payload
+
+    emitter.label("__rt_array_to_mixed_load_tagged_scalar");
+    emitter.instruction("lsl x13, x9, #4");                                     // scale the tagged-scalar slot index by 16 bytes
+    emitter.instruction("add x13, x11, x13");                                   // advance to the source tagged-scalar slot
+    emitter.instruction("add x13, x13, #24");                                   // skip the indexed-array header
+    emitter.instruction("ldr x1, [x13]");                                       // load the tagged-scalar payload word
+    emitter.instruction("ldr x12, [x13, #8]");                                  // load the per-slot runtime value tag for Mixed boxing
+    emitter.instruction("mov x2, xzr");                                         // tagged scalar payloads do not use a high payload word
+    emitter.instruction("b __rt_array_to_mixed_box");                           // allocate a Mixed box from the per-slot tag and payload
 
     emitter.label("__rt_array_to_mixed_load_string");
     emitter.instruction("lsl x13, x9, #4");                                     // scale the string slot index by 16 bytes
@@ -143,11 +155,22 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_array_to_mixed_x86_stamp");                   // stamp the array once every live slot is boxed
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the unique indexed-array pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source value_type tag
+    emitter.instruction(&format!("cmp rax, {}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)); // do source slots contain inline tagged scalars?
+    emitter.instruction("je __rt_array_to_mixed_x86_load_tagged_scalar");       // tagged-scalar slots need payload-plus-tag loads
     emitter.instruction("cmp rax, 1");                                          // do source slots contain string pointer/length pairs?
     emitter.instruction("je __rt_array_to_mixed_x86_load_string");              // string slots need a 16-byte load
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24 + r10 * 8]");             // load the low payload word from the source slot
     emitter.instruction("xor rsi, rsi");                                        // pointer-sized and scalar slots do not use a high payload word
     emitter.instruction("jmp __rt_array_to_mixed_x86_box");                     // allocate a Mixed box for the loaded payload
+
+    emitter.label("__rt_array_to_mixed_x86_load_tagged_scalar");
+    emitter.instruction("mov r8, r10");                                         // copy the tagged-scalar slot index before scaling
+    emitter.instruction("shl r8, 4");                                           // scale the tagged-scalar slot index by 16 bytes
+    emitter.instruction("lea r8, [r11 + r8 + 24]");                             // address the source tagged-scalar slot
+    emitter.instruction("mov rdi, QWORD PTR [r8]");                             // load the tagged-scalar payload word
+    emitter.instruction("mov rax, QWORD PTR [r8 + 8]");                         // load the per-slot runtime value tag for Mixed boxing
+    emitter.instruction("xor rsi, rsi");                                        // tagged scalar payloads do not use a high payload word
+    emitter.instruction("jmp __rt_array_to_mixed_x86_box");                     // allocate a Mixed box from the per-slot tag and payload
 
     emitter.label("__rt_array_to_mixed_x86_load_string");
     emitter.instruction("mov r8, r10");                                         // copy the string slot index before scaling
