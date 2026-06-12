@@ -14,9 +14,10 @@
 //! - Returned FFI pointers reference a process-global buffer and remain valid
 //!   until the next `elephc_phar_extract_url` call.
 //! - Writes preserve the archive family for existing native PHAR, tar, and ZIP
-//!   archives. ZIP writes emit stored entries; ZIP64, encrypted ZIP entries,
-//!   ZIP data descriptors, and compressed PHAR writes are intentionally
-//!   unsupported.
+//!   archives. Native PHAR gzip/bzip2 entries keep their compression when
+//!   replaced. ZIP writes emit stored entries; ZIP64, encrypted ZIP entries,
+//!   ZIP data descriptors, and explicit compression-control APIs are
+//!   intentionally unsupported.
 
 use std::io::{Read, Write};
 use std::sync::{Mutex, OnceLock};
@@ -433,7 +434,12 @@ fn encode_phar_payload(payload: &[u8], compression: PharCompression) -> Option<V
             encoder.write_all(payload).ok()?;
             encoder.finish().ok()
         }
-        PharCompression::Bzip2 => Some(payload.to_vec()),
+        PharCompression::Bzip2 => {
+            let mut encoder =
+                bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+            encoder.write_all(payload).ok()?;
+            encoder.finish().ok()
+        }
     }
 }
 
@@ -442,7 +448,7 @@ fn phar_compression_flag(compression: PharCompression) -> u32 {
     match compression {
         PharCompression::None => 0,
         PharCompression::Gzip => PHAR_FLAG_GZIP,
-        PharCompression::Bzip2 => 0,
+        PharCompression::Bzip2 => PHAR_FLAG_BZIP2,
     }
 }
 
@@ -832,6 +838,14 @@ mod tests {
         encoder.finish().unwrap()
     }
 
+    /// Builds a bzip2 payload for PHAR bzip2 entry fixtures.
+    fn bzip2_payload(content: &[u8]) -> Vec<u8> {
+        let mut encoder =
+            bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        encoder.write_all(content).unwrap();
+        encoder.finish().unwrap()
+    }
+
     /// Builds a small tar archive with regular-file entries.
     fn build_tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1014,6 +1028,35 @@ mod tests {
         let entries = parse_native_phar_entries(&archive).unwrap();
         assert_eq!(entries[0].compression, PharCompression::Gzip);
         assert_eq!(entries[0].payload, b"gzip updated payload");
+    }
+
+    /// Verifies native PHAR writes preserve bzip2 compression on replaced entries.
+    #[test]
+    fn writes_preserve_bzip2_native_phar_entries() {
+        let path = std::env::temp_dir().join(format!(
+            "elephc_phar_bzip2_update_{}_{}.phar",
+            std::process::id(),
+            "unit"
+        ));
+        let original = b"bzip2 old payload bzip2 old payload";
+        let stored = bzip2_payload(original);
+        let archive = build_native_phar_with_flags(&[(
+            "b.txt",
+            &stored,
+            original.len() as u32,
+            PHAR_FILE_MODE_0644 | PHAR_FLAG_BZIP2,
+        )]);
+        std::fs::write(&path, archive).unwrap();
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"b.txt", b"bzip2 updated payload"),
+            Some(21)
+        );
+        let archive = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let entries = parse_native_phar_entries(&archive).unwrap();
+        assert_eq!(entries[0].compression, PharCompression::Bzip2);
+        assert_eq!(entries[0].payload, b"bzip2 updated payload");
     }
 
     /// Verifies tar writes preserve the tar container family while updating entries.

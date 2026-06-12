@@ -85,8 +85,8 @@ entry in a native, SHA1-signed PHAR archive while preserving existing native PHA
 entries. `file_put_contents()` also accepts runtime-built `phar://` URLs. Current
 entries. `file_put_contents()` and write-mode `fopen()` also accept
 runtime-built `phar://` URLs. Current limits: one PHAR write stream at a time,
-native-PHAR bzip2 entries are rewritten uncompressed when touched, ZIP writes
-emit stored entries, and no key/private-key signing variants are supported.
+ZIP writes emit stored entries, explicit compression-control APIs are not
+implemented, and no key/private-key signing variants are supported.
 
 `file_get_contents($url)` recognizes runtime `http://`, `https://`, `ftp://`,
 and `ftps://` strings before falling back to `phar://`/filesystem handling.

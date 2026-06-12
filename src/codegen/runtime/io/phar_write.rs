@@ -1,7 +1,7 @@
 //! Purpose:
 //! Emits the phar-write runtime: `__rt_phar_write_open`, `__rt_phar_write_append`,
-//! and `__rt_phar_write_finalize`. Together they buffer one uncompressed
-//! `phar://` entry per open write stream and flush it on `fclose()`.
+//! and `__rt_phar_write_finalize`. Together they buffer one `phar://` payload
+//! per open write stream and flush it on `fclose()`.
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` (and the minimal x86
@@ -25,8 +25,8 @@
 //! - Runtime-built `file_put_contents()` and write-mode `fopen()` URLs use a
 //!   separate bridge entry that receives the complete `phar://archive/entry`
 //!   string and performs the split in Rust.
-//! - Current limits: one phar-write stream at a time, uncompressed payloads only,
-//!   no tar/zip writes, and no private-key signing variants.
+//! - Current limits: one phar-write stream at a time, stored ZIP writes only,
+//!   no explicit compression-control APIs, and no private-key signing variants.
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
