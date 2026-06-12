@@ -204,6 +204,69 @@ fn test_error_checkdate_wrong_args() {
     );
 }
 
+// -- date/time alias arity diagnostics --
+// Procedural date/time aliases are desugared by the name resolver only at their supported
+// arities. A wrong-arity call must report a precise arity error (matching `function_exists()`,
+// which recognizes these names) rather than the misleading "Undefined function". Each test below
+// covers a distinct message shape produced by the checker's alias-arity diagnostic.
+
+/// `idate()` accepts 1 or 2 arguments; a zero-arg call reports the "N or M" message shape.
+#[test]
+fn test_error_idate_too_few_args() {
+    expect_error("<?php idate();", "idate() takes 1 or 2 arguments");
+}
+
+/// A date alias called with too MANY arguments is diagnosed by arity, not as undefined.
+#[test]
+fn test_error_idate_too_many_args() {
+    expect_error("<?php idate(\"Y\", 0, 1);", "idate() takes 1 or 2 arguments");
+}
+
+/// `gregoriantojd()` requires exactly 3 arguments (the "exactly N" message shape).
+#[test]
+fn test_error_gregoriantojd_wrong_args() {
+    expect_error(
+        "<?php gregoriantojd(1, 2);",
+        "gregoriantojd() takes exactly 3 arguments",
+    );
+}
+
+/// `jdtogregorian()` requires exactly 1 argument (singular wording in the message).
+#[test]
+fn test_error_jdtogregorian_wrong_args() {
+    expect_error(
+        "<?php jdtogregorian();",
+        "jdtogregorian() takes exactly 1 argument",
+    );
+}
+
+/// `easter_date()` accepts 0 to 2 arguments (the "N to M" message shape).
+#[test]
+fn test_error_easter_date_too_many_args() {
+    expect_error(
+        "<?php easter_date(1, 2, 3);",
+        "easter_date() takes 0 to 2 arguments",
+    );
+}
+
+/// `date_sunrise()` accepts 1 to 6 arguments; a zero-arg call reports the wide "N to M" range.
+#[test]
+fn test_error_date_sunrise_too_few_args() {
+    expect_error(
+        "<?php date_sunrise();",
+        "date_sunrise() takes 1 to 6 arguments",
+    );
+}
+
+/// `timezone_version_get()` takes no arguments (the "exactly 0" message shape).
+#[test]
+fn test_error_timezone_version_get_wrong_args() {
+    expect_error(
+        "<?php timezone_version_get(1);",
+        "timezone_version_get() takes exactly 0 arguments",
+    );
+}
+
 // -- JSON error tests --
 
 /// Verifies that `json_encode()` with no arguments yields a wrong-args diagnostic.

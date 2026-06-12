@@ -140,3 +140,11 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
 pub(crate) fn is_date_procedural_alias(name: &str) -> bool {
     expressions::is_date_procedural_alias(name)
 }
+
+/// Returns the inclusive `(min, max)` argument arity that the resolver's date/time alias
+/// desugaring accepts for `name`, or `None` when `name` is not a desugared alias. The type
+/// checker uses this to report a precise arity error (instead of "Undefined function") when a
+/// known alias call survives desugaring because its argument count was out of range.
+pub(crate) fn date_procedural_alias_arity(name: &str) -> Option<(usize, usize)> {
+    expressions::date_procedural_alias_arity(name)
+}

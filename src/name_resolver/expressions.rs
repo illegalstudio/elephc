@@ -686,3 +686,44 @@ pub(crate) fn is_date_procedural_alias(name: &str) -> bool {
             | "timezone_offset_get"
     )
 }
+
+/// Returns the inclusive `(min, max)` argument-count range that
+/// `rewrite_date_procedural_alias` accepts for a desugared procedural date/time alias, or
+/// `None` when `name` is not such an alias.
+///
+/// This MUST stay in lockstep with the arity guards in `rewrite_date_procedural_alias`: it lets
+/// the type checker turn a wrong-arity alias call (which fails to desugar and would otherwise be
+/// reported as "Undefined function") into a precise arity diagnostic, matching how real builtins
+/// like `checkdate()` are diagnosed. The `timezone_location_get`/`timezone_transitions_get`/
+/// `timezone_abbreviations_list` introspection names are intentionally excluded: they are real
+/// injected prelude functions (not rewrite arms), so their arity is validated normally.
+pub(crate) fn date_procedural_alias_arity(name: &str) -> Option<(usize, usize)> {
+    let bare = name
+        .rsplit('\\')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let range = match bare.as_str() {
+        "date_get_last_errors" | "timezone_version_get" => (0, 0),
+        "date_create" | "date_create_immutable" | "cal_info" | "unixtojd" | "gettimeofday" => {
+            (0, 1)
+        }
+        "easter_days" | "easter_date" | "timezone_identifiers_list" => (0, 2),
+        "date_parse" | "jdtogregorian" | "jdtojulian" | "jdtofrench" | "jdtounix"
+        | "timezone_open" | "date_interval_create_from_date_string" | "date_timestamp_get"
+        | "date_timezone_get" | "date_offset_get" | "timezone_name_get" => (1, 1),
+        "idate" | "jddayofweek" | "strftime" | "gmstrftime" => (1, 2),
+        "timezone_name_from_abbr" | "jdtojewish" => (1, 3),
+        "date_sunrise" | "date_sunset" => (1, 6),
+        "date_parse_from_format" | "cal_from_jd" | "jdmonthname" | "strptime" | "date_diff"
+        | "date_format" | "date_add" | "date_sub" | "date_modify" | "date_timestamp_set"
+        | "date_timezone_set" | "date_interval_format" | "timezone_offset_get" => (2, 2),
+        "date_create_from_format" | "date_create_immutable_from_format" => (2, 3),
+        "date_sun_info" | "cal_days_in_month" | "gregoriantojd" | "juliantojd" | "frenchtojd"
+        | "jewishtojd" => (3, 3),
+        "date_isodate_set" | "date_time_set" => (3, 4),
+        "cal_to_jd" | "date_date_set" => (4, 4),
+        _ => return None,
+    };
+    Some(range)
+}
