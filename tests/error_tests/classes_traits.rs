@@ -611,3 +611,12 @@ fn test_error_reflection_method_unsupported_attribute_args() {
         "method has attribute argument metadata that is not supported yet",
     );
 }
+
+/// Verifies that an anonymous class missing its body is rejected with a clear diagnostic.
+#[test]
+fn test_error_anonymous_class_missing_body() {
+    expect_error(
+        "<?php $o = new class;",
+        "Expected '{' to open anonymous class body",
+    );
+}

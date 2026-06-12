@@ -236,3 +236,72 @@ fn test_parse_relative_class_param_and_property_types() {
         _ => panic!("Expected ClassDecl"),
     }
 }
+
+/// Verifies that `new class { ... }` is rewritten to `new <synthetic>()` and that the class body
+/// is hoisted to the program as a synthetic `ClassDecl` whose name marks it as anonymous.
+#[test]
+fn test_parse_anonymous_class_hoists_declaration() {
+    let stmts = parse_source(
+        "<?php $o = new class { public function v(): string { return \"x\"; } };",
+    );
+    // The assignment plus the hoisted synthetic class declaration appended to the program.
+    assert_eq!(stmts.len(), 2);
+    let synthetic_name = match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewObject { class_name, args } => {
+                assert!(args.is_empty());
+                assert!(
+                    class_name.as_str().starts_with("class@anonymous"),
+                    "expected anonymous synthetic name, got {}",
+                    class_name.as_str()
+                );
+                class_name.as_str().to_string()
+            }
+            other => panic!("Expected NewObject, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    };
+    match &stmts[1].kind {
+        StmtKind::ClassDecl { name, methods, .. } => {
+            assert_eq!(name, &synthetic_name);
+            assert_eq!(methods[0].name, "v");
+        }
+        other => panic!("Expected hoisted ClassDecl, got {:?}", other),
+    }
+}
+
+/// Verifies that `new class(args) extends P implements I {}` carries constructor args, the parent,
+/// and the interface list onto the hoisted declaration.
+#[test]
+fn test_parse_anonymous_class_with_ctor_extends_implements() {
+    let stmts = parse_source(
+        "<?php interface I {} class P {} $o = new class(1, 2) extends P implements I { public function __construct(int $a, int $b) {} };",
+    );
+    // interface, parent class, the assignment, then the hoisted anonymous class.
+    let assign = stmts
+        .iter()
+        .find(|s| matches!(s.kind, StmtKind::Assign { .. }))
+        .expect("assignment present");
+    match &assign.kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewObject { args, .. } => assert_eq!(args.len(), 2),
+            other => panic!("Expected NewObject, got {:?}", other),
+        },
+        _ => unreachable!(),
+    }
+    let anon = stmts
+        .iter()
+        .filter_map(|s| match &s.kind {
+            StmtKind::ClassDecl {
+                name,
+                extends,
+                implements,
+                ..
+            } if name.starts_with("class@anonymous") => Some((extends, implements)),
+            _ => None,
+        })
+        .next()
+        .expect("hoisted anonymous class present");
+    assert_eq!(anon.0.as_deref(), Some("P"));
+    assert_eq!(anon.1.len(), 1);
+}

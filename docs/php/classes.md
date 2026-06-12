@@ -514,6 +514,36 @@ echo gettype($bad);                      // "NULL"
 
 elephc resolves the class name case-insensitively against compile-time class metadata, matching PHP class lookup. A match dispatches through the same allocation path as `new ClassName()`, including constructor calls, declared property defaults, and supported built-in/SPL runtime storage initialization. An unknown name currently yields PHP `null`; the missing-class fatal path is not yet tightened.
 
+## Anonymous classes (`new class {}`)
+
+An anonymous class defines and instantiates a class in one expression. It may take constructor arguments, extend a class, and implement interfaces:
+
+```php
+<?php
+interface Logger {
+    public function log(string $message): string;
+}
+
+function make_logger(string $prefix): Logger {
+    return new class($prefix) implements Logger {
+        public function __construct(private string $prefix) {}
+
+        public function log(string $message): string {
+            return $this->prefix . ": " . $message;
+        }
+    };
+}
+
+echo make_logger("INFO")->log("started"); // INFO: started
+```
+
+Rules:
+
+- Constructor arguments go before any `extends`/`implements` clause: `new class(args) extends P implements I { ... }`.
+- Each anonymous class is compiled to its own uniquely-named class, so two `new class {}` expressions produce two independent types.
+- Like a named class, an anonymous class does **not** capture variables from the enclosing scope; pass data in through the constructor.
+- `new readonly class { ... }` is supported.
+
 ## Override rules
 Same parameter count, same pass-by-reference positions, same default layout, same variadic shape.
 
