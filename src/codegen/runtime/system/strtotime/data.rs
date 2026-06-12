@@ -16,8 +16,17 @@
 /// Kind 9: `ago` (consumed by the offsets strategy as a trailing suffix).
 /// Kinds 10-16: weekday names (10=Sun..16=Sat) — full and abbreviated forms share the same kind.
 /// Kinds 17-18: "a"/"an" relative magnitudes consumed by the offsets strategy.
+/// Kinds 19-30: month names (19=January..30=December) — full and abbreviated forms share the same
+/// kind; consumed by the textual-date strategy.
+/// Kinds 31-35: ordinals `first`..`fifth` — routed to the first/last-day / nth-weekday strategy
+/// (`first`=31 also anchors `first day of`). `last` (kind 7) supplies the "last" ordinal there.
 const KEYWORDS: &[(&str, u8)] = &[
     ("now", 0),
+    ("first", 31),
+    ("second", 32),
+    ("third", 33),
+    ("fourth", 34),
+    ("fifth", 35),
     ("today", 1),
     ("tomorrow", 2),
     ("yesterday", 3),
@@ -43,6 +52,30 @@ const KEYWORDS: &[(&str, u8)] = &[
     ("thu", 14),
     ("fri", 15),
     ("sat", 16),
+    ("january", 19),
+    ("february", 20),
+    ("march", 21),
+    ("april", 22),
+    ("may", 23),
+    ("june", 24),
+    ("july", 25),
+    ("august", 26),
+    ("september", 27),
+    ("october", 28),
+    ("november", 29),
+    ("december", 30),
+    ("jan", 19),
+    ("feb", 20),
+    ("mar", 21),
+    ("apr", 22),
+    ("jun", 24),
+    ("jul", 25),
+    ("aug", 26),
+    ("sep", 27),
+    ("sept", 27),
+    ("oct", 28),
+    ("nov", 29),
+    ("dec", 30),
 ];
 
 /// Unit table entries indexed by the strtotime lexer.
@@ -88,8 +121,32 @@ pub(crate) fn emit_strtotime_data() -> String {
         out.push_str(&entry(name, *kind));
     }
     out.push_str("    .byte 0,0,0,0,0,0,0,0,0,0,0,0\n");
+
+    out.push_str(".globl _strtotime_firstlast_tab\n_strtotime_firstlast_tab:\n");
+    for (name, kind) in FIRSTLAST {
+        out.push_str(&entry(name, *kind));
+    }
+    out.push_str("    .byte 0,0,0,0,0,0,0,0,0,0,0,0\n");
     out
 }
+
+/// Phrase-token table for the `first/last day of <modifier> month` strategy.
+///
+/// Fixed phrase words map to: `day`=0, `of`=1, `month`=2. Month modifiers map to a
+/// month-delta kind: `this`=3 (delta 0), `next`=4 (delta +1), `last`/`previous`/`prev`=5
+/// (delta -1). Matched with the shared `__rt_strtotime_match_word` after lowercasing from the
+/// cursor. Kept separate from the main keyword table so these words do not affect first-word
+/// classification.
+const FIRSTLAST: &[(&str, u8)] = &[
+    ("day", 0),
+    ("of", 1),
+    ("month", 2),
+    ("this", 3),
+    ("next", 4),
+    ("last", 5),
+    ("previous", 5),
+    ("prev", 5),
+];
 
 /// Formats one fixed-stride table entry for the strtotime data section.
 ///

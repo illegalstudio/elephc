@@ -338,6 +338,15 @@ fn runtime_extern_named(ctx: &Context, name: &str) -> bool {
 fn runtime_static_method_wrappers(ctx: &Context) -> Vec<(String, String, FunctionSig)> {
     let mut wrappers = Vec::new();
     for (class_name, class_info) in &ctx.classes {
+        // Synthetic builtin classes (e.g. DateTime::createFromFormat) are emitted on demand, so
+        // their static-method symbols may not exist in a program that never uses the class. Keep
+        // them out of the dynamic-callable descriptor to avoid referencing an unemitted symbol,
+        // mirroring how they are excluded from dynamic `new $x()`.
+        if crate::codegen::expr::objects::known_dynamic_new_builtin_class_names()
+            .contains(&class_name.as_str())
+        {
+            continue;
+        }
         for (method_name, sig) in &class_info.static_methods {
             if !class_info
                 .static_method_visibilities

@@ -248,7 +248,7 @@ fn emit_offsets_arm64(emitter: &mut Emitter) {
 
     // -- call mktime --
     emitter.instruction("mov x0, sp");                                          // x0 = &tm
-    emitter.bl_c("mktime");                                                     // → x0 = ts (normalizes overflow)
+    emitter.instruction("bl __rt_mktime_shifted");                              // → x0 = ts (normalizes overflow)
     emitter.instruction("b __rt_strtotime_ret");                                // return through shared epilogue
 }
 
@@ -456,6 +456,6 @@ fn emit_offsets_linux_x86_64(emitter: &mut Emitter) {
 
     // -- call mktime --
     emitter.instruction("mov rdi, rsp");                                        // rdi = &tm
-    emitter.instruction("call mktime");                                         // → rax = ts (normalizes overflow)
+    emitter.instruction("call __rt_mktime_shifted");                            // → rax = ts (normalizes overflow)
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return through shared epilogue
 }

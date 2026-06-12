@@ -230,6 +230,15 @@ fn test_error_new_static_validates_child_constructor() {
     );
 }
 
+/// Verifies the builtin `DatePeriod` constructor enforces its 3-to-4 argument arity.
+#[test]
+fn test_error_date_period_too_few_args() {
+    expect_error(
+        "<?php $p = new DatePeriod(new DateTime(\"2024-01-01\"));",
+        "Constructor 'DatePeriod::__construct' expects 3 to 4 arguments, got 1",
+    );
+}
+
 // --- #[\Override] enforcement (PHP 8.3) ---
 
 /// Verifies that `#[Override]` on a method with no matching parent method reports

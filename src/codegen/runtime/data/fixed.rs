@@ -29,6 +29,38 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".data\n");
     out.push_str(".comm _concat_buf, 65536, 3\n");
     out.push_str(".comm _concat_off, 8, 3\n");
+    out.push_str(".comm _strtotime_clock, 8, 3\n");
+    // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
+    // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
+    // "UTC" literal returned in that default case.
+    out.push_str(".comm _php_tz_env, 264, 3\n");
+    out.push_str(".comm _php_default_tz_len, 8, 3\n");
+    out.push_str(".comm _php_tz_save, 264, 3\n");
+    out.push_str(".globl _php_tz_utc\n");
+    out.push_str("_php_tz_utc:\n");
+    out.push_str("    .ascii \"UTC\"\n");
+    // getdate() associative-array key strings (read by __rt_getdate).
+    for (sym, key) in [
+        ("_gd_k_seconds", "seconds"),
+        ("_gd_k_minutes", "minutes"),
+        ("_gd_k_hours", "hours"),
+        ("_gd_k_mday", "mday"),
+        ("_gd_k_wday", "wday"),
+        ("_gd_k_mon", "mon"),
+        ("_gd_k_year", "year"),
+        ("_gd_k_yday", "yday"),
+        ("_gd_k_weekday", "weekday"),
+        ("_gd_k_month", "month"),
+    ] {
+        out.push_str(&format!(".globl {sym}\n{sym}:\n    .ascii \"{key}\"\n"));
+    }
+    // localtime() associative-array key strings (read by __rt_localtime).
+    for key in [
+        "tm_sec", "tm_min", "tm_hour", "tm_mday", "tm_mon", "tm_year", "tm_wday", "tm_yday",
+        "tm_isdst",
+    ] {
+        out.push_str(&format!(".globl _lt_k_{key}\n_lt_k_{key}:\n    .ascii \"{key}\"\n"));
+    }
     out.push_str(".comm _global_argc, 8, 3\n");
     out.push_str(".comm _global_argv, 8, 3\n");
     out.push_str(".comm _exc_handler_top, 8, 3\n");

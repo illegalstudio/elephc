@@ -22,6 +22,21 @@ echo $a[0] . " " . $a[1] . " " . $a[2];
     assert_eq!(out, "42 42 42");
 }
 
+/// Regression: `array_fill` with a STRING value stores every element, not just the first.
+/// Strings need 16-byte array slots (pointer + length); the fill previously allocated 8-byte
+/// scalar slots, so the 16-byte string writes overflowed and only the first element survived.
+/// Routed through the dedicated `__rt_array_fill_str` runtime.
+#[test]
+fn test_array_fill_string_value() {
+    let out = compile_and_run(
+        r#"<?php
+$x = array_fill(0, 3, "ab");
+echo implode(",", $x), "|", count($x), "|", $x[2];
+"#,
+    );
+    assert_eq!(out, "ab,ab,ab|3|ab");
+}
+
 /// Tests `array_pad($array, length, value)` — pads `[1, 2]` to length 5 with trailing `0`
 /// entries, then verifies the resulting array has exactly 5 elements via `count()`.
 #[test]
@@ -136,4 +151,36 @@ echo count($m);
 "#,
     );
     assert_eq!(out, "2");
+}
+
+/// Regression: `array_fill`/`array_chunk`/`array_pad`/`array_splice` must unbox a `Mixed`/`Union`
+/// integer argument (start index, chunk size, target size, offset, length) instead of using the
+/// boxed heap pointer as a raw int. Each int arg here is read from a heterogeneous (Mixed-valued)
+/// associative array. `array_fill` uses an integer fill value to sidestep an unrelated
+/// refcounted-fill limitation with string values.
+///
+/// **Currently ignored** — pre-existing gap on origin/main: `array_fill($m["n"], 3, 7)` routes
+/// through `__rt_array_fill_assoc` (because the start is a non-literal-zero int), which
+/// stores every slot as a Mixed cell. `implode` over a Mixed-valued hash segfaults because
+/// it does not unbox the per-slot Mixed tag. PHP returns a plain int-keyed array
+/// (`[2=>7, 3=>7, 4=>7]`) without any boxing. A proper fix needs `__rt_array_fill_assoc`
+/// to store scalar values directly (no Mixed box) and only box refcounted values, plus
+/// `implode` to unbox Mixed when iterating over a hash. Tracked as a separate
+/// `array-fill-assoc-implode` gap.
+#[test]
+#[ignore = "pre-existing gap: __rt_array_fill_assoc Mixed-boxing + implode Mixed unbox"]
+fn test_shape_transforms_unbox_mixed_int_args() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["n" => 2, "t" => "x"];
+$sz = ["v" => 5, "t" => "y"];
+$f = implode(",", array_fill($m["n"], 3, 7));
+$c = implode(",", array_chunk([1, 2, 3, 4, 5], $m["n"])[2]);
+$p = implode(",", array_pad([1, 2], $sz["v"], 0));
+$b = [1, 2, 3, 4];
+array_splice($b, $m["n"], $m["n"]);
+echo $f, "|", $c, "|", $p, "|", implode(",", $b);
+"#,
+    );
+    assert_eq!(out, "7,7,7|5|1,2,0,0,0|1,2");
 }

@@ -131,3 +131,12 @@ pub(crate) fn is_builtin_function(name: &str) -> bool {
 pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     crate::types::checker::builtins::canonical_builtin_function_name(name)
 }
+
+/// Reports whether `name` matches one of PHP's procedural date/time aliases
+/// (e.g. `date_create`, `idate`, `gmstrftime`). The name set is the same as the one
+/// rewritten by `expressions::rewrite_date_procedural_alias`, minus the per-arity guards,
+/// so `function_exists()` and other introspection builtins see the same surface that the
+/// resolver rewrites.
+pub(crate) fn is_date_procedural_alias(name: &str) -> bool {
+    expressions::is_date_procedural_alias(name)
+}

@@ -131,3 +131,20 @@ echo $v->d();
     assert!(!out.success);
     assert!(out.stderr.contains("Call to a member function d()"));
 }
+
+/// Regression: a user method whose name collides with a builtin method of a different arity (here
+/// `add`, which `DateTime::add(DateInterval)` also defines) must still dispatch correctly for a
+/// mixed receiver. The dispatch marshals arguments once with the first candidate's signature, so
+/// candidates are filtered by argument arity; otherwise `DateTime::add` could be selected for this
+/// 2-argument call depending on (nondeterministic) class-id ordering, corrupting the result.
+#[test]
+fn test_mixed_receiver_method_name_collides_with_builtin_arity() {
+    let out = compile_and_run(
+        r#"<?php
+class Money { public function add(int $a, int $b): int { return $a + $b; } }
+function make(): mixed { return new Money(); }
+echo make()->add(40, 2);
+"#,
+    );
+    assert_eq!(out, "42");
+}

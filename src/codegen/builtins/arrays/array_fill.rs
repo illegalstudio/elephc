@@ -15,7 +15,7 @@ use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_int, emit_expr};
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime_value_tag;
 use crate::parser::ast::{Expr, ExprKind};
@@ -30,11 +30,14 @@ fn assoc_fill_type() -> PhpType {
 }
 
 /// Returns true when `array_fill` must build a keyed (hash) array rather than a 0-based
-/// indexed one: a non-literal-zero start index produces keys `start..start+count-1`, and a
-/// string value cannot be stored in the scalar indexed fill's 8-byte slots.
-fn needs_assoc_fill(start_arg: &Expr, value_ty: &PhpType) -> bool {
+/// indexed one. A non-literal-zero start index produces keys `start..start+count-1`, which a
+/// 0-based indexed array cannot represent, so it always goes through the keyed path. A
+/// literal-zero start with a string value still uses the dedicated `__rt_array_fill_str`
+/// indexed path (the 0-based indexed string array is what `array_fill(0, n, "ab")` should
+/// return — `[0=>"ab", 1=>"ab", ...]`, not a hash).
+fn needs_assoc_fill(start_arg: &Expr, _value_ty: &PhpType) -> bool {
     let start_is_literal_zero = matches!(start_arg.kind, ExprKind::IntLiteral(0));
-    !start_is_literal_zero || matches!(value_ty.codegen_repr(), PhpType::Str)
+    !start_is_literal_zero
 }
 
 /// Emits the `array_fill(start_index, count, value)` builtin call.
@@ -59,7 +62,8 @@ pub fn emit(
         return emit_array_fill_linux_x86_64(args, emitter, ctx, data);
     }
 
-    emit_expr(&args[0], emitter, ctx, data);
+    let start_ty = emit_expr(&args[0], emitter, ctx, data);
+    coerce_to_int(emitter, &start_ty);                                          // unbox a Mixed/Union start index into a raw integer
     // -- save start index, evaluate count --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push start index onto stack
     emit_expr(&args[1], emitter, ctx, data);
@@ -90,6 +94,16 @@ pub fn emit(
         return Some(assoc_fill_type());
     }
 
+    if matches!(value_ty.codegen_repr(), PhpType::Str) {
+        // -- literal-zero start with a string value: use the dedicated indexed string path --
+        // String ABI: x1 = pointer, x2 = length; x0 still holds the count we pushed on the stack.
+        // Marshal to (x0=count, x1=ptr, x2=len): pop the count, discard the (literal-zero) start.
+        emitter.instruction("ldr x0, [sp], #16");                               // pop count into x0 (first arg)
+        emitter.instruction("ldr x9, [sp], #16");                               // pop and discard the (literal-zero) start index
+        emitter.instruction("bl __rt_array_fill_str");                          // build the indexed string array via repeated push_str
+        return Some(PhpType::Array(Box::new(PhpType::Str)));
+    }
+
     let uses_refcounted_runtime = value_ty.is_refcounted();
     // -- set up three-arg call: start, count, value --
     emitter.instruction("mov x2, x0");                                          // move fill value to x2 (third arg)
@@ -118,7 +132,8 @@ fn emit_array_fill_linux_x86_64(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> Option<PhpType> {
-    emit_expr(&args[0], emitter, ctx, data);
+    let start_ty = emit_expr(&args[0], emitter, ctx, data);
+    coerce_to_int(emitter, &start_ty);                                          // unbox a Mixed/Union start index into a raw integer
     abi::emit_push_reg(emitter, "rax");                                         // preserve the start index while evaluating the count and fill value arguments
     emit_expr(&args[1], emitter, ctx, data);
     abi::emit_push_reg(emitter, "rax");                                         // preserve the count while evaluating the fill value argument
@@ -145,6 +160,18 @@ fn emit_array_fill_linux_x86_64(
         abi::emit_pop_reg(emitter, "rdi");                                      // restore the start index into the first argument register
         abi::emit_call_label(emitter, "__rt_array_fill_assoc");                 // build a keyed hash with keys start..start+count-1
         return Some(assoc_fill_type());
+    }
+
+    if matches!(value_ty.codegen_repr(), PhpType::Str) {
+        // -- literal-zero start with a string value: use the dedicated indexed string path --
+        // String ABI: rax = pointer, rdx = length. Marshal to (rdi=count, rsi=ptr, rdx=len).
+        abi::emit_push_reg(emitter, "rdx");                                      // preserve the string length across the rsi move
+        emitter.instruction("mov rsi, rax");                                    // string pointer into the second runtime argument register
+        abi::emit_pop_reg(emitter, "rdx");                                      // restore the string length into the third runtime argument register
+        abi::emit_pop_reg(emitter, "rdi");                                      // pop count into the first runtime argument register
+        abi::emit_pop_reg(emitter, "r11");                                      // pop and discard the (literal-zero) start index
+        abi::emit_call_label(emitter, "__rt_array_fill_str");                   // build the indexed string array via repeated push_str
+        return Some(PhpType::Array(Box::new(PhpType::Str)));
     }
 
     if matches!(value_ty, PhpType::Float) {

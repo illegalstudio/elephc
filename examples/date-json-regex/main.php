@@ -21,6 +21,13 @@ $ts = mktime(14, 30, 0, 12, 25, 2024);
 echo "Christmas 2024: " . date("l, F j, Y", $ts) . "\n";
 echo "Time: " . date("g:i A", $ts) . "\n";
 echo "ISO: " . date("Y-m-d H:i:s", $ts) . "\n";
+echo "Ordinal: " . date("l jS F y", $ts) . "\n";
+echo "December has " . date("t", $ts) . " days, day-of-year " . date("z", $ts)
+    . ", leap year " . date("L", $ts) . "\n";
+// gmdate() formats in UTC, so this is the same on every machine regardless of timezone.
+echo "UTC epoch: " . gmdate("Y-m-d H:i:s", 0) . "\n";
+// A backslash escapes the next character; single quotes keep PHP from eating the slashes.
+echo "ISO 8601: " . gmdate('Y-m-d\TH:i:s\Z', 0) . "\n";
 
 // Parse date strings back to timestamps
 $parsed = strtotime("2024-12-25 14:30:00");

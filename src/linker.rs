@@ -77,6 +77,20 @@ const BRIDGES: &[BridgeStaticlib] = &[
         // Rust runtime/unwinder symbols, like the other bridges.
         needs_libdl: true,
     },
+    BridgeStaticlib {
+        lib_name: "elephc_tz",
+        env_var: "ELEPHC_TZ_LIB_DIR",
+        crate_name: "elephc-tz",
+        // Timezone-introspection tables baked from PHP and embedded with
+        // include_str!: pure data lookup, no link-time side effects, so a plain
+        // `-l elephc_tz` is sufficient.
+        whole_archive: false,
+        // Pure-std crate (the IANA tables are baked, not pulled from a tz crate),
+        // so there are no native transitive deps.
+        macos_frameworks: &[],
+        // Rust runtime/unwinder symbols, like the other bridges.
+        needs_libdl: true,
+    },
 ];
 
 impl BridgeStaticlib {
@@ -448,5 +462,20 @@ mod tests {
         assert_eq!(entry.env_var, "ELEPHC_CRYPTO_LIB_DIR");
         assert_eq!(entry.archive_filename(), "libelephc_crypto.a");
         assert!(!entry.whole_archive, "crypto bridge must not force-load (no link-time side effects)");
+    }
+
+    /// Verifies the elephc-tz bridge is registered and produces the expected
+    /// archive filename, so compiled programs that use timezone introspection
+    /// (getLocation/getTransitions/listAbbreviations) can link it.
+    #[test]
+    fn bridges_includes_elephc_tz() {
+        let entry = BRIDGES
+            .iter()
+            .find(|b| b.lib_name == "elephc_tz")
+            .expect("elephc_tz must be a registered bridge");
+        assert_eq!(entry.crate_name, "elephc-tz");
+        assert_eq!(entry.env_var, "ELEPHC_TZ_LIB_DIR");
+        assert_eq!(entry.archive_filename(), "libelephc_tz.a");
+        assert!(!entry.whole_archive, "tz bridge must not force-load (no link-time side effects)");
     }
 }

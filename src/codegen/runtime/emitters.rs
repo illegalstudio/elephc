@@ -117,6 +117,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_getenv(emitter);
     system::emit_shell_exec(emitter);
     system::emit_date(emitter);
+    system::emit_date_default_timezone(emitter);
+    system::emit_checkdate(emitter);
+    system::emit_getdate(emitter);
+    system::emit_localtime(emitter);
+    system::emit_hrtime(emitter);
     system::emit_mktime(emitter);
     system::emit_strtotime(emitter);
     system::emit_json_encode_bool(emitter);
@@ -223,6 +228,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_assoc(emitter);
     arrays::emit_array_fill_refcounted(emitter);
+    arrays::emit_array_fill_str(emitter);
     arrays::emit_array_pad(emitter);
     arrays::emit_array_pad_refcounted(emitter);
     arrays::emit_array_diff(emitter);

@@ -154,6 +154,21 @@ fn test_error_date_no_args() {
     expect_error("<?php date();", "date() takes 1 or 2 arguments");
 }
 
+/// Verifies that `gmdate()` with no arguments yields a wrong-args diagnostic naming `gmdate`.
+#[test]
+fn test_error_gmdate_no_args() {
+    expect_error("<?php gmdate();", "gmdate() takes 1 or 2 arguments");
+}
+
+/// Verifies that `gmdate()` with three arguments yields a wrong-args diagnostic.
+#[test]
+fn test_error_gmdate_too_many_args() {
+    expect_error(
+        "<?php gmdate(\"Y\", 0, 1);",
+        "gmdate() takes 1 or 2 arguments",
+    );
+}
+
 /// Verifies that `mktime()` with only three arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_mktime_wrong_args() {
@@ -166,7 +181,17 @@ fn test_error_mktime_wrong_args() {
 /// Verifies that `strtotime()` with no arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_strtotime_no_args() {
-    expect_error("<?php strtotime();", "strtotime() takes exactly 1 argument");
+    expect_error("<?php strtotime();", "strtotime() takes 1 or 2 arguments");
+}
+
+/// Verifies that `strtotime()` with three arguments yields a wrong-args diagnostic
+/// (the optional `baseTimestamp` is the only second argument).
+#[test]
+fn test_error_strtotime_too_many_args() {
+    expect_error(
+        "<?php strtotime(\"now\", 0, 1);",
+        "strtotime() takes 1 or 2 arguments",
+    );
 }
 
 // -- JSON error tests --
