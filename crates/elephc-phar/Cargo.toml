@@ -12,3 +12,4 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 flate2 = "1"
 bzip2-rs = "0.1"
+sha1 = "0.10"

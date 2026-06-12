@@ -75,13 +75,14 @@ pub(super) fn check_builtin(
                     "file_put_contents() takes exactly 2 arguments",
                 ));
             }
-            // file_put_contents("phar://...") writes a signed entry; the SHA1
-            // signature computed in __rt_phar_write_finalize needs libcrypto on
-            // Linux (CommonCrypto is in libSystem on macOS).
+            // file_put_contents("phar://...") writes through the elephc-phar
+            // read-modify-write bridge, with the assembly SHA1 path retained as
+            // a fallback when the bridge slot is not published.
             if let Some(crate::parser::ast::ExprKind::StringLiteral(url)) =
                 args.first().map(|a| &a.kind)
             {
                 if url.starts_with("phar://") {
+                    checker.require_builtin_library("elephc_phar");
                     checker.require_builtin_library("elephc_crypto");
                 }
             }

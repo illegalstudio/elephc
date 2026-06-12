@@ -1,8 +1,7 @@
 //! Purpose:
 //! Emits the phar-write runtime: `__rt_phar_write_open`, `__rt_phar_write_append`,
-//! and `__rt_phar_write_finalize`. Together they implement Milestone-1 writing of
-//! a single uncompressed `phar://` entry by buffering the archive in memory and
-//! flushing it to disk on `fclose()`.
+//! and `__rt_phar_write_finalize`. Together they buffer one uncompressed
+//! `phar://` entry per open write stream and flush it on `fclose()`.
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` (and the minimal x86
@@ -13,15 +12,14 @@
 //! - `__rt_phar_write_finalize` from the `fclose` emitter for that same fd.
 //!
 //! Key details:
-//! - State lives in the fixed `.bss` globals `_phar_write_out` (the archive buffer,
-//!   template prefix followed by the entry content), `_phar_write_len` (bytes used),
-//!   `_phar_write_tpl_len` (template prefix length), and `_phar_write_path_ptr` /
-//!   `_phar_write_path_len` (the on-disk archive path the emitter records).
-//! - The template prefix carries a one-file manifest whose uncompressed-size,
-//!   compressed-size, and crc32 fields are zero placeholders; finalize patches them
-//!   in place (little-endian u32) before writing, then reuses `__rt_crc32` and
-//!   `__rt_file_put_contents`. Milestone-1: one phar-write stream at a time,
-//!   content bounded by the buffer size, no signature.
+//! - State lives in fixed `.bss` globals for the buffered payload, the target
+//!   archive path, and the inner entry name recorded by lowering.
+//! - When the `elephc-phar` bridge pointer is published, finalize upserts the
+//!   entry into a SHA1-signed native PHAR so existing entries are preserved. The
+//!   assembly fallback still emits a single-entry SHA1-signed archive for paths
+//!   that do not publish the bridge.
+//! - Current limits: one phar-write stream at a time, uncompressed payloads only,
+//!   no tar/zip writes, and no private-key signing variants.
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
@@ -93,6 +91,29 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.instruction("sub x11, x9, x10");                                    // content length = total - template
     abi::emit_symbol_address(emitter, "x12", "_phar_write_out");
     emitter.instruction("add x13, x12, x10");                                   // entry anchor = buffer base + template length
+    // -- prefer the elephc-phar bridge so existing native entries are preserved --
+    abi::emit_symbol_address(emitter, "x14", "_elephc_phar_put_entry_fn");
+    emitter.instruction("ldr x14, [x14]");                                      // load the optional native PHAR writer bridge pointer
+    emitter.instruction("cbz x14, __rt_phar_write_finalize_asm");               // no bridge published → use the single-entry assembly writer
+    abi::emit_symbol_address(emitter, "x0", "_phar_write_path_ptr");
+    emitter.instruction("ldr x0, [x0]");                                        // bridge arg 0 = archive path pointer
+    abi::emit_symbol_address(emitter, "x1", "_phar_write_path_len");
+    emitter.instruction("ldr x1, [x1]");                                        // bridge arg 1 = archive path length
+    abi::emit_symbol_address(emitter, "x2", "_phar_write_entry_ptr");
+    emitter.instruction("ldr x2, [x2]");                                        // bridge arg 2 = entry name pointer
+    abi::emit_symbol_address(emitter, "x3", "_phar_write_entry_len");
+    emitter.instruction("ldr x3, [x3]");                                        // bridge arg 3 = entry name length
+    emitter.instruction("mov x4, x13");                                         // bridge arg 4 = buffered entry payload pointer
+    emitter.instruction("mov x5, x11");                                         // bridge arg 5 = buffered entry payload length
+    emitter.instruction("blr x14");                                             // insert/update the entry through the Rust PHAR bridge
+    emitter.instruction("cmn x0, #1");                                          // did the bridge report usize::MAX failure?
+    emitter.instruction("b.eq __rt_phar_write_finalize_bridge_fail");           // bridge failure makes fclose() false
+    emitter.instruction("mov x0, #1");                                          // fclose() returns true after a successful bridge write
+    emitter.instruction("b __rt_phar_write_finalize_return");                   // skip the single-entry assembly writer
+    emitter.label("__rt_phar_write_finalize_bridge_fail");
+    emitter.instruction("mov x0, #0");                                          // fclose() returns false when the bridge rejects the write
+    emitter.instruction("b __rt_phar_write_finalize_return");                   // restore the frame and return
+    emitter.label("__rt_phar_write_finalize_asm");
     // -- patch the manifest size fields (little-endian u32) --
     emitter.instruction("str w11, [x13, #-24]");                                // uncompressed size = content length
     emitter.instruction("str w11, [x13, #-16]");                                // compressed size = content length (stored uncompressed)
@@ -143,6 +164,7 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_file_put_contents");                           // write the assembled phar archive to disk
     // -- return true and restore the frame --
     emitter.instruction("mov x0, #1");                                          // fclose() returns true after a successful finalize
+    emitter.label("__rt_phar_write_finalize_return");
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the frame
     emitter.instruction("ret");                                                 // return to the fclose caller
@@ -205,6 +227,25 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r11, r10");                                        // ... minus the template length
     abi::emit_symbol_address(emitter, "rcx", "_phar_write_out");                // buffer base
     emitter.instruction("add rcx, r10");                                        // entry anchor = base + template length
+    // -- prefer the elephc-phar bridge so existing native entries are preserved --
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_phar_put_entry_fn", 0); // load the optional native PHAR writer bridge pointer
+    emitter.instruction("test r10, r10");                                       // was the writer bridge published?
+    emitter.instruction("jz __rt_phar_write_finalize_asm_x86");                 // no bridge published → use the single-entry assembly writer
+    emitter.instruction("mov r8, rcx");                                         // bridge arg 4 = buffered entry payload pointer
+    emitter.instruction("mov r9, r11");                                         // bridge arg 5 = buffered entry payload length
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_phar_write_path_ptr", 0);    // bridge arg 0 = archive path pointer
+    abi::emit_load_symbol_to_reg(emitter, "rsi", "_phar_write_path_len", 0);    // bridge arg 1 = archive path length
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_phar_write_entry_ptr", 0);   // bridge arg 2 = entry name pointer
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_phar_write_entry_len", 0);   // bridge arg 3 = entry name length
+    emitter.instruction("call r10");                                            // insert/update the entry through the Rust PHAR bridge
+    emitter.instruction("cmp rax, -1");                                         // did the bridge report usize::MAX failure?
+    emitter.instruction("je __rt_phar_write_finalize_bridge_fail_x86");         // bridge failure makes fclose() false
+    emitter.instruction("mov eax, 1");                                          // fclose() returns true after a successful bridge write
+    emitter.instruction("jmp __rt_phar_write_finalize_return_x86");             // skip the single-entry assembly writer
+    emitter.label("__rt_phar_write_finalize_bridge_fail_x86");
+    emitter.instruction("xor eax, eax");                                        // fclose() returns false when the bridge rejects the write
+    emitter.instruction("jmp __rt_phar_write_finalize_return_x86");             // restore the frame and return
+    emitter.label("__rt_phar_write_finalize_asm_x86");
     // -- patch the manifest size fields (little-endian u32) --
     emitter.instruction("mov DWORD PTR [rcx - 24], r11d");                      // uncompressed size = content length
     emitter.instruction("mov DWORD PTR [rcx - 16], r11d");                      // compressed size = content length (stored uncompressed)
@@ -251,6 +292,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_file_put_contents");                         // write the assembled phar archive to disk
     // -- return true and restore the frame --
     emitter.instruction("mov eax, 1");                                          // fclose() returns true after a successful finalize
+    emitter.label("__rt_phar_write_finalize_return_x86");
     emitter.instruction("add rsp, 16");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the fclose caller

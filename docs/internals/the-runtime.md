@@ -547,7 +547,7 @@ Userspace `streamWrapper` classes registered with `stream_wrapper_register()` di
 |---|---|
 | `__rt_fopen_maybe_phar` / `__rt_file_get_contents_maybe_phar` | Route `phar://` paths to archive entry reads, falling through to plain file I/O otherwise |
 | `__rt_phar_read_entry` | Locate and read one entry from a PHAR URL. When the `elephc-phar` bridge is published it handles native PHAR, tar, and ZIP containers; the assembly fallback handles native PHAR plus gzip/bzip2 payloads through published zlib/libbz2 slots |
-| `__rt_phar_write_open` / `__rt_phar_write_append` / `__rt_phar_write_finalize` | Create phar archives entry by entry with manifest finalization |
+| `__rt_phar_write_open` / `__rt_phar_write_append` / `__rt_phar_write_finalize` | Buffer one `phar://` write entry, then finalize it through the `elephc-phar` bridge so native archives preserve existing entries; the assembly fallback still emits a single-entry SHA1-signed native archive |
 
 ### var_dump output routines
 

@@ -1905,6 +1905,41 @@ echo file_get_contents("phar://" . $archive . "/note.txt");
     assert_eq!(out, "7|via fpc");
 }
 
+/// Repeated phar:// file_put_contents() calls update a native PHAR in place,
+/// preserving previously written entries instead of rewriting a single-entry archive.
+#[test]
+fn test_file_put_contents_phar_preserves_existing_entries() {
+    let out = compile_and_run(
+        r#"<?php
+echo file_put_contents("phar://multi.phar/one.txt", "alpha") . "|";
+echo file_put_contents("phar://multi.phar/dir/two.txt", "bravo") . "|";
+echo file_put_contents("phar://multi.phar/one.txt", "updated") . "|";
+$archive = "multi.phar";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/dir/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|5|7|updated|bravo");
+}
+
+/// fopen()+fwrite()+fclose() phar:// writes also use the native PHAR
+/// read-modify-write bridge, so stream writes preserve earlier entries.
+#[test]
+fn test_fopen_phar_write_preserves_existing_entries() {
+    let out = compile_and_run(
+        r#"<?php
+echo file_put_contents("phar://stream_multi.phar/one.txt", "alpha") . "|";
+$f = fopen("phar://stream_multi.phar/two.txt", "w");
+echo fwrite($f, "stream") . "|";
+echo (fclose($f) ? "closed" : "failed") . "|";
+$archive = "stream_multi.phar";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|6|closed|alpha|stream");
+}
+
 /// `file_get_contents()` of a literal `phar://` URL decodes the entry at compile
 /// time (like the fopen read fast path) and returns its bytes as a string; a
 /// missing entry returns `false`.

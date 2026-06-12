@@ -291,6 +291,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // reader. Dynamic phar:// paths publish it before calling the runtime
     // reader; literal phar:// paths are still decoded at compile time.
     out.push_str(".p2align 3\n.globl _elephc_phar_extract_url_fn\n_elephc_phar_extract_url_fn:\n    .quad 0\n");
+    // _elephc_phar_put_entry_fn: indirect pointer to the elephc-phar native
+    // writer bridge. phar:// write paths publish it so finalize can preserve
+    // existing native PHAR entries instead of regenerating a single-entry file.
+    out.push_str(".p2align 3\n.globl _elephc_phar_put_entry_fn\n_elephc_phar_put_entry_fn:\n    .quad 0\n");
     // _phar_extract_len: output-length scratch written by elephc_phar_extract_url
     // and consumed immediately by __rt_phar_read_entry before __rt_data_stream
     // copies the bytes into a temp-file-backed descriptor.
@@ -549,6 +553,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".comm _phar_write_tpl_len, 8, 3\n");
     out.push_str(".comm _phar_write_path_ptr, 8, 3\n");
     out.push_str(".comm _phar_write_path_len, 8, 3\n");
+    out.push_str(".comm _phar_write_entry_ptr, 8, 3\n");
+    out.push_str(".comm _phar_write_entry_len, 8, 3\n");
     // _stream_open_opened_path_scratch: 16-byte scratch backing the 5th
     // `?string &$opened_path` parameter of stream_open. The runtime passes
     // its address so wrappers that follow the PHP-faithful signature can

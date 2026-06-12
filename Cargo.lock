@@ -551,6 +551,7 @@ version = "0.1.0"
 dependencies = [
  "bzip2-rs",
  "flate2",
+ "sha1",
 ]
 
 [[package]]

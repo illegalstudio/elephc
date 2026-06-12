@@ -154,7 +154,7 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
         let archive_path =
             Path::new(bridge_staticlib_dir).join(format!("lib{}.a", bridge.lib_name));
-        if archive_path.exists() {
+        if !bridge_staticlib_needs_build(&archive_path, bridge.package) {
             continue;
         }
 
@@ -180,6 +180,61 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &st
             archive_path.display()
         );
     }
+}
+
+/// Reports whether a bridge staticlib is missing or older than its package
+/// sources. This keeps codegen tests from linking stale bridge archives after a
+/// bridge crate changes inside the same worktree.
+fn bridge_staticlib_needs_build(archive_path: &Path, package: &str) -> bool {
+    let archive_mtime = match archive_path.metadata().and_then(|meta| meta.modified()) {
+        Ok(mtime) => mtime,
+        Err(_) => return true,
+    };
+    let package_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("crates")
+        .join(package);
+
+    source_path_newer_than(&package_dir.join("Cargo.toml"), archive_mtime)
+        || source_path_newer_than(&package_dir.join("build.rs"), archive_mtime)
+        || source_tree_newer_than(&package_dir.join("src"), archive_mtime)
+}
+
+/// Reports whether an existing source path was modified after `archive_mtime`.
+/// Missing optional files such as `build.rs` do not force a rebuild.
+fn source_path_newer_than(path: &Path, archive_mtime: std::time::SystemTime) -> bool {
+    match path.metadata().and_then(|meta| meta.modified()) {
+        Ok(source_mtime) => source_mtime > archive_mtime,
+        Err(_) => false,
+    }
+}
+
+/// Recursively scans a bridge package source directory for files newer than the
+/// compiled staticlib. Directory-read failures are treated as stale so tests do
+/// not silently link an archive whose source state could not be inspected.
+fn source_tree_newer_than(dir: &Path, archive_mtime: std::time::SystemTime) -> bool {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return true,
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => return true,
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => return true,
+        };
+        if file_type.is_dir() {
+            if source_tree_newer_than(&path, archive_mtime) {
+                return true;
+            }
+        } else if file_type.is_file() && source_path_newer_than(&path, archive_mtime) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Links a user object file and a runtime object into a final native binary.

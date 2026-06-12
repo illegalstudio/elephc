@@ -70,7 +70,7 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 | `php://memory`, `php://temp` | Seekable in-memory streams backed by an anonymous temporary buffer. `php://temp/maxmemory:N` is accepted and ignored. |
 | `php://filter` | Opens an underlying resource and attaches one built-in filter at open time, for example `php://filter/read=string.toupper/resource=php://temp`. |
 | `data://` | RFC 2397 inline payload streams. Base64 and percent-decoded payloads are supported. The URI must be a string literal. |
-| `phar://` | Read or write a single PHAR entry. Literal reads happen at compile time and embed the entry in the binary; non-literal reads happen at runtime. Native PHAR, tar-based PHAR, and zip-based PHAR containers are readable; native PHAR gzip/bzip2 entries and ZIP deflate entries are decoded transparently. |
+| `phar://` | Read or write PHAR entries. Literal reads happen at compile time and embed the entry in the binary; non-literal reads happen at runtime. Native PHAR, tar-based PHAR, and zip-based PHAR containers are readable; native PHAR gzip/bzip2 entries and ZIP deflate entries are decoded transparently. |
 | `ftp://` | Anonymous binary passive FTP read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. Credentials in the URL are ignored in v1. |
 | `ftps://` | Explicit FTP over TLS using `AUTH TLS`, with TLS on both control and data channels. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. |
 | `http://` | HTTP/1.0 `GET` read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. v1 does not follow redirects and buffers up to 1 MiB. |
@@ -79,11 +79,12 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 | `compress.bzip2://` | Read-only wrapper that opens the underlying file and decompresses it through libbz2. |
 | `glob://` | Directory-style wrapper for iterating paths matching a glob pattern through `opendir()` / `readdir()`. |
 
-`phar://` write streams buffer one uncompressed entry in memory. `fclose()` writes
-a native, signed PHAR archive with a SHA1 trailer, and
-`file_put_contents("phar://archive.phar/entry", $data)` uses the same path.
-Current limits: one PHAR write stream at a time, uncompressed entry payloads
-only, no key/private-key signing variants, and no tar/zip write variants.
+`phar://` write streams buffer one uncompressed entry in memory. `fclose()` and
+`file_put_contents("phar://archive.phar/entry", $data)` insert or replace that
+entry in a native, SHA1-signed PHAR archive while preserving existing native PHAR
+entries. Current limits: one PHAR write stream at a time, uncompressed entry
+payloads only, no key/private-key signing variants, and no tar/zip write
+variants.
 
 `file_get_contents($url)` recognizes runtime `http://`, `https://`, `ftp://`,
 and `ftps://` strings before falling back to `phar://`/filesystem handling.
