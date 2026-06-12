@@ -117,11 +117,17 @@ PHP source (.php)
 └─────┬────────┘
       │
       ▼
-┌─────────┐
-│ Codegen  │  src/codegen/
-│          │  mod.rs, expr.rs + expr/, stmt.rs + stmt/, functions/, abi/, platform/
-│          │  AST → target assembly string (.s file)
-└────┬─────┘
+┌─────────────┐
+│ EIR Lowerer │  src/ir_lower/ + src/ir/
+│             │  Lowers the checked optimized AST into validated EIR.
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│ EIR Codegen │  src/codegen_ir/ + shared src/codegen/abi/
+│             │  Emits target assembly text from EIR. The legacy AST backend
+│             │  remains in src/codegen/ behind --ast-backend.
+└──────┬──────┘
      │
      ▼
 ┌───────────────┐
@@ -166,6 +172,9 @@ src/
 ├── resolver/                  Include/require resolution, declaration discovery, once guards
 ├── optimize.rs                Public optimizer entry points and effect context
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
+├── ir/                        EIR types, builder, validator, printer, effects, and tests
+├── ir_lower/                  Active checked-AST to EIR lowering
+├── codegen_ir/                Active EIR to target assembly backend
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── termination.rs             Structured terminal-effect analysis shared by checker and optimizer
@@ -227,7 +236,7 @@ src/
 │       └── ...
 │
 ├── codegen/
-│   ├── mod.rs                 generate() orchestration
+│   ├── mod.rs                 Frozen legacy AST-backend orchestration plus shared runtime feature scans
 │   ├── driver_support.rs      Pipeline glue and orchestration helpers
 │   ├── main_emission.rs       Top-level program, globals, and deferred-body emission
 │   ├── class_methods.rs       Instance/static method emission orchestration
@@ -320,7 +329,7 @@ src/
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
 │       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (71 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (127 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (131 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed plus callable descriptor release (3 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (108 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)

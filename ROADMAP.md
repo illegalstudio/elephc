@@ -675,7 +675,8 @@ Build the IR-level passes that the AST optimizer could not reach now that the
 EIR backend is the user-facing default.
 
 - [x] Deprecation warning on `--ast-backend`; from this point the legacy AST backend is frozen as a diagnostic-only fallback, not a feature/parity target
-- [ ] EIR-only backend release notes and documentation updates (`the-codegen.md`, `the-ir.md`) with `--ast-backend` documented only as frozen diagnostic fallback
+- [x] EIR-only backend documentation updates (`the-codegen.md`, `the-ir.md`) with `--ast-backend` documented only as frozen diagnostic fallback
+- [ ] EIR-only backend release notes with `--ast-backend` documented only as frozen diagnostic fallback
 - [ ] Fixed-point IR pass driver with validation after each pass in test builds
 - [ ] Identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, etc.)
 - [ ] Peephole patterns: redundant load/store, box/unbox cancellation, string-literal concat folding, paired acquire/release cancellation, redundant `Move` / `Borrow` cleanup

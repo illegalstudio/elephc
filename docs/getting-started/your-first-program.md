@@ -98,8 +98,10 @@ When you run `elephc hello.php`, the compiler:
 8. **Folds** constant expressions that are already statically known
 9. **Type-checks** the program and collects non-fatal warnings
 10. **Optimizes** checked AST control flow through propagation, pruning, normalization, and dead-code elimination
-11. **Generates** assembly for the selected target
-12. **Assembles and links** the `.s` / `.o` files into a native executable
+11. **Lowers** the checked AST into validated EIR
+12. **Generates** target assembly from EIR
+13. **Prepares** or reuses the cached runtime object
+14. **Assembles and links** the `.s` / `.o` files into a native executable
 
 The intermediate `.s` and `.o` files are cleaned up automatically. You're left with a single executable.
 

@@ -160,7 +160,7 @@ milestones, `$message`, `$message_code`, and `$bytes_max` are deferred.
 | `stream_bucket_new()` | `stream_bucket_new(resource $stream, string $data): object` | Create a stdClass-backed bucket with public `data` and `datalen` properties. |
 | `stream_bucket_make_writeable()` | `stream_bucket_make_writeable(resource $brigade): object\|null` | Pop the next bucket from a brigade. |
 | `stream_bucket_append()` | `stream_bucket_append(resource $brigade, object $bucket): void` | Push a bucket to the end of a brigade. |
-| `stream_bucket_prepend()` | `stream_bucket_prepend(resource $brigade, object $bucket): void` | Push a bucket to the front of a brigade. |
+| `stream_bucket_prepend()` | `stream_bucket_prepend(resource $brigade, object $bucket): void` | Accepted for source compatibility; v1 currently appends like `stream_bucket_append()` because bucket-brigade front insertion is not lowered separately yet. |
 
 `zlib.deflate` and `gzcompress()` use system `libz`. `bzip2.compress`,
 `bzip2.decompress`, and `compress.bzip2://` use `libbz2`. `convert.iconv.*`

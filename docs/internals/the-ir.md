@@ -21,6 +21,9 @@ AST backend remains available only as the temporary `--ast-backend` fallback.
 - `src/parser/ast/types.rs`
 - `src/parser/ast/oop.rs`
 - `src/parser/ast/ffi.rs`
+- `src/ir/`
+- `src/ir_lower/`
+- `src/codegen_ir/`
 - `src/codegen/expr.rs` and `src/codegen/expr/`
 - `src/codegen/stmt.rs` and `src/codegen/stmt/`
 - `src/codegen/functions/locals.rs`
@@ -39,25 +42,26 @@ descriptors, copy-on-write checks, fatal paths, exception paths, runtime calls,
 and exact source evaluation order are first-class compiler concepts. EIR is not
 a generic LLVM- or Cranelift-style IR.
 
-## Completion Boundary
+## Historical Design Boundary
 
-The first roadmap item covers this document only:
+The first roadmap item originally covered this document only:
 
 ```text
 EIR design specification (`docs/internals/the-ir.md`) - types, instructions,
 terminators, effects, ownership, textual format
 ```
 
-It originally did **not** include:
+That first item did **not** include:
 
 - EIR -> assembly backend
 - `--ir-backend`
 - register allocation
 - IR optimization passes
 
-The item is complete when this page is a sufficient contract for Phase 02 to
-implement `src/ir/` data structures, builder, validator, and printer without
-reopening core design questions.
+That design-only milestone is complete. The current implementation has since
+added `src/ir/`, `src/ir_lower/`, `--emit-ir`, and the default EIR assembly
+backend under `src/codegen_ir/`. Register allocation and IR optimization passes
+remain follow-up work.
 
 ## Pipeline Position
 

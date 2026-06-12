@@ -222,7 +222,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (127 files)
+**Source:** `src/codegen/runtime/arrays/` (131 files)
 
 ### Core allocation
 

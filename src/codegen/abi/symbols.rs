@@ -380,10 +380,8 @@ pub fn emit_store_imm_to_symbol(
                 emitter.instruction(&format!("mov QWORD PTR [r11{}], {}", slot_suffix, imm)); // store the immediate payload through the GOT-resolved address
                 emitter.instruction("pop r11");                                 // restore the borrowed GOT scratch register after the immediate store
             } else {
-                emitter.instruction(&format!(
-                    "mov QWORD PTR [rip + {}{}], {}",
-                    symbol, slot_suffix, imm
-                ));                                                             // store the immediate payload through RIP-relative addressing
+                let inst = format!("mov QWORD PTR [rip + {}{}], {}", symbol, slot_suffix, imm);
+                emitter.instruction(&inst);                                     // store the immediate payload through RIP-relative addressing
             }
         }
     }

@@ -5,7 +5,7 @@ sidebar:
   order: 7
 ---
 
-**Source:** `src/codegen/` — `mod.rs`, `driver_support.rs`, `main_emission.rs`, `class_methods.rs`, `function_variants.rs`, `interface_wrappers.rs`, `callables.rs`, `reflection.rs`, `prescan.rs`, `program_usage.rs`, `program_usage/`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `builtins/`, `runtime/`, `ffi.rs`, `abi/`, `platform/`, `context.rs`, `data_section.rs`, `emit.rs`; intrinsic method registry: `src/intrinsics.rs`
+**Source:** default backend `src/ir_lower/`, `src/ir/`, and `src/codegen_ir/`; shared target/runtime infrastructure under `src/codegen/abi/`, `src/codegen/runtime/`, `src/codegen/platform/`, `src/codegen/emit.rs`, and `src/codegen/data_section.rs`; frozen legacy AST backend under `src/codegen/expr.rs`, `src/codegen/expr/`, `src/codegen/stmt.rs`, `src/codegen/stmt/`, `src/codegen/functions/`, and `src/codegen/builtins/`; intrinsic method registry: `src/intrinsics.rs`
 
 The code generator (codegen) is the heart of the compiler. The default path lowers the checked and optimized AST into EIR first, then emits native assembly text for the selected target from that EIR. The temporary `--ast-backend` fallback still walks the checked AST directly and emits assembly while the legacy emitter remains in-tree.
 
@@ -17,7 +17,7 @@ For an introduction to AArch64, see [Introduction to ARM64 Assembly](arm64-assem
 
 ## Overview
 
-The codegen walks the AST and emits assembly for each node. In the CLI, the main output is now the **user program assembly**; the shared runtime helpers are usually assembled separately and reused from the runtime object cache. The user-facing `.s` file still has this structure:
+In the default path, `src/ir_lower/` walks the checked optimized AST, produces validated EIR, and `src/codegen_ir/` emits assembly for each EIR function, instruction, and terminator. The CLI's main output is the **user program assembly**; the shared runtime helpers are usually assembled separately and reused from the runtime object cache. The user-facing `.s` file still has this structure:
 
 ```asm
 .global _main
@@ -58,7 +58,7 @@ Trait composition does not add a separate runtime dispatch layer. Traits are fla
 
 The exact directives and symbol decoration vary by target. The example above is intentionally AArch64-flavored, but the same structural phases apply on Linux `x86_64`.
 
-When you call the library-style `codegen::generate(...)` entry point, elephc still exposes both pieces explicitly as `(user_asm, runtime_asm)`. The CLI path uses `generate_user_asm(...)` plus the runtime-object cache so repeated compiles do not have to reassemble the same shared runtime text every time.
+When you call the legacy library-style `codegen::generate(...)` entry point, elephc still exposes both pieces explicitly as `(user_asm, runtime_asm)`. The normal CLI path lowers to EIR, calls `codegen_ir::generate_user_asm_from_ir_with_options(...)`, and links against the runtime-object cache so repeated compiles do not have to reassemble the same shared runtime text every time.
 
 ## The Emitter
 
@@ -205,11 +205,11 @@ When the codegen encounters `"hello"`, it calls `data.add_string(b"hello")` whic
 
 Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 
-## Expression codegen
+## Legacy AST expression codegen
 
 **Files:** `src/codegen/expr.rs`, `src/codegen/expr/`
 
-`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `scalars.rs`, `variables.rs`, `binops/`, `arrays.rs`, `compare/`, `calls/`, and `objects/`.
+The frozen `--ast-backend` path still uses `emit_expr()` to take an expression node and emit code that leaves the result in the standard registers. The default backend reaches the same ABI/runtime helpers through EIR lowering in `src/ir_lower/` and instruction lowering in `src/codegen_ir/`. The top-level legacy `expr.rs` file mainly dispatches into focused helpers under `expr/` such as `scalars.rs`, `variables.rs`, `binops/`, `arrays.rs`, `compare/`, `calls/`, and `objects/`.
 
 | Type | Result location |
 |---|---|
@@ -225,8 +225,8 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 
 ### Expression AST dispatch coverage
 
-The expression dispatcher is intentionally thin. It routes each `ExprKind`
-variant into one of the focused lowering paths below:
+The legacy expression dispatcher is intentionally thin. It routes each `ExprKind`
+variant into one of the focused lowering paths below, while the EIR path mirrors the same PHP-visible coverage through `src/ir_lower/expr/`:
 
 | Variants | Lowering path |
 |---|---|

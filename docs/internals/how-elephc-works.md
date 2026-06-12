@@ -263,11 +263,28 @@ This pass currently handles cases such as:
 
 In our running example there is nothing else to remove: the remaining assignment and `echo` stay as they are.
 
-## Phase 15: Code generation
+## Phase 15: EIR lowering and validation
 
-**File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
+**Files:** `src/ir_lower/`, `src/ir/` — See [The EIR Design](the-ir.md) for details.
 
-The code generator walks the typed AST and emits assembly for the selected target. For ordinary control flow this is mostly straight-line branches and labels; for `try` / `catch` / `finally`, the compiler additionally emits handler records and resume labels around `_setjmp` / `_longjmp`-based exception unwinding. By this point our running example has already lost the `if` shell, so the AArch64 form is simpler than the original source (simplified, with comments):
+The default backend lowers the checked and optimized AST into elephc IR (EIR), then validates the module before any assembly is emitted. EIR keeps PHP-visible evaluation order, ownership operations, call metadata, runtime helper references, and block structure explicit while still deferring physical registers and stack layout to the target-aware backend.
+
+In our running example the EIR already sees the optimized statement list:
+
+```text
+function main:
+  store_local $x, 10
+  echo "big\n"
+  return
+```
+
+The exact textual IR contains value ids, types, ownership, spans, and terminators, but the important point is that the removed `if` shell does not reappear. `--emit-ir` stops here after printing validated textual EIR.
+
+## Phase 16: Code generation
+
+**Files:** `src/codegen_ir/`, plus shared `src/codegen/abi/`, `src/codegen/runtime/`, and target helpers — See [The Code Generator](the-codegen.md) for details.
+
+The EIR backend emits assembly for the selected target. For ordinary control flow this is mostly straight-line branches and labels; for `try` / `catch` / `finally`, the compiler additionally emits handler records and resume labels around `_setjmp` / `_longjmp`-based exception unwinding. The legacy AST backend remains available only through `--ast-backend`; new PHP-visible behavior is expected to go through EIR. By this point our running example has already lost the `if` shell, so the AArch64 form is simpler than the original source (simplified, with comments):
 
 ```asm
 .global _main
@@ -306,7 +323,7 @@ Key observations:
 - `echo "big\n"` → load string address + length, then `svc` to write to stdout
 - The string literal lives in the `.data` section, referenced by label `_str_0`
 
-## Phase 16: Runtime preparation, assembly, and linking
+## Phase 17: Runtime preparation, assembly, and linking
 
 **Tools:** native `as` and `ld` (or the equivalent system toolchain)
 
@@ -344,7 +361,7 @@ The `.o` file is deleted after linking. The result is a standalone executable.
 
 With `--emit cdylib` the same flow produces a shared library instead: codegen emits position-independent code with no `main` entry, a PIC variant of the runtime object is prepared (cached separately by its assembly hash), and the linker is invoked with `-dylib` (macOS) or `-shared` (Linux) to produce `lib<name>.dylib` / `lib<name>.so`.
 
-## Phase 17: Execution
+## Phase 18: Execution
 
 ```bash
 ./file
@@ -390,7 +407,10 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
                     ▼ Optimizer (dead-code elimination, no-op here)
     [Assign{x, 10}, Echo("big\n")]
                     │
-                    ▼ Code Generator
+                    ▼ EIR lowering + validation
+    main stores x=10, echoes "big\n", returns
+                    │
+                    ▼ EIR Code Generator
     "sub sp, sp, #32 / stp x29, x30, ... / mov x0, #10 / adrp x1, _str_0 / ..."
                     │
                     ▼ Runtime Cache

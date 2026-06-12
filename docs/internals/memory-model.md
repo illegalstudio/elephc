@@ -25,8 +25,9 @@ This page explains where every value lives in memory at runtime.
 │     String buffer            │  _concat_buf: 64KB, scratch pad
 │  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
-│     I/O buffers              │  _cstr_buf/_cstr_buf2: 4KB each, _eof_flags: 256B
-│  (C-string conversion, EOF)  │
+│     I/O and stream buffers   │  _cstr_buf/_cstr_buf2, _eof_flags,
+│  (C strings, streams, TLS,   │  _stream_*, _http_*, _ftp_*, wrapper/filter
+│   wrappers, filters)         │  tables, protocol/service lookup buffers
 ├─────────────────────────────┤
 │   Runtime metadata (BSS)     │  _concat_off, _global_argc/_argv,
 │  (heap state, counters,      │  _heap_off, _heap_free_list,
@@ -40,7 +41,8 @@ This page explains where every value lives in memory at runtime.
 │                              │  _json_decode_assoc, _json_error_*,
 │                              │  _fiber_current, _fiber_main_saved_*,
 │                              │  _generator_class_id,
-│                              │  _include_once_*, _fn_variant_active_*, ...
+│                              │  _include_once_*, _fn_variant_active_*,
+│                              │  _elephc_crypto_*_fn, _elephc_tls_*_fn, ...
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
 │  (.data — read-only)         │
@@ -586,8 +588,17 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |
 | Static properties | 16 bytes per effective declaring class static property | Grows with number of declared and redeclared static properties |
 | Array capacity | Fixed at creation until grow/re-hash logic runs | Fatal error: "array capacity exceeded" if a hard limit is hit |
-| C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB each | Long converted paths/strings are truncated to buffer size |
-| EOF flags | 256 bytes | Max 256 simultaneous file descriptors |
+| C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB each, `_empty_str` = 1 byte | Long converted paths/strings are truncated to buffer size; `_empty_str` is a safe zero-length string pointer |
+| File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors |
+| Stream filter scratch | `_stream_filter_buf`, `_stream_grow_scratch` = 64KB each | Scratch space for stream filters, including length-growing filters such as base64 and quoted-printable encoders |
+| Stream context and callbacks | `_stream_context_options`, `_stream_notification_callback`, `_stream_connect_host`, `_stream_open_opened_path_scratch`, `_url_stat_matched` | Current stream-context options hash, notification callback, TLS peer host, wrapper opened-path scratch, and wrapper url_stat match flag |
+| TLS and crypto function slots | `_elephc_tls_*_fn`, `_zlib_*_fn`, `_bz2_*_fn`, `_iconv_*_fn`, `_elephc_crypto_*_fn` = 8 bytes per slot | Late-bound function pointers so programs only link optional TLS/compression/iconv/crypto support when a call site publishes the symbol |
+| HTTP/HTTPS/FTP buffers | `_http_resp_buf`, `_https_resp_buf`, `_user_wrapper_drain_buf`, `_phar_write_out` = 1MB each; `_http_req_scratch` = 8KB; `_http_redirect_path_buf`, `_fgc_url_retr` = 2KB each; `_fgc_url_addr`, `_fsockopen_addr` = 512 bytes each; `_ftp_resp_buf` = 4KB; `_ftp_data_addr`, `_ftp_cmd_scratch` = 64 bytes each | Protocol-specific response, request, redirect, FTP, wrapper, and PHAR writer scratch buffers |
+| HTTP active context | `_http_active_ignore_errors`, `_http_active_max_redirects`, `_http_active_timeout_seconds`, `_http_active_proxy_ptr`, `_http_active_proxy_len`, `_http_active_host_ptr`, `_http_active_host_len`, `_http_redirect_path_len` | Fixed-size state shared between HTTP request construction and redirect/open helpers |
+| Socket address scratch | `_recvfrom_addr_ptr`, `_recvfrom_addr_len`, `_accept_peer_ptr`, `_accept_peer_len` = 8 bytes each | Stores peer/address strings returned through by-reference socket parameters |
+| Protocol/service lookup buffers | `_protoent_buf` = 32KB, `_servent_buf` = 1MB | Scratch buffers for protocol and service database lookups |
+| User wrapper and filter registries | `_user_wrappers`, `_user_wrapper_handles` = 2048 bytes each; `_user_filter_registry`, `_user_filter_instances` = 4096 bytes each | Registered stream wrappers, active wrapper handles, user filter definitions, and attached filter instances |
+| PHAR writer state | `_phar_write_len`, `_phar_write_tpl_len`, `_phar_write_path_ptr`, `_phar_write_path_len` = 8 bytes each | State paired with the 1MB `_phar_write_out` archive buffer |
 | Data section | No fixed limit | Grows with number of unique literals |
 
 ## Memory management strategy

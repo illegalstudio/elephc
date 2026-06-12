@@ -27,7 +27,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Operators](php/operators.md) — arithmetic, comparison, `instanceof`, logical, bitwise, string, assignment, ternary, null coalescing, error control
 - [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, multi-level break/continue, try/catch/finally
 - [Functions](php/functions.md) — declarations, closures, arrow functions, named arguments, variadic, spread, pass-by-reference, first-class callables, static variables
-- [Strings](php/strings.md) — escape sequences, interpolation, heredoc/nowdoc, 55+ built-in string functions
+- [Strings](php/strings.md) — escape sequences, interpolation, heredoc/nowdoc, 70+ built-in string functions
 - [Regex](php/regex.md) — PCRE2-backed `preg_*` functions, SPL regex iterators, and native PCRE2 build requirements
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions
 - [Math](php/math.md) — abs, floor, ceil, round, trigonometry, logarithms, random, constants
@@ -39,7 +39,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
 - [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, state-machine codegen
-- [PDO (Databases)](php/pdo.md) — SQLite-backed PDO: connections, prepared statements, fetch modes, transactions, PDOException
+- [PDO (Databases)](php/pdo.md) — PDO connections, prepared statements, fetch modes, transactions, and PDOException for SQLite, PostgreSQL, and MySQL/MariaDB drivers
 
 ## Beyond PHP
 
@@ -62,8 +62,8 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [The Parser](internals/the-parser.md) — tokens to AST with Pratt parsing
 - [The Type Checker](internals/the-type-checker.md) — compile-time type inference and validation
 - [The Optimizer](internals/the-optimizer.md) — constant folding, constant propagation, purity / may-throw reasoning, control-flow pruning, normalization, and dead-code elimination on the AST
-- [The Code Generator](internals/the-codegen.md) — optimized checked AST to target assembly (with an AArch64-focused walkthrough)
-- [The EIR Design](internals/the-ir.md) — planned PHP-shaped intermediate representation for backend migration and IR-level optimization
+- [The Code Generator](internals/the-codegen.md) — checked AST to EIR, then target assembly through the default backend
+- [The EIR Design](internals/the-ir.md) — PHP-shaped intermediate representation used by the default backend and `--emit-ir`
 - [The Runtime](internals/the-runtime.md) — hand-written assembly routines
 - [Memory Model](internals/memory-model.md) — stack frames, heap, reference counting
 - [Architecture](internals/architecture.md) — module map, calling conventions
