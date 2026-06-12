@@ -298,6 +298,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // _elephc_phar_put_url_fn: indirect pointer to the elephc-phar native
     // writer bridge for runtime-built phar:// file_put_contents() URLs.
     out.push_str(".p2align 3\n.globl _elephc_phar_put_url_fn\n_elephc_phar_put_url_fn:\n    .quad 0\n");
+    // _elephc_phar_stream_*_fn: indirect pointers to the elephc-phar buffered
+    // write-stream bridge. These allow multiple phar:// write descriptors to
+    // stay open at once while the old assembly single-entry writer remains as
+    // a fallback when the bridge is not linked.
+    out.push_str(".p2align 3\n.globl _elephc_phar_stream_open_entry_fn\n_elephc_phar_stream_open_entry_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_stream_open_url_fn\n_elephc_phar_stream_open_url_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_stream_append_fn\n_elephc_phar_stream_append_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_stream_finalize_fn\n_elephc_phar_stream_finalize_fn:\n    .quad 0\n");
     // _phar_extract_len: output-length scratch written by elephc_phar_extract_url
     // and consumed immediately by __rt_phar_read_entry before __rt_data_stream
     // copies the bytes into a temp-file-backed descriptor.
@@ -550,7 +558,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // entry ptr/len pairs let literal writes call the elephc-phar
     // read-modify-write bridge. The url ptr/len pair keeps a runtime-built
     // phar:// URL alive until fclose() can route it through the URL bridge.
-    // One stream at a time; synthetic fd 0x50000000.
+    // Fallback only: one stream at a time; synthetic fd 0x50000000.
     out.push_str(".comm _phar_write_out, 1048576, 3\n");
     out.push_str(".comm _phar_write_len, 8, 3\n");
     out.push_str(".comm _phar_write_tpl_len, 8, 3\n");

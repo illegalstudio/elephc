@@ -31,11 +31,15 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fwrite ---");
     emitter.label_global("__rt_fwrite");
 
-    // -- phar:// write stream synthetic fd (exact 0x50000000) --
-    emitter.instruction("mov w10, #0x5000");                                    // low half of the phar-write descriptor 0x50000000
-    emitter.instruction("lsl w10, w10, #16");                                   // form the full 0x50000000 phar-write descriptor
-    emitter.instruction("cmp x0, x10");                                         // is this the phar-write synthetic descriptor?
-    emitter.instruction("b.eq __rt_phar_write_append");                         // append the payload to the in-memory phar buffer
+    // -- phar:// write stream synthetic fd range (0x50000000..0x50000020) --
+    emitter.instruction("mov w10, #0x5000");                                    // low half of the phar-write descriptor base
+    emitter.instruction("lsl w10, w10, #16");                                   // form the full 0x50000000 phar-write descriptor base
+    emitter.instruction("cmp x0, x10");                                         // is the descriptor below the phar-write range?
+    emitter.instruction("b.lt __rt_fwrite_not_phar");                           // below the range: use normal stream dispatch
+    emitter.instruction("add x11, x10, #32");                                   // upper bound for the 32 buffered PHAR write descriptors
+    emitter.instruction("cmp x0, x11");                                         // is this inside the phar-write descriptor range?
+    emitter.instruction("b.lt __rt_phar_write_append");                         // append the payload to the selected phar buffer
+    emitter.label("__rt_fwrite_not_phar");
 
     // -- user-wrapper synthetic fd path (Phase 10 step 4) --
     emitter.instruction("mov w9, #0x4000");                                     // load the high half of USER_WRAPPER_FD_BASE = 0x40000000
@@ -161,10 +165,14 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fwrite ---");
     emitter.label_global("__rt_fwrite");
 
-    // -- phar:// write stream synthetic fd (exact 0x50000000) --
-    emitter.instruction("mov r10d, 0x50000000");                                // the phar-write synthetic descriptor
-    emitter.instruction("cmp rdi, r10");                                        // is this the phar-write synthetic descriptor?
-    emitter.instruction("je __rt_phar_write_append");                           // append the payload to the in-memory phar buffer
+    // -- phar:// write stream synthetic fd range (0x50000000..0x50000020) --
+    emitter.instruction("mov r10d, 0x50000000");                                // the phar-write synthetic descriptor base
+    emitter.instruction("cmp rdi, r10");                                        // is the descriptor below the phar-write range?
+    emitter.instruction("jl __rt_fwrite_not_phar_x86");                         // below the range: use normal stream dispatch
+    emitter.instruction("lea r11, [r10 + 32]");                                 // upper bound for the 32 buffered PHAR write descriptors
+    emitter.instruction("cmp rdi, r11");                                        // is this inside the phar-write descriptor range?
+    emitter.instruction("jl __rt_phar_write_append");                           // append the payload to the selected phar buffer
+    emitter.label("__rt_fwrite_not_phar_x86");
 
     // -- user-wrapper synthetic fd path (Phase 10 step 4) --
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE

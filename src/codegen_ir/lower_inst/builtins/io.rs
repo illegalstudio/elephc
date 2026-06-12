@@ -86,38 +86,60 @@ fn publish_dynamic_phar_function_pointers(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Publishes the native PHAR read-modify-write bridge used by write finalization.
-fn publish_phar_write_function_pointer(ctx: &mut FunctionContext<'_>) {
-    let extern_sym = ctx.emitter.target.extern_symbol("elephc_phar_put_entry");
+/// Publishes a list of elephc-phar bridge entry points into runtime slots.
+fn publish_phar_bridge_entries(ctx: &mut FunctionContext<'_>, entries: &[(&str, &str)]) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_extern_symbol_address(ctx.emitter, "x9", &extern_sym);
-            abi::emit_symbol_address(ctx.emitter, "x10", "_elephc_phar_put_entry_fn");
-            ctx.emitter.instruction("str x9, [x10]");                           // publish the PHAR writer bridge entry into its runtime slot
+            for (c_name, slot) in entries {
+                let extern_sym = ctx.emitter.target.extern_symbol(c_name);
+                abi::emit_extern_symbol_address(ctx.emitter, "x9", &extern_sym);
+                abi::emit_symbol_address(ctx.emitter, "x10", slot);
+                ctx.emitter.instruction("str x9, [x10]");                       // publish the PHAR bridge entry into its runtime slot
+            }
         }
         Arch::X86_64 => {
-            abi::emit_extern_symbol_address(ctx.emitter, "r9", &extern_sym);
-            abi::emit_store_reg_to_symbol(ctx.emitter, "r9", "_elephc_phar_put_entry_fn", 0); // publish the PHAR writer bridge entry into its runtime slot
+            for (c_name, slot) in entries {
+                let extern_sym = ctx.emitter.target.extern_symbol(c_name);
+                abi::emit_extern_symbol_address(ctx.emitter, "r9", &extern_sym);
+                abi::emit_store_reg_to_symbol(ctx.emitter, "r9", slot, 0);     // publish the PHAR bridge entry into its runtime slot
+            }
         }
     }
+}
+
+/// Publishes the native PHAR read-modify-write bridge used by write finalization.
+fn publish_phar_write_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[
+        ("elephc_phar_put_entry", "_elephc_phar_put_entry_fn"),
+        (
+            "elephc_phar_stream_open_entry",
+            "_elephc_phar_stream_open_entry_fn",
+        ),
+        ("elephc_phar_stream_append", "_elephc_phar_stream_append_fn"),
+        (
+            "elephc_phar_stream_finalize",
+            "_elephc_phar_stream_finalize_fn",
+        ),
+    ];
+    publish_phar_bridge_entries(ctx, ENTRIES);
 }
 
 /// Publishes the native PHAR writer bridge used by runtime-built phar:// URLs.
 fn publish_dynamic_phar_write_function_pointer(ctx: &mut FunctionContext<'_>) {
-    let extern_sym = ctx.emitter.target.extern_symbol("elephc_phar_put_url");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_extern_symbol_address(ctx.emitter, "x9", &extern_sym);
-            abi::emit_symbol_address(ctx.emitter, "x10", "_elephc_phar_put_url_fn");
-            ctx.emitter.instruction("str x9, [x10]");                           // publish the PHAR URL writer bridge into its runtime slot
-        }
-        Arch::X86_64 => {
-            abi::emit_extern_symbol_address(ctx.emitter, "r9", &extern_sym);
-            abi::emit_store_reg_to_symbol(ctx.emitter, "r9", "_elephc_phar_put_url_fn", 0); // publish the PHAR URL writer bridge into its runtime slot
-        }
-    }
+    const ENTRIES: &[(&str, &str)] = &[
+        ("elephc_phar_put_url", "_elephc_phar_put_url_fn"),
+        (
+            "elephc_phar_stream_open_url",
+            "_elephc_phar_stream_open_url_fn",
+        ),
+        ("elephc_phar_stream_append", "_elephc_phar_stream_append_fn"),
+        (
+            "elephc_phar_stream_finalize",
+            "_elephc_phar_stream_finalize_fn",
+        ),
+    ];
+    publish_phar_bridge_entries(ctx, ENTRIES);
 }
-
 
 /// Lowers `hash_file(algo, filename, binary?)` by reading bytes then hashing them.
 pub(super) fn lower_hash_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -756,24 +778,15 @@ fn lower_literal_phar_fopen_write(
 
 /// Emits the boxed stream result for a literal write-mode `phar://` stream open.
 fn emit_literal_phar_fopen_write_result(ctx: &mut FunctionContext<'_>, path: &str) -> Result<()> {
-    match emit_phar_write_open_for_literal(ctx, path)? {
-        true => match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction("mov w0, #0x5000");                     // low half of the phar-write descriptor 0x50000000
-                ctx.emitter.instruction("lsl w0, w0, #16");                     // form the phar-write synthetic descriptor
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction("mov eax, 0x50000000");                 // return the phar-write synthetic descriptor
-            }
-        },
-        false => match ctx.emitter.target.arch {
+    if !emit_phar_write_open_for_literal(ctx, path)? {
+        match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.instruction("mov x0, #-1");                         // unresolved phar write target lowers to PHP false
             }
             Arch::X86_64 => {
                 ctx.emitter.instruction("mov rax, -1");                         // unresolved phar write target lowers to PHP false
             }
-        },
+        }
     }
     box_stream_fd_or_false_result(ctx, "fopen_phar_write");
     Ok(())
@@ -2445,22 +2458,31 @@ pub(super) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     let done_label = ctx.next_label("fclose_done");
     let user_wrapper_label = ctx.next_label("fclose_user_wrapper");
     let phar_label = ctx.next_label("fclose_phar");
+    let not_phar_label = ctx.next_label("fclose_not_phar");
     let after_dispatch_label = ctx.next_label("fclose_after_dispatch");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov w9, #0x5000");                         // low half of the phar-write descriptor 0x50000000
-            ctx.emitter.instruction("lsl w9, w9, #16");                         // form the phar-write synthetic descriptor
-            ctx.emitter.instruction("cmp x0, x9");                              // test whether this is the phar write stream
-            ctx.emitter.instruction(&format!("b.eq {}", phar_label));           // finalize phar writes instead of closing a real fd
+            ctx.emitter.instruction("mov w9, #0x5000");                         // low half of the phar-write descriptor base 0x50000000
+            ctx.emitter.instruction("lsl w9, w9, #16");                         // form the phar-write synthetic descriptor base
+            ctx.emitter.instruction("cmp x0, x9");                              // is the descriptor below the phar-write range?
+            ctx.emitter.instruction(&format!("b.lt {}", not_phar_label));       // below the PHAR range: continue with normal dispatch
+            ctx.emitter.instruction("add x10, x9, #32");                        // upper bound for the 32 buffered PHAR write descriptors
+            ctx.emitter.instruction("cmp x0, x10");                             // is this inside the phar-write descriptor range?
+            ctx.emitter.instruction(&format!("b.lt {}", phar_label));           // finalize phar writes instead of closing a real fd
+            ctx.emitter.label(&not_phar_label);
             ctx.emitter.instruction("mov w9, #0x4000");                         // materialize the high half of USER_WRAPPER_FD_BASE
             ctx.emitter.instruction("lsl w9, w9, #16");                         // form the synthetic wrapper fd base 0x40000000
             ctx.emitter.instruction("cmp x0, x9");                              // test whether this is a userspace-wrapper stream
             ctx.emitter.instruction(&format!("b.ge {}", user_wrapper_label));   // dispatch synthetic handles without indexing fd tables
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r9d, 0x50000000");                     // materialize the phar-write synthetic descriptor
-            ctx.emitter.instruction("cmp rax, r9");                             // test whether this is the phar write stream
-            ctx.emitter.instruction(&format!("je {}", phar_label));             // finalize phar writes instead of closing a real fd
+            ctx.emitter.instruction("mov r9d, 0x50000000");                     // materialize the phar-write synthetic descriptor base
+            ctx.emitter.instruction("cmp rax, r9");                             // is the descriptor below the phar-write range?
+            ctx.emitter.instruction(&format!("jl {}", not_phar_label));         // below the PHAR range: continue with normal dispatch
+            ctx.emitter.instruction("lea r10, [r9 + 32]");                      // upper bound for the 32 buffered PHAR write descriptors
+            ctx.emitter.instruction("cmp rax, r10");                            // is this inside the phar-write descriptor range?
+            ctx.emitter.instruction(&format!("jl {}", phar_label));             // finalize phar writes instead of closing a real fd
+            ctx.emitter.label(&not_phar_label);
             ctx.emitter.instruction("mov r9d, 0x40000000");                     // materialize USER_WRAPPER_FD_BASE for synthetic handles
             ctx.emitter.instruction("cmp rax, r9");                             // test whether this is a userspace-wrapper stream
             ctx.emitter.instruction(&format!("jge {}", user_wrapper_label));    // dispatch synthetic handles without indexing fd tables
@@ -2526,6 +2548,9 @@ pub(super) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         }
     }
     ctx.emitter.label(&phar_label);
+    if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the PHAR write descriptor to the finalizer
+    }
     abi::emit_call_label(ctx.emitter, "__rt_phar_write_finalize");
     ctx.emitter.label(&after_dispatch_label);
     store_if_result(ctx, inst)
@@ -3485,16 +3510,25 @@ fn lower_literal_phar_file_put_contents(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            load_string_to_result(ctx, data, "file_put_contents phar data")?;
-            abi::emit_call_label(ctx.emitter, "__rt_phar_write_append");
             abi::emit_push_reg(ctx.emitter, "x0");
+            load_string_to_result(ctx, data, "file_put_contents phar data")?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_phar_write_append");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("mov x0, x9");                              // pass the PHAR write descriptor to finalize
             abi::emit_call_label(ctx.emitter, "__rt_phar_write_finalize");
             abi::emit_pop_reg(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
             load_string_to_result(ctx, data, "file_put_contents phar data")?;
             ctx.emitter.instruction("mov rsi, rax");                            // pass the entry payload pointer to the phar writer
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_push_reg(ctx.emitter, "rdi");
             abi::emit_call_label(ctx.emitter, "__rt_phar_write_append");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_push_reg(ctx.emitter, "rax");
             abi::emit_call_label(ctx.emitter, "__rt_phar_write_finalize");
             abi::emit_pop_reg(ctx.emitter, "rax");

@@ -6,7 +6,7 @@
 //!
 //! Called from:
 //! - Compiled PHP program assembly through the `_elephc_phar_extract_url_fn`
-//!   and `_elephc_phar_put_entry_fn` slots.
+//!   and `_elephc_phar_put_entry_fn` / PHAR stream slots.
 //! - `src/codegen/builtins/io/phar_stream.rs` for literal compile-time reads.
 //! - `cargo test -p elephc-phar` for in-isolation validation.
 //!
@@ -30,8 +30,11 @@ const PHAR_SHA1_SIGNATURE_TYPE: u32 = 0x0000_0002;
 const ZIP_METHOD_STORE: u16 = 0;
 const ZIP_METHOD_DEFLATE: u16 = 8;
 const ZIP_FLAG_DATA_DESCRIPTOR: u16 = 0x0008;
+const PHAR_WRITE_FD_BASE: usize = 0x5000_0000;
+const PHAR_WRITE_STREAM_LIMIT: usize = 32;
 
 static EXTRACT_BUFFER: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+static WRITE_STREAMS: OnceLock<Mutex<Vec<Option<WriteStream>>>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PharCompression {
@@ -52,6 +55,16 @@ enum ArchiveFormat {
     NativePhar,
     Tar,
     Zip,
+}
+
+enum WriteStreamTarget {
+    Entry { archive: Vec<u8>, entry: Vec<u8> },
+    Url(Vec<u8>),
+}
+
+struct WriteStream {
+    target: WriteStreamTarget,
+    payload: Vec<u8>,
 }
 
 /// Extracts a `phar://archive/entry` URL into bytes.
@@ -193,6 +206,103 @@ pub unsafe extern "C" fn elephc_phar_put_url(
     }
 }
 
+/// C ABI wrapper that opens a buffered write stream for a literal PHAR entry.
+///
+/// Returns a synthetic descriptor in the `0x50000000..0x50000020` range, or
+/// `usize::MAX` when no stream slot is available or the target is invalid.
+///
+/// # Safety
+/// Each pointer must be valid for its paired byte length unless that length is
+/// zero. `entry_ptr` must not describe an empty entry name.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_phar_stream_open_entry(
+    archive_ptr: *const u8,
+    archive_len: usize,
+    entry_ptr: *const u8,
+    entry_len: usize,
+) -> usize {
+    let result = std::panic::catch_unwind(|| {
+        let entry = slice(entry_ptr, entry_len);
+        if entry.is_empty() {
+            return None;
+        }
+        allocate_write_stream(WriteStream {
+            target: WriteStreamTarget::Entry {
+                archive: slice(archive_ptr, archive_len).to_vec(),
+                entry: entry.to_vec(),
+            },
+            payload: Vec::new(),
+        })
+    });
+    match result {
+        Ok(Some(fd)) => fd,
+        _ => usize::MAX,
+    }
+}
+
+/// C ABI wrapper that opens a buffered write stream for a runtime PHAR URL.
+///
+/// Returns a synthetic descriptor in the `0x50000000..0x50000020` range, or
+/// `usize::MAX` when no stream slot is available or the URL is invalid.
+///
+/// # Safety
+/// `url_ptr` must be valid for `url_len` bytes unless `url_len` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_phar_stream_open_url(
+    url_ptr: *const u8,
+    url_len: usize,
+) -> usize {
+    let result = std::panic::catch_unwind(|| {
+        let url = slice(url_ptr, url_len);
+        if !url.starts_with(b"phar://") {
+            return None;
+        }
+        allocate_write_stream(WriteStream {
+            target: WriteStreamTarget::Url(url.to_vec()),
+            payload: Vec::new(),
+        })
+    });
+    match result {
+        Ok(Some(fd)) => fd,
+        _ => usize::MAX,
+    }
+}
+
+/// C ABI wrapper that appends bytes to an open PHAR write stream.
+///
+/// Returns the number of consumed bytes on success and `usize::MAX` when `fd`
+/// does not name an open PHAR write stream.
+///
+/// # Safety
+/// `data_ptr` must be valid for `data_len` bytes unless `data_len` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_phar_stream_append(
+    fd: usize,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> usize {
+    let result = std::panic::catch_unwind(|| {
+        append_write_stream(fd, slice(data_ptr, data_len))
+    });
+    match result {
+        Ok(Some(len)) => len,
+        _ => usize::MAX,
+    }
+}
+
+/// C ABI wrapper that finalizes and closes an open PHAR write stream.
+///
+/// Returns `1` on success and `0` on failure. The stream slot is released before
+/// the archive write is attempted, matching fclose-style one-shot finalization.
+#[no_mangle]
+pub extern "C" fn elephc_phar_stream_finalize(fd: usize) -> usize {
+    let result = std::panic::catch_unwind(|| finalize_write_stream(fd));
+    match result {
+        Ok(Some(())) => 1,
+        _ => 0,
+    }
+}
+
 /// Builds a byte slice from a C pointer and byte length.
 ///
 /// A zero length never dereferences the pointer, so null plus zero is accepted.
@@ -218,6 +328,60 @@ fn publish_result(bytes: Vec<u8>, out_len: *mut usize) -> *const u8 {
     } else {
         buffer.as_ptr()
     }
+}
+
+/// Returns the process-global table for buffered PHAR write streams.
+fn write_streams() -> &'static Mutex<Vec<Option<WriteStream>>> {
+    WRITE_STREAMS.get_or_init(|| {
+        let mut streams = Vec::with_capacity(PHAR_WRITE_STREAM_LIMIT);
+        streams.resize_with(PHAR_WRITE_STREAM_LIMIT, || None);
+        Mutex::new(streams)
+    })
+}
+
+/// Allocates a write-stream slot and returns its synthetic descriptor.
+fn allocate_write_stream(stream: WriteStream) -> Option<usize> {
+    let mut streams = write_streams().lock().ok()?;
+    for (slot, current) in streams.iter_mut().enumerate() {
+        if current.is_none() {
+            *current = Some(stream);
+            return Some(PHAR_WRITE_FD_BASE + slot);
+        }
+    }
+    None
+}
+
+/// Converts a synthetic PHAR descriptor into a write-stream slot index.
+fn write_stream_slot(fd: usize) -> Option<usize> {
+    let slot = fd.checked_sub(PHAR_WRITE_FD_BASE)?;
+    (slot < PHAR_WRITE_STREAM_LIMIT).then_some(slot)
+}
+
+/// Appends payload bytes to an open write stream.
+fn append_write_stream(fd: usize, data: &[u8]) -> Option<usize> {
+    let slot = write_stream_slot(fd)?;
+    let mut streams = write_streams().lock().ok()?;
+    let stream = streams.get_mut(slot)?.as_mut()?;
+    stream.payload.extend_from_slice(data);
+    Some(data.len())
+}
+
+/// Finalizes one open write stream and writes its target archive.
+fn finalize_write_stream(fd: usize) -> Option<()> {
+    let slot = write_stream_slot(fd)?;
+    let stream = {
+        let mut streams = write_streams().lock().ok()?;
+        streams.get_mut(slot)?.take()?
+    };
+    match stream.target {
+        WriteStreamTarget::Entry { archive, entry } => {
+            put_entry_bytes(&archive, &entry, &stream.payload)?;
+        }
+        WriteStreamTarget::Url(url) => {
+            put_url_bytes(&url, &stream.payload)?;
+        }
+    }
+    Some(())
 }
 
 /// Writes an output length through the optional C pointer.
@@ -846,6 +1010,14 @@ mod tests {
         encoder.finish().unwrap()
     }
 
+    /// Finds one parsed archive entry payload by name.
+    fn entry_payload<'a>(entries: &'a [ArchiveEntry], name: &[u8]) -> Option<&'a [u8]> {
+        entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .map(|entry| entry.payload.as_slice())
+    }
+
     /// Builds a small tar archive with regular-file entries.
     fn build_tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1057,6 +1229,44 @@ mod tests {
         let entries = parse_native_phar_entries(&archive).unwrap();
         assert_eq!(entries[0].compression, PharCompression::Bzip2);
         assert_eq!(entries[0].payload, b"bzip2 updated payload");
+    }
+
+    /// Verifies buffered PHAR stream descriptors keep concurrent payloads separate.
+    #[test]
+    fn concurrent_phar_write_streams_preserve_distinct_entries() {
+        let path = std::env::temp_dir().join(format!(
+            "elephc_phar_streams_{}_{}.phar",
+            std::process::id(),
+            "unit"
+        ));
+        let path_bytes = path.to_string_lossy();
+        let path_raw = path_bytes.as_bytes();
+        let one = b"one.txt";
+        let two = b"two.txt";
+        let fd_one = unsafe {
+            elephc_phar_stream_open_entry(path_raw.as_ptr(), path_raw.len(), one.as_ptr(), one.len())
+        };
+        let fd_two = unsafe {
+            elephc_phar_stream_open_entry(path_raw.as_ptr(), path_raw.len(), two.as_ptr(), two.len())
+        };
+        assert_ne!(fd_one, usize::MAX);
+        assert_ne!(fd_two, usize::MAX);
+        assert_ne!(fd_one, fd_two);
+        assert_eq!(
+            unsafe { elephc_phar_stream_append(fd_two, b"bravo".as_ptr(), 5) },
+            5
+        );
+        assert_eq!(
+            unsafe { elephc_phar_stream_append(fd_one, b"alpha".as_ptr(), 5) },
+            5
+        );
+        assert_eq!(elephc_phar_stream_finalize(fd_one), 1);
+        assert_eq!(elephc_phar_stream_finalize(fd_two), 1);
+        let archive = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let entries = parse_native_phar_entries(&archive).unwrap();
+        assert_eq!(entry_payload(&entries, b"one.txt"), Some(b"alpha".as_slice()));
+        assert_eq!(entry_payload(&entries, b"two.txt"), Some(b"bravo".as_slice()));
     }
 
     /// Verifies tar writes preserve the tar container family while updating entries.

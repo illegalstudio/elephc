@@ -1974,6 +1974,26 @@ echo file_get_contents("phar://" . $archive . "/dir/two.txt");
     assert_eq!(out, "5|6|closed|alpha|stream");
 }
 
+/// Concurrent phar:// write streams keep independent payload buffers and
+/// finalize through their own descriptors, including mixed literal/dynamic URLs.
+#[test]
+fn test_fopen_concurrent_phar_write_streams_preserve_entries() {
+    let out = compile_and_run(
+        r#"<?php
+$archive = "concurrent_streams.phar";
+$one = fopen("phar://concurrent_streams.phar/one.txt", "w");
+$two = fopen("phar://" . $archive . "/two.txt", "w");
+echo fwrite($two, "bravo") . "|";
+echo fwrite($one, "alpha") . "|";
+echo (fclose($one) ? "one" : "fail-one") . "|";
+echo (fclose($two) ? "two" : "fail-two") . "|";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|5|one|two|alpha|bravo");
+}
+
 /// `phar://` writes to a `.tar` archive create/update a tar container through
 /// the Rust bridge, and the runtime reader can read both entries back.
 #[test]

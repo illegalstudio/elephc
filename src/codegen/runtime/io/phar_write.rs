@@ -7,26 +7,25 @@
 //! - `crate::codegen::runtime::emitters::emit_runtime()` (and the minimal x86
 //!   runtime) via `crate::codegen::runtime::io`.
 //! - `__rt_phar_write_open` from the `fopen("phar://...","w")` emitter.
-//! - `__rt_phar_write_append` from `__rt_fwrite` when the descriptor is the phar-
-//!   write synthetic fd `0x50000000`.
-//! - `__rt_phar_write_finalize` from the `fclose` emitter for that same fd.
+//! - `__rt_phar_write_append` from `__rt_fwrite` when the descriptor is in the
+//!   phar-write synthetic range `0x50000000..0x50000020`.
+//! - `__rt_phar_write_finalize` from the `fclose` emitter for that same range.
 //! - `__rt_file_put_contents_maybe_phar` from non-literal `file_put_contents()`
 //!   lowering when a runtime string may be a `phar://` URL.
 //! - `__rt_phar_write_open_url` from `__rt_fopen_maybe_phar` when a non-literal
 //!   `phar://` URL is opened in a write-capable mode.
 //!
 //! Key details:
-//! - State lives in fixed `.bss` globals for the buffered payload, the target
-//!   archive path, and the inner entry name recorded by lowering.
-//! - When the `elephc-phar` bridge pointer is published, finalize upserts the
-//!   entry into a SHA1-signed native PHAR so existing entries are preserved. The
-//!   assembly fallback still emits a single-entry SHA1-signed archive for paths
-//!   that do not publish the bridge.
+//! - When the `elephc-phar` stream bridge pointers are published, buffered state
+//!   lives in Rust-owned per-descriptor slots and multiple PHAR write streams can
+//!   stay open concurrently.
+//! - The fixed `.bss` globals remain as a fallback for the older single-entry
+//!   assembly writer when the bridge is not linked.
 //! - Runtime-built `file_put_contents()` and write-mode `fopen()` URLs use a
 //!   separate bridge entry that receives the complete `phar://archive/entry`
 //!   string and performs the split in Rust.
-//! - Current limits: one phar-write stream at a time, stored ZIP writes only,
-//!   no explicit compression-control APIs, and no private-key signing variants.
+//! - Current limits: stored ZIP writes only, no explicit compression-control
+//!   APIs, and no private-key signing variants.
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
@@ -44,6 +43,25 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.label_global("__rt_phar_write_open");
     // __rt_phar_write_open(x0 = template ptr, x1 = template len): copy the
     // template prefix into the archive buffer and seed the length counters.
+    abi::emit_symbol_address(emitter, "x9", "_elephc_phar_stream_open_entry_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the optional buffered PHAR stream opener
+    emitter.instruction("cbz x9, __rt_phar_write_open_asm");                    // no bridge published: use the assembly fallback
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a bridge call frame
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the bridge call frame
+    abi::emit_symbol_address(emitter, "x0", "_phar_write_path_ptr");
+    emitter.instruction("ldr x0, [x0]");                                        // bridge arg 0 = archive path pointer
+    abi::emit_symbol_address(emitter, "x1", "_phar_write_path_len");
+    emitter.instruction("ldr x1, [x1]");                                        // bridge arg 1 = archive path length
+    abi::emit_symbol_address(emitter, "x2", "_phar_write_entry_ptr");
+    emitter.instruction("ldr x2, [x2]");                                        // bridge arg 2 = entry name pointer
+    abi::emit_symbol_address(emitter, "x3", "_phar_write_entry_len");
+    emitter.instruction("ldr x3, [x3]");                                        // bridge arg 3 = entry name length
+    emitter.instruction("blr x9");                                              // allocate a buffered PHAR write stream descriptor
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the bridge call frame
+    emitter.instruction("ret");                                                 // return the synthetic descriptor or failure sentinel
+    emitter.label("__rt_phar_write_open_asm");
     abi::emit_symbol_address(emitter, "x9", "_phar_write_out");
     emitter.instruction("mov x10, #0");                                         // copy index = 0
     emitter.label("__rt_phar_write_open_loop");
@@ -66,6 +84,17 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.label_global("__rt_phar_write_open_url");
     // __rt_phar_write_open_url(x0 = full phar:// URL ptr, x1 = URL len): persist
     // the URL for fclose(), then start an empty payload buffer.
+    abi::emit_symbol_address(emitter, "x9", "_elephc_phar_stream_open_url_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the optional buffered PHAR URL stream opener
+    emitter.instruction("cbz x9, __rt_phar_write_open_url_asm");                // no bridge published: use the assembly fallback
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a bridge call frame
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the bridge call frame
+    emitter.instruction("blr x9");                                              // allocate a buffered runtime-URL PHAR write stream
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the bridge call frame
+    emitter.instruction("ret");                                                 // return the synthetic descriptor or failure sentinel
+    emitter.label("__rt_phar_write_open_url_asm");
     emitter.instruction("sub sp, sp, #16");                                     // allocate a 16-byte frame for the persist call
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
@@ -88,8 +117,19 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: phar_write append ---");
     emitter.label_global("__rt_phar_write_append");
-    // __rt_phar_write_append(x1 = payload ptr, x2 = payload len; x0 = fd, ignored):
-    // append the payload to the buffer and return the byte count, like write().
+    // __rt_phar_write_append(x0 = fd, x1 = payload ptr, x2 = payload len):
+    // append the payload to the selected buffer and return the byte count.
+    abi::emit_symbol_address(emitter, "x9", "_elephc_phar_stream_append_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the optional buffered PHAR stream appender
+    emitter.instruction("cbz x9, __rt_phar_write_append_asm");                  // no bridge published: append to the assembly fallback buffer
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a bridge call frame
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the bridge call frame
+    emitter.instruction("blr x9");                                              // append to the selected buffered PHAR stream
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the bridge call frame
+    emitter.instruction("ret");                                                 // return bytes consumed or the failure sentinel
+    emitter.label("__rt_phar_write_append_asm");
     abi::emit_symbol_address(emitter, "x9", "_phar_write_len");
     emitter.instruction("ldr x10, [x9]");                                       // current buffer length (template + prior writes)
     abi::emit_symbol_address(emitter, "x11", "_phar_write_out");
@@ -116,6 +156,12 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #16");                                     // allocate a 16-byte frame
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    abi::emit_symbol_address(emitter, "x9", "_elephc_phar_stream_finalize_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the optional buffered PHAR stream finalizer
+    emitter.instruction("cbz x9, __rt_phar_write_finalize_asm_state");          // no bridge published: use the assembly fallback state
+    emitter.instruction("blr x9");                                              // flush and release the selected buffered PHAR stream
+    emitter.instruction("b __rt_phar_write_finalize_return");                   // restore the frame and return the bridge result
+    emitter.label("__rt_phar_write_finalize_asm_state");
     // -- compute the content length and the entry anchor --
     abi::emit_symbol_address(emitter, "x9", "_phar_write_len");
     emitter.instruction("ldr x9, [x9]");                                        // total buffer length (template + content)
@@ -282,6 +328,19 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: phar_write open ---");
     emitter.label_global("__rt_phar_write_open");
     // __rt_phar_write_open(rdi = template ptr, rsi = template len).
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_phar_stream_open_entry_fn", 0); // load the optional buffered PHAR stream opener
+    emitter.instruction("test r10, r10");                                       // was the stream opener bridge published?
+    emitter.instruction("jz __rt_phar_write_open_asm_x86");                     // no bridge published: use the assembly fallback
+    emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the bridge call frame
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_phar_write_path_ptr", 0);    // bridge arg 0 = archive path pointer
+    abi::emit_load_symbol_to_reg(emitter, "rsi", "_phar_write_path_len", 0);    // bridge arg 1 = archive path length
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_phar_write_entry_ptr", 0);   // bridge arg 2 = entry name pointer
+    abi::emit_load_symbol_to_reg(emitter, "rcx", "_phar_write_entry_len", 0);   // bridge arg 3 = entry name length
+    emitter.instruction("call r10");                                            // allocate a buffered PHAR write stream descriptor
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the synthetic descriptor or failure sentinel
+    emitter.label("__rt_phar_write_open_asm_x86");
     abi::emit_symbol_address(emitter, "r8", "_phar_write_out");                 // phar-write buffer base
     emitter.instruction("xor r9, r9");                                          // copy index = 0
     emitter.label("__rt_phar_write_open_loop_x86");
@@ -303,6 +362,15 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: phar_write open_url ---");
     emitter.label_global("__rt_phar_write_open_url");
     // __rt_phar_write_open_url(rdi = full phar:// URL ptr, rsi = URL len).
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_phar_stream_open_url_fn", 0); // load the optional buffered PHAR URL stream opener
+    emitter.instruction("test r10, r10");                                       // was the URL stream opener bridge published?
+    emitter.instruction("jz __rt_phar_write_open_url_asm_x86");                 // no bridge published: use the assembly fallback
+    emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the bridge call frame
+    emitter.instruction("call r10");                                            // allocate a buffered runtime-URL PHAR write stream
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the synthetic descriptor or failure sentinel
+    emitter.label("__rt_phar_write_open_url_asm_x86");
     emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("mov rax, rdi");                                        // str_persist arg pointer = URL pointer
@@ -318,7 +386,16 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: phar_write append ---");
     emitter.label_global("__rt_phar_write_append");
-    // __rt_phar_write_append(rsi = payload ptr, rdx = payload len; rdi = fd, ignored).
+    // __rt_phar_write_append(rdi = fd, rsi = payload ptr, rdx = payload len).
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_phar_stream_append_fn", 0); // load the optional buffered PHAR stream appender
+    emitter.instruction("test r10, r10");                                       // was the stream appender bridge published?
+    emitter.instruction("jz __rt_phar_write_append_asm_x86");                   // no bridge published: append to the assembly fallback buffer
+    emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the bridge call frame
+    emitter.instruction("call r10");                                            // append to the selected buffered PHAR stream
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return bytes consumed or the failure sentinel
+    emitter.label("__rt_phar_write_append_asm_x86");
     abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // current buffer length
     abi::emit_symbol_address(emitter, "r10", "_phar_write_out");                // buffer base
@@ -342,6 +419,12 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 16");                                         // reserve a small aligned frame for the crc stash
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_elephc_phar_stream_finalize_fn", 0); // load the optional buffered PHAR stream finalizer
+    emitter.instruction("test r10, r10");                                       // was the stream finalizer bridge published?
+    emitter.instruction("jz __rt_phar_write_finalize_asm_state_x86");           // no bridge published: use the assembly fallback state
+    emitter.instruction("call r10");                                            // flush and release the selected buffered PHAR stream
+    emitter.instruction("jmp __rt_phar_write_finalize_return_x86");             // restore the frame and return the bridge result
+    emitter.label("__rt_phar_write_finalize_asm_state_x86");
     // -- compute the content length and the entry anchor --
     abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // total buffer length (template + content)
