@@ -128,7 +128,7 @@ Rules:
 - instance and static properties can use declared property types
 - property defaults and assignments must be compatible with the declared type
 - constructor assignments through untyped parameters are checked once call sites refine the parameter type
-- nullable and union property storage is boxed using the same mixed runtime shape as typed locals
+- nullable and union property storage is boxed using the same mixed runtime shape as typed locals; scalar literal defaults (`int|string $v = 1`, `float|int $v = 1.5`, `bool|int $v = true`) are boxed into that shape
 - static property redeclarations across inheritance follow PHP-style rules: non-private inherited properties keep invariant declared types, cannot reduce visibility, and cannot override `final` properties
 - private inherited static properties can be redeclared as independent subclass slots
 - untyped inherited static properties cannot be redeclared with a type, and typed inherited static properties cannot be redeclared without one

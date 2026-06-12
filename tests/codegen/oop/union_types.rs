@@ -97,3 +97,51 @@ demo();
     );
     assert_eq!(out, "10");
 }
+
+/// Verifies that a union-typed property accepts an integer literal default, boxing it into the
+/// property's Mixed storage. Regression: this previously failed codegen with an "object_new for
+/// default value ... Union" error.
+#[test]
+fn test_union_property_int_literal_default() {
+    let out = compile_and_run(
+        "<?php class C { public int|string $v = 1; } $c = new C(); var_dump($c->v);",
+    );
+    assert_eq!(out, "int(1)\n");
+}
+
+/// Verifies that a union-typed property accepts a negative integer literal default.
+#[test]
+fn test_union_property_negative_int_default() {
+    let out = compile_and_run(
+        "<?php class C { public int|string $v = -7; } $c = new C(); var_dump($c->v);",
+    );
+    assert_eq!(out, "int(-7)\n");
+}
+
+/// Verifies that a union-typed property accepts a float literal default.
+#[test]
+fn test_union_property_float_literal_default() {
+    let out = compile_and_run(
+        "<?php class C { public float|int $v = 1.5; } $c = new C(); var_dump($c->v);",
+    );
+    assert_eq!(out, "float(1.5)\n");
+}
+
+/// Verifies that a union-typed property accepts a boolean literal default.
+#[test]
+fn test_union_property_bool_literal_default() {
+    let out = compile_and_run(
+        "<?php class C { public bool|int $v = true; } $c = new C(); var_dump($c->v);",
+    );
+    assert_eq!(out, "bool(true)\n");
+}
+
+/// Verifies that a string literal default for a union-typed property still works (it did before
+/// this fix), exercising the sibling boxed-string path.
+#[test]
+fn test_union_property_string_literal_default() {
+    let out = compile_and_run(
+        "<?php class C { public string|int $v = \"hi\"; } $c = new C(); var_dump($c->v);",
+    );
+    assert_eq!(out, "string(2) \"hi\"\n");
+}
