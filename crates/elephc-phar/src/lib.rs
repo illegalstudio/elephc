@@ -14,9 +14,9 @@
 //! - Returned FFI pointers reference a process-global buffer and remain valid
 //!   until the next `elephc_phar_extract_url` call.
 //! - Writes preserve the archive family for existing native PHAR, tar, and ZIP
-//!   archives. Native PHAR gzip/bzip2 entries keep their compression when
-//!   replaced. ZIP writes emit stored entries; ZIP64, encrypted ZIP entries,
-//!   ZIP data descriptors, and explicit compression-control APIs are
+//!   archives. Native PHAR gzip/bzip2 entries and ZIP deflate entries keep their
+//!   compression when replaced. ZIP64, encrypted ZIP entries, ZIP data
+//!   descriptors, tar archive compression, and private-key signing are
 //!   intentionally unsupported.
 
 use std::io::{Read, Write};
@@ -156,18 +156,22 @@ pub fn delete_url_bytes(url: &[u8]) -> Option<()> {
     delete_entry_bytes(archive_path, entry_name)
 }
 
-/// Updates all native-PHAR entry compression flags in an archive on disk.
+/// Updates all supported entry compression flags in an archive on disk.
 ///
 /// Compression codes follow PHP's `Phar::NONE`, `Phar::GZ`, and `Phar::BZ2`
-/// constants. Tar and ZIP containers intentionally return `None` because their
-/// per-entry compression semantics differ from native PHAR manifest flags.
+/// constants. Native PHAR supports gzip and bzip2 entry payloads, ZIP supports
+/// stored and deflated entries, and tar returns `None` because compression is
+/// archive-wide rather than per-entry.
 pub fn set_archive_compression(archive_path: &[u8], compression_code: usize) -> Option<()> {
     let compression = compression_from_php_constant(compression_code)?;
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
     let archive = std::fs::read(path).ok()?;
     let (mut entries, format) = parse_archive_entries(&archive)?;
-    if !matches!(format, ArchiveFormat::NativePhar) {
+    if matches!(format, ArchiveFormat::Tar) {
+        return None;
+    }
+    if matches!(format, ArchiveFormat::Zip) && matches!(compression, PharCompression::Bzip2) {
         return None;
     }
     for entry in &mut entries {
@@ -779,39 +783,41 @@ fn split_tar_name(name: &[u8]) -> Option<(&[u8], Option<&[u8]>)> {
     None
 }
 
-/// Builds a ZIP archive with stored entries and central-directory records.
+/// Builds a ZIP archive with stored or deflated entries and central-directory records.
 fn build_zip_archive(entries: &[ArchiveEntry]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut central = Vec::new();
     for entry in entries {
         let name_len = u16::try_from(entry.name.len()).ok()?;
         let payload_len = u32::try_from(entry.payload.len()).ok()?;
+        let (method, stored) = encode_zip_payload(&entry.payload, entry.compression)?;
+        let stored_len = u32::try_from(stored.len()).ok()?;
         let local_offset = u32::try_from(out.len()).ok()?;
         let crc = crc32(&entry.payload);
 
         out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
         out.extend_from_slice(&20u16.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(&ZIP_METHOD_STORE.to_le_bytes());
+        out.extend_from_slice(&method.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&crc.to_le_bytes());
-        out.extend_from_slice(&payload_len.to_le_bytes());
+        out.extend_from_slice(&stored_len.to_le_bytes());
         out.extend_from_slice(&payload_len.to_le_bytes());
         out.extend_from_slice(&name_len.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&entry.name);
-        out.extend_from_slice(&entry.payload);
+        out.extend_from_slice(&stored);
 
         central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
         central.extend_from_slice(&20u16.to_le_bytes());
         central.extend_from_slice(&20u16.to_le_bytes());
         central.extend_from_slice(&0u16.to_le_bytes());
-        central.extend_from_slice(&ZIP_METHOD_STORE.to_le_bytes());
+        central.extend_from_slice(&method.to_le_bytes());
         central.extend_from_slice(&0u16.to_le_bytes());
         central.extend_from_slice(&0u16.to_le_bytes());
         central.extend_from_slice(&crc.to_le_bytes());
-        central.extend_from_slice(&payload_len.to_le_bytes());
+        central.extend_from_slice(&stored_len.to_le_bytes());
         central.extend_from_slice(&payload_len.to_le_bytes());
         central.extend_from_slice(&name_len.to_le_bytes());
         central.extend_from_slice(&0u16.to_le_bytes());
@@ -835,6 +841,20 @@ fn build_zip_archive(entries: &[ArchiveEntry]) -> Option<Vec<u8>> {
     out.extend_from_slice(&central_offset.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     Some(out)
+}
+
+/// Encodes a ZIP entry payload and returns its ZIP compression method.
+fn encode_zip_payload(payload: &[u8], compression: PharCompression) -> Option<(u16, Vec<u8>)> {
+    match compression {
+        PharCompression::None => Some((ZIP_METHOD_STORE, payload.to_vec())),
+        PharCompression::Gzip => {
+            let mut encoder =
+                flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(payload).ok()?;
+            Some((ZIP_METHOD_DEFLATE, encoder.finish().ok()?))
+        }
+        PharCompression::Bzip2 => None,
+    }
 }
 
 /// Appends PHP's raw-SHA1 PHAR signature trailer to `archive`.
@@ -899,10 +919,11 @@ fn parse_zip_entries(data: &[u8]) -> Option<Vec<ArchiveEntry>> {
             compressed_size,
             uncompressed_size,
         )?;
+        let compression = zip_compression_from_method(method)?;
         entries.push(ArchiveEntry {
             name: name.to_vec(),
             payload,
-            compression: PharCompression::None,
+            compression,
         });
         p = name_start
             .checked_add(name_len)?
@@ -910,6 +931,15 @@ fn parse_zip_entries(data: &[u8]) -> Option<Vec<ArchiveEntry>> {
             .checked_add(comment_len)?;
     }
     Some(entries)
+}
+
+/// Maps supported ZIP methods to the bridge's compression representation.
+fn zip_compression_from_method(method: u16) -> Option<PharCompression> {
+    match method {
+        ZIP_METHOD_STORE => Some(PharCompression::None),
+        ZIP_METHOD_DEFLATE => Some(PharCompression::Gzip),
+        _ => None,
+    }
 }
 
 /// Finds the ZIP end-of-central-directory record.
@@ -1558,6 +1588,47 @@ mod tests {
         );
     }
 
+    /// Verifies ZIP archive compression controls rewrite stored and deflated entries.
+    #[test]
+    fn sets_zip_archive_compression() {
+        let path = std::env::temp_dir().join(format!(
+            "elephc_phar_zip_compress_{}_{}.zip",
+            std::process::id(),
+            "unit"
+        ));
+        std::fs::write(
+            &path,
+            build_zip(&[
+                ("one.txt", b"alpha alpha alpha", false),
+                ("two.txt", b"bravo bravo bravo", false),
+            ]),
+        )
+        .unwrap();
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(set_archive_compression(path_bytes.as_bytes(), 4_096), Some(()));
+        let deflated_archive = std::fs::read(&path).unwrap();
+        let deflated_entries = parse_zip_entries(&deflated_archive).unwrap();
+        assert!(deflated_entries
+            .iter()
+            .all(|entry| entry.compression == PharCompression::Gzip));
+        assert_eq!(
+            extract_entry_bytes(&deflated_archive, b"two.txt").as_deref(),
+            Some(&b"bravo bravo bravo"[..])
+        );
+
+        assert_eq!(set_archive_compression(path_bytes.as_bytes(), 0), Some(()));
+        let stored_archive = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let stored_entries = parse_zip_entries(&stored_archive).unwrap();
+        assert!(stored_entries
+            .iter()
+            .all(|entry| entry.compression == PharCompression::None));
+        assert_eq!(
+            extract_entry_bytes(&stored_archive, b"one.txt").as_deref(),
+            Some(&b"alpha alpha alpha"[..])
+        );
+    }
+
     /// Verifies compression controls reject unsupported constants and containers.
     #[test]
     fn set_compression_rejects_unsupported_inputs() {
@@ -1583,6 +1654,16 @@ mod tests {
         let tar_bytes = tar_path.to_string_lossy();
         assert_eq!(set_archive_compression(tar_bytes.as_bytes(), 4_096), None);
         std::fs::remove_file(&tar_path).ok();
+
+        let zip_path = std::env::temp_dir().join(format!(
+            "elephc_phar_compress_bad_{}_{}.zip",
+            std::process::id(),
+            "unit"
+        ));
+        std::fs::write(&zip_path, build_zip(&[("one.txt", b"alpha", false)])).unwrap();
+        let zip_bytes = zip_path.to_string_lossy();
+        assert_eq!(set_archive_compression(zip_bytes.as_bytes(), 8_192), None);
+        std::fs::remove_file(&zip_path).ok();
     }
 
     /// Verifies full phar:// URL writes split archive and entry names at run time.

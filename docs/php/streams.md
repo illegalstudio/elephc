@@ -84,15 +84,18 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 entry in a SHA1-signed PHAR archive while preserving existing entries.
 `file_put_contents()` and write-mode `fopen()` also accept runtime-built
 `phar://` URLs. Native PHAR, tar-based PHAR, and zip-based PHAR containers are
-writable; ZIP writes emit stored entries. `Phar` and `PharData` expose a
+writable; ZIP writes preserve stored/deflated entries and compression controls
+can rewrite ZIP entries between stored and deflated forms. `Phar` and
+`PharData` expose a
 baseline OOP surface with constructors, format/compression/signature constants,
 `addFromString()`, `delete()`, `compressFiles()`, `decompressFiles()`, and
 ArrayAccess read/write/isset over the same `phar://` paths.
 `unlink("phar://archive/entry")` and `unset($phar["entry"])` remove entries
 while preserving sibling entries. Native PHAR compression controls support
-`Phar::GZ`, `Phar::BZ2`, and `Phar::NONE`. Current limits: compression controls
-are native-PHAR only; metadata/stub APIs, iteration/`PharFileInfo`, and
-key/private-key signing variants are not implemented.
+`Phar::GZ`, `Phar::BZ2`, and `Phar::NONE`; ZIP compression controls support
+`Phar::GZ` and `Phar::NONE`. Current limits: tar compression controls,
+metadata/stub APIs, iteration/`PharFileInfo`, and key/private-key signing
+variants are not implemented.
 
 `file_get_contents($url)` recognizes runtime `http://`, `https://`, `ftp://`,
 and `ftps://` strings before falling back to `phar://`/filesystem handling.

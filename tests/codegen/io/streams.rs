@@ -2117,10 +2117,19 @@ $p->compressFiles(Phar::GZ);
 echo $p["one.txt"] . "|";
 echo ($p->decompressFiles() ? "plain|" : "bad|");
 echo $p["two.txt"] . "|";
+$zip = new PharData("compress.zip");
+$zip->addFromString("zip.txt", "zip zip zip");
+$zip->compressFiles(Phar::GZ);
+echo $zip["zip.txt"] . "|";
+echo ($zip->decompressFiles() ? "zip-plain|" : "zip-bad|");
+echo $zip["zip.txt"] . "|";
 echo (function_exists("__elephc_phar_set_compression") ? "visible" : "hidden");
 "#,
     );
-    assert_eq!(out, "alpha alpha alpha|plain|bravo bravo bravo|hidden");
+    assert_eq!(
+        out,
+        "alpha alpha alpha|plain|bravo bravo bravo|zip zip zip|zip-plain|zip zip zip|hidden"
+    );
 }
 
 /// `Phar::delete()` and `PharData::delete()` remove archive entries through the

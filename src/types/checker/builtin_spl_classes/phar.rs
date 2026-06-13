@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - Method bodies are synthetic PHP-like AST, so normal checker and EIR lowering own behavior.
-//! - Advanced APIs such as compression controls, metadata, deletion, and OpenSSL signing remain deferred.
+//! - Archive writes, deletion, and supported compression controls reuse existing
+//!   runtime `phar://` paths or focused internal bridge helpers.
 
 use std::collections::HashMap;
 
