@@ -1259,3 +1259,83 @@ echo $a(), " ", $b();
     );
     assert_eq!(out, "42 42");
 }
+
+/// Verifies `$closure->call($newThis, ...$args)` binds `$this` and invokes the
+/// closure in one step, passing through the trailing arguments.
+#[test]
+fn test_closure_call_binds_and_invokes() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+    public function adder() {
+        return function(int $n) { return $this->v + $n; };
+    }
+}
+$c1 = new C(7);
+$c2 = new C(100);
+$f = $c1->adder();
+echo $f->call($c2, 5);   // 105 — bound to $c2
+echo " ";
+echo $f->call($c1, 1);   // 8   — bound to $c1
+"#,
+    );
+    assert_eq!(out, "105 8");
+}
+
+// --- A closure defined outside a class may reference $this and be bound later ---
+
+/// Verifies a top-level closure that references `$this` can be bound to an object
+/// via `Closure::bind`, dispatching member access against the bound object.
+#[test]
+fn test_top_level_closure_bind_reads_property() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $x = 42;
+}
+$reader = function() { return $this->x; };
+$bound = Closure::bind($reader, new C());
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies the canonical scope-stealing pattern: a standalone closure bound to
+/// an object reads a private property (visibility is permissive once bound).
+#[test]
+fn test_top_level_closure_bind_reads_private_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Account {
+    private int $balance = 250;
+}
+$peek = function() { return $this->balance; };
+$read = Closure::bind($peek, new Account(), Account::class);
+echo $read();
+"#,
+    );
+    assert_eq!(out, "250");
+}
+
+/// Verifies a top-level closure that calls a method on `$this` and takes an
+/// argument, bound via both `bindTo` and `call`.
+#[test]
+fn test_top_level_closure_bind_method_and_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public string $name = "Ada";
+    public function hi(): string { return "Hi " . $this->name; }
+}
+$f = function(string $suffix) { return $this->hi() . $suffix; };
+$bound = $f->bindTo(new Greeter());
+echo $bound("!");
+echo "|";
+echo $f->call(new Greeter(), "?");
+"#,
+    );
+    assert_eq!(out, "Hi Ada!|Hi Ada?");
+}

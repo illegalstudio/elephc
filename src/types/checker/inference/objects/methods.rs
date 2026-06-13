@@ -85,14 +85,26 @@ impl Checker {
             // diagnostic.
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?;
         }
-        // `$closure->bindTo($newThis [, $scope])` rebinds a closure's `$this` and
-        // returns a new closure. `$scope` is accepted and ignored (visibility is
-        // resolved at compile time). Other methods on a callable are unsupported.
-        if matches!(obj_ty, PhpType::Callable) && php_symbol_key(method) == "bindto" {
-            for arg in args {
-                self.infer_type(arg, env)?;
+        // Closure rebinding methods on a callable receiver. `bindTo` rebinds
+        // `$this` and returns a new closure; `call` binds `$this` and invokes the
+        // closure in one step, returning its result. `$scope` is accepted and
+        // ignored (visibility is resolved at compile time).
+        if matches!(obj_ty, PhpType::Callable) {
+            match php_symbol_key(method).as_str() {
+                "bindto" => {
+                    for arg in args {
+                        self.infer_type(arg, env)?;
+                    }
+                    return Ok(PhpType::Callable);
+                }
+                "call" => {
+                    for arg in args {
+                        self.infer_type(arg, env)?;
+                    }
+                    return Ok(PhpType::Mixed);
+                }
+                _ => {}
             }
-            return Ok(PhpType::Callable);
         }
         Ok(PhpType::Int)
     }

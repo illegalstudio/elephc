@@ -485,6 +485,12 @@ impl Checker {
         }
         if let Some(class_name) = &self.current_class {
             Ok(PhpType::Object(class_name.clone()))
+        } else if self.closure_depth > 0 {
+            // A non-static closure defined outside a class method may still use
+            // `$this` when it is later bound to an object via `Closure::bind` /
+            // `bindTo`. The bound class is unknown here, so `$this` is a
+            // runtime-dispatched receiver (`Mixed`).
+            Ok(PhpType::Mixed)
         } else {
             Err(CompileError::new(
                 expr.span,

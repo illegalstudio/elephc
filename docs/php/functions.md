@@ -185,8 +185,31 @@ echo $read();              // 7   (original is unchanged)
 An optional third `$scope` argument is accepted for source compatibility and
 ignored (member visibility is resolved at compile time).
 
-Rebinding currently supports closures that capture `$this` and nothing else —
-the typical accessor closure created inside an instance method. Binding a
+`$closure->call($newThis, ...$args)` binds `$this` and invokes the closure in a
+single step, returning its result:
+
+```php
+<?php
+$add = $a->reader();              // reusing Box from above (returns $this->value)
+echo $add->call($b);              // 99 — bound to $b for this one call
+```
+
+A closure defined outside any class may also reference `$this` and be bound
+later — the canonical "scope-stealing" accessor:
+
+```php
+<?php
+class Account {
+    private int $balance = 250;
+}
+
+$peek = function() { return $this->balance; };
+$read = Closure::bind($peek, new Account(), Account::class);
+echo $read();   // 250 — bound access reaches the private property
+```
+
+Rebinding supports closures that capture `$this` and nothing else (the typical
+accessor closure, whether created inside a method or standalone). Binding a
 closure that also has `use(...)` captures aborts with a fatal error rather than
 producing an incorrectly bound closure.
 

@@ -136,3 +136,8 @@ echo $read();      // 10 — original
 echo " ";
 echo $rebound();   // 20 — rebound to $second
 echo "\n";
+
+// call() binds $this and invokes the closure in one step.
+echo "call: ";
+echo $read->call($second);   // 20 — bound to $second for this call only
+echo "\n";
