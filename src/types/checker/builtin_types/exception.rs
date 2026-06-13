@@ -24,6 +24,7 @@ pub(super) fn builtin_exception_message_property() -> ClassProperty {
     ClassProperty {
         name: "message".to_string(),
         visibility: Visibility::Public,
+        set_visibility: None,
         type_expr: Some(TypeExpr::Str),
         hooks: PropertyHooks::none(),
         readonly: false,
@@ -107,6 +108,7 @@ pub(super) fn builtin_exception_code_property() -> ClassProperty {
     ClassProperty {
         name: "code".to_string(),
         visibility: Visibility::Protected,
+        set_visibility: None,
         type_expr: Some(TypeExpr::Int),
         hooks: PropertyHooks::none(),
         readonly: false,

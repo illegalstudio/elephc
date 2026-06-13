@@ -12,10 +12,26 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ExprKind, Visibility};
+use crate::parser::ast::{ClassMethod, ExprKind, Visibility};
 use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, FunctionSig, PhpType};
 
 use super::super::Checker;
+use super::validation::build_method_sig;
+
+/// Clones an enum method with `self`/`static` type hints rewritten to the enum itself. Enums
+/// have no parent, so `parent` is left unresolved (and rejected later if it surfaces).
+fn substitute_enum_relative_types(method: &ClassMethod, enum_name: &str) -> ClassMethod {
+    let mut method = method.clone();
+    for (_, type_ann, _, _) in method.params.iter_mut() {
+        if let Some(ty) = type_ann.as_mut() {
+            *ty = ty.substitute_relative_class_types(enum_name, None);
+        }
+    }
+    if let Some(return_type) = method.return_type.as_mut() {
+        *return_type = return_type.substitute_relative_class_types(enum_name, None);
+    }
+    method
+}
 
 /// Propagates concrete return types from overrides to their abstract parent declarations.
 ///
@@ -109,10 +125,14 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - Inserts `ClassInfo` into `checker.classes` with synthesized methods
 /// - Inserts `EnumInfo` into `checker.enums`
 /// - Increments `*next_class_id`
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_enum_info(
     name: &str,
     backing_type: Option<&crate::parser::ast::TypeExpr>,
     cases: &[crate::parser::ast::EnumCaseDecl],
+    implements: &[crate::names::Name],
+    user_methods: &[crate::parser::ast::ClassMethod],
+    user_constants: &[crate::parser::ast::ClassConst],
     span: crate::span::Span,
     checker: &mut Checker,
     next_class_id: &mut u64,
@@ -222,8 +242,16 @@ pub(crate) fn build_enum_info(
         });
     }
 
-    insert_enum_metadata(name, resolved_backing, enum_cases, checker, next_class_id);
-    Ok(())
+    insert_enum_metadata(
+        name,
+        resolved_backing,
+        enum_cases,
+        implements,
+        user_methods,
+        user_constants,
+        checker,
+        next_class_id,
+    )
 }
 
 /// Inserts validated enum metadata and its parallel final readonly class metadata.
@@ -232,13 +260,17 @@ pub(crate) fn build_enum_info(
 /// validation has already happened. Synthesizes the static enum methods exposed
 /// by PHP: all enums get `cases()`, while backed enums also get `from()` and
 /// `tryFrom()`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_enum_metadata(
     name: &str,
     backing_type: Option<PhpType>,
     enum_cases: Vec<EnumCaseInfo>,
+    implements: &[crate::names::Name],
+    user_methods: &[ClassMethod],
+    user_constants: &[crate::parser::ast::ClassConst],
     checker: &mut Checker,
     next_class_id: &mut u64,
-) {
+) -> Result<(), CompileError> {
     let mut properties = Vec::new();
     let mut property_offsets = HashMap::new();
     let mut property_declaring_classes = HashMap::new();
@@ -306,6 +338,48 @@ pub(crate) fn insert_enum_metadata(
         }
     }
 
+    // Register the enum as a known class name before building method signatures so that `self`
+    // return/parameter types (rewritten to the enum name) resolve while its metadata is in flight.
+    checker.declared_classes.insert(name.to_string());
+
+    // User-declared enum methods. Enum cases are singleton objects, so instance methods dispatch
+    // on the case like a class. `self`/`static` hints resolve to the enum.
+    let mut methods = HashMap::new();
+    let mut method_decls = Vec::new();
+    let mut method_visibilities = HashMap::new();
+    let mut method_declaring_classes = HashMap::new();
+    let mut method_impl_classes = HashMap::new();
+    for method in user_methods {
+        let method = substitute_enum_relative_types(method, name);
+        let sig = build_method_sig(checker, &method)?;
+        let key = php_symbol_key(&method.name);
+        if method.is_static {
+            static_methods.insert(key.clone(), sig);
+            static_method_visibilities.insert(key.clone(), method.visibility.clone());
+            static_method_declaring_classes.insert(key.clone(), name.to_string());
+            static_method_impl_classes.insert(key, name.to_string());
+        } else {
+            methods.insert(key.clone(), sig);
+            method_visibilities.insert(key.clone(), method.visibility.clone());
+            method_declaring_classes.insert(key.clone(), name.to_string());
+            method_impl_classes.insert(key, name.to_string());
+        }
+        // Codegen emits both instance and static method bodies from `method_decls`.
+        method_decls.push(method);
+    }
+
+    // User-declared enum constants. Values are kept as their parsed expressions, matching the
+    // class-constant representation.
+    let mut constants = HashMap::new();
+    for constant in user_constants {
+        constants.insert(constant.name.clone(), constant.value.clone());
+    }
+
+    let interfaces: Vec<String> = implements
+        .iter()
+        .map(|interface| interface.as_str().to_string())
+        .collect();
+
     checker.classes.insert(
         name.to_string(),
         ClassInfo {
@@ -315,7 +389,7 @@ pub(crate) fn insert_enum_metadata(
             is_final: true,
             is_readonly_class: true,
             allow_dynamic_properties: false,
-            constants: HashMap::new(),
+            constants,
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
             method_attribute_names: HashMap::new(),
@@ -328,6 +402,7 @@ pub(crate) fn insert_enum_metadata(
             property_declaring_classes,
             defaults,
             property_visibilities,
+            property_set_visibilities: HashMap::new(),
             declared_properties,
             final_properties,
             readonly_properties,
@@ -340,15 +415,15 @@ pub(crate) fn insert_enum_metadata(
             static_property_visibilities: HashMap::new(),
             declared_static_properties: HashSet::new(),
             final_static_properties: HashSet::new(),
-            method_decls: Vec::new(),
-            methods: HashMap::new(),
+            method_decls,
+            methods,
             static_methods,
             callable_method_return_sigs: HashMap::new(),
             callable_array_method_return_sigs: HashMap::new(),
-            method_visibilities: HashMap::new(),
+            method_visibilities,
             final_methods: HashSet::new(),
-            method_declaring_classes: HashMap::new(),
-            method_impl_classes: HashMap::new(),
+            method_declaring_classes,
+            method_impl_classes,
             vtable_methods: Vec::new(),
             vtable_slots: HashMap::new(),
             static_method_visibilities,
@@ -357,7 +432,7 @@ pub(crate) fn insert_enum_metadata(
             static_method_impl_classes,
             static_vtable_methods: Vec::new(),
             static_vtable_slots: HashMap::new(),
-            interfaces: Vec::new(),
+            interfaces,
             constructor_param_to_prop: Vec::new(),
         },
     );
@@ -369,4 +444,5 @@ pub(crate) fn insert_enum_metadata(
         },
     );
     *next_class_id += 1;
+    Ok(())
 }

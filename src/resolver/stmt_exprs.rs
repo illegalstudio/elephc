@@ -483,9 +483,15 @@ pub(super) fn resolve_stmt_exprs(
             name,
             backing_type,
             cases,
+            implements,
+            methods,
+            constants,
         } => StmtKind::EnumDecl {
             name,
             backing_type,
+            implements,
+            methods,
+            constants,
             cases: cases
                 .into_iter()
                 .map(|mut case| {

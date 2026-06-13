@@ -481,11 +481,17 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             name,
             backing_type,
             cases,
+            implements,
+            methods,
+            constants,
         } => vec![Stmt {
             kind: StmtKind::EnumDecl {
                 name,
                 backing_type,
                 cases,
+                implements,
+                methods,
+                constants,
             },
             span,
             attributes: Vec::new(),

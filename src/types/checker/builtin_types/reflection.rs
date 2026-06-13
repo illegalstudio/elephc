@@ -114,6 +114,7 @@ fn builtin_property(
     ClassProperty {
         name: name.to_string(),
         visibility,
+        set_visibility: None,
         type_expr,
         hooks: crate::parser::ast::PropertyHooks::none(),
         readonly: false,

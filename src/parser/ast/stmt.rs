@@ -216,6 +216,13 @@ pub enum StmtKind {
         name: String,
         backing_type: Option<TypeExpr>,
         cases: Vec<EnumCaseDecl>,
+        /// Interfaces the enum implements (`enum E implements Foo, Bar`).
+        implements: Vec<Name>,
+        /// User-declared enum methods (instance and static). Enums dispatch instance methods on
+        /// the case singleton, like a class.
+        methods: Vec<ClassMethod>,
+        /// User-declared enum constants.
+        constants: Vec<ClassConst>,
     },
     PackedClassDecl {
         name: String,

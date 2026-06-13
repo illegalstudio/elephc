@@ -34,6 +34,7 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
     ClassProperty {
         name: property.name,
         visibility: property.visibility,
+        set_visibility: property.set_visibility,
         type_expr: property.type_expr,
         hooks: property.hooks,
         readonly: property.readonly,

@@ -125,6 +125,7 @@ pub(super) fn storage_property_with_visibility(
     ClassProperty {
         name: name.to_string(),
         visibility,
+        set_visibility: None,
         type_expr,
         hooks: PropertyHooks::none(),
         readonly: false,

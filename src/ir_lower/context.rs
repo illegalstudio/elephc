@@ -17,7 +17,7 @@ use crate::ir::{
     BlockId, Builder, DataId, DataPool, Effects, Immediate, IrType, LocalKind, LocalSlotId, Op,
     Ownership, ValueId, Function,
 };
-use crate::names::php_symbol_key;
+use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{
@@ -412,6 +412,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         self.closure_counter += 1;
         name
+    }
+
+    /// Returns true when the body being lowered is the get or set hook accessor for `property`.
+    ///
+    /// `owner_name` is `"Class::method"` for a method body, so this compares the method part against
+    /// the synthetic accessor names. Inside a property's own accessor, `$this->property` must read or
+    /// write the raw backing slot rather than re-entering the accessor (which would recurse).
+    pub(crate) fn in_own_property_accessor(&self, property: &str) -> bool {
+        let Some((_, method)) = self.owner_name.split_once("::") else {
+            return false;
+        };
+        method == property_hook_get_method(property) || method == property_hook_set_method(property)
     }
 
     /// Appends closure functions discovered while lowering expressions in this body.
@@ -1079,6 +1091,11 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Union(members) => {
             PhpType::Union(members.iter().map(type_expr_to_php_type).collect())
         }
+        // An intersection value is an object pointer; type it as its first member.
+        TypeExpr::Intersection(members) => members
+            .first()
+            .map(type_expr_to_php_type)
+            .unwrap_or(PhpType::Mixed),
     }
 }
 

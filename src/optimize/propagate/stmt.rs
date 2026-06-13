@@ -314,11 +314,17 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             name,
             backing_type,
             cases,
+            implements,
+            methods,
+            constants,
         } => (
             Stmt::new(
                 StmtKind::EnumDecl {
                     name,
                     backing_type,
+                    implements,
+                    methods,
+                    constants,
                     cases: cases.into_iter().map(propagate_enum_case).collect(),
                 },
                 span,

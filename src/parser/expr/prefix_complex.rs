@@ -15,7 +15,9 @@ use crate::lexer::Token;
 use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
 };
-use crate::parser::stmt::{looks_like_typed_param, parse_block, parse_name, parse_type_expr};
+use crate::parser::stmt::{
+    looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_expr,
+};
 use crate::span::Span;
 
 use super::calls::parse_first_class_callable_parens;
@@ -527,12 +529,8 @@ fn parse_closure_params(
             false
         };
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-            if type_ann.is_some() {
-                return Err(CompileError::new(
-                    span,
-                    "Typed variadic parameters are not supported yet",
-                ));
-            }
+            // A typed variadic (`int ...$xs`) is accepted on closures/arrow functions too; the
+            // collected array's element type is inferred from the actual call arguments.
             *pos += 1;
             match tokens.get(*pos).map(|(token, _)| token) {
                 Some(Token::Variable(name)) => {
@@ -736,6 +734,17 @@ pub(super) fn parse_new_object(
     span: Span,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
+
+    // `new class { ... }` / `new readonly class { ... }` — anonymous class. The body is hoisted
+    // to a synthetic top-level class and this becomes `new <synthetic name>(args)`.
+    let anonymous_readonly = matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::ReadOnly))
+        && matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::Class));
+    if anonymous_readonly {
+        *pos += 1; // consume `readonly`; `parse_anonymous_class` consumes `class`
+    }
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Class)) {
+        return parse_anonymous_class(tokens, pos, span, anonymous_readonly);
+    }
 
     // `new self()`, `new static()`, `new parent()` — late-static-binding
     // factory pattern. Parsed as a NewScopedObject so codegen can apply LSB

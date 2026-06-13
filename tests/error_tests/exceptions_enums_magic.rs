@@ -308,3 +308,21 @@ fn test_error_cannot_instantiate_throwable_interface() {
         "Cannot instantiate interface: Throwable",
     );
 }
+
+/// Verifies that a `case` declaration outside of an enum body is rejected.
+#[test]
+fn test_error_case_outside_enum() {
+    expect_error(
+        "<?php class C { case Foo; }",
+        "'case' is only valid inside an enum",
+    );
+}
+
+/// Verifies that using a trait inside an enum is rejected (not yet supported).
+#[test]
+fn test_error_enum_using_trait() {
+    expect_error(
+        "<?php trait T {} enum E { use T; case A; }",
+        "Enums using traits are not supported yet",
+    );
+}

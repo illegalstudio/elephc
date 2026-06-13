@@ -92,12 +92,8 @@ pub(super) fn parse_method_params(
                     "Cannot declare variadic promoted property",
                 ));
             }
-            if type_ann.is_some() {
-                return Err(CompileError::new(
-                    span,
-                    "Typed variadic parameters are not supported yet",
-                ));
-            }
+            // A typed variadic (`int ...$xs`) is accepted; the collected array's element type is
+            // inferred from the actual call arguments rather than stored on the variadic itself.
             *pos += 1;
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(n)) => {
@@ -129,6 +125,9 @@ pub(super) fn parse_method_params(
                     promoted_properties.push(ClassProperty {
                         name: n.clone(),
                         visibility,
+                        // Asymmetric visibility on promoted constructor parameters is not parsed
+                        // yet; only declared properties carry a `set` visibility.
+                        set_visibility: None,
                         type_expr: type_ann.clone(),
                         hooks: PropertyHooks::none(),
                         readonly,

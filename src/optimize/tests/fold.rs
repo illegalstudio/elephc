@@ -83,6 +83,7 @@ fn test_fold_string_concat_and_property_default() {
     let property = ClassProperty {
         name: "label".to_string(),
         visibility: Visibility::Public,
+        set_visibility: None,
         type_expr: None,
         hooks: crate::parser::ast::PropertyHooks::none(),
         readonly: false,

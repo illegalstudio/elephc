@@ -10,14 +10,15 @@
 
 use crate::errors::CompileError;
 use crate::lexer::Token;
+use crate::names::{property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, PropertyHooks, Stmt, StmtKind, TraitUse,
+    ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, PropertyHooks, Stmt, StmtKind, TraitUse,
     TypeExpr, Visibility,
 };
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
-use super::super::params::{parse_name_list, parse_type_expr};
+use super::super::params::{looks_like_typed_param, parse_name_list, parse_type_expr};
 use super::super::{expect_semicolon, expect_token, parse_block};
 use super::method_params::parse_method_params;
 use super::traits::parse_trait_use;
@@ -103,7 +104,7 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
     };
 
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after trait name")?;
-    let (trait_uses, properties, methods, constants) =
+    let (trait_uses, properties, methods, constants, _cases) =
         parse_class_like_body(tokens, pos, "trait", false)?;
     expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of trait")?;
 
@@ -136,6 +137,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
         Vec<ClassProperty>,
         Vec<ClassMethod>,
         Vec<ClassConst>,
+        Vec<EnumCaseDecl>,
     ),
     CompileError,
 > {
@@ -143,6 +145,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
     let mut properties = Vec::new();
     let mut methods = Vec::new();
     let mut constants = Vec::new();
+    let mut cases = Vec::new();
 
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         // Capture any `#[...]` attribute groups attached to the next member —
@@ -160,6 +163,45 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 ));
             }
             trait_uses.push(parse_trait_use(tokens, pos, member_span)?);
+            continue;
+        }
+
+        // Enum cases. Cases carry no visibility modifiers, so they are handled before the
+        // modifier scan; `case` outside an enum is a hard error.
+        if tokens[*pos].0 == Token::Case {
+            if owner_kind != "enum" {
+                return Err(CompileError::new(
+                    member_span,
+                    "'case' is only valid inside an enum",
+                ));
+            }
+            *pos += 1; // consume 'case'
+            let case_name = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Identifier(name)) => {
+                    let name = name.clone();
+                    *pos += 1;
+                    name
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Expected case name after 'case'",
+                    ))
+                }
+            };
+            let value = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                *pos += 1;
+                Some(parse_expr(tokens, pos)?)
+            } else {
+                None
+            };
+            expect_semicolon(tokens, pos)?;
+            cases.push(EnumCaseDecl {
+                name: case_name,
+                value,
+                span: member_span,
+                attributes: member_attributes,
+            });
             continue;
         }
 
@@ -277,7 +319,8 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             } else {
                 None
             };
-            let hooks = parse_property_hooks(tokens, pos, member_span)?;
+            let (hooks, hook_accessors) =
+                parse_property_hooks(tokens, pos, member_span, &prop_name, type_expr.as_ref())?;
             if modifiers.is_abstract && default.is_some() {
                 return Err(CompileError::new(
                     member_span,
@@ -333,15 +376,17 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                         "Private abstract properties are not supported",
                     ));
                 }
-            } else if hooks.any() {
+            } else if hooks.any() && hook_accessors.is_empty() {
                 return Err(CompileError::new(
                     member_span,
                     "Non-abstract property hook must have a body",
                 ));
             }
+            methods.extend(hook_accessors);
             properties.push(ClassProperty {
                 name: prop_name,
                 visibility: modifiers.visibility,
+                set_visibility: modifiers.set_visibility,
                 type_expr,
                 hooks,
                 readonly: modifiers.is_readonly,
@@ -365,7 +410,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
         ));
     }
 
-    Ok((trait_uses, properties, methods, constants))
+    Ok((trait_uses, properties, methods, constants, cases))
 }
 
 /// Appends promoted constructor properties to the class properties list.
@@ -411,6 +456,9 @@ fn parse_optional_property_type(
 /// Used internally during class-like body parsing to collect modifiers before processing a member declaration.
 pub(super) struct MemberModifiers {
     visibility: Visibility,
+    /// PHP 8.4 asymmetric visibility: the write (`set`) visibility from a `private(set)` /
+    /// `protected(set)` modifier, when present. Only meaningful for properties.
+    set_visibility: Option<Visibility>,
     is_static: bool,
     is_readonly: bool,
     is_abstract: bool,
@@ -422,25 +470,31 @@ pub(super) struct MemberModifiers {
 /// Default visibility is `Public` if no visibility modifier is present.
 fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberModifiers {
     let mut visibility = Visibility::Public;
+    let mut set_visibility = None;
     let mut is_static = false;
     let mut is_readonly = false;
     let mut is_abstract = false;
     let mut is_final = false;
 
     loop {
+        // A visibility keyword immediately followed by `(set)` is a PHP 8.4 asymmetric write
+        // visibility (`private(set)`); otherwise it is the ordinary read visibility.
+        let visibility_keyword = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Public) => Some(Visibility::Public),
+            Some(Token::Protected) => Some(Visibility::Protected),
+            Some(Token::Private) => Some(Visibility::Private),
+            _ => None,
+        };
+        if let Some(keyword) = visibility_keyword {
+            *pos += 1;
+            if consume_set_marker(tokens, pos) {
+                set_visibility = Some(keyword);
+            } else {
+                visibility = keyword;
+            }
+            continue;
+        }
         match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Public) => {
-                visibility = Visibility::Public;
-                *pos += 1;
-            }
-            Some(Token::Protected) => {
-                visibility = Visibility::Protected;
-                *pos += 1;
-            }
-            Some(Token::Private) => {
-                visibility = Visibility::Private;
-                *pos += 1;
-            }
             Some(Token::Static) => {
                 is_static = true;
                 *pos += 1;
@@ -463,10 +517,30 @@ fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberMo
 
     MemberModifiers {
         visibility,
+        set_visibility,
         is_static,
         is_readonly,
         is_abstract,
         is_final,
+    }
+}
+
+/// Consumes a `(set)` marker at `*pos` (an `LParen`, the `set` identifier, and an `RParen`),
+/// returning `true` when one was present. Leaves `*pos` unchanged otherwise. `set` is matched
+/// case-insensitively, mirroring PHP's case-insensitive modifier keywords.
+fn consume_set_marker(tokens: &[(Token, Span)], pos: &mut usize) -> bool {
+    let is_set_ident = matches!(
+        tokens.get(*pos + 1).map(|(t, _)| t),
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("set")
+    );
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen))
+        && is_set_ident
+        && matches!(tokens.get(*pos + 2).map(|(t, _)| t), Some(Token::RParen))
+    {
+        *pos += 3;
+        true
+    } else {
+        false
     }
 }
 
@@ -661,7 +735,14 @@ fn parse_interface_body(
                     "Interface properties cannot have a default value",
                 ));
             }
-            let hooks = parse_property_hooks(tokens, pos, member_span)?;
+            let (hooks, hook_accessors) =
+                parse_property_hooks(tokens, pos, member_span, &prop_name, type_expr.as_ref())?;
+            if !hook_accessors.is_empty() {
+                return Err(CompileError::new(
+                    member_span,
+                    "Interface property hooks cannot have a body",
+                ));
+            }
             if !hooks.any() {
                 return Err(CompileError::new(
                     member_span,
@@ -683,6 +764,7 @@ fn parse_interface_body(
             properties.push(ClassProperty {
                 name: prop_name,
                 visibility: Visibility::Public,
+                set_visibility: None,
                 type_expr,
                 hooks,
                 readonly: false,
@@ -728,14 +810,23 @@ fn parse_interface_body(
 /// Returns a `PropertyHooks` indicating which hooks are present (`get`, `set`, by-ref variants).
 /// Consumes the opening `{`, hook declarations, and closing `}`.
 /// Returns an error if no hook declarations appear or if the block is malformed.
+/// Parses the property-hook tail of a property declaration: either a bare `;` (no hooks), or a
+/// `{ get ...; set ...; }` block. Concrete hook bodies are compiled into synthetic accessor methods
+/// (`__propget_<name>()` / `__propset_<name>($value)`) returned alongside the [`PropertyHooks`]
+/// flags, so the bodies flow through every later pass as ordinary methods. `prop_name`/`prop_type`
+/// name and type the property the hooks belong to; the get accessor returns `prop_type` and the set
+/// accessor receives it. Abstract/interface hooked properties (a hook ending in `;`) produce flags
+/// but no accessor methods.
 fn parse_property_hooks(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
-) -> Result<PropertyHooks, CompileError> {
+    prop_name: &str,
+    prop_type: Option<&TypeExpr>,
+) -> Result<(PropertyHooks, Vec<ClassMethod>), CompileError> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
         *pos += 1;
-        return Ok(PropertyHooks::none());
+        return Ok((PropertyHooks::none(), Vec::new()));
     }
     if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LBrace)) {
         return Err(CompileError::new(
@@ -746,6 +837,7 @@ fn parse_property_hooks(
     *pos += 1;
 
     let mut hooks = PropertyHooks::none();
+    let mut accessors: Vec<ClassMethod> = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         let hook_span = tokens[*pos].1;
         let get_by_ref = if tokens[*pos].0 == Token::Ampersand {
@@ -764,22 +856,94 @@ fn parse_property_hooks(
             }
         };
         *pos += 1;
-
-        if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Semicolon)) {
+        let is_get = hook_name.eq_ignore_ascii_case("get");
+        let is_set = hook_name.eq_ignore_ascii_case("set");
+        if !is_get && !is_set {
             return Err(CompileError::new(
                 hook_span,
-                "Property hook bodies are not supported yet",
+                &format!("Unknown property hook '{}'", hook_name),
             ));
         }
-        *pos += 1;
 
-        if hook_name.eq_ignore_ascii_case("get") {
+        // Optional set-hook parameter list: `set(Type $value)` (the type is accepted but the
+        // property type governs); the default parameter name is `$value`.
+        let mut set_param = "value".to_string();
+        if is_set && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+            *pos += 1;
+            if looks_like_typed_param(tokens, *pos) {
+                let _ = parse_type_expr(tokens, pos, hook_span)?;
+            }
+            match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Variable(name)) => {
+                    set_param = name.clone();
+                    *pos += 1;
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        hook_span,
+                        "Expected '$value' parameter in set hook",
+                    ))
+                }
+            }
+            expect_token(
+                tokens,
+                pos,
+                &Token::RParen,
+                "Expected ')' after set hook parameter",
+            )?;
+        }
+
+        // Hook body: `;` (abstract), `=> expr;` (short), or `{ ... }` (block).
+        let body: Option<Vec<Stmt>> = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Semicolon) => {
+                *pos += 1;
+                None
+            }
+            Some(Token::DoubleArrow) => {
+                *pos += 1;
+                let expr = parse_expr(tokens, pos)?;
+                expect_semicolon(tokens, pos)?;
+                if is_get {
+                    Some(vec![Stmt::new(StmtKind::Return(Some(expr)), hook_span)])
+                } else {
+                    return Err(CompileError::new(
+                        hook_span,
+                        "Short `set => expr` hooks require a backed property; use a block `set { ... }`",
+                    ));
+                }
+            }
+            Some(Token::LBrace) => Some(parse_block(tokens, pos)?),
+            _ => {
+                return Err(CompileError::new(
+                    hook_span,
+                    "Expected '=>', '{', or ';' in property hook",
+                ))
+            }
+        };
+
+        if is_get {
             if hooks.requires_get() {
                 return Err(CompileError::new(hook_span, "Duplicate get property hook"));
             }
             hooks.get = !get_by_ref;
             hooks.get_by_ref = get_by_ref;
-        } else if hook_name.eq_ignore_ascii_case("set") {
+            if let Some(body) = body {
+                accessors.push(ClassMethod {
+                    name: property_hook_get_method(prop_name),
+                    visibility: Visibility::Public,
+                    is_static: false,
+                    is_abstract: false,
+                    is_final: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: prop_type.cloned(),
+                    body,
+                    span: hook_span,
+                    attributes: Vec::new(),
+                });
+            }
+        } else {
             if get_by_ref {
                 return Err(CompileError::new(
                     hook_span,
@@ -790,11 +954,22 @@ fn parse_property_hooks(
                 return Err(CompileError::new(hook_span, "Duplicate set property hook"));
             }
             hooks.set = true;
-        } else {
-            return Err(CompileError::new(
-                hook_span,
-                &format!("Unknown property hook '{}'", hook_name),
-            ));
+            if let Some(body) = body {
+                accessors.push(ClassMethod {
+                    name: property_hook_set_method(prop_name),
+                    visibility: Visibility::Public,
+                    is_static: false,
+                    is_abstract: false,
+                    is_final: false,
+                    has_body: true,
+                    params: vec![(set_param, prop_type.cloned(), None, false)],
+                    variadic: None,
+                    return_type: Some(TypeExpr::Void),
+                    body,
+                    span: hook_span,
+                    attributes: Vec::new(),
+                });
+            }
         }
     }
 
@@ -807,5 +982,5 @@ fn parse_property_hooks(
     if !hooks.any() {
         return Err(CompileError::new(span, "Expected property hook declaration"));
     }
-    Ok(hooks)
+    Ok((hooks, accessors))
 }

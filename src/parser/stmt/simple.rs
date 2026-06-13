@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
@@ -55,6 +55,78 @@ pub(super) fn parse_include(
         },
         span,
     ))
+}
+
+/// If the token at `*pos` begins an `include`/`require` (optionally `_once`), parses it as a
+/// value-position include and returns an expression evaluating to the include's value, without
+/// consuming a trailing semicolon. Returns `Ok(None)` when the next token is not an include
+/// keyword.
+///
+/// PHP allows `include`/`require` in expression position (e.g. `return require X;` or
+/// `$x = require X;`) and the expression evaluates to the included file's `return` value, or `1`
+/// when the file has no explicit `return`. elephc resolves includes at compile time as
+/// statements, so the include is wrapped in an immediately-invoked closure:
+/// `(static function () { <include>; return 1; })()`. The included file's top-level `return`
+/// becomes the closure's return value, while a file with no `return` falls through to `1`.
+/// Declarations in the included file are still hoisted to global scope by the resolver.
+pub(in crate::parser::stmt) fn try_parse_value_include(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+) -> Result<Option<Expr>, CompileError> {
+    let (once, required) = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Include) => (false, false),
+        Some(Token::IncludeOnce) => (true, false),
+        Some(Token::Require) => (false, true),
+        Some(Token::RequireOnce) => (true, true),
+        _ => return Ok(None),
+    };
+    let span = tokens[*pos].1;
+    *pos += 1; // consume the include/require keyword
+
+    let has_parens = *pos < tokens.len() && tokens[*pos].0 == Token::LParen;
+    if has_parens {
+        *pos += 1;
+    }
+    let path = parse_expr(tokens, pos)?;
+    if has_parens {
+        expect_token(tokens, pos, &Token::RParen, "Expected ')' after include path")?;
+    }
+
+    // Wrap the include in an immediately-invoked static closure so the included file's top-level
+    // `return` becomes the value of the include expression; `return 1` is the fallthrough value
+    // PHP yields for a successful include with no explicit `return`.
+    let include = Stmt::new(
+        StmtKind::Include {
+            path,
+            once,
+            required,
+        },
+        span,
+    );
+    let fallthrough = Stmt::new(
+        StmtKind::Return(Some(Expr::new(ExprKind::IntLiteral(1), span))),
+        span,
+    );
+    let closure = Expr::new(
+        ExprKind::Closure {
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![include, fallthrough],
+            is_arrow: false,
+            is_static: true,
+            captures: Vec::new(),
+            capture_refs: Vec::new(),
+        },
+        span,
+    );
+    Ok(Some(Expr::new(
+        ExprKind::ExprCall {
+            callee: Box::new(closure),
+            args: Vec::new(),
+        },
+        span,
+    )))
 }
 
 /// Parses `echo` statements with one or more comma-separated expressions.
@@ -148,6 +220,12 @@ pub(super) fn parse_return(
     if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
         *pos += 1;
         return Ok(Stmt::new(StmtKind::Return(None), span));
+    }
+
+    // `return require X;` returns the included file's value (its top-level `return`, or `1`).
+    if let Some(include_value) = try_parse_value_include(tokens, pos)? {
+        expect_semicolon(tokens, pos)?;
+        return Ok(Stmt::new(StmtKind::Return(Some(include_value)), span));
     }
 
     let expr = parse_expr(tokens, pos)?;

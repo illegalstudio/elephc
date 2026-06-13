@@ -19,7 +19,7 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::function;
-use crate::names::{php_symbol_key, Name};
+use crate::names::{php_symbol_key, property_hook_get_method, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget, MagicConstant,
     StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
@@ -6735,6 +6735,21 @@ fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
+    // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
+    // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.
+    if matches!(op, Op::PropGet | Op::NullsafePropGet)
+        && class_declares_hook_accessor(ctx, object.value, &property_hook_get_method(property))
+        && !ctx.in_own_property_accessor(property)
+    {
+        let accessor = property_hook_get_method(property);
+        let call_op = if op == Op::NullsafePropGet {
+            Op::NullsafeMethodCall
+        } else {
+            Op::MethodCall
+        };
+        return lower_method_call_with_receiver(ctx, object, &accessor, &[], call_op, expr);
+    }
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
     ctx.emit_value(
@@ -6852,7 +6867,26 @@ fn nullable_result_type(php_type: PhpType) -> PhpType {
     }
 }
 
-/// Returns the single object class represented by a direct or nullable object type.
+/// Returns true when the runtime class of `object` declares the synthetic property-hook accessor
+/// `accessor_method` (`__propget_<p>` / `__propset_<p>`). Drives the decision to route a property
+/// read/write to a hook; inherited (flattened) methods count, so subclasses inherit hooks.
+fn class_declares_hook_accessor(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    accessor_method: &str,
+) -> bool {
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some((class_name, _nullable)) = singular_object_class(&object_ty) else {
+        return false;
+    };
+    let key = php_symbol_key(accessor_method);
+    ctx.classes
+        .get(class_name)
+        .is_some_and(|info| info.methods.contains_key(&key))
+}
+
+/// Returns the class name and nullability if `php_type` is a single object type (optionally
+/// nullable). Heterogeneous unions and non-object types return `None`.
 fn singular_object_class(php_type: &PhpType) -> Option<(&str, bool)> {
     match php_type {
         PhpType::Object(name) => Some((name.as_str(), false)),

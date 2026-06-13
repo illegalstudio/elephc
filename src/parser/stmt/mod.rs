@@ -25,6 +25,7 @@ use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
 pub use ffi::parse_extern_stmts;
+pub(crate) use oop::parse_anonymous_class;
 pub(crate) use params::{looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::can_replay_assignment_target;
 

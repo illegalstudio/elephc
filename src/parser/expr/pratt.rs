@@ -74,6 +74,54 @@ pub(super) fn parse_expr_bp(
                     span,
                 );
             }
+            Token::DoubleColon => {
+                // A `::` reaching the postfix loop has a dynamic (variable/expression) class
+                // receiver — named-class static calls are fully parsed in the prefix parser.
+                // `$cls::method(args)` / `$cls::$method(args)` desugars to
+                // `call_user_func([$cls, $method], ...args)`, reusing the runtime dispatch path.
+                let span = tokens[*pos].1;
+                *pos += 1; // consume '::'
+                let member = match tokens.get(*pos).map(|(token, s)| (token.clone(), *s)) {
+                    Some((Token::Identifier(name), name_span)) => {
+                        *pos += 1;
+                        Expr::new(ExprKind::StringLiteral(name), name_span)
+                    }
+                    Some((Token::Variable(name), var_span)) => {
+                        *pos += 1;
+                        Expr::new(ExprKind::Variable(name), var_span)
+                    }
+                    Some((Token::LBrace, _)) => {
+                        *pos += 1;
+                        let member = parse_expr(tokens, pos)?;
+                        if *pos >= tokens.len() || tokens[*pos].0 != Token::RBrace {
+                            return Err(CompileError::new(span, "Expected '}'"));
+                        }
+                        *pos += 1;
+                        member
+                    }
+                    _ => {
+                        return Err(CompileError::new(span, "Expected method name after '::'"));
+                    }
+                };
+                if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                    *pos += 1; // consume '('
+                    let mut call_args =
+                        vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)];
+                    call_args.extend(crate::parser::expr::parse_args(tokens, pos, span)?);
+                    lhs = Expr::new(
+                        ExprKind::FunctionCall {
+                            name: crate::names::Name::unqualified("call_user_func"),
+                            args: call_args,
+                        },
+                        span,
+                    );
+                } else {
+                    return Err(CompileError::new(
+                        span,
+                        "Dynamic class access (`$class::X`) is only supported for method calls",
+                    ));
+                }
+            }
             Token::Arrow | Token::QuestionArrow => {
                 let arrow_span = tokens[*pos].1;
                 let nullsafe = tokens[*pos].0 == Token::QuestionArrow;
@@ -82,10 +130,30 @@ pub(super) fn parse_expr_bp(
                     ObjectMember::Named(member_name) => member_name,
                     ObjectMember::Dynamic(property) => {
                         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-                            return Err(CompileError::new(
+                            if nullsafe {
+                                return Err(CompileError::new(
+                                    arrow_span,
+                                    "Nullsafe dynamic method calls are not supported yet",
+                                ));
+                            }
+                            // `$obj->$method(args)` reuses the runtime dynamic-dispatch path by
+                            // desugaring to `call_user_func([$obj, $method], ...args)`.
+                            *pos += 1; // consume '('
+                            let mut call_args = vec![Expr::new(
+                                ExprKind::ArrayLiteral(vec![lhs, property]),
                                 arrow_span,
-                                "Dynamic method calls are not supported yet",
-                            ));
+                            )];
+                            call_args.extend(crate::parser::expr::parse_args(
+                                tokens, pos, arrow_span,
+                            )?);
+                            lhs = Expr::new(
+                                ExprKind::FunctionCall {
+                                    name: crate::names::Name::unqualified("call_user_func"),
+                                    args: call_args,
+                                },
+                                arrow_span,
+                            );
+                            continue;
                         }
                         lhs = Expr::new(
                             if nullsafe {
@@ -434,6 +502,16 @@ fn parse_object_member(
         }
         *pos += 1;
         return Ok(ObjectMember::Dynamic(property));
+    }
+    // `->$var` selects a member whose name is the runtime value of `$var`.
+    if let Some((Token::Variable(name), var_span)) =
+        tokens.get(*pos).map(|(token, span)| (token.clone(), *span))
+    {
+        *pos += 1;
+        return Ok(ObjectMember::Dynamic(Expr::new(
+            ExprKind::Variable(name),
+            var_span,
+        )));
     }
     // PHP 8 allows identifiers and any semi-reserved keyword as a member name after `->`/`?->`.
     if let Some(name) = tokens

@@ -59,6 +59,20 @@ pub(super) fn parse_assign(
         return parse_ref_assign(tokens, pos, name, span);
     }
 
+    // `$x = require X;` assigns the included file's value (its top-level `return`, or `1`).
+    if op == AssignmentOperator::Assign {
+        if let Some(include_value) = super::super::simple::try_parse_value_include(tokens, pos)? {
+            expect_semicolon(tokens, pos)?;
+            return Ok(Stmt::new(
+                StmtKind::Assign {
+                    name,
+                    value: include_value,
+                },
+                span,
+            ));
+        }
+    }
+
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     if matches!(
         tokens.get(*pos).map(|(token, _)| token),

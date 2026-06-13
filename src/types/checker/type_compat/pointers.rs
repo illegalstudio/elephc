@@ -77,6 +77,15 @@ impl Checker {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.normalize_union_type(resolved))
             }
+            crate::parser::ast::TypeExpr::Intersection(members) => {
+                // Resolve every member so unknown types are reported, then type the value as its
+                // first member; call boundaries validate that arguments satisfy all members.
+                let resolved = members
+                    .iter()
+                    .map(|member| self.resolve_type_expr(member, span))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(resolved.into_iter().next().unwrap_or(PhpType::Mixed))
+            }
             crate::parser::ast::TypeExpr::Ptr(target) => {
                 let normalized = match target {
                     Some(name) => self
@@ -109,6 +118,12 @@ impl Checker {
                     "callable" => Ok(PhpType::Callable),
                     "void" => Ok(PhpType::Void),
                     "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
+                    // Relative class types only survive to this point when used outside a class
+                    // body; inside a class they are rewritten to the enclosing class beforehand.
+                    relative @ ("self" | "static" | "parent") => Err(CompileError::new(
+                        span,
+                        &format!("Cannot use '{}' as a type outside of a class", relative),
+                    )),
                     _ if self.classes.contains_key(name_str)
                         || self.declared_classes.contains(name_str)
                         || self.interfaces.contains_key(name_str)

@@ -10,8 +10,10 @@
 
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{EnumCaseDecl, PackedField, Stmt, StmtKind};
-use crate::parser::expr::parse_expr;
+use crate::names::Name;
+use crate::parser::ast::{Expr, ExprKind, PackedField, Stmt, StmtKind};
+use crate::parser::expr::parse_args;
+use crate::parser::{next_anonymous_class_name, register_anonymous_class};
 use crate::span::Span;
 
 use super::super::params::{parse_name_list, parse_type_expr};
@@ -66,7 +68,7 @@ pub(in crate::parser::stmt) fn parse_class_decl(
 
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after class name")?;
 
-    let (trait_uses, properties, methods, constants) =
+    let (trait_uses, properties, methods, constants, _cases) =
         parse_class_like_body(tokens, pos, "class", is_abstract)?;
 
     expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of class")?;
@@ -83,6 +85,94 @@ pub(in crate::parser::stmt) fn parse_class_decl(
             properties,
             methods,
             constants,
+        },
+        span,
+    ))
+}
+
+/// Parses an anonymous class expression `new class [(args)] [extends P] [implements I...] { body }`.
+///
+/// The class body is hoisted to the top level as a uniquely-named synthetic `ClassDecl` (via
+/// `register_anonymous_class`) and the expression evaluates to `new <synthetic name>(args)`.
+/// Assumes the `class` keyword is at `*pos` (already past `new`). `is_readonly` carries a leading
+/// `readonly` modifier (`new readonly class {}`). PHP anonymous classes do not capture the
+/// enclosing scope, so no captures are recorded.
+pub(crate) fn parse_anonymous_class(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    is_readonly: bool,
+) -> Result<Expr, CompileError> {
+    *pos += 1; // consume 'class'
+
+    // PHP places the constructor arguments before any `extends`/`implements` clause.
+    let args = if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+        *pos += 1;
+        parse_args(tokens, pos, span)?
+    } else {
+        Vec::new()
+    };
+
+    let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
+        *pos += 1;
+        Some(parse_name(
+            tokens,
+            pos,
+            span,
+            "Expected parent class name after 'extends'",
+        )?)
+    } else {
+        None
+    };
+
+    let implements = if *pos < tokens.len() && tokens[*pos].0 == Token::Implements {
+        *pos += 1;
+        parse_name_list(
+            tokens,
+            pos,
+            span,
+            "Expected interface name after 'implements'",
+        )?
+    } else {
+        Vec::new()
+    };
+
+    expect_token(
+        tokens,
+        pos,
+        &Token::LBrace,
+        "Expected '{' to open anonymous class body",
+    )?;
+    let (trait_uses, properties, methods, constants, _cases) =
+        parse_class_like_body(tokens, pos, "class", false)?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::RBrace,
+        "Expected '}' to close anonymous class body",
+    )?;
+
+    let name = next_anonymous_class_name();
+    register_anonymous_class(Stmt::new(
+        StmtKind::ClassDecl {
+            name: name.clone(),
+            extends,
+            implements,
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: is_readonly,
+            trait_uses,
+            properties,
+            methods,
+            constants,
+        },
+        span,
+    ));
+
+    Ok(Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified(&name),
+            args,
         },
         span,
     ))
@@ -114,50 +204,42 @@ pub(in crate::parser::stmt) fn parse_enum_decl(
         None
     };
 
+    let implements = if *pos < tokens.len() && tokens[*pos].0 == Token::Implements {
+        *pos += 1;
+        parse_name_list(
+            tokens,
+            pos,
+            span,
+            "Expected interface name after 'implements'",
+        )?
+    } else {
+        Vec::new()
+    };
+
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after enum name")?;
-    let mut cases = Vec::new();
-    while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
-        // Enum cases can carry attributes (`#[Deprecated]`).
-        let case_attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
-        if *pos >= tokens.len() || matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
-            break;
-        }
-        let case_span = tokens[*pos].1;
-        expect_token(tokens, pos, &Token::Case, "Expected 'case' in enum body")?;
-        let case_name = match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(name)) => {
-                let name = name.clone();
-                *pos += 1;
-                name
-            }
-            _ => {
-                return Err(CompileError::new(
-                    case_span,
-                    "Expected case name after 'case'",
-                ))
-            }
-        };
-        let value = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
-            *pos += 1;
-            Some(parse_expr(tokens, pos)?)
-        } else {
-            None
-        };
-        expect_semicolon(tokens, pos)?;
-        cases.push(EnumCaseDecl {
-            name: case_name,
-            value,
-            span: case_span,
-            attributes: case_attributes,
-        });
+    // Enum bodies share the class member grammar (methods, constants) plus `case` declarations.
+    let (trait_uses, properties, methods, constants, cases) =
+        parse_class_like_body(tokens, pos, "enum", false)?;
+    expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of enum")?;
+
+    if !properties.is_empty() {
+        return Err(CompileError::new(span, "Enums cannot declare properties"));
+    }
+    if !trait_uses.is_empty() {
+        return Err(CompileError::new(
+            span,
+            "Enums using traits are not supported yet",
+        ));
     }
 
-    expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of enum")?;
     Ok(Stmt::new(
         StmtKind::EnumDecl {
             name,
             backing_type,
             cases,
+            implements,
+            methods,
+            constants,
         },
         span,
     ))

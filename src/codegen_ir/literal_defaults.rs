@@ -32,6 +32,9 @@ pub(crate) enum LiteralDefaultValue {
     NullSentinel,
     TaggedNull,
     BoxedNull,
+    BoxedInt(i64),
+    BoxedBool(bool),
+    BoxedFloat(f64),
     BoxedStr(String),
     Array {
         elem_type: PhpType,
@@ -83,6 +86,25 @@ pub(crate) fn literal_default_value(
         (PhpType::Mixed | PhpType::Union(_), ExprKind::StringLiteral(value)) => {
             Ok(LiteralDefaultValue::BoxedStr(value.clone()))
         }
+        // A scalar literal default for a `mixed`/union slot is boxed into a tagged Mixed cell,
+        // mirroring the string and null cases above.
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::IntLiteral(value)) => {
+            Ok(LiteralDefaultValue::BoxedInt(*value))
+        }
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::BoolLiteral(value)) => {
+            Ok(LiteralDefaultValue::BoxedBool(*value))
+        }
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::FloatLiteral(value)) => {
+            Ok(LiteralDefaultValue::BoxedFloat(*value))
+        }
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::Negate(inner)) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value
+                .checked_neg()
+                .map(LiteralDefaultValue::BoxedInt)
+                .ok_or_else(|| unsupported_literal_default(context, php_type, op_name)),
+            ExprKind::FloatLiteral(value) => Ok(LiteralDefaultValue::BoxedFloat(-value)),
+            _ => Err(unsupported_literal_default(context, php_type, op_name)),
+        },
         (php_type, ExprKind::Null) if php_type.codegen_repr() == PhpType::TaggedScalar => {
             Ok(LiteralDefaultValue::TaggedNull)
         }
@@ -140,6 +162,40 @@ pub(crate) fn emit_boxed_string_literal_default_to_result(
 ) {
     emit_string_literal_default_to_result(ctx, value);
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+}
+
+/// Emits an integer literal default boxed as a Mixed value.
+pub(crate) fn emit_boxed_int_literal_to_result(ctx: &mut FunctionContext<'_>, value: i64) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), value);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+}
+
+/// Emits a boolean literal default boxed as a Mixed value.
+pub(crate) fn emit_boxed_bool_literal_to_result(ctx: &mut FunctionContext<'_>, value: bool) {
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        i64::from(value),
+    );
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+}
+
+/// Emits a float literal default boxed as a Mixed value. The constant is materialized through a
+/// `.data` symbol and loaded into the float result register before boxing.
+pub(crate) fn emit_boxed_float_literal_to_result(ctx: &mut FunctionContext<'_>, value: f64) {
+    let label = ctx.data.add_float(value);
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    let float_reg = abi::float_result_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, scratch, &label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr {}, [{}]", float_reg, scratch)); // load the boxed float literal through the symbol scratch register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)); // load the boxed float literal through the symbol scratch register
+        }
+    }
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
 }
 
 /// Emits an empty associative-array literal default into the canonical result register.

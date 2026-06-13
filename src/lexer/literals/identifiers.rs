@@ -42,6 +42,15 @@ pub(in crate::lexer) fn scan_variable(cursor: &mut Cursor) -> Result<Token, Comp
     }
 
     if name.is_empty() {
+        // `$$name` / `${expr}` are variable variables: the variable name is computed at runtime.
+        // elephc allocates locals to fixed compile-time slots and has no per-frame variable-name
+        // table, so variable variables cannot be supported in the closed-world model.
+        if matches!(cursor.peek(), Some('$') | Some('{')) {
+            return Err(CompileError::new(
+                cursor.span(),
+                "Variable variables (`$$name`) are not supported: variable names must be known at compile time",
+            ));
+        }
         return Err(CompileError::new(cursor.span(), "Expected variable name after '$'"));
     }
 

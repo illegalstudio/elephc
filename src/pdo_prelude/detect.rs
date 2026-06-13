@@ -89,7 +89,9 @@ fn type_refs_pdo(type_expr: &TypeExpr) -> bool {
             type_refs_pdo(inner)
         }
         TypeExpr::Named(name) => name_is_pdo(name),
-        TypeExpr::Union(members) => members.iter().any(type_refs_pdo),
+        TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
+            members.iter().any(type_refs_pdo)
+        }
     }
 }
 

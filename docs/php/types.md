@@ -24,6 +24,8 @@ sidebar:
 | `enum`           | Yes              | Pure and backed enums. Cases are singletons. Backed enums support `->value`, `::from()`, `::tryFrom()`, `::cases()`.   |
 | `int|string`     | Yes              | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime.                                    |
 | `?int`           | Yes              | Nullable shorthand — sugar for `int|null`.                                                                             |
+| `string|null`    | Yes              | Union with the `null` literal type. Folds to the nullable shorthand `?string`, so `string|null` and `?string` are identical. |
+| `int|false`      | Yes              | Union with the `false` literal type (PHP's `strpos`-style return). `false`/`true` widen to `bool`; the runtime value is a real boolean. |
 | `void`           | Return only      | Valid as a function, method, closure, arrow, or extern return type. Internally, `null` is represented as `Void`.        |
 | `never`          | Return only      | Marks a function, method, closure, or interface method that **never returns** — it must always `throw`, call `exit()`/`die()`, or loop forever. Returning is rejected at type-check time. |
 | `ptr` / `ptr<T>` | elephc extension | Raw 64-bit pointer, optionally carrying a checked compile-time pointee tag. See [Pointers](../beyond-php/pointers.md). |
@@ -31,6 +33,47 @@ sidebar:
 | `packed class`   | elephc extension | Flat POD record type with compile-time field offsets. See [Packed Classes](../beyond-php/packed-classes.md).           |
 
 Integer-form numeric literals keep the `int` type only while they fit in PHP's signed 64-bit range. Larger decimal, hexadecimal, octal, or binary literals are promoted to `float`, matching PHP on 64-bit builds.
+
+### Literal pseudo-types in unions
+
+PHP lets `null`, `false`, and `true` appear as type members. elephc accepts them in parameter, return, and property positions, matched case-insensitively like the other built-in type names.
+
+```php
+<?php
+function find(string $haystack, string $needle): int|false {
+    return strpos($haystack, $needle); // a real int, or the literal false
+}
+
+function label(?string $name): string|null {
+    return $name === '' ? null : $name;
+}
+
+class Setting {
+    public string|null $value = null;
+}
+```
+
+Rules:
+
+- `T|null` is exactly equivalent to the nullable shorthand `?T` — both compile to the same type, so `string|null` and `?string` are interchangeable.
+- `false` and `true` widen to `bool`. elephc does not track literal-bool precision, so `int|false` is accepted wherever `int|bool` is; the stored value is still a genuine boolean at runtime.
+- A multi-member union may mix these with other members (`int|string|null`); the `null` member keeps the whole union nullable.
+- The nullable shorthand still may not be combined with a pipe union: write `T|null`, not `?T|U`.
+
+### Intersection types
+
+An intersection type `A&B` (PHP 8.1) declares a value that satisfies every listed class/interface. elephc accepts the syntax in parameter and return positions:
+
+```php
+<?php
+function render(Renderable&Cacheable $widget): string {
+    return $widget->render();
+}
+```
+
+The `&` is recognized as an intersection only when it is followed by another type; a `&` before a variable (`int &$x`) remains the by-reference marker.
+
+Current limitation: the value is typed as its **first** listed member, so member access resolves against that member (`$widget->render()` above, from `Renderable`). Methods declared only on later members are not yet resolved, and argument compatibility is checked against the first member. Full structural intersection resolution is planned.
 
 ### Never
 
@@ -100,7 +143,7 @@ Rules:
 - instance and static properties can use declared property types
 - property defaults and assignments must be compatible with the declared type
 - constructor assignments through untyped parameters are checked once call sites refine the parameter type
-- nullable and union property storage is boxed using the same mixed runtime shape as typed locals
+- nullable and union property storage is boxed using the same mixed runtime shape as typed locals; scalar literal defaults (`int|string $v = 1`, `float|int $v = 1.5`, `bool|int $v = true`) are boxed into that shape
 - static property redeclarations across inheritance follow PHP-style rules: non-private inherited properties keep invariant declared types, cannot reduce visibility, and cannot override `final` properties
 - private inherited static properties can be redeclared as independent subclass slots
 - untyped inherited static properties cannot be redeclared with a type, and typed inherited static properties cannot be redeclared without one
@@ -188,6 +231,7 @@ Narrowing applies to function and method parameters. A parameter whose call site
 - Plain array numeric casts (`(int)$array`, `(float)$array`) follow elephc's existing array cast semantics (return the element count rather than PHP's `0`/`1`). Direct `iterable` numeric casts use PHP's empty/non-empty `0`/`1` semantics.
 - `__destruct` runs when an object's refcount reaches zero (scope exit, reassignment, `unset`, program end), matching PHP's timing, but **object resurrection is not supported**: re-storing `$this` so the object would outlive the destructor does not keep it alive — the object is still freed once `__destruct` returns.
 - Under the legacy `--null-repr=sentinel` opt-out, the integer `9223372036854775806` (`PHP_INT_MAX - 1`) collides with elephc's internal null marker in unboxed scalar slots and is misread as `null` by `echo`, `var_dump()`, `is_null()`, `??`, and related null checks. The default tagged null representation does not have this collision: the full 64-bit integer range round-trips.
+- Variable variables (`$$name`, `${$expr}`) are not supported. elephc allocates each local to a fixed compile-time stack slot and keeps no per-frame variable-name table, so a variable whose name is computed at runtime cannot be resolved. Use an array keyed by the dynamic name instead.
 
 ### Filesystem functions not implemented
 

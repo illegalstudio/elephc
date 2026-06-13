@@ -67,6 +67,15 @@ fn apply_static_property(
             "Property cannot be both final and private",
         ));
     }
+    if prop.set_visibility.is_some() {
+        return Err(CompileError::new(
+            prop.span,
+            &format!(
+                "Static property may not declare asymmetric visibility: {}::${}",
+                class.name, prop.name
+            ),
+        ));
+    }
     if state.property_declaring_classes.contains_key(&prop.name) {
         return Err(CompileError::new(
             prop.span,
@@ -207,6 +216,7 @@ fn apply_instance_property(
             "Property cannot be both final and private",
         ));
     }
+    validate_asymmetric_visibility(prop)?;
     if state.static_property_declaring_classes.contains_key(&prop.name) {
         return Err(CompileError::new(
             prop.span,
@@ -270,6 +280,7 @@ fn apply_instance_property(
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
+    apply_set_visibility(state, prop);
     if prop.is_final {
         state.final_properties.insert(prop.name.clone());
     } else {
@@ -353,6 +364,7 @@ fn apply_instance_property_redeclaration(
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
+    apply_set_visibility(state, prop);
     if prop.is_final {
         state.final_properties.insert(prop.name.clone());
     }
@@ -657,4 +669,44 @@ fn resolve_property_declared_type(
             )
         })
         .transpose()
+}
+
+/// Validates a property's PHP 8.4 asymmetric visibility. The write (`set`) visibility must not be
+/// weaker (more permissive) than the read visibility, and the property must be typed, matching
+/// PHP. Returns `Ok(())` when the property declares no `set` visibility.
+fn validate_asymmetric_visibility(prop: &ClassProperty) -> Result<(), CompileError> {
+    if let Some(set_visibility) = &prop.set_visibility {
+        if visibility_rank(set_visibility) > visibility_rank(&prop.visibility) {
+            return Err(CompileError::new(
+                prop.span,
+                &format!(
+                    "Asymmetric set visibility must not be weaker than the get visibility: ${}",
+                    prop.name
+                ),
+            ));
+        }
+        if prop.type_expr.is_none() {
+            return Err(CompileError::new(
+                prop.span,
+                &format!(
+                    "Property with asymmetric visibility must have a type: ${}",
+                    prop.name
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Records a property's PHP 8.4 asymmetric write (`set`) visibility in the build state, but only
+/// when it differs from the read visibility. A redeclaration without one clears any inherited
+/// write restriction so the property's read visibility governs writes again.
+fn apply_set_visibility(state: &mut ClassBuildState, prop: &ClassProperty) {
+    if let Some(set_visibility) = &prop.set_visibility {
+        state
+            .property_set_visibilities
+            .insert(prop.name.clone(), set_visibility.clone());
+    } else {
+        state.property_set_visibilities.remove(&prop.name);
+    }
 }

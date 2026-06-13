@@ -344,10 +344,11 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             name,
             backing_type,
             cases,
-        } => StmtKind::EnumDecl {
-            name,
-            backing_type,
-            cases: cases
+            implements,
+            methods,
+            constants,
+        } => {
+            let cases = cases
                 .into_iter()
                 .map(|case| EnumCaseDecl {
                     name: case.name,
@@ -355,8 +356,22 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                     span: case.span,
                     attributes: case.attributes,
                 })
-                .collect(),
-        },
+                .collect();
+            pass.enter_class(&name);
+            let methods = methods
+                .into_iter()
+                .map(|m| walk_class_method(m, pass))
+                .collect();
+            pass.leave_class();
+            StmtKind::EnumDecl {
+                name,
+                backing_type,
+                cases,
+                implements,
+                methods,
+                constants,
+            }
+        }
         StmtKind::NamespaceDecl { name } => {
             pass.enter_namespace_decl(&name);
             StmtKind::NamespaceDecl { name }

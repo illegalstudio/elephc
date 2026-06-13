@@ -727,6 +727,57 @@ fn test_error_interface_set_property_rejects_readonly_implementation() {
     );
 }
 
+/// Verifies that writing a get-only (read-only) hooked property is rejected.
+#[test]
+fn test_error_write_to_get_only_hooked_property() {
+    // a property with a get hook but no set hook is read-only; external writes must be rejected.
+    expect_error(
+        "<?php class C { public int $x { get => 42; } } $c = new C(); $c->x = 5;",
+        "Cannot write to read-only hooked property C::x",
+    );
+}
+
+/// Verifies that the short `set => expr` hook form (which needs a backed property) is rejected.
+#[test]
+fn test_error_short_set_hook_rejected() {
+    // short `set => expr` requires a backed property; only the block form is supported.
+    expect_error(
+        "<?php class C { private int $n = 0; public int $v { get => $this->n; set => $this->n; } }",
+        "Short `set => expr` hooks require a backed property",
+    );
+}
+
+/// Verifies that declaring the same hook twice on one property is rejected.
+#[test]
+fn test_error_duplicate_get_hook_rejected() {
+    // a property may declare each hook only once.
+    expect_error(
+        "<?php class C { public int $x { get => 1; get => 2; } }",
+        "Duplicate get property hook",
+    );
+}
+
+/// Verifies that an unknown hook name (not `get`/`set`) is rejected.
+#[test]
+fn test_error_unknown_property_hook_rejected() {
+    // only `get` and `set` are valid property hooks.
+    expect_error(
+        "<?php class C { public int $x { peek => 1; } }",
+        "Unknown property hook 'peek'",
+    );
+}
+
+/// Verifies that an interface property hook carrying a body is rejected (interface hooks are
+/// abstract declarations only).
+#[test]
+fn test_error_interface_property_hook_with_body_rejected() {
+    // interface hooked properties may only declare the hooks, not implement them.
+    expect_error(
+        "<?php interface I { public int $x { get => 1; } }",
+        "Interface property hooks cannot have a body",
+    );
+}
+
 /// Verifies the error diagnostic for interface property missing uses contract span.
 #[test]
 fn test_error_interface_property_missing_uses_contract_span() {
@@ -871,5 +922,42 @@ fn test_error_operator_after_arrow_is_rejected() {
     expect_error(
         "<?php $o = 1; echo $o->+;",
         "Expected property or method name after '->'",
+    );
+}
+
+/// Verifies that writing a `public private(set)` property from outside the class is rejected,
+/// while reading it (not shown) is allowed.
+#[test]
+fn test_error_asymmetric_visibility_external_write() {
+    expect_error(
+        "<?php class C { public private(set) int $v = 1; } $c = new C(); $c->v = 9;",
+        "Cannot access private property: C::v",
+    );
+}
+
+/// Verifies that a `set` visibility weaker than the `get` visibility is rejected.
+#[test]
+fn test_error_asymmetric_visibility_set_weaker_than_get() {
+    expect_error(
+        "<?php class C { private public(set) int $v = 1; }",
+        "Asymmetric set visibility must not be weaker than the get visibility",
+    );
+}
+
+/// Verifies that asymmetric visibility on an untyped property is rejected.
+#[test]
+fn test_error_asymmetric_visibility_requires_type() {
+    expect_error(
+        "<?php class C { public private(set) $v = 1; }",
+        "Property with asymmetric visibility must have a type",
+    );
+}
+
+/// Verifies that asymmetric visibility on a static property is rejected.
+#[test]
+fn test_error_asymmetric_visibility_on_static_property() {
+    expect_error(
+        "<?php class C { public private(set) static int $v = 1; }",
+        "Static property may not declare asymmetric visibility",
     );
 }
