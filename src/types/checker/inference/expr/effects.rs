@@ -175,26 +175,34 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 let builtin_name = name.trim_start_matches('\\');
-                for (idx, arg) in expanded_args.iter().enumerate() {
-                    if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
-                        continue;
+                // `isset`/`unset` are lazy language constructs: an operand may be
+                // an undeclared property routed to `__isset`/`__unset`, which must
+                // not be inferred as a bare property access here. The call's own
+                // inference handles the operands (with magic routing).
+                let is_lazy_construct = builtin_name.eq_ignore_ascii_case("isset")
+                    || builtin_name.eq_ignore_ascii_case("unset");
+                if !is_lazy_construct {
+                    for (idx, arg) in expanded_args.iter().enumerate() {
+                        if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
+                            continue;
+                        }
+                        if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
+                            continue;
+                        }
+                        // The user-sort comparator is type-checked by `check_builtin`
+                        // with its parameters typed from the array element (so an
+                        // unannotated object comparator type-checks). Skip the eager
+                        // pass here, which would otherwise check the comparator body
+                        // with default `Int` parameters and reject object access.
+                        if idx == 1
+                            && (builtin_name.eq_ignore_ascii_case("usort")
+                                || builtin_name.eq_ignore_ascii_case("uasort")
+                                || builtin_name.eq_ignore_ascii_case("uksort"))
+                        {
+                            continue;
+                        }
+                        self.infer_type_with_assignment_effects(arg, env)?;
                     }
-                    if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
-                        continue;
-                    }
-                    // The user-sort comparator is type-checked by `check_builtin`
-                    // with its parameters typed from the array element (so an
-                    // unannotated object comparator type-checks). Skip the eager
-                    // pass here, which would otherwise check the comparator body
-                    // with default `Int` parameters and reject object access.
-                    if idx == 1
-                        && (builtin_name.eq_ignore_ascii_case("usort")
-                            || builtin_name.eq_ignore_ascii_case("uasort")
-                            || builtin_name.eq_ignore_ascii_case("uksort"))
-                    {
-                        continue;
-                    }
-                    self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
                 if builtin_name.eq_ignore_ascii_case("preg_match") {

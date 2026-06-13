@@ -768,10 +768,81 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__construct(...)` — runs at instantiation
 - `__destruct()` — runs when the object is released (see below)
 - `__toString()` — string coercion
-- `__get($name)` — reading undefined property
-- `__set($name, $value)` — writing undefined property
+- `__get($name)` — reading an undeclared property
+- `__set($name, $value)` — writing an undeclared property
+- `__isset($name)` — `isset()`/`empty()` on an undeclared property
+- `__unset($name)` — `unset()` of an undeclared property
 - `__invoke(...$args)` — calling an object directly
 - `__call($name, $args)` — intercepting missing instance methods
+- `__callStatic($name, $args)` — intercepting missing static methods
+
+## Property interception (`__get`, `__set`, `__isset`, `__unset`)
+
+When code reads, writes, tests, or removes a property that the class does not
+declare, the matching magic method is invoked. This lets a class expose virtual
+properties backed by any internal representation:
+
+```php
+<?php
+class Config
+{
+    private bool $debugEnabled = true;
+
+    public function __get(string $name): bool
+    {
+        return $name === "debug" && $this->debugEnabled;
+    }
+
+    public function __isset(string $name): bool
+    {
+        return $name === "debug" && $this->debugEnabled;
+    }
+
+    public function __unset(string $name): void
+    {
+        if ($name === "debug") {
+            $this->debugEnabled = false;
+        }
+    }
+}
+
+$config = new Config();
+echo isset($config->debug) ? "on" : "off";  // on  → __isset
+unset($config->debug);                        //     → __unset
+echo isset($config->debug) ? "on" : "off";  // off → __isset
+```
+
+`isset($obj->prop)` returns the boolean result of `__isset`; `unset($obj->prop)`
+runs `__unset` for its side effects. Both fire only for properties the class does
+not declare — accessing a declared property uses it directly.
+
+Contract: `__isset` and `__unset` must be non-static and public, and each takes
+exactly one argument (the property name). `__isset` returns `bool`.
+
+## Static call interception (`__callStatic`)
+
+`__callStatic` is the static counterpart of `__call`: a static call to a method
+the class does not define is forwarded to `__callStatic`, which receives the
+called method name and an array of the arguments. Subclasses inherit it.
+
+```php
+<?php
+abstract class Query
+{
+    public static function __callStatic(string $method, array $args): string
+    {
+        return $method . "(" . implode(", ", $args) . ")";
+    }
+}
+
+class User extends Query {}
+
+echo User::where("active", "1");  // where(active, 1)  → __callStatic
+echo User::orderBy("name");        // orderBy(name)      → __callStatic
+```
+
+Contract: `__callStatic` must be declared `public static` and takes exactly two
+arguments — the method name (`string`) and the argument list (`array`).
 
 ## Destructors (`__destruct`)
 
