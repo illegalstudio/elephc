@@ -118,6 +118,66 @@ pub(super) fn lower_reflection_function_new(
     emit_reflection_string_property(ctx, &short_name, short_off, short_off + 8);
     emit_reflection_int_property(ctx, num_params, np_off, np_off + 8);
     emit_reflection_int_property(ctx, num_required, nr_off, nr_off + 8);
+
+    // Build the `ReflectionParameter[]` array and store it into `__params`.
+    let params_off = ctx
+        .module
+        .class_infos
+        .get("ReflectionFunction")
+        .and_then(|ci| ci.property_offsets.get("__params").copied())
+        .ok_or_else(|| CodegenIrError::missing_entry("property offset", 0))?;
+    let param_infos = reflection_function_param_infos(ctx, &full_name);
+    let (rp_class_id, rp_prop_count, rp_markers, rp_name, rp_pos, rp_opt, rp_var) = {
+        let ci = ctx
+            .module
+            .class_infos
+            .get("ReflectionParameter")
+            .ok_or_else(|| CodegenIrError::unsupported("unknown class ReflectionParameter"))?;
+        let slot = |n: &str| -> Result<usize> {
+            ci.property_offsets
+                .get(n)
+                .copied()
+                .ok_or_else(|| CodegenIrError::missing_entry("property offset", 0))
+        };
+        (
+            ci.class_id,
+            ci.properties.len(),
+            super::uninitialized_property_marker_offsets(ci),
+            slot("__name")?,
+            slot("__position")?,
+            slot("__optional")?,
+            slot("__variadic")?,
+        )
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, params_off);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    emit_reflection_parameter_array(
+        ctx,
+        &param_infos,
+        rp_class_id,
+        rp_prop_count,
+        &rp_markers,
+        rp_name,
+        rp_pos,
+        rp_opt,
+        rp_var,
+    )?;
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, params_off);
+    abi::emit_load_int_immediate(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter), 4);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        object_reg,
+        params_off + 8,
+    );
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
@@ -177,6 +237,114 @@ fn emit_reflection_int_property(
     abi::emit_store_to_address(ctx.emitter, scratch, object_reg, low_offset);
     abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
     abi::emit_store_to_address(ctx.emitter, scratch, object_reg, high_offset);
+}
+
+/// Per-parameter reflection metadata for one function parameter.
+struct ReflectionParamInfo {
+    name: String,
+    optional: bool,
+    variadic: bool,
+}
+
+/// Extracts per-parameter reflection metadata from a function's lowered
+/// signature. A parameter is optional once a default or the variadic is seen
+/// (matching PHP's `isOptional`).
+fn reflection_function_param_infos(
+    ctx: &FunctionContext<'_>,
+    function_name: &str,
+) -> Vec<ReflectionParamInfo> {
+    let key = php_symbol_key(function_name.trim_start_matches('\\'));
+    let Some(signature) = ctx
+        .module
+        .functions
+        .iter()
+        .find(|function| php_symbol_key(function.name.trim_start_matches('\\')) == key)
+        .and_then(|function| function.signature.as_ref())
+    else {
+        return Vec::new();
+    };
+    let mut seen_optional = false;
+    signature
+        .params
+        .iter()
+        .enumerate()
+        .map(|(idx, (name, _))| {
+            let variadic = signature.variadic.as_deref() == Some(name.as_str());
+            let has_default = signature.defaults.get(idx).map_or(false, Option::is_some);
+            if has_default || variadic {
+                seen_optional = true;
+            }
+            ReflectionParamInfo {
+                name: name.clone(),
+                optional: seen_optional,
+                variadic,
+            }
+        })
+        .collect()
+}
+
+/// Allocates a fresh indexed array sized for `count` object handles (8-byte stride).
+fn emit_alloc_object_array(ctx: &mut FunctionContext<'_>, count: usize) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", count.max(1) as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", 8);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", count.max(1) as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 8);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+}
+
+/// Pops a freshly built object and the result array off the stack and appends
+/// the object handle to the array (leaving the array pointer in the result reg).
+fn emit_append_object_to_array(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+}
+
+/// Builds an indexed array of `ReflectionParameter` objects (one per function
+/// parameter), leaving the array pointer in the result register. Stack-balanced.
+#[allow(clippy::too_many_arguments)]
+fn emit_reflection_parameter_array(
+    ctx: &mut FunctionContext<'_>,
+    params: &[ReflectionParamInfo],
+    class_id: u64,
+    property_count: usize,
+    markers: &[usize],
+    name_off: usize,
+    pos_off: usize,
+    opt_off: usize,
+    var_off: usize,
+) -> Result<()> {
+    emit_alloc_object_array(ctx, params.len());
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &crate::types::PhpType::Object("ReflectionParameter".to_string()),
+    );
+    for (position, param) in params.iter().enumerate() {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        super::emit_object_allocation(ctx, class_id, property_count, false, markers)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_reflection_string_property(ctx, &param.name, name_off, name_off + 8);
+        emit_reflection_int_property(ctx, position as i64, pos_off, pos_off + 8);
+        emit_reflection_int_property(ctx, param.optional as i64, opt_off, opt_off + 8);
+        emit_reflection_int_property(ctx, param.variadic as i64, var_off, var_off + 8);
+        emit_append_object_to_array(ctx);
+    }
+    Ok(())
 }
 
 /// Resolves Reflection constructor operands to captured class/member metadata.

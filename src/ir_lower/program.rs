@@ -615,6 +615,7 @@ fn lower_builtin_reflection_methods(
         "ReflectionMethod",
         "ReflectionProperty",
         "ReflectionFunction",
+        "ReflectionParameter",
     ] {
         lower_builtin_reflection_class_methods(class_name, module, check_result, constants, fiber_return_sigs);
     }

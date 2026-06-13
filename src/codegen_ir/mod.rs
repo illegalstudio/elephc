@@ -489,6 +489,8 @@ fn seed_builtin_reflection_class_names(module: &Module, names: &mut HashSet<Stri
         "ReflectionClass",
         "ReflectionMethod",
         "ReflectionProperty",
+        "ReflectionFunction",
+        "ReflectionParameter",
     ] {
         if module.class_infos.contains_key(class_name) {
             names.insert(class_name.to_string());

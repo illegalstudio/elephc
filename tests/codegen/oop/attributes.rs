@@ -1224,3 +1224,25 @@ echo $r->getNumberOfRequiredParameters();
     );
     assert_eq!(out, "greet|greet|3|1");
 }
+
+/// Verifies `ReflectionFunction::getParameters()` returns `ReflectionParameter`
+/// objects exposing each parameter's name, position, optional, and variadic state.
+#[test]
+fn test_reflection_function_get_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function greet(int $a, string $b = "x", ...$rest) {
+    return $a;
+}
+$params = (new ReflectionFunction('greet'))->getParameters();
+echo count($params), "|";
+foreach ($params as $p) {
+    echo $p->getName(), ":", $p->getPosition();
+    echo $p->isOptional() ? "o" : "r";
+    echo $p->isVariadic() ? "v" : "-";
+    echo " ";
+}
+"#,
+    );
+    assert_eq!(out, "3|a:0r- b:1o- rest:2ov ");
+}

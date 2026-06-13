@@ -36,6 +36,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionMethod",
         "ReflectionProperty",
         "ReflectionFunction",
+        "ReflectionParameter",
     ] {
         let builtin_key = php_symbol_key(builtin_name);
         if interface_map
@@ -101,6 +102,10 @@ pub(crate) fn inject_builtin_reflection(
         ),
     );
     class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
+    class_map.insert(
+        "ReflectionParameter".to_string(),
+        builtin_reflection_parameter(),
+    );
 
     Ok(())
 }
@@ -149,6 +154,14 @@ fn empty_array() -> Option<Expr> {
 fn int_lit(value: i64) -> Option<Expr> {
     Some(Expr::new(
         ExprKind::IntLiteral(value),
+        crate::span::Span::dummy(),
+    ))
+}
+
+/// Returns a `BoolLiteral` expression with the given value.
+fn bool_lit(value: bool) -> Option<Expr> {
+    Some(Expr::new(
+        ExprKind::BoolLiteral(value),
         crate::span::Span::dummy(),
     ))
 }
@@ -339,6 +352,7 @@ fn builtin_reflection_function() -> FlattenedClass {
                 Some(TypeExpr::Int),
                 int_lit(0),
             ),
+            builtin_property("__params", Visibility::Private, Some(array_type()), empty_array()),
         ],
         methods: vec![
             builtin_reflection_function_constructor_method(),
@@ -350,6 +364,46 @@ fn builtin_reflection_function() -> FlattenedClass {
                 "__num_required",
                 TypeExpr::Int,
             ),
+            builtin_reflection_slot_getter("getParameters", "__params", array_type()),
+        ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+    }
+}
+
+/// Builds the `ReflectionParameter` shell with private name/position/optional/
+/// variadic slots and public accessors, populated at codegen from the reflected
+/// function's signature.
+fn builtin_reflection_parameter() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionParameter".to_string(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties: vec![
+            builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property("__position", Visibility::Private, Some(TypeExpr::Int), int_lit(0)),
+            builtin_property(
+                "__optional",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+            builtin_property(
+                "__variadic",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+        ],
+        methods: vec![
+            builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
+            builtin_reflection_slot_getter("getPosition", "__position", TypeExpr::Int),
+            builtin_reflection_slot_getter("isOptional", "__optional", TypeExpr::Bool),
+            builtin_reflection_slot_getter("isVariadic", "__variadic", TypeExpr::Bool),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -543,6 +597,16 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "ReflectionAttribute".to_string(),
                 )));
             }
+        }
+    }
+    if let Some(class_info) = checker.classes.get_mut("ReflectionFunction") {
+        if let Some(sig) = class_info.methods.get_mut("__construct") {
+            sig.return_type = PhpType::Void;
+        }
+        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParameters")) {
+            sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                "ReflectionParameter".to_string(),
+            )));
         }
     }
 }
