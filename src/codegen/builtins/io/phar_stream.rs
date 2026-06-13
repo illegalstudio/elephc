@@ -54,8 +54,8 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("fopen() phar:// stream");
-    // A write/append/create mode lowers to the phar-write path (Milestone-1):
-    // a single uncompressed entry buffered in memory and flushed on fclose().
+    // Write/append/create modes lower to the PHAR write runtime/bridge, which
+    // can update native PHAR, tar, and ZIP archives while preserving siblings.
     if let ExprKind::StringLiteral(mode) = &args[1].kind {
         if is_phar_write_mode(mode) {
             return emit_write(args, emitter, ctx, data);
@@ -65,9 +65,8 @@ pub fn emit(
         ExprKind::StringLiteral(path) => extract_phar_entry(path),
         _ => None,
     };
-    // The mode and optional fopen args are evaluated for side effects;
-    // phar:// streams are read-only regardless of the requested mode
-    // (Milestone-1).
+    // Read-mode literal phar:// URLs embed the resolved payload; optional fopen
+    // args are still evaluated for PHP-visible side effects.
     super::fopen::emit_mode_and_ignored_optional_args(args, emitter, ctx, data);
     match bytes {
         Some(payload) => {
@@ -94,7 +93,7 @@ pub fn emit(
 }
 
 /// Returns true for `fopen()` modes that open a `phar://` entry for writing.
-/// Milestone-1 treats `w`/`a`/`c`/`x` (and their `+` variants) as write modes;
+/// `w`/`a`/`c`/`x` and their `+` variants use the runtime write bridge, while
 /// `r`/`r+` use the read path.
 fn is_phar_write_mode(mode: &str) -> bool {
     matches!(
@@ -249,7 +248,7 @@ pub(crate) fn emit_file_put_contents_write(
 /// Resolves a `phar://<archive>/<entry>` URL to the entry's uncompressed bytes.
 /// Splits the archive (the longest leading path that names an existing file)
 /// from the inner entry, reads and parses the archive, and returns the entry
-/// payload, or `None` on any failure (missing file/entry, compressed entry).
+/// payload, or `None` on any failure.
 pub(crate) fn extract_phar_entry(url: &str) -> Option<Vec<u8>> {
     if let Some(bytes) = elephc_phar::extract_url_bytes(url.as_bytes()) {
         return Some(bytes);
@@ -278,8 +277,7 @@ fn split_archive_entry(rest: &str) -> Option<(&str, &str)> {
 }
 
 /// Parses the native PHAR manifest in `data` and returns the uncompressed bytes
-/// of `entry`, or `None` if the archive is malformed, the entry is absent, or
-/// the entry is compressed (out of scope for Milestone-1).
+/// of `entry`, or `None` if the archive is malformed or the entry is absent.
 fn parse_phar_entry(data: &[u8], entry: &str) -> Option<Vec<u8>> {
     let halt = b"__HALT_COMPILER();";
     let halt_idx = find_subslice(data, halt)?;
