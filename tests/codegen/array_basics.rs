@@ -189,6 +189,57 @@ fn test_array_push_builtin() {
     assert_eq!(out, "2 20");
 }
 
+/// Regression: appending strings into an empty `[]` literal past its initial capacity must
+/// not corrupt the first element. An empty literal is typed `array<never>`; `array_new`
+/// previously sized its slots at 8 bytes, but the first string append specializes the header
+/// to 16-byte `{ptr,len}` slots in place without reallocating, overflowing the undersized
+/// backing store. Growth then copied the overflowed bytes and the first element came out
+/// garbled. Pushing 8 strings forces at least one grow from the initial 4-element capacity.
+#[test]
+fn test_empty_array_string_append_grows() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 8; $i++) { $a[] = "x"; }
+echo implode(",", $a);
+"#,
+    );
+    assert_eq!(out, "x,x,x,x,x,x,x,x");
+}
+
+/// Regression: same empty-array grow corruption, exercised with distinct interpolated strings
+/// so a mis-sized first slot is caught by value (not just by a repeated character). Verifies
+/// the first element survives the grow and every appended string round-trips.
+#[test]
+fn test_empty_array_interpolated_string_append_grows() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 10; $i++) { $a[] = "item$i"; }
+echo implode("|", $a);
+"#,
+    );
+    assert_eq!(out, "item0|item1|item2|item3|item4|item5|item6|item7|item8|item9");
+}
+
+/// Regression guard: an empty `[]` literal that first receives refcounted (object) elements must
+/// also survive growth. Object slots are 8-byte pointers, so the empty `array<never>` buffer is
+/// already the right size and only the string-append path needs the capacity rescale — this test
+/// confirms the fix left the pointer-slot grow path untouched. Pushing 6 objects forces a grow
+/// from the initial 4-element capacity.
+#[test]
+fn test_empty_array_object_append_grows() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public function __construct(public string $n) {} }
+$a = [];
+for ($i = 0; $i < 6; $i++) { $a[] = new P("p$i"); }
+echo $a[0]->n . "|" . $a[5]->n . "|" . count($a);
+"#,
+    );
+    assert_eq!(out, "p0|p5|6");
+}
+
 /// Verifies array access on function call result.
 #[test]
 fn test_array_access_on_function_call_result() {
