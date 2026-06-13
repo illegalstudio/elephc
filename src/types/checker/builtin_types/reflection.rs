@@ -37,6 +37,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionProperty",
         "ReflectionFunction",
         "ReflectionParameter",
+        "ReflectionNamedType",
     ] {
         let builtin_key = php_symbol_key(builtin_name);
         if interface_map
@@ -106,6 +107,10 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionParameter".to_string(),
         builtin_reflection_parameter(),
     );
+    class_map.insert(
+        "ReflectionNamedType".to_string(),
+        builtin_reflection_named_type(),
+    );
 
     Ok(())
 }
@@ -156,6 +161,11 @@ fn int_lit(value: i64) -> Option<Expr> {
         ExprKind::IntLiteral(value),
         crate::span::Span::dummy(),
     ))
+}
+
+/// Returns a `Null` literal expression.
+fn null_lit() -> Option<Expr> {
+    Some(Expr::new(ExprKind::Null, crate::span::Span::dummy()))
 }
 
 /// Returns a `BoolLiteral` expression with the given value.
@@ -398,12 +408,53 @@ fn builtin_reflection_parameter() -> FlattenedClass {
                 Some(TypeExpr::Bool),
                 bool_lit(false),
             ),
+            builtin_property("__has_type", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
+            builtin_property("__type", Visibility::Private, Some(mixed_type()), null_lit()),
         ],
         methods: vec![
             builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
             builtin_reflection_slot_getter("getPosition", "__position", TypeExpr::Int),
             builtin_reflection_slot_getter("isOptional", "__optional", TypeExpr::Bool),
             builtin_reflection_slot_getter("isVariadic", "__variadic", TypeExpr::Bool),
+            builtin_reflection_slot_getter("hasType", "__has_type", TypeExpr::Bool),
+            builtin_reflection_slot_getter("getType", "__type", mixed_type()),
+        ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+    }
+}
+
+/// Builds the `ReflectionNamedType` shell: a parameter/return type rendered as a
+/// runtime object with a name, nullability flag, and builtin flag. Populated at
+/// codegen from the declared type.
+fn builtin_reflection_named_type() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionNamedType".to_string(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties: vec![
+            builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property(
+                "__allows_null",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+            builtin_property(
+                "__builtin",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+        ],
+        methods: vec![
+            builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
+            builtin_reflection_slot_getter("allowsNull", "__allows_null", TypeExpr::Bool),
+            builtin_reflection_slot_getter("isBuiltin", "__builtin", TypeExpr::Bool),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
@@ -607,6 +658,15 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             sig.return_type = PhpType::Array(Box::new(PhpType::Object(
                 "ReflectionParameter".to_string(),
             )));
+        }
+    }
+    if let Some(class_info) = checker.classes.get_mut("ReflectionParameter") {
+        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getType")) {
+            // ?ReflectionNamedType — null for untyped parameters.
+            sig.return_type = PhpType::Union(vec![
+                PhpType::Object("ReflectionNamedType".to_string()),
+                PhpType::Void,
+            ]);
         }
     }
 }

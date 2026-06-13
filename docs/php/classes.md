@@ -810,11 +810,62 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionProperty::getAttributes()` | `new ReflectionProperty($class_name, $property_name)` | Return `ReflectionAttribute` objects for property attributes |
 | `ReflectionAttribute::newInstance()` | Internal only | Instantiate the attribute class from captured literal args |
 
+Functions and their parameters can also be reflected. `ReflectionFunction` reads
+a named function's signature, and `getParameters()` returns one
+`ReflectionParameter` per declared parameter, in order:
+
+```php
+<?php
+class Mailer {}
+
+function send(string $to, Mailer $mailer, int $retries = 3, ?string $subject = null): void {}
+
+$fn = new ReflectionFunction('send');
+echo $fn->getNumberOfParameters();         // 4
+echo $fn->getNumberOfRequiredParameters(); // 2
+
+foreach ($fn->getParameters() as $param) {
+    echo $param->getName();                // to, mailer, retries, subject
+    echo $param->getPosition();            // 0, 1, 2, 3
+    echo $param->isOptional() ? "?" : "!"; // retries and subject are optional
+
+    if ($param->hasType()) {
+        $type = $param->getType();         // ReflectionNamedType
+        echo $type->getName();             // string, Mailer, int, string
+        echo $type->isBuiltin() ? "b" : "c";
+        echo $type->allowsNull() ? "n" : "-"; // subject (?string) allows null
+    }
+}
+```
+
+A parameter with no type hint reports `hasType()` as `false`, and `getType()`
+returns `null`. A nullable hint such as `?string` reports `getName()` as
+`string` with `allowsNull()` true. Class-typed parameters report the bare class
+name with `isBuiltin()` false.
+
+| Reflection method | Returns | Description |
+|---|---|---|
+| `ReflectionFunction::getName()` | `string` | The reflected function's name |
+| `ReflectionFunction::getShortName()` | `string` | The name without its namespace prefix |
+| `ReflectionFunction::getNumberOfParameters()` | `int` | Total declared parameters |
+| `ReflectionFunction::getNumberOfRequiredParameters()` | `int` | Parameters without a default and before the first optional |
+| `ReflectionFunction::getParameters()` | `ReflectionParameter[]` | One object per declared parameter, in order |
+| `ReflectionParameter::getName()` | `string` | The parameter name (without `$`) |
+| `ReflectionParameter::getPosition()` | `int` | Zero-based parameter index |
+| `ReflectionParameter::isOptional()` | `bool` | True for a parameter with a default or variadic, and any after it |
+| `ReflectionParameter::isVariadic()` | `bool` | True for the `...$rest` parameter |
+| `ReflectionParameter::hasType()` | `bool` | True when the parameter declares a type |
+| `ReflectionParameter::getType()` | `?ReflectionNamedType` | The declared type, or `null` when untyped |
+| `ReflectionNamedType::getName()` | `string` | The type name (`int`, `string`, a class name, …) |
+| `ReflectionNamedType::isBuiltin()` | `bool` | True for builtin types, false for class types |
+| `ReflectionNamedType::allowsNull()` | `bool` | True when the declared type is nullable |
+
 Limitations today:
 - All arguments to `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and `new ReflectionClass/Method/Property(...)` must be compile-time class/member strings. `ClassName::class` is accepted for the class-name argument of `new ReflectionClass/Method/Property(...)`, and normal named-argument / static associative-spread normalization runs before the literal-string check. Dynamic class, method, property, or attribute names require a runtime name→id lookup table that is not yet implemented.
 - Only **literal** positional arguments are materialized by reflection helpers today (string, int, bool, null, plus `-N` for negative ints). Other legal PHP attribute arguments can still be parsed and compiled, and `class_attribute_names()` can still list the attribute name, but `class_attribute_args()`, `class_get_attributes()`, and Reflection `getAttributes()` report an error if they would need unsupported argument metadata.
 - When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
 - `ReflectionClass` supports `getName()` and `getAttributes()`. `ReflectionMethod` and `ReflectionProperty` currently support `getAttributes()` only; broader APIs such as `getProperties()`, `getMethods()`, and object construction through `ReflectionClass::newInstance()` are not yet available.
+- `ReflectionFunction`/`ReflectionParameter` reflect named functions only (the constructor argument must be a compile-time function-name string). `ReflectionParameter::getType()` resolves a single named type (including a nullable `?T`); union and intersection parameter types, default-value reflection (`getDefaultValue()`), and per-parameter attribute reflection are not yet available. An explicit `mixed` hint is reported as untyped.
 
 ### Class constants
 
@@ -844,4 +895,4 @@ Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfa
 - Shadowing a private parent property with a same-named child property is not yet supported (PHP gives them separate slots; elephc uses one slot per name)
 - Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
 - Anonymous classes (`new class { ... }`) are not yet supported.
-- Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` APIs; parameter reflection is not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).
+- Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` APIs. Function and parameter signatures are exposed through `ReflectionFunction` and `ReflectionParameter` (including `getType()`); per-parameter attribute reflection is not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).
