@@ -127,7 +127,7 @@ pub(super) fn lower_reflection_function_new(
         .and_then(|ci| ci.property_offsets.get("__params").copied())
         .ok_or_else(|| CodegenIrError::missing_entry("property offset", 0))?;
     let param_infos = reflection_function_param_infos(ctx, &full_name);
-    let (rp_class_id, rp_prop_count, rp_markers, rp_name, rp_pos, rp_opt, rp_var) = {
+    let (rp_class_id, rp_prop_count, rp_markers, rp_name, rp_pos, rp_opt, rp_var, rp_type, rp_has_type) = {
         let ci = ctx
             .module
             .class_infos
@@ -147,6 +147,8 @@ pub(super) fn lower_reflection_function_new(
             slot("__position")?,
             slot("__optional")?,
             slot("__variadic")?,
+            slot("__type")?,
+            slot("__has_type")?,
         )
     };
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -165,6 +167,8 @@ pub(super) fn lower_reflection_function_new(
         rp_pos,
         rp_opt,
         rp_var,
+        rp_type,
+        rp_has_type,
     )?;
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, params_off);
@@ -244,6 +248,42 @@ struct ReflectionParamInfo {
     name: String,
     optional: bool,
     variadic: bool,
+    /// `Some((type_name, is_builtin, allows_null))` when the parameter declares a
+    /// single named type; `None` for an untyped parameter (`getType()` is null).
+    type_info: Option<(String, bool, bool)>,
+}
+
+/// Maps a declared parameter type to `ReflectionNamedType` metadata
+/// `(name, is_builtin, allows_null)`, or `None` for an unsupported/union shape.
+fn reflection_named_type_info(ty: &crate::types::PhpType) -> Option<(String, bool, bool)> {
+    use crate::types::PhpType;
+    match ty {
+        PhpType::Int => Some(("int".to_string(), true, false)),
+        PhpType::Str => Some(("string".to_string(), true, false)),
+        PhpType::Float => Some(("float".to_string(), true, false)),
+        PhpType::Bool => Some(("bool".to_string(), true, false)),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Some(("array".to_string(), true, false)),
+        PhpType::Callable => Some(("callable".to_string(), true, false)),
+        PhpType::Iterable => Some(("iterable".to_string(), true, false)),
+        // Bare `Mixed` is how an *untyped* parameter is represented in the EIR
+        // signature (and `declared_params` is unreliable here — it is also set
+        // for boxed-ABI params). PHP reports untyped parameters as having no
+        // type, so map `Mixed` to no named type. An explicit `mixed` hint is
+        // the only case this under-reports, which is an accepted edge case.
+        PhpType::Object(class) => Some((class.trim_start_matches('\\').to_string(), false, false)),
+        PhpType::Union(members) => {
+            let has_null = members.iter().any(|m| matches!(m, PhpType::Void));
+            let mut non_null = members.iter().filter(|m| !matches!(m, PhpType::Void));
+            let single = non_null.next();
+            // Only `T|null` (a single non-null member) maps to a named type.
+            match (single, non_null.next()) {
+                (Some(member), None) => reflection_named_type_info(member)
+                    .map(|(name, builtin, _)| (name, builtin, has_null)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Extracts per-parameter reflection metadata from a function's lowered
@@ -268,16 +308,23 @@ fn reflection_function_param_infos(
         .params
         .iter()
         .enumerate()
-        .map(|(idx, (name, _))| {
+        .map(|(idx, (name, ty))| {
             let variadic = signature.variadic.as_deref() == Some(name.as_str());
             let has_default = signature.defaults.get(idx).map_or(false, Option::is_some);
             if has_default || variadic {
                 seen_optional = true;
             }
+            let declared = signature.declared_params.get(idx).copied().unwrap_or(false);
+            let type_info = if declared {
+                reflection_named_type_info(ty)
+            } else {
+                None
+            };
             ReflectionParamInfo {
                 name: name.clone(),
                 optional: seen_optional,
                 variadic,
+                type_info,
             }
         })
         .collect()
@@ -327,7 +374,21 @@ fn emit_reflection_parameter_array(
     pos_off: usize,
     opt_off: usize,
     var_off: usize,
+    type_off: usize,
+    has_type_off: usize,
 ) -> Result<()> {
+    // ReflectionNamedType layout for building per-parameter type objects.
+    let named_type = ctx.module.class_infos.get("ReflectionNamedType").map(|ci| {
+        let off = |n: &str| ci.property_offsets.get(n).copied().unwrap_or(0);
+        (
+            ci.class_id,
+            ci.properties.len(),
+            super::uninitialized_property_marker_offsets(ci),
+            off("__name"),
+            off("__allows_null"),
+            off("__builtin"),
+        )
+    });
     emit_alloc_object_array(ctx, params.len());
     crate::codegen::emit_array_value_type_stamp(
         ctx.emitter,
@@ -342,6 +403,36 @@ fn emit_reflection_parameter_array(
         emit_reflection_int_property(ctx, position as i64, pos_off, pos_off + 8);
         emit_reflection_int_property(ctx, param.optional as i64, opt_off, opt_off + 8);
         emit_reflection_int_property(ctx, param.variadic as i64, var_off, var_off + 8);
+        if let (Some((type_name, builtin, allows_null)), Some((nt_id, nt_count, nt_markers, nt_name, nt_anull, nt_builtin))) =
+            (&param.type_info, &named_type)
+        {
+            // Build a ReflectionNamedType (result reg); the parameter object is
+            // safe on the stack at slot 0 across this balanced construction.
+            super::emit_object_allocation(ctx, *nt_id, *nt_count, false, nt_markers)?;
+            emit_reflection_string_property(ctx, type_name, *nt_name, *nt_name + 8);
+            emit_reflection_int_property(ctx, *builtin as i64, *nt_builtin, *nt_builtin + 8);
+            emit_reflection_int_property(ctx, *allows_null as i64, *nt_anull, *nt_anull + 8);
+            // `__type` is a `mixed` property, so its value must be a *boxed*
+            // Mixed cell (the receiver later dispatches `getType()->...` through
+            // the Mixed unbox path). Box the freshly built object pointer (still
+            // in the result reg) into a cell, then store it as a Mixed slot:
+            // boxed-cell pointer in the low word, 0 in the high word. The slot
+            // was zero-initialized at allocation, so no decref of an old value
+            // is required.
+            crate::codegen::emit_box_current_value_as_mixed(
+                ctx.emitter,
+                &crate::types::PhpType::Object("ReflectionNamedType".to_string()),
+            );
+            let cell_reg = abi::int_result_reg(ctx.emitter);
+            let param_reg = abi::symbol_scratch_reg(ctx.emitter);
+            let flag_reg = abi::secondary_scratch_reg(ctx.emitter);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, param_reg, 0);
+            abi::emit_store_to_address(ctx.emitter, cell_reg, param_reg, type_off);
+            abi::emit_store_zero_to_address(ctx.emitter, param_reg, type_off + 8);
+            abi::emit_load_int_immediate(ctx.emitter, flag_reg, 1);
+            abi::emit_store_to_address(ctx.emitter, flag_reg, param_reg, has_type_off);
+            abi::emit_store_zero_to_address(ctx.emitter, param_reg, has_type_off + 8);
+        }
         emit_append_object_to_array(ctx);
     }
     Ok(())

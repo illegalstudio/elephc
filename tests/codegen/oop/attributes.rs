@@ -1246,3 +1246,42 @@ foreach ($params as $p) {
     );
     assert_eq!(out, "3|a:0r- b:1o- rest:2ov ");
 }
+
+/// Verifies `ReflectionParameter::getType()`/`hasType()` expose a builtin named
+/// type for typed parameters and null/false for untyped ones. The `mixed` slot
+/// must round-trip the type object so `getType()->getName()` dispatches.
+#[test]
+fn test_reflection_parameter_get_type_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+function greet(int $a, $b): void {}
+$params = (new ReflectionFunction('greet'))->getParameters();
+echo $params[0]->hasType() ? "y" : "n";
+echo "|", $params[0]->getType()->getName();
+echo "|", $params[0]->getType()->isBuiltin() ? "b" : "-";
+echo "|", $params[0]->getType()->allowsNull() ? "n" : "-";
+echo "|", $params[1]->hasType() ? "y" : "n";
+echo "|", $params[1]->getType() === null ? "null" : "obj";
+"#,
+    );
+    assert_eq!(out, "y|int|b|-|n|null");
+}
+
+/// Verifies `ReflectionParameter::getType()` reports nullable class types: the
+/// named type carries the bare class name, `isBuiltin()` is false, and
+/// `allowsNull()` is true for a `?Class` hint.
+#[test]
+fn test_reflection_parameter_get_type_nullable_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Widget {}
+function build(?Widget $w, string $label): void {}
+$params = (new ReflectionFunction('build'))->getParameters();
+$t0 = $params[0]->getType();
+echo $t0->getName(), "|", $t0->isBuiltin() ? "b" : "-", "|", $t0->allowsNull() ? "n" : "-";
+$t1 = $params[1]->getType();
+echo "|", $t1->getName(), "|", $t1->isBuiltin() ? "b" : "-", "|", $t1->allowsNull() ? "n" : "-";
+"#,
+    );
+    assert_eq!(out, "Widget|-|n|string|b|-");
+}
