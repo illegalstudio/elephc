@@ -618,7 +618,11 @@ fn collect_emitted_class_names(
         names.insert(builtin.to_string());
     }
     for factory in reflection::collect_attribute_factories(classes) {
-        names.insert(factory.class_name);
+        // Only resolvable attribute classes are emitted; non-class attributes
+        // are registered solely so `getArguments()` can return their arguments.
+        if factory.resolvable {
+            names.insert(factory.class_name);
+        }
     }
     collect_dynamic_object_factory_classes(program, classes, &mut names);
     expand_emitted_class_dependencies(&mut names, classes);

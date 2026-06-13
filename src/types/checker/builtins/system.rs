@@ -546,7 +546,26 @@ fn class_attribute_args_unsupported(checker: &Checker, class_name: &str, attr_na
         .iter()
         .enumerate()
         .find(|(_, name)| php_symbol_key(name.trim_start_matches('\\')) == attr_key)
-        .is_some_and(|(idx, _)| !matches!(class_info.attribute_args.get(idx), Some(Some(_))))
+        .is_some_and(|(idx, _)| match class_info.attribute_args.get(idx) {
+            // The flat `class_attribute_args()` helper returns a positional
+            // array, so keyed arguments (named arguments or associative arrays,
+            // at any depth) would silently lose their keys. Reject them and
+            // direct users to `ReflectionClass::getAttributes()` instead.
+            Some(Some(entries)) => attr_entries_have_keys(entries),
+            _ => true,
+        })
+}
+
+/// Returns true when any captured attribute-argument entry carries a key — a
+/// named argument or an associative-array key — at any nesting depth.
+fn attr_entries_have_keys(entries: &[crate::types::AttrArgEntry]) -> bool {
+    entries.iter().any(|entry| {
+        entry.key.is_some()
+            || matches!(
+                &entry.value,
+                crate::types::AttrArgValue::Array(inner) if attr_entries_have_keys(inner)
+            )
+    })
 }
 
 /// Returns `true` if the class has any attribute whose argument metadata is not

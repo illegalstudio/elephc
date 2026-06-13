@@ -131,6 +131,24 @@ foreach ($roles as $role) {
 }
 echo "\n";
 
+// Named arguments are returned under their string keys, like in PHP.
+#[\Attribute]
+class Endpoint
+{
+    public function __construct(public string $path, public array $methods = []) {}
+}
+
+#[Endpoint('/users', methods: ['GET', 'POST'])]
+class UserApi {}
+
+$endpoint = (new ReflectionClass('UserApi'))->getAttributes()[0];
+$endpointArgs = $endpoint->getArguments();
+echo "Endpoint path: ", $endpointArgs[0], "\n";
+echo "Endpoint methods: ", $endpointArgs['methods'][0], " ", $endpointArgs['methods'][1], "\n";
+
+$endpointInstance = $endpoint->newInstance();
+echo "Endpoint instance path: ", $endpointInstance->path, "\n";
+
 $method = new ReflectionMethod('Greeter', 'greet');
 echo "ReflectionMethod attrs:";
 foreach ($method->getAttributes() as $attr) {
