@@ -383,9 +383,20 @@ fn emit_mixed_array_fill_x86_64(
 }
 
 /// Boxes one captured attribute argument into a Mixed cell, leaving the cell in
-/// the integer result register. Scalars dispatch to the per-architecture boxer;
-/// nested arrays will be built recursively once the collector emits them.
+/// the integer result register. A nested array is built recursively and boxed
+/// with the array tag; scalars dispatch to the per-architecture boxer.
 fn emit_box_arg(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) -> Result<()> {
+    if let AttrArgValue::Array(entries) = arg {
+        // Build the nested array (leaves it in the result reg), then box the
+        // array pointer as a Mixed cell with the array runtime tag. The parent
+        // array being filled stays parked on the temporary stack across this.
+        emit_mixed_array(ctx, entries)?;
+        crate::codegen::emit_box_current_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+        return Ok(());
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_box_scalar_arg_aarch64(ctx, arg),
         Arch::X86_64 => emit_box_scalar_arg_x86_64(ctx, arg),

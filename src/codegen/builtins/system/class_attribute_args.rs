@@ -157,7 +157,11 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             emitter.instruction(&format!("mov x2, #{}", len));                  // x2 = string length
         }
         AttrArgValue::Array(_) => {
-            unreachable!("array attribute arguments are not collected until a later phase")
+            // Frozen legacy AST backend: nested arrays are not materialized
+            // here; emit a null placeholder. The active EIR path builds them.
+            emitter.instruction("mov x0, #8");                                  // runtime tag 8 = null placeholder
+            emitter.instruction("mov x1, xzr");                                 // null carries no low word
+            emitter.instruction("mov x2, xzr");                                 // null carries no high word
         }
     }
     emitter.instruction("bl __rt_mixed_from_value");                            // box the captured payload into an owned mixed cell
@@ -201,7 +205,11 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             emitter.instruction(&format!("mov rsi, {}", len));                  // rsi = string length
         }
         AttrArgValue::Array(_) => {
-            unreachable!("array attribute arguments are not collected until a later phase")
+            // Frozen legacy AST backend: nested arrays are not materialized
+            // here; emit a null placeholder. The active EIR path builds them.
+            emitter.instruction("mov rax, 8");                                  // runtime tag 8 = null placeholder
+            emitter.instruction("xor rdi, rdi");                                // null carries no low word
+            emitter.instruction("xor rsi, rsi");                                // null carries no high word
         }
     }
     emitter.instruction("call __rt_mixed_from_value");                          // box the captured payload into an owned mixed cell

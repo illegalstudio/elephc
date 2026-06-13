@@ -119,6 +119,18 @@ foreach ($thresholds as $value) {
 }
 echo "\n";
 
+// Array arguments (including nested arrays) are materialized too.
+#[Roles(['admin', 'editor', 'viewer'])]
+class Account {}
+
+$roles = (new ReflectionClass('Account'))->getAttributes()[0]->getArguments()[0];
+echo "Account roles:";
+foreach ($roles as $role) {
+    echo " ";
+    echo $role;
+}
+echo "\n";
+
 $method = new ReflectionMethod('Greeter', 'greet');
 echo "ReflectionMethod attrs:";
 foreach ($method->getAttributes() as $attr) {

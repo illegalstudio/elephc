@@ -479,9 +479,12 @@ pub(crate) fn emit_runtime_data_user(
                                 arg_rows.push((8u64, "0".to_string(), 0u64));
                             }
                             crate::types::AttrArgValue::Array(_) => {
-                                unreachable!(
-                                    "array attribute arguments are not collected until a later phase"
-                                )
+                                // This legacy flat (tag, lo, hi) table cannot
+                                // represent a nested array, and no runtime
+                                // routine reads it; emit a null placeholder.
+                                // The active EIR path materializes the real
+                                // array from class metadata instead.
+                                arg_rows.push((8u64, "0".to_string(), 0u64));
                             }
                         }
                     }

@@ -237,11 +237,11 @@ pub(super) fn collect_attribute_args(
 
 /// Folds a single attribute-argument expression to a compile-time
 /// [`AttrArgValue`], or `None` when the expression is not a constant shape
-/// reflection can materialize. Handles scalars (string/int/bool/null/float)
-/// and negation of numeric literals.
+/// reflection can materialize. Handles scalars (string/int/bool/null/float),
+/// negation of numeric literals, and positional array literals.
 fn fold_attr_value(expr: &crate::parser::ast::Expr) -> Option<crate::types::AttrArgValue> {
     use crate::parser::ast::ExprKind;
-    use crate::types::AttrArgValue;
+    use crate::types::{AttrArgEntry, AttrArgValue};
 
     match &expr.kind {
         ExprKind::StringLiteral(value) => Some(AttrArgValue::Str(value.clone())),
@@ -254,9 +254,19 @@ fn fold_attr_value(expr: &crate::parser::ast::Expr) -> Option<crate::types::Attr
             ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-n).to_bits())),
             _ => None,
         },
-        // TODO(attr-args): arrays (positional + associative) need the
-        // nested-array / keyed hash materializer; until that lands they stay
-        // unsupported so reflection reports the existing diagnostic.
+        ExprKind::ArrayLiteral(elements) => {
+            let mut entries = Vec::with_capacity(elements.len());
+            for element in elements {
+                entries.push(AttrArgEntry {
+                    key: None,
+                    value: fold_attr_value(element)?,
+                });
+            }
+            Some(AttrArgValue::Array(entries))
+        }
+        // TODO(attr-args): associative arrays (and named args) need the keyed
+        // hash materializer; until that lands they stay unsupported so
+        // reflection reports the existing diagnostic.
         _ => None,
     }
 }
