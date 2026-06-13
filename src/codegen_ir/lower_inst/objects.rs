@@ -97,6 +97,9 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if is_fiber_class(&class_name) {
         return lower_fiber_new(ctx, inst);
     }
+    if class_name == "ReflectionFunction" {
+        return reflection::lower_reflection_function_new(ctx, inst);
+    }
     if reflection::is_reflection_owner_class(&class_name) {
         return reflection::lower_reflection_owner_new(ctx, inst, &class_name);
     }
