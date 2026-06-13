@@ -17,10 +17,7 @@
 
 use std::collections::HashSet;
 
-use crate::codegen::{
-    abi, callable_descriptor, emit_box_current_owned_value_as_mixed,
-    emit_box_current_value_as_mixed, runtime_value_tag,
-};
+use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, runtime_value_tag};
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::intrinsics::IntrinsicCall;
@@ -4225,11 +4222,9 @@ fn load_property_store_value_to_result(
     let value_ty = ctx.value_php_type(value)?;
     if can_box_value_for_mixed_property(&value_ty, slot_ty) {
         let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
-        if ctx.value_can_own_mixed_box_source(value)? {
-            emit_box_current_owned_value_as_mixed(ctx.emitter, &loaded_ty);
-        } else {
-            emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
-        }
+        // Property stores do not consume the SSA source; explicit release ops still
+        // own temporary cleanup after `prop_set`.
+        emit_box_current_value_as_mixed(ctx.emitter, &loaded_ty);
         return Ok(());
     }
     if can_store_boxed_value_for_mixed_property(&value_ty, slot_ty) {
