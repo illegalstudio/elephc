@@ -1205,3 +1205,22 @@ $attrs[0]->newInstance();
     );
     assert_eq!(out, "-65537/-65537");
 }
+
+/// Verifies `ReflectionFunction` exposes a user function's name, short name, and
+/// parameter counts (total and required), including variadic handling.
+#[test]
+fn test_reflection_function_name_and_parameter_counts() {
+    let out = compile_and_run(
+        r#"<?php
+function greet(int $a, string $b = "x", ...$rest) {
+    return $a;
+}
+$r = new ReflectionFunction('greet');
+echo $r->getName(), "|";
+echo $r->getShortName(), "|";
+echo $r->getNumberOfParameters(), "|";
+echo $r->getNumberOfRequiredParameters();
+"#,
+    );
+    assert_eq!(out, "greet|greet|3|1");
+}

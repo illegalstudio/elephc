@@ -75,6 +75,110 @@ pub(super) fn lower_reflection_owner_new(
     ctx.store_result_value(result)
 }
 
+/// Lowers `new ReflectionFunction("name")` by populating its name and
+/// parameter-count slots from the reflected function's signature. The slot
+/// layout is `__name` (8/16), `__short` (24/32), `__num_params` (40/48),
+/// `__num_required` (56/64).
+pub(super) fn lower_reflection_function_new(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let (full_name, short_name, num_params, num_required) = reflection_function_metadata(ctx, inst)?;
+    let (class_id, property_count, uninitialized_marker_offsets, name_off, short_off, np_off, nr_off) = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionFunction")
+            .ok_or_else(|| CodegenIrError::unsupported("unknown class ReflectionFunction"))?;
+        let slot = |name: &str| -> Result<usize> {
+            class_info
+                .property_offsets
+                .get(name)
+                .copied()
+                .ok_or_else(|| CodegenIrError::missing_entry("property offset", 0))
+        };
+        (
+            class_info.class_id,
+            class_info.properties.len(),
+            super::uninitialized_property_marker_offsets(class_info),
+            slot("__name")?,
+            slot("__short")?,
+            slot("__num_params")?,
+            slot("__num_required")?,
+        )
+    };
+    super::emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        false,
+        &uninitialized_marker_offsets,
+    )?;
+    emit_reflection_string_property(ctx, &full_name, name_off, name_off + 8);
+    emit_reflection_string_property(ctx, &short_name, short_off, short_off + 8);
+    emit_reflection_int_property(ctx, num_params, np_off, np_off + 8);
+    emit_reflection_int_property(ctx, num_required, nr_off, nr_off + 8);
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
+    ctx.store_result_value(result)
+}
+
+/// Resolves `ReflectionFunction(name)` to its full name, short name, and
+/// parameter counts from the reflected function's lowered signature.
+fn reflection_function_metadata(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<(String, String, i64, i64)> {
+    let Some(name_operand) = inst.operands.first().copied() else {
+        return Ok((String::new(), String::new(), 0, 0));
+    };
+    let function_name = const_required_string_operand(ctx, name_operand, "ReflectionFunction")?;
+    let key = php_symbol_key(function_name.trim_start_matches('\\'));
+    let signature = ctx
+        .module
+        .functions
+        .iter()
+        .find(|function| php_symbol_key(function.name.trim_start_matches('\\')) == key)
+        .and_then(|function| function.signature.as_ref());
+    let (num_params, num_required) = signature
+        .map(|sig| {
+            let total = sig.params.len() as i64;
+            let required = sig
+                .params
+                .iter()
+                .zip(sig.defaults.iter().chain(std::iter::repeat(&None)))
+                .filter(|((name, _), default)| {
+                    default.is_none() && sig.variadic.as_deref() != Some(name.as_str())
+                })
+                .count() as i64;
+            (total, required)
+        })
+        .unwrap_or((0, 0));
+    let short_name = function_name
+        .trim_start_matches('\\')
+        .rsplit('\\')
+        .next()
+        .unwrap_or(&function_name)
+        .to_string();
+    Ok((function_name.clone(), short_name, num_params, num_required))
+}
+
+/// Stores an integer immediate into a Reflection object's property slot.
+fn emit_reflection_int_property(
+    ctx: &mut FunctionContext<'_>,
+    value: i64,
+    low_offset: usize,
+    high_offset: usize,
+) {
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, value);
+    abi::emit_store_to_address(ctx.emitter, scratch, object_reg, low_offset);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    abi::emit_store_to_address(ctx.emitter, scratch, object_reg, high_offset);
+}
+
 /// Resolves Reflection constructor operands to captured class/member metadata.
 fn reflection_owner_metadata(
     ctx: &FunctionContext<'_>,

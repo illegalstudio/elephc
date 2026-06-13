@@ -35,6 +35,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionClass",
         "ReflectionMethod",
         "ReflectionProperty",
+        "ReflectionFunction",
     ] {
         let builtin_key = php_symbol_key(builtin_name);
         if interface_map
@@ -99,6 +100,7 @@ pub(crate) fn inject_builtin_reflection(
             ],
         ),
     );
+    class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
 
     Ok(())
 }
@@ -263,6 +265,100 @@ fn builtin_reflection_attribute_new_instance_method() -> ClassMethod {
         )],
         span: dummy_span,
         attributes: Vec::new(),
+    }
+}
+
+/// Returns a public no-op method that returns the private `property` slot typed
+/// `return_type`. Reflection getters are populated at codegen; their bodies just
+/// surface the corresponding private slot.
+fn builtin_reflection_slot_getter(
+    method_name: &str,
+    property: &str,
+    return_type: TypeExpr,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        return_type: Some(return_type),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns the public `__construct(string $name)` for `ReflectionFunction`. The
+/// body is empty; codegen populates the metadata slots from the reflected
+/// function's signature.
+fn builtin_reflection_function_constructor_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "__construct".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        variadic: None,
+        return_type: None,
+        body: Vec::new(),
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the `ReflectionFunction` shell with private name/short-name and
+/// parameter-count slots plus public accessors. The slots are populated at
+/// codegen from the reflected function's signature.
+fn builtin_reflection_function() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionFunction".to_string(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties: vec![
+            builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property("__short", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property("__num_params", Visibility::Private, Some(TypeExpr::Int), int_lit(0)),
+            builtin_property(
+                "__num_required",
+                Visibility::Private,
+                Some(TypeExpr::Int),
+                int_lit(0),
+            ),
+        ],
+        methods: vec![
+            builtin_reflection_function_constructor_method(),
+            builtin_reflection_slot_getter("getName", "__name", TypeExpr::Str),
+            builtin_reflection_slot_getter("getShortName", "__short", TypeExpr::Str),
+            builtin_reflection_slot_getter("getNumberOfParameters", "__num_params", TypeExpr::Int),
+            builtin_reflection_slot_getter(
+                "getNumberOfRequiredParameters",
+                "__num_required",
+                TypeExpr::Int,
+            ),
+        ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
     }
 }
 
