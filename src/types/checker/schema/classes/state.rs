@@ -232,7 +232,10 @@ pub(super) fn collect_attribute_args(
 /// Folds a single attribute-argument expression to a compile-time
 /// [`AttrArgValue`], or `None` when the expression is not a constant shape
 /// reflection can materialize. Handles scalars (string/int/bool/null/float),
-/// negation of numeric literals, and positional array literals.
+/// negation of numeric literals, positional/associative array literals, and
+/// symbolic references (global constants, class constants, enum cases). The
+/// symbolic references are captured by canonical name and resolved later, when
+/// the synthetic reflection method bodies are lowered (see [`AttrArgValue`]).
 fn fold_attr_value(expr: &crate::parser::ast::Expr) -> Option<crate::types::AttrArgValue> {
     use crate::parser::ast::ExprKind;
     use crate::types::{AttrArgEntry, AttrArgValue};
@@ -243,6 +246,16 @@ fn fold_attr_value(expr: &crate::parser::ast::Expr) -> Option<crate::types::Attr
         ExprKind::FloatLiteral(value) => Some(AttrArgValue::Float(value.to_bits())),
         ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
         ExprKind::Null => Some(AttrArgValue::Null),
+        // A bare constant reference (`#[A(SOME_CONST)]`). Name resolution has
+        // already canonicalised the name, so capture it for late resolution.
+        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string())),
+        // A class constant or enum case (`#[A(C::BAR)]` / `#[A(E::Case)]`). Only
+        // a named (class/enum) receiver can be resolved outside a class scope;
+        // `self`/`parent`/`static` have no meaning here and stay unsupported.
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_receiver_type_name(receiver)
+                .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone()))
+        }
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(n) => Some(AttrArgValue::Int(n.wrapping_neg())),
             ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-n).to_bits())),
@@ -286,6 +299,19 @@ fn fold_attr_key(expr: &crate::parser::ast::Expr) -> Option<crate::types::AttrKe
         },
         ExprKind::StringLiteral(value) => Some(AttrKey::Str(value.clone())),
         _ => None,
+    }
+}
+
+/// Returns the canonical type name of a static receiver when it is a named
+/// class/enum (`#[A(C::BAR)]`), or `None` for `self`/`parent`/`static`, which
+/// have no resolvable meaning in the attribute argument position.
+fn scoped_receiver_type_name(
+    receiver: &crate::parser::ast::StaticReceiver,
+) -> Option<String> {
+    use crate::parser::ast::StaticReceiver;
+    match receiver {
+        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
     }
 }
 

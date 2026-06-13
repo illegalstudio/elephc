@@ -149,6 +149,21 @@ echo "Endpoint methods: ", $endpointArgs['methods'][0], " ", $endpointArgs['meth
 $endpointInstance = $endpoint->newInstance();
 echo "Endpoint instance path: ", $endpointInstance->path, "\n";
 
+// Arguments can also be symbolic references — a global constant or a class /
+// interface constant — resolved to their values when reflection reads them back.
+const DEFAULT_LIMIT = 100;
+
+class Bounds {
+    const CEILING = 999;
+}
+
+#[Policy(DEFAULT_LIMIT, Bounds::CEILING)]
+class Quota {}
+
+$policyArgs = (new ReflectionClass('Quota'))->getAttributes()[0]->getArguments();
+echo "Policy limit: ", $policyArgs[0], "\n";
+echo "Policy ceiling: ", $policyArgs[1], "\n";
+
 $method = new ReflectionMethod('Greeter', 'greet');
 echo "ReflectionMethod attrs:";
 foreach ($method->getAttributes() as $attr) {
