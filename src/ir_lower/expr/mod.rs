@@ -6201,9 +6201,11 @@ fn lower_closure_with_context(
     // capture would push otherwise capture-free closures through capture-only
     // runtime paths. Nested closures compose: each level captures `this` from the
     // level above.
+    // A method-defined closure loads the enclosing `this`; a top-level closure
+    // that uses `$this` (bound later via `Closure::bind`) gets a null `this`
+    // slot the bind fills, typed `Mixed` for runtime-dispatched member access.
     let with_this;
     let captures: &[String] = if !is_static
-        && ctx.local_slots.contains_key("this")
         && !captures.iter().any(|name| name == "this")
         && crate::types::checker::closure_body_uses_this(body)
     {
@@ -6220,11 +6222,19 @@ fn lower_closure_with_context(
     let mut capture_params = Vec::with_capacity(captures.len());
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
-        let captured = ctx.load_local(capture, Some(expr.span));
-        let php_type = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
-            PhpType::Callable
+        let (captured, php_type) = if capture == "this" && !ctx.local_slots.contains_key("this") {
+            // Top-level closure: no enclosing `$this`. Start with a null receiver
+            // that `Closure::bind` overwrites; `Mixed` so members dispatch at
+            // runtime against the bound object's class.
+            (lower_null(ctx, expr), PhpType::Mixed)
         } else {
-            ctx.builder.value_php_type(captured.value)
+            let captured = ctx.load_local(capture, Some(expr.span));
+            let php_type = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
+                PhpType::Callable
+            } else {
+                ctx.builder.value_php_type(captured.value)
+            };
+            (captured, php_type)
         };
         let immediate = by_ref.then_some(Immediate::I64(1));
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
@@ -7229,6 +7239,26 @@ fn lower_closure_bind_method(
                 None => lower_null(ctx, expr),
             };
             Some(emit_closure_bind(ctx, closure.value, new_this.value, expr))
+        }
+        "call" => {
+            // `$closure->call($newThis, ...$args)`: bind `$this` then invoke the
+            // bound closure with the remaining arguments in one step.
+            let new_this = match args.first() {
+                Some(arg) => lower_expr(ctx, arg),
+                None => lower_null(ctx, expr),
+            };
+            let bound = emit_closure_bind(ctx, closure.value, new_this.value, expr);
+            let call_args = &args[args.len().min(1)..];
+            let arg_container =
+                lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span)?;
+            Some(ctx.emit_value(
+                Op::CallableDescriptorInvoke,
+                vec![bound.value, arg_container.value],
+                None,
+                PhpType::Mixed,
+                Op::CallableDescriptorInvoke.default_effects(),
+                Some(expr.span),
+            ))
         }
         _ => None,
     }

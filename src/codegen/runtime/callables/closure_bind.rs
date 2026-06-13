@@ -51,6 +51,8 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_closure_bind_unsupported");                  // extra captures are not yet handled
     emitter.instruction("ldr x11, [x9, #16]");                                  // x11 = capture binding metadata table
     emitter.instruction("cbz x11, __rt_closure_bind_unsupported");              // missing metadata means the capture name is unknown
+    emitter.instruction("ldr x14, [x11, #16]");                                 // x14 = capture type tag (6=object, 7=mixed)
+    emitter.instruction("str x14, [sp, #24]");                                  // save the capture type tag for the store phase
     emitter.instruction("ldr x12, [x11, #8]");                                  // x12 = capture name length
     emitter.instruction("cmp x12, #4");                                         // "this" is four bytes long
     emitter.instruction("b.ne __rt_closure_bind_unsupported");                  // a different-length name is not $this
@@ -79,13 +81,28 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("ldp x2, x3, [x1, #64]");                               // copy the single capture slot (value, tag/len)
     emitter.instruction("stp x2, x3, [x0, #64]");                               // store the capture slot into the copy
 
-    // -- overwrite the captured $this and retain the new receiver --
+    // -- overwrite the captured $this, matching the capture representation --
+    emitter.instruction("ldr x14, [sp, #24]");                                  // x14 = capture type tag
+    emitter.instruction("cmp x14, #7");                                         // a Mixed capture stores a boxed cell, not a raw object
+    emitter.instruction("b.eq __rt_closure_bind_box_this");                     // top-level closures use a Mixed $this receiver
+    // object capture (method-defined closure): store the raw object and retain it
     emitter.instruction("ldr x2, [sp, #8]");                                    // x2 = new $this receiver
     emitter.instruction("str x2, [x0, #64]");                                   // replace the captured object with the new receiver
     emitter.instruction("mov x0, x2");                                          // pass the new receiver to the incref helper
     emitter.instruction("bl __rt_incref");                                      // the bound descriptor now owns a reference to $this
+    emitter.instruction("b __rt_closure_bind_return");                          // skip the Mixed boxing path
+
+    // mixed capture (top-level closure): box the object into a Mixed cell
+    emitter.label("__rt_closure_bind_box_this");
+    emitter.instruction("mov x0, #6");                                          // boxed payload tag 6 = object
+    emitter.instruction("ldr x1, [sp, #8]");                                    // payload low word = new $this object pointer
+    emitter.instruction("mov x2, #0");                                          // payload high word is unused for objects
+    emitter.instruction("bl __rt_mixed_from_value");                            // box (and retain) the receiver into a Mixed cell
+    emitter.instruction("ldr x16, [sp, #16]");                                  // reload the bound descriptor pointer
+    emitter.instruction("str x0, [x16, #64]");                                  // store the boxed Mixed receiver into the capture slot
 
     // -- return the new descriptor --
+    emitter.label("__rt_closure_bind_return");
     emitter.instruction("ldr x0, [sp, #16]");                                   // x0 = bound descriptor result
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // tear down the closure-bind frame
@@ -123,6 +140,8 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, [r8+16]");                                    // r10 = capture binding metadata table
     emitter.instruction("test r10, r10");                                       // is the capture metadata present?
     emitter.instruction("jz __rt_closure_bind_unsupported");                    // missing metadata means the capture name is unknown
+    emitter.instruction("mov rax, [r10+16]");                                   // rax = capture type tag (6=object, 7=mixed)
+    emitter.instruction("mov [rsp+24], rax");                                   // save the capture type tag for the store phase
     emitter.instruction("mov r11, [r10+8]");                                    // r11 = capture name length
     emitter.instruction("cmp r11, 4");                                          // "this" is four bytes long
     emitter.instruction("jne __rt_closure_bind_unsupported");                   // a different-length name is not $this
@@ -143,14 +162,29 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cld");                                                 // copy forward
     emitter.instruction("rep movsq");                                           // copy the descriptor payload word by word
 
-    // -- overwrite the captured $this and retain the new receiver --
+    // -- overwrite the captured $this, matching the capture representation --
+    emitter.instruction("mov rax, [rsp+24]");                                   // rax = capture type tag
+    emitter.instruction("cmp rax, 7");                                          // a Mixed capture stores a boxed cell, not a raw object
+    emitter.instruction("je __rt_closure_bind_box_this");                       // top-level closures use a Mixed $this receiver
+    // object capture (method-defined closure): store the raw object and retain it
     emitter.instruction("mov rax, [rsp+16]");                                   // rax = new descriptor
     emitter.instruction("mov rdx, [rsp+8]");                                    // rdx = new $this receiver
     emitter.instruction("mov [rax+64], rdx");                                   // replace the captured object with the new receiver
     emitter.instruction("mov rdi, rdx");                                        // pass the new receiver to the incref helper
     emitter.instruction("call __rt_incref");                                    // the bound descriptor now owns a reference to $this
+    emitter.instruction("jmp __rt_closure_bind_return");                        // skip the Mixed boxing path
+
+    // mixed capture (top-level closure): box the object into a Mixed cell
+    emitter.label("__rt_closure_bind_box_this");
+    emitter.instruction("mov rax, 6");                                          // boxed payload tag 6 = object
+    emitter.instruction("mov rdi, [rsp+8]");                                    // payload low word = new $this object pointer
+    emitter.instruction("mov rsi, 0");                                          // payload high word is unused for objects
+    emitter.instruction("call __rt_mixed_from_value");                          // box (and retain) the receiver into a Mixed cell
+    emitter.instruction("mov rdx, [rsp+16]");                                   // reload the bound descriptor pointer
+    emitter.instruction("mov [rdx+64], rax");                                   // store the boxed Mixed receiver into the capture slot
 
     // -- return the new descriptor --
+    emitter.label("__rt_closure_bind_return");
     emitter.instruction("mov rax, [rsp+16]");                                   // rax = bound descriptor result
     emitter.instruction("mov rsp, rbp");                                        // tear down the closure-bind frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

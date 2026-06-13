@@ -89,6 +89,7 @@ impl Checker {
             current_class: None,
             current_method: None,
             current_method_is_static: false,
+            closure_depth: 0,
             extern_functions: HashMap::new(),
             extern_classes: HashMap::new(),
             packed_classes: HashMap::new(),
