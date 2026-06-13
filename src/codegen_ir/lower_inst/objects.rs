@@ -3824,8 +3824,13 @@ fn emit_property_load(
     match &slot.php_type {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_load_from_address(ctx.emitter, ptr_reg, base_reg, slot.offset);
-            abi::emit_load_from_address(ctx.emitter, len_reg, base_reg, slot.offset + 8);
+            if base_reg == ptr_reg {
+                abi::emit_load_from_address(ctx.emitter, len_reg, base_reg, slot.offset + 8);
+                abi::emit_load_from_address(ctx.emitter, ptr_reg, base_reg, slot.offset);
+            } else {
+                abi::emit_load_from_address(ctx.emitter, ptr_reg, base_reg, slot.offset);
+                abi::emit_load_from_address(ctx.emitter, len_reg, base_reg, slot.offset + 8);
+            }
         }
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);

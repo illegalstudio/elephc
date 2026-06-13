@@ -5806,13 +5806,13 @@ fn store_fsockopen_error_outputs(
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("cmp rax, 0");                              // test whether the fsockopen connection succeeded
             ctx.emitter.instruction(&format!("mov r9, {}", econnrefused));      // failure error code is ECONNREFUSED
-            ctx.emitter.instruction("xor r10d, r10d");                          // success error code is zero
+            ctx.emitter.instruction("mov r10, 0");                              // success error code is zero without clobbering compare flags
             ctx.emitter.instruction("cmovge r9, r10");                          // choose the error code for the connection outcome
             abi::emit_symbol_address(ctx.emitter, "r10", &msg_sym);
             abi::emit_symbol_address(ctx.emitter, "r11", &empty_sym);
             ctx.emitter.instruction("cmovge r10, r11");                         // choose the error-message pointer for the outcome
             ctx.emitter.instruction(&format!("mov r11, {}", msg_len));          // failure error-message byte length
-            ctx.emitter.instruction("xor ecx, ecx");                            // success error-message length is zero
+            ctx.emitter.instruction("mov rcx, 0");                              // success error-message length is zero without clobbering compare flags
             ctx.emitter.instruction("cmovge r11, rcx");                         // choose the error-message length for the outcome
             if let Some(slot) = errstr_slot {
                 let preserve_errno = errno_slot.is_some()
