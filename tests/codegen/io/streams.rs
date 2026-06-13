@@ -2920,6 +2920,25 @@ echo feof($pair[0]) ? "eof" : "open";
     assert_eq!(out, "empty|open|false|open|false|open|hi\nopen");
 }
 
+/// Verifies `stream_get_line()` treats a nonblocking miss as transient instead of EOF.
+#[test]
+fn test_nonblocking_stream_get_line_does_not_mark_eof() {
+    let out = compile_and_run(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($pair[0], false);
+$miss = stream_get_line($pair[0], 8);
+echo $miss === "" ? "empty" : "data";
+echo "|";
+echo feof($pair[0]) ? "eof" : "open";
+echo "|";
+fwrite($pair[1], "ready\n");
+echo stream_get_line($pair[0], 8, "\n");
+"#,
+    );
+    assert_eq!(out, "empty|open|ready");
+}
+
 /// Verifies compiled PHP output for stream socket shutdown on connection.
 #[test]
 fn test_stream_socket_shutdown_on_connection() {

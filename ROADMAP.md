@@ -632,7 +632,11 @@ none are needed for typical stream usage.
   `O_NONBLOCK` fcntl: native `read()` paths now distinguish
   `EAGAIN`/`EWOULDBLOCK` from EOF, so `fread()` returns an empty result,
   `fgetc()`/`fgets()` return `false`, and `stream_get_line()` also avoids
-  setting `feof()` on transient non-blocking misses.
+  setting `feof()` on transient non-blocking misses. `realpath_cache_get()` and
+  `realpath_cache_size()` expose elephc's intentionally empty realpath-cache
+  model (`[]` and `0`), while `lchown()` / `lchgrp()` route through libc
+  `lchown(2)` without following symlinks and support numeric IDs plus user/group
+  name resolution.
 
 ### Database access — PDO (SQLite, PostgreSQL, MySQL/MariaDB)
 
