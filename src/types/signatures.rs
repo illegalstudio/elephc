@@ -365,6 +365,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         | "stat" | "lstat" => Some(fixed(&["filename"])),
         "disk_free_space" | "disk_total_space" => Some(fixed(&["directory"])),
         "file_put_contents" => Some(fixed(&["filename", "data"])),
+        "__elephc_phar_list_entries" => Some(fixed(&["filename"])),
         "__elephc_phar_set_compression" => Some(fixed(&["filename", "compression"])),
         "copy" | "rename" => Some(fixed(&["from", "to"])),
         "unlink" => Some(fixed(&["filename"])),

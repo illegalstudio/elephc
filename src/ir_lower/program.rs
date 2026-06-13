@@ -217,7 +217,7 @@ fn is_regex_builtin_name(name: &str) -> bool {
 fn is_phar_archive_builtin_name(name: &str) -> bool {
     matches!(
         crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "file_get_contents" | "file_put_contents" | "fopen"
+        "__elephc_phar_list_entries" | "file_get_contents" | "file_put_contents" | "fopen"
     )
 }
 

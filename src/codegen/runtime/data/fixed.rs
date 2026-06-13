@@ -304,6 +304,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // _elephc_phar_set_compression_fn: indirect pointer to the elephc-phar
     // native-PHAR compression-control bridge used by Phar::compressFiles().
     out.push_str(".p2align 3\n.globl _elephc_phar_set_compression_fn\n_elephc_phar_set_compression_fn:\n    .quad 0\n");
+    // _elephc_phar_list_entries_fn: indirect pointer to the elephc-phar archive
+    // listing bridge used by Phar/PharData constructors to seed iteration.
+    out.push_str(".p2align 3\n.globl _elephc_phar_list_entries_fn\n_elephc_phar_list_entries_fn:\n    .quad 0\n");
     // _elephc_phar_stream_*_fn: indirect pointers to the elephc-phar buffered
     // write-stream bridge. These allow multiple phar:// write descriptors to
     // stay open at once while the old assembly single-entry writer remains as
@@ -316,6 +319,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // and consumed immediately by __rt_phar_read_entry before __rt_data_stream
     // copies the bytes into a temp-file-backed descriptor.
     out.push_str(".p2align 3\n.globl _phar_extract_len\n_phar_extract_len:\n    .quad 0\n");
+    // _phar_list_len: output-length scratch written by elephc_phar_list_entries
+    // and consumed immediately while expanding serialized names into an array.
+    out.push_str(".p2align 3\n.globl _phar_list_len\n_phar_list_len:\n    .quad 0\n");
     // _tls_sessions: per-fd TLS handle (i64 returned by
     // elephc_tls_attach_fd or 0 when the fd is plain TCP). Indexed by raw
     // fd up to 256; the runtime fread/fwrite/fclose paths consult this

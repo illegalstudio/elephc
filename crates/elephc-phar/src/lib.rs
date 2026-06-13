@@ -1,8 +1,8 @@
 //! Purpose:
 //! Pure-Rust archive bridge for elephc's `phar://` runtime paths.
-//! Extracts native PHAR, tar-based PHAR, and zip-based PHAR entries, and writes
-//! or deletes archive entries through a small C ABI so generated assembly does not
-//! duplicate archive parsers or manifest writers.
+//! Extracts and lists native PHAR, tar-based PHAR, and zip-based PHAR entries,
+//! and writes or deletes archive entries through a small C ABI so generated
+//! assembly does not duplicate archive parsers or manifest writers.
 //!
 //! Called from:
 //! - Compiled PHP program assembly through the `_elephc_phar_extract_url_fn`
@@ -12,7 +12,7 @@
 //!
 //! Key details:
 //! - Returned FFI pointers reference a process-global buffer and remain valid
-//!   until the next `elephc_phar_extract_url` call.
+//!   until the next `elephc_phar_extract_url` or `elephc_phar_list_entries` call.
 //! - Writes preserve the archive family for existing native PHAR, tar, and ZIP
 //!   archives. Native PHAR gzip/bzip2 entries and ZIP deflate entries keep their
 //!   compression when replaced. ZIP64, encrypted ZIP entries, ZIP data
@@ -90,6 +90,24 @@ pub fn extract_entry_bytes(archive: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
     parse_native_phar_entry(archive, entry)
         .or_else(|| parse_zip_entry(archive, entry))
         .or_else(|| parse_tar_entry(archive, entry))
+}
+
+/// Serializes every supported entry name from an archive on disk.
+///
+/// The output is a packed sequence of `u64 little-endian length` followed by
+/// raw entry-name bytes. This keeps the C ABI simple while letting generated
+/// code build a PHP string array without knowing the archive format.
+pub fn entry_names_bytes(archive_path: &[u8]) -> Option<Vec<u8>> {
+    let archive_path = std::str::from_utf8(archive_path).ok()?;
+    let archive = std::fs::read(archive_path).ok()?;
+    let (entries, _) = parse_archive_entries(&archive)?;
+    let mut out = Vec::new();
+    for entry in entries {
+        let name_len = u64::try_from(entry.name.len()).ok()?;
+        out.extend_from_slice(&name_len.to_le_bytes());
+        out.extend_from_slice(&entry.name);
+    }
+    Some(out)
 }
 
 /// Inserts or replaces one entry in an archive on disk.
@@ -197,6 +215,30 @@ pub unsafe extern "C" fn elephc_phar_extract_url(
     out_len: *mut usize,
 ) -> *const u8 {
     match std::panic::catch_unwind(|| extract_url_bytes(slice(url_ptr, url_len))) {
+        Ok(Some(bytes)) => publish_result(bytes, out_len),
+        _ => {
+            write_len(out_len, 0);
+            std::ptr::null()
+        }
+    }
+}
+
+/// C ABI wrapper around [`entry_names_bytes`].
+///
+/// Returns a pointer to the serialized entry-name buffer and writes its byte
+/// length into `out_len`. Returns null and writes zero when the archive cannot
+/// be read or parsed.
+///
+/// # Safety
+/// `path_ptr` must be valid for `path_len` bytes unless `path_len` is zero.
+/// `out_len` may be null; when non-null it must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_phar_list_entries(
+    path_ptr: *const u8,
+    path_len: usize,
+    out_len: *mut usize,
+) -> *const u8 {
+    match std::panic::catch_unwind(|| entry_names_bytes(slice(path_ptr, path_len))) {
         Ok(Some(bytes)) => publish_result(bytes, out_len),
         _ => {
             write_len(out_len, 0);
@@ -1154,6 +1196,16 @@ mod tests {
             .map(|entry| entry.payload.as_slice())
     }
 
+    /// Builds the serialized entry-name format returned by `entry_names_bytes`.
+    fn serialized_names(names: &[&str]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for name in names {
+            out.extend_from_slice(&(name.len() as u64).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+        }
+        out
+    }
+
     /// Builds a small tar archive with regular-file entries.
     fn build_tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1274,6 +1326,52 @@ mod tests {
             extract_entry_bytes(&archive, b"deflated.txt").as_deref(),
             Some(&b"deflated payload"[..])
         );
+    }
+
+    /// Verifies entry-name listing across supported archive families.
+    #[test]
+    fn lists_entry_names_for_supported_archive_families() {
+        let base = std::env::temp_dir().join(format!(
+            "elephc_phar_list_{}_{}",
+            std::process::id(),
+            "unit"
+        ));
+        let phar_path = base.with_extension("phar");
+        let tar_path = base.with_extension("tar");
+        let zip_path = base.with_extension("zip");
+
+        std::fs::write(
+            &phar_path,
+            build_native_phar(&[("one.txt", b"alpha"), ("dir/two.txt", b"bravo")]),
+        )
+        .unwrap();
+        std::fs::write(
+            &tar_path,
+            build_tar(&[("tar.txt", b"tar"), ("dir/nested.txt", b"nested")]),
+        )
+        .unwrap();
+        std::fs::write(
+            &zip_path,
+            build_zip(&[("zip.txt", b"zip", false), ("def.txt", b"def", true)]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            entry_names_bytes(phar_path.to_string_lossy().as_bytes()).as_deref(),
+            Some(serialized_names(&["one.txt", "dir/two.txt"]).as_slice())
+        );
+        assert_eq!(
+            entry_names_bytes(tar_path.to_string_lossy().as_bytes()).as_deref(),
+            Some(serialized_names(&["tar.txt", "dir/nested.txt"]).as_slice())
+        );
+        assert_eq!(
+            entry_names_bytes(zip_path.to_string_lossy().as_bytes()).as_deref(),
+            Some(serialized_names(&["zip.txt", "def.txt"]).as_slice())
+        );
+
+        std::fs::remove_file(&phar_path).ok();
+        std::fs::remove_file(&tar_path).ok();
+        std::fs::remove_file(&zip_path).ok();
     }
 
     /// Verifies native PHAR writes preserve existing entries and update duplicates.

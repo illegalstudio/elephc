@@ -57,5 +57,7 @@ echo "oop stub length: " . strlen($oop->getStub()) . "\n";
 foreach ($oop as $name => $entry) {
     echo "oop iter {$name}: " . $entry->getContent();
 }
+$scan = new Phar("oop.phar");
+echo "oop scanned count: " . $scan->count() . "\n";
 $oop->delete("array-access.txt");
 echo "oop delete removed array-access entry: " . (isset($oop["array-access.txt"]) ? "no\n" : "yes\n");

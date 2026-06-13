@@ -411,6 +411,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
 ];
 
 const INTERNAL_BUILTIN_FUNCTIONS: &[&str] = &[
+    "__elephc_phar_list_entries",
     "__elephc_phar_set_compression",
 ];
 

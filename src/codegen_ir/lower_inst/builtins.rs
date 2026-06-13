@@ -241,6 +241,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "realpath_cache_size" => io::lower_realpath_cache_size(ctx, inst),
         "file_put_contents" => io::lower_file_put_contents(ctx, inst),
         "__elephc_phar_set_compression" => io::lower_elephc_phar_set_compression(ctx, inst),
+        "__elephc_phar_list_entries" => io::lower_elephc_phar_list_entries(ctx, inst),
         "file_exists" => io::lower_file_exists(ctx, inst),
         "copy" => io::lower_copy(ctx, inst),
         "rename" => io::lower_rename(ctx, inst),

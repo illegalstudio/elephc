@@ -2174,6 +2174,41 @@ unlink("iter.tar");
     );
 }
 
+/// `Phar` and `PharData` seed iteration from archives that already exist.
+#[test]
+fn test_phar_oop_iteration_scans_existing_archives() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("phar://scan.phar/one.txt", "alpha");
+file_put_contents("phar://scan.phar/two.txt", "bravo");
+$p = new Phar("scan.phar");
+echo $p->count() . "|";
+foreach ($p as $name => $info) {
+    echo $name . "=" . $info->getContent() . "|";
+}
+file_put_contents("phar://scan.tar/tar.txt", "tar");
+$tar = new PharData("scan.tar");
+echo $tar->count() . "|";
+foreach ($tar as $name => $info) {
+    echo $name . "=" . $info->getContent() . "|";
+}
+file_put_contents("phar://scan.zip/zip.txt", "zip");
+$zip = new PharData("scan.zip");
+echo $zip->count() . "|";
+foreach ($zip as $name => $info) {
+    echo $name . "=" . $info->getContent();
+}
+unlink("scan.phar");
+unlink("scan.tar");
+unlink("scan.zip");
+"#,
+    );
+    assert_eq!(
+        out,
+        "2|one.txt=alpha|two.txt=bravo|1|tar.txt=tar|1|zip.txt=zip"
+    );
+}
+
 /// `Phar::compressFiles()` and `decompressFiles()` rewrite native PHAR entry
 /// compression while preserving readable payloads.
 #[test]

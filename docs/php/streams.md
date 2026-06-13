@@ -92,16 +92,15 @@ baseline OOP surface with constructors, format/compression/signature constants,
 string metadata/stub accessors, path helpers, and ArrayAccess read/write/isset
 over the same `phar://` paths. ArrayAccess reads return `PharFileInfo` objects
 with `getContent()` for payload reads. `foreach` over a `Phar` / `PharData`
-object visits entries written through that object and yields
-`entryName => PharFileInfo`.
+object visits entries scanned from the archive at construction time plus entries
+written through that object, yielding `entryName => PharFileInfo`.
 `unlink("phar://archive/entry")` and `unset($phar["entry"])` remove entries
 while preserving sibling entries. Native PHAR compression controls support
 `Phar::GZ`, `Phar::BZ2`, and `Phar::NONE`; ZIP compression controls support
 `Phar::GZ` and `Phar::NONE`. Current limits: metadata and stub strings
 are stored on the archive object and are not serialized into the archive file;
-tar compression controls, scanning pre-existing archives into OOP iteration,
-non-string metadata values, and key/private-key signing variants are not
-implemented.
+tar compression controls, non-string metadata values, and key/private-key
+signing variants are not implemented.
 
 `file_get_contents($url)` recognizes runtime `http://`, `https://`, `ftp://`,
 and `ftps://` strings before falling back to `phar://`/filesystem handling.

@@ -106,6 +106,19 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Bool))
         }
+        "__elephc_phar_list_entries" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "__elephc_phar_list_entries() takes exactly 1 argument",
+                ));
+            }
+            checker.require_builtin_library("elephc_phar");
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+        }
         "file" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "file() takes exactly 1 argument"));

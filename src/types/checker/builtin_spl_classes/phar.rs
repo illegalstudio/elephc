@@ -276,7 +276,11 @@ fn phar_construct_body() -> Vec<crate::parser::ast::Stmt> {
         property_assign_stmt(this_expr(), "metadata", string_expr("")),
         property_assign_stmt(this_expr(), "hasMetadata", bool_expr(false)),
         property_assign_stmt(this_expr(), "stub", string_expr("<?php __HALT_COMPILER(); ?>")),
-        property_assign_stmt(this_expr(), "entries", empty_array_expr()),
+        property_assign_stmt(
+            this_expr(),
+            "entries",
+            function_call("__elephc_phar_list_entries", vec![var_expr("filename")]),
+        ),
         property_assign_stmt(this_expr(), "position", int_expr(0)),
     ]
 }
