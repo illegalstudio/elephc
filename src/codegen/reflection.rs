@@ -169,8 +169,13 @@ fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
         AttrArgValue::Float(bits) => ExprKind::FloatLiteral(f64::from_bits(*bits)),
         AttrArgValue::Bool(value) => ExprKind::BoolLiteral(*value),
         AttrArgValue::Str(value) => ExprKind::StringLiteral(value.clone()),
-        AttrArgValue::Array(_) => {
-            unreachable!("array attribute arguments are not collected until a later phase")
+        AttrArgValue::Array(entries) => {
+            // Positional array → a plain `[...]` literal whose elements are the
+            // recursively converted argument expressions. (Keyed/associative
+            // arrays are collected in a later phase.)
+            ExprKind::ArrayLiteral(
+                entries.iter().map(|entry| attr_arg_expr(&entry.value)).collect(),
+            )
         }
     };
     Expr::new(kind, span)
@@ -445,7 +450,12 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             emitter.instruction(&format!("mov x2, #{}", len));                  // x2 = string length
         }
         AttrArgValue::Array(_) => {
-            unreachable!("array attribute arguments are not collected until a later phase")
+            // The frozen legacy AST backend does not materialize nested array
+            // attribute arguments; emit a null placeholder. The active EIR
+            // backend builds the real array.
+            emitter.instruction("mov x0, #8");                                  // runtime tag 8 = null placeholder
+            emitter.instruction("mov x1, xzr");                                 // null carries no low word
+            emitter.instruction("mov x2, xzr");                                 // null carries no high word
         }
     }
     emitter.instruction("bl __rt_mixed_from_value");                            // box the captured payload into an owned mixed cell
@@ -485,7 +495,12 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             emitter.instruction(&format!("mov rsi, {}", len));                  // rsi = string length
         }
         AttrArgValue::Array(_) => {
-            unreachable!("array attribute arguments are not collected until a later phase")
+            // The frozen legacy AST backend does not materialize nested array
+            // attribute arguments; emit a null placeholder. The active EIR
+            // backend builds the real array.
+            emitter.instruction("mov rax, 8");                                  // runtime tag 8 = null placeholder
+            emitter.instruction("xor rdi, rdi");                                // null carries no low word
+            emitter.instruction("xor rsi, rsi");                                // null carries no high word
         }
     }
     emitter.instruction("call __rt_mixed_from_value");                          // box the captured payload into an owned mixed cell

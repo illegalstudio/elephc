@@ -952,6 +952,69 @@ echo count($args), "/", $args[0], "/", $args[1];
     assert_eq!(out, "2/0.75/1");
 }
 
+/// Verifies that a positional array attribute argument (with heterogeneous
+/// element types) round-trips through `getAttributes()->getArguments()`.
+#[test]
+fn test_reflection_attribute_positional_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[Tags([10, 'x', 2.5, true])]
+class A {}
+$arr = (new ReflectionClass('A'))->getAttributes()[0]->getArguments()[0];
+echo count($arr), ":", $arr[0], ",", $arr[1], ",", $arr[2], ",", $arr[3] ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "4:10,x,2.5,T");
+}
+
+/// Verifies that nested array attribute arguments materialize recursively.
+#[test]
+fn test_reflection_attribute_nested_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[Matrix([[1, 2], [3, 4]])]
+class A {}
+$m = (new ReflectionClass('A'))->getAttributes()[0]->getArguments()[0];
+echo $m[0][0], $m[0][1], $m[1][0], $m[1][1];
+"#,
+    );
+    assert_eq!(out, "1234");
+}
+
+/// Verifies that an empty array attribute argument materializes as an empty
+/// array (count 0) rather than being dropped.
+#[test]
+fn test_reflection_attribute_empty_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[Cfg([])]
+class A {}
+$arr = (new ReflectionClass('A'))->getAttributes()[0]->getArguments()[0];
+echo count($arr);
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+/// Verifies that `ReflectionAttribute::newInstance()` constructs the attribute
+/// object with an array constructor argument.
+#[test]
+fn test_reflection_attribute_new_instance_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[\Attribute]
+class Cfg {
+    public function __construct(public array $items) {}
+}
+#[Cfg([7, 8, 9])]
+class A {}
+$obj = (new ReflectionClass('A'))->getAttributes()[0]->newInstance();
+echo $obj->items[0], $obj->items[1], $obj->items[2];
+"#,
+    );
+    assert_eq!(out, "789");
+}
+
 /// Verifies that `ReflectionAttribute::newInstance()` constructs the attribute
 /// object with floating-point constructor arguments, mixed with an int.
 #[test]

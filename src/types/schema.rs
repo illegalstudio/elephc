@@ -31,9 +31,6 @@ pub enum AttrArgValue {
     Bool(bool),
     Str(String),
     Float(u64),
-    // TODO(attr-args): constructed once the nested-array / keyed materializer
-    // lands; collected as unsupported until then.
-    #[allow(dead_code)]
     Array(Vec<AttrArgEntry>),
 }
 
