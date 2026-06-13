@@ -16,14 +16,44 @@ use crate::span::Span;
 
 use super::{FunctionSig, PhpType};
 
-/// Compile-time attribute argument literal. Captures the subset of PHP
-/// attribute argument expressions that reflection helpers can currently
-/// materialize: strings, ints, bools, null, and negative int literals.
+/// Compile-time attribute argument value. Captures the subset of PHP
+/// attribute argument expressions that reflection helpers can materialize:
+/// scalars (string/int/bool/null/float), and nested arrays of the same.
+///
+/// `Float` stores the IEEE-754 bit pattern (`f64::to_bits`) rather than an
+/// `f64` so the enum can keep deriving `Eq`/`Hash`/`Ord` (used by the
+/// reflection de-duplication `BTreeMap` and schema hashing). Reconstruct the
+/// value with `f64::from_bits`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AttrArgValue {
     Null,
     Int(i64),
     Bool(bool),
+    Str(String),
+    Float(u64),
+    // TODO(attr-args): constructed once the nested-array / keyed materializer
+    // lands; collected as unsupported until then.
+    #[allow(dead_code)]
+    Array(Vec<AttrArgEntry>),
+}
+
+/// One entry of an attribute argument list or of a nested attribute array.
+/// `key` is `None` for a positional argument / next sequential array element,
+/// `Some(AttrKey::Str)` for a named argument (`#[A(name: 1)]`) or string array
+/// key, and `Some(AttrKey::Int)` for an explicit integer array key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AttrArgEntry {
+    pub key: Option<AttrKey>,
+    pub value: AttrArgValue,
+}
+
+/// A resolved array/named-argument key for an [`AttrArgEntry`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum AttrKey {
+    // TODO(attr-args): constructed for integer-keyed arrays once the array
+    // materializer lands.
+    #[allow(dead_code)]
+    Int(i64),
     Str(String),
 }
 
@@ -93,18 +123,18 @@ pub struct ClassInfo {
     /// aligned with `attribute_names`. `None` means the source uses legal PHP
     /// attribute arguments that this reflection metadata model cannot
     /// materialize yet; callers that need arguments report that at query time.
-    pub attribute_args: Vec<Option<Vec<AttrArgValue>>>,
+    pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
     /// Attribute names attached to methods visible on this class, keyed by
     /// PHP's case-insensitive method key. Inherited methods keep the metadata
     /// from the declaring class until overridden.
     pub method_attribute_names: HashMap<String, Vec<String>>,
     /// Literal method-attribute args aligned with `method_attribute_names`.
-    pub method_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
+    pub method_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     /// Attribute names attached to properties visible on this class. Property
     /// names are case-sensitive, so the source property name is the key.
     pub property_attribute_names: HashMap<String, Vec<String>>,
     /// Literal property-attribute args aligned with `property_attribute_names`.
-    pub property_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
+    pub property_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     /// Trait names used directly by this class declaration, preserving source order.
     pub used_traits: Vec<String>,
     pub properties: Vec<(String, PhpType)>,

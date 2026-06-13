@@ -106,6 +106,19 @@ echo $attrs[0]->getName();
 echo "\n";
 $attrs[0]->newInstance();
 
+// Attribute arguments can be floats (and negated numeric literals), not just
+// strings and ints. They round-trip through getArguments() unchanged.
+#[Threshold(0.9, -1.5)]
+class Sensor {}
+
+$thresholds = (new ReflectionClass('Sensor'))->getAttributes()[0]->getArguments();
+echo "Sensor thresholds:";
+foreach ($thresholds as $value) {
+    echo " ";
+    echo $value;
+}
+echo "\n";
+
 $method = new ReflectionMethod('Greeter', 'greet');
 echo "ReflectionMethod attrs:";
 foreach ($method->getAttributes() as $attr) {

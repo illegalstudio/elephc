@@ -931,7 +931,7 @@ fn is_phar_archive_class(class_name: &str) -> bool {
 /// arg is `None` (indicating unsupported metadata).
 fn attributes_have_unsupported_args(
     names: &[String],
-    args: &[Option<Vec<crate::types::AttrArgValue>>],
+    args: &[Option<Vec<crate::types::AttrArgEntry>>],
 ) -> bool {
     names.len() != args.len() || args.iter().any(Option::is_none)
 }
