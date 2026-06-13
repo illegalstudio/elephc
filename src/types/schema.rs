@@ -47,9 +47,6 @@ pub struct AttrArgEntry {
 /// A resolved array/named-argument key for an [`AttrArgEntry`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AttrKey {
-    // TODO(attr-args): constructed for integer-keyed arrays once the array
-    // materializer lands.
-    #[allow(dead_code)]
     Int(i64),
     Str(String),
 }

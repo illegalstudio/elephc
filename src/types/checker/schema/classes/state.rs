@@ -215,14 +215,6 @@ pub(super) fn collect_attribute_args(
                     }
                     _ => (None, arg_expr),
                 };
-                // TODO(attr-args): keyed entries (named args, associative
-                // arrays) need the hash-array materializer; until that lands
-                // they stay reported as unsupported metadata so reflection
-                // raises the existing diagnostic rather than miscompiling.
-                if key.is_some() {
-                    supported = false;
-                    break;
-                }
                 match fold_attr_value(value_expr) {
                     Some(value) => entries.push(AttrArgEntry { key, value }),
                     None => {
@@ -266,9 +258,33 @@ fn fold_attr_value(expr: &crate::parser::ast::Expr) -> Option<crate::types::Attr
             }
             Some(AttrArgValue::Array(entries))
         }
-        // TODO(attr-args): associative arrays (and named args) need the keyed
-        // hash materializer; until that lands they stay unsupported so
-        // reflection reports the existing diagnostic.
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            let mut entries = Vec::with_capacity(pairs.len());
+            for (key_expr, value_expr) in pairs {
+                entries.push(AttrArgEntry {
+                    key: Some(fold_attr_key(key_expr)?),
+                    value: fold_attr_value(value_expr)?,
+                });
+            }
+            Some(AttrArgValue::Array(entries))
+        }
+        _ => None,
+    }
+}
+
+/// Folds an associative-array key expression to an [`AttrKey`], or `None` when
+/// it is not an integer or string literal key (the only keys PHP allows).
+fn fold_attr_key(expr: &crate::parser::ast::Expr) -> Option<crate::types::AttrKey> {
+    use crate::parser::ast::ExprKind;
+    use crate::types::AttrKey;
+
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(AttrKey::Int(*value)),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(n) => Some(AttrKey::Int(n.wrapping_neg())),
+            _ => None,
+        },
+        ExprKind::StringLiteral(value) => Some(AttrKey::Str(value.clone())),
         _ => None,
     }
 }

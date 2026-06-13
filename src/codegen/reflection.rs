@@ -23,7 +23,7 @@ use crate::codegen::expr::objects::emit_new_object;
 use crate::codegen::platform::Arch;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
-use crate::types::{AttrArgEntry, AttrArgValue, ClassInfo, PhpType};
+use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, PhpType};
 
 #[derive(Clone)]
 /// Factory record for compile-time reflection attribute metadata.
@@ -33,6 +33,10 @@ pub(crate) struct ReflectionAttributeFactory {
     pub(crate) id: i64,
     pub(crate) class_name: String,
     pub(crate) args: Vec<AttrArgEntry>,
+    /// True when `class_name` resolves to a real class. `newInstance()` only
+    /// emits a construction branch for resolvable factories; `getArguments()`
+    /// uses every factory (including non-class attributes) to return arguments.
+    pub(crate) resolvable: bool,
 }
 
 /// Looks up `class_name` in `classes` using PHPsymbol-key normalization
@@ -77,12 +81,13 @@ pub(crate) fn collect_attribute_factories(
     }
 
     unique
-        .into_keys()
+        .into_iter()
         .enumerate()
-        .map(|(idx, (class_name, args))| ReflectionAttributeFactory {
+        .map(|(idx, ((class_name, args), resolvable))| ReflectionAttributeFactory {
             id: (idx as i64) + 1,
             class_name,
             args,
+            resolvable,
         })
         .collect()
 }
@@ -95,12 +100,15 @@ pub(crate) fn attribute_factory_id(
     attr_name: &str,
     attr_args: &[AttrArgEntry],
 ) -> i64 {
-    let Some(resolved_name) = resolve_class_name(classes, attr_name) else {
-        return 0;
-    };
+    // Non-class attributes are registered under their raw name (see
+    // `collect_from_attribute_lists`), so fall back to it when the name does
+    // not resolve to a real class.
+    let lookup_name = resolve_class_name(classes, attr_name)
+        .map(|resolved| resolved.to_string())
+        .unwrap_or_else(|| attr_name.to_string());
     collect_attribute_factories(classes)
         .into_iter()
-        .find(|factory| factory.class_name == resolved_name && factory.args == attr_args)
+        .find(|factory| factory.class_name == lookup_name && factory.args == attr_args)
         .map(|factory| factory.id)
         .unwrap_or(0)
 }
@@ -113,6 +121,12 @@ pub(crate) fn build_attribute_new_instance_body(
     let factories = collect_attribute_factories(classes);
     let mut body = Vec::new();
     for factory in factories {
+        // Only resolvable attribute classes can be instantiated. Non-class
+        // attributes are registered (so `getArguments()` can find them) but
+        // have no construction branch here; they fall through to `return null`.
+        if !factory.resolvable {
+            continue;
+        }
         let condition = factory_condition(factory.id);
         let then_body = vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
@@ -160,25 +174,103 @@ fn factory_condition(factory_id: i64) -> Expr {
     )
 }
 
-/// Converts one captured literal attribute argument into a synthetic AST expression.
+/// Converts one captured literal attribute argument into a synthetic AST
+/// expression. Nested arrays (positional or associative) become the
+/// corresponding array-literal expression so they lower through the normal,
+/// architecture-independent array path.
 fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
     let span = crate::span::Span::dummy();
-    let kind = match arg {
-        AttrArgValue::Null => ExprKind::Null,
-        AttrArgValue::Int(value) => ExprKind::IntLiteral(*value),
-        AttrArgValue::Float(bits) => ExprKind::FloatLiteral(f64::from_bits(*bits)),
-        AttrArgValue::Bool(value) => ExprKind::BoolLiteral(*value),
-        AttrArgValue::Str(value) => ExprKind::StringLiteral(value.clone()),
-        AttrArgValue::Array(entries) => {
-            // Positional array → a plain `[...]` literal whose elements are the
-            // recursively converted argument expressions. (Keyed/associative
-            // arrays are collected in a later phase.)
-            ExprKind::ArrayLiteral(
-                entries.iter().map(|entry| attr_arg_expr(&entry.value)).collect(),
-            )
-        }
+    match arg {
+        AttrArgValue::Null => Expr::new(ExprKind::Null, span),
+        AttrArgValue::Int(value) => Expr::new(ExprKind::IntLiteral(*value), span),
+        AttrArgValue::Float(bits) => Expr::new(ExprKind::FloatLiteral(f64::from_bits(*bits)), span),
+        AttrArgValue::Bool(value) => Expr::new(ExprKind::BoolLiteral(*value), span),
+        AttrArgValue::Str(value) => Expr::new(ExprKind::StringLiteral(value.clone()), span),
+        AttrArgValue::Array(entries) => entries_to_array_expr(entries, false),
+    }
+}
+
+/// Builds an array-literal AST expression from captured attribute-arg entries.
+/// When `force_assoc` is set (or any entry carries a key — a named argument or
+/// explicit array key) it produces an associative `ArrayLiteralAssoc` with
+/// positional entries taking their sequential integer key, matching PHP's
+/// `getArguments()` ordering; otherwise it produces a positional `ArrayLiteral`.
+/// `force_assoc` keeps the top-level `getArguments()` result a single array kind
+/// (a hash) so its declared associative type matches the runtime value.
+fn entries_to_array_expr(entries: &[AttrArgEntry], force_assoc: bool) -> Expr {
+    let span = crate::span::Span::dummy();
+    if force_assoc || entries.iter().any(|entry| entry.key.is_some()) {
+        let mut next_index = 0i64;
+        let pairs = entries
+            .iter()
+            .map(|entry| {
+                let key = match &entry.key {
+                    Some(key) => attr_key_expr(key),
+                    None => {
+                        let index = next_index;
+                        next_index += 1;
+                        Expr::new(ExprKind::IntLiteral(index), span)
+                    }
+                };
+                (key, attr_arg_expr(&entry.value))
+            })
+            .collect();
+        Expr::new(ExprKind::ArrayLiteralAssoc(pairs), span)
+    } else {
+        Expr::new(
+            ExprKind::ArrayLiteral(entries.iter().map(|entry| attr_arg_expr(&entry.value)).collect()),
+            span,
+        )
+    }
+}
+
+/// Converts a captured attribute array/named key into a synthetic AST key
+/// expression.
+fn attr_key_expr(key: &AttrKey) -> Expr {
+    let span = crate::span::Span::dummy();
+    let kind = match key {
+        AttrKey::Int(value) => ExprKind::IntLiteral(*value),
+        AttrKey::Str(value) => ExprKind::StringLiteral(value.clone()),
     };
     Expr::new(kind, span)
+}
+
+/// Builds the synthetic body for `ReflectionAttribute::getArguments()`. For
+/// each attribute whose class resolves, it dispatches on the factory id and
+/// returns the captured arguments as a lowered array literal — so named
+/// arguments and associative arrays are materialized through the normal array
+/// path. Attributes without a resolvable class fall back to the `$__args`
+/// property populated at construction.
+pub(crate) fn build_attribute_get_arguments_body(
+    classes: &HashMap<String, ClassInfo>,
+) -> Vec<Stmt> {
+    let span = crate::span::Span::dummy();
+    let factories = collect_attribute_factories(classes);
+    let mut body = Vec::new();
+    for factory in factories {
+        let condition = factory_condition(factory.id);
+        let then_body = vec![Stmt::new(
+            StmtKind::Return(Some(entries_to_array_expr(&factory.args, true))),
+            span,
+        )];
+        body.push(Stmt::new(
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            span,
+        ));
+    }
+    // Every attribute with supported arguments is registered as a factory
+    // above (class or not), so this is only a defensive default; return an
+    // empty associative array to match the declared return type.
+    body.push(Stmt::new(
+        StmtKind::Return(Some(entries_to_array_expr(&[], true))),
+        span,
+    ));
+    body
 }
 
 /// Converts a canonical class string into the `Name` shape expected by `NewObject`.
@@ -513,7 +605,7 @@ fn collect_from_attribute_lists(
     classes: &HashMap<String, ClassInfo>,
     names: &[String],
     args: &[Option<Vec<AttrArgEntry>>],
-    unique: &mut BTreeMap<(String, Vec<AttrArgEntry>), ()>,
+    unique: &mut BTreeMap<(String, Vec<AttrArgEntry>), bool>,
 ) {
     if names.len() != args.len() {
         return;
@@ -522,9 +614,14 @@ fn collect_from_attribute_lists(
         let Some(Some(attr_args)) = args.get(idx) else {
             continue;
         };
-        let Some(resolved_name) = resolve_class_name(classes, attr_name) else {
-            continue;
+        // Non-class attributes (`#[Foo(1)]` with no `Foo` class) still expose
+        // their arguments through reflection, so they are registered under
+        // their raw name with `resolvable = false`. The map value records
+        // resolvability so `newInstance()` can skip them.
+        let (name, resolvable) = match resolve_class_name(classes, attr_name) {
+            Some(resolved) => (resolved.to_string(), true),
+            None => (attr_name.clone(), false),
         };
-        unique.insert((resolved_name.to_string(), attr_args.clone()), ());
+        unique.entry((name, attr_args.clone())).or_insert(resolvable);
     }
 }

@@ -996,6 +996,64 @@ echo count($arr);
     assert_eq!(out, "0");
 }
 
+/// Verifies that named attribute arguments are exposed by `getArguments()`
+/// under their string keys (alongside positional integer-keyed arguments),
+/// including an array value passed to a named argument.
+#[test]
+fn test_reflection_attribute_named_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+#[\Attribute]
+class Route {
+    public function __construct(
+        public string $path,
+        public ?string $name = null,
+        public array $methods = []
+    ) {}
+}
+#[Route('/home', name: 'home_page', methods: ['GET', 'POST'])]
+class HomeController {}
+$args = (new ReflectionClass('HomeController'))->getAttributes()[0]->getArguments();
+echo count($args), "|", $args[0], "|", $args['name'], "|", $args['methods'][0], $args['methods'][1];
+"#,
+    );
+    assert_eq!(out, "3|/home|home_page|GETPOST");
+}
+
+/// Verifies that an associative-array attribute argument round-trips through
+/// `getArguments()` with its string keys preserved.
+#[test]
+fn test_reflection_attribute_associative_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[Cfg(['width' => 80, 'height' => 25])]
+class A {}
+$cfg = (new ReflectionClass('A'))->getAttributes()[0]->getArguments()[0];
+echo $cfg['width'], "x", $cfg['height'];
+"#,
+    );
+    assert_eq!(out, "80x25");
+}
+
+/// Verifies that `ReflectionAttribute::newInstance()` constructs the attribute
+/// object when the attribute uses named arguments.
+#[test]
+fn test_reflection_attribute_new_instance_named_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+#[\Attribute]
+class Opt {
+    public function __construct(public int $a, public int $b) {}
+}
+#[Opt(a: 7, b: 9)]
+class A {}
+$obj = (new ReflectionClass('A'))->getAttributes()[0]->newInstance();
+echo $obj->a, "-", $obj->b;
+"#,
+    );
+    assert_eq!(out, "7-9");
+}
+
 /// Verifies that `ReflectionAttribute::newInstance()` constructs the attribute
 /// object with an array constructor argument.
 #[test]

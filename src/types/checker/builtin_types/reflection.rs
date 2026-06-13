@@ -635,7 +635,12 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             sig.return_type = PhpType::Str;
         }
         if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getArguments")) {
-            sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
+            // Attribute arguments can be keyed (named arguments / associative
+            // arrays), so the result is an associative array of mixed values.
+            sig.return_type = PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            };
         }
         if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("newInstance")) {
             sig.return_type = PhpType::Mixed;
