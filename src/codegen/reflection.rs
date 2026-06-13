@@ -23,7 +23,7 @@ use crate::codegen::expr::objects::emit_new_object;
 use crate::codegen::platform::Arch;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
-use crate::types::{AttrArgValue, ClassInfo, PhpType};
+use crate::types::{AttrArgEntry, AttrArgValue, ClassInfo, PhpType};
 
 #[derive(Clone)]
 /// Factory record for compile-time reflection attribute metadata.
@@ -32,7 +32,7 @@ use crate::types::{AttrArgValue, ClassInfo, PhpType};
 pub(crate) struct ReflectionAttributeFactory {
     pub(crate) id: i64,
     pub(crate) class_name: String,
-    pub(crate) args: Vec<AttrArgValue>,
+    pub(crate) args: Vec<AttrArgEntry>,
 }
 
 /// Looks up `class_name` in `classes` using PHPsymbol-key normalization
@@ -93,7 +93,7 @@ pub(crate) fn collect_attribute_factories(
 pub(crate) fn attribute_factory_id(
     classes: &HashMap<String, ClassInfo>,
     attr_name: &str,
-    attr_args: &[AttrArgValue],
+    attr_args: &[AttrArgEntry],
 ) -> i64 {
     let Some(resolved_name) = resolve_class_name(classes, attr_name) else {
         return 0;
@@ -118,7 +118,7 @@ pub(crate) fn build_attribute_new_instance_body(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::NewObject {
                     class_name: name_from_canonical(&factory.class_name),
-                    args: factory.args.iter().map(attr_arg_expr).collect(),
+                    args: factory.args.iter().map(|entry| attr_arg_expr(&entry.value)).collect(),
                 },
                 span,
             ))),
@@ -166,8 +166,12 @@ fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
     let kind = match arg {
         AttrArgValue::Null => ExprKind::Null,
         AttrArgValue::Int(value) => ExprKind::IntLiteral(*value),
+        AttrArgValue::Float(bits) => ExprKind::FloatLiteral(f64::from_bits(*bits)),
         AttrArgValue::Bool(value) => ExprKind::BoolLiteral(*value),
         AttrArgValue::Str(value) => ExprKind::StringLiteral(value.clone()),
+        AttrArgValue::Array(_) => {
+            unreachable!("array attribute arguments are not collected until a later phase")
+        }
     };
     Expr::new(kind, span)
 }
@@ -184,7 +188,7 @@ fn name_from_canonical(class_name: &str) -> Name {
 /// Returns the emitted array type stamp (`array<ReflectionAttribute>`).
 pub(crate) fn emit_reflection_attribute_array(
     attr_names: &[String],
-    attr_args: &[Option<Vec<AttrArgValue>>],
+    attr_args: &[Option<Vec<AttrArgEntry>>],
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
@@ -310,7 +314,7 @@ pub(crate) fn emit_set_string_property(
 fn emit_set_args_property(
     emitter: &mut Emitter,
     data: &mut DataSection,
-    attr_arg_list: &[AttrArgValue],
+    attr_arg_list: &[AttrArgEntry],
     obj_ptr_scratch: &str,
 ) {
     let result_reg = abi::int_result_reg(emitter);
@@ -345,7 +349,8 @@ fn emit_set_args_property(
     emit_array_value_type_stamp(emitter, result_reg, &PhpType::Mixed);
 
     // -- box and push each literal arg --
-    for arg in attr_arg_list {
+    for entry in attr_arg_list {
+        let arg = &entry.value;
         match emitter.target.arch {
             Arch::AArch64 => {
                 abi::emit_push_reg(emitter, result_reg);                        // save the args array pointer across the boxing helper call
@@ -422,6 +427,11 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             abi::emit_load_int_immediate(emitter, "x1", *value);
             emitter.instruction("mov x2, xzr");                                 // ints do not use the high word
         }
+        AttrArgValue::Float(bits) => {
+            emitter.instruction("mov x0, #2");                                  // runtime tag 2 = float payload
+            abi::emit_load_int_immediate(emitter, "x1", *bits as i64);          // x1 = IEEE-754 bit pattern
+            emitter.instruction("mov x2, xzr");                                 // floats do not use the high word
+        }
         AttrArgValue::Bool(value) => {
             emitter.instruction("mov x0, #3");                                  // runtime tag 3 = boolean payload
             emitter.instruction(&format!("mov x1, #{}", *value as u64));        // x1 = 0 or 1
@@ -433,6 +443,9 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string payload
             abi::emit_symbol_address(emitter, "x1", &sym);                      // x1 = string data address
             emitter.instruction(&format!("mov x2, #{}", len));                  // x2 = string length
+        }
+        AttrArgValue::Array(_) => {
+            unreachable!("array attribute arguments are not collected until a later phase")
         }
     }
     emitter.instruction("bl __rt_mixed_from_value");                            // box the captured payload into an owned mixed cell
@@ -454,6 +467,11 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             abi::emit_load_int_immediate(emitter, "rdi", *value);
             emitter.instruction("xor rsi, rsi");                                // ints do not use the high word
         }
+        AttrArgValue::Float(bits) => {
+            emitter.instruction("mov rax, 2");                                  // runtime tag 2 = float payload
+            abi::emit_load_int_immediate(emitter, "rdi", *bits as i64);         // rdi = IEEE-754 bit pattern
+            emitter.instruction("xor rsi, rsi");                                // floats do not use the high word
+        }
         AttrArgValue::Bool(value) => {
             emitter.instruction("mov rax, 3");                                  // runtime tag 3 = boolean payload
             emitter.instruction(&format!("mov rdi, {}", *value as u64));        // rdi = 0 or 1
@@ -466,6 +484,9 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             abi::emit_symbol_address(emitter, "rdi", &sym);                     // rdi = string data address
             emitter.instruction(&format!("mov rsi, {}", len));                  // rsi = string length
         }
+        AttrArgValue::Array(_) => {
+            unreachable!("array attribute arguments are not collected until a later phase")
+        }
     }
     emitter.instruction("call __rt_mixed_from_value");                          // box the captured payload into an owned mixed cell
 }
@@ -476,8 +497,8 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
 fn collect_from_attribute_lists(
     classes: &HashMap<String, ClassInfo>,
     names: &[String],
-    args: &[Option<Vec<AttrArgValue>>],
-    unique: &mut BTreeMap<(String, Vec<AttrArgValue>), ()>,
+    args: &[Option<Vec<AttrArgEntry>>],
+    unique: &mut BTreeMap<(String, Vec<AttrArgEntry>), ()>,
 ) {
     if names.len() != args.len() {
         return;

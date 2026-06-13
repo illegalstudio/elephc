@@ -61,10 +61,10 @@ pub(super) struct ClassBuildState {
     pub(super) interfaces: Vec<String>,
     pub(super) method_attribute_names: HashMap<String, Vec<String>>,
     pub(super) method_attribute_args:
-        HashMap<String, Vec<Option<Vec<crate::types::AttrArgValue>>>>,
+        HashMap<String, Vec<Option<Vec<crate::types::AttrArgEntry>>>>,
     pub(super) property_attribute_names: HashMap<String, Vec<String>>,
     pub(super) property_attribute_args:
-        HashMap<String, Vec<Option<Vec<crate::types::AttrArgValue>>>>,
+        HashMap<String, Vec<Option<Vec<crate::types::AttrArgEntry>>>>,
 }
 
 impl ClassBuildState {
@@ -194,45 +194,71 @@ pub(super) fn collect_attribute_names(
 /// reflection helper needs the missing argument payload.
 pub(super) fn collect_attribute_args(
     groups: &[crate::parser::ast::AttributeGroup],
-) -> Vec<Option<Vec<crate::types::AttrArgValue>>> {
+) -> Vec<Option<Vec<crate::types::AttrArgEntry>>> {
     use crate::parser::ast::ExprKind;
-    use crate::types::AttrArgValue;
+    use crate::types::{AttrArgEntry, AttrKey};
 
     let mut out = Vec::new();
     for group in groups {
         for attr in &group.attributes {
-            let mut args = Vec::new();
+            let mut entries = Vec::new();
             let mut supported = true;
             for arg_expr in &attr.args {
-                match &arg_expr.kind {
-                    ExprKind::StringLiteral(value) => {
-                        args.push(AttrArgValue::Str(value.clone()))
+                // A named argument (`#[A(name: value)]`) keys the entry by its
+                // string name; positional arguments stay unkeyed and reflection
+                // materializes them at sequential integer offsets like PHP.
+                let (key, value_expr) = match &arg_expr.kind {
+                    ExprKind::NamedArg { name, value } => {
+                        (Some(AttrKey::Str(name.clone())), value.as_ref())
                     }
-                    ExprKind::IntLiteral(value) => args.push(AttrArgValue::Int(*value)),
-                    ExprKind::BoolLiteral(value) => args.push(AttrArgValue::Bool(*value)),
-                    ExprKind::Null => args.push(AttrArgValue::Null),
-                    ExprKind::Negate(inner) => {
-                        if let ExprKind::IntLiteral(n) = &inner.kind {
-                            args.push(AttrArgValue::Int(n.wrapping_neg()));
-                        } else {
-                            supported = false;
-                            break;
-                        }
-                    }
-                    ExprKind::NamedArg { .. } => {
-                        supported = false;
-                        break;
-                    }
-                    _ => {
+                    _ => (None, arg_expr),
+                };
+                // TODO(attr-args): keyed entries (named args, associative
+                // arrays) need the hash-array materializer; until that lands
+                // they stay reported as unsupported metadata so reflection
+                // raises the existing diagnostic rather than miscompiling.
+                if key.is_some() {
+                    supported = false;
+                    break;
+                }
+                match fold_attr_value(value_expr) {
+                    Some(value) => entries.push(AttrArgEntry { key, value }),
+                    None => {
                         supported = false;
                         break;
                     }
                 }
             }
-            out.push(if supported { Some(args) } else { None });
+            out.push(if supported { Some(entries) } else { None });
         }
     }
     out
+}
+
+/// Folds a single attribute-argument expression to a compile-time
+/// [`AttrArgValue`], or `None` when the expression is not a constant shape
+/// reflection can materialize. Handles scalars (string/int/bool/null/float)
+/// and negation of numeric literals.
+fn fold_attr_value(expr: &crate::parser::ast::Expr) -> Option<crate::types::AttrArgValue> {
+    use crate::parser::ast::ExprKind;
+    use crate::types::AttrArgValue;
+
+    match &expr.kind {
+        ExprKind::StringLiteral(value) => Some(AttrArgValue::Str(value.clone())),
+        ExprKind::IntLiteral(value) => Some(AttrArgValue::Int(*value)),
+        ExprKind::FloatLiteral(value) => Some(AttrArgValue::Float(value.to_bits())),
+        ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
+        ExprKind::Null => Some(AttrArgValue::Null),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(n) => Some(AttrArgValue::Int(n.wrapping_neg())),
+            ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-n).to_bits())),
+            _ => None,
+        },
+        // TODO(attr-args): arrays (positional + associative) need the
+        // nested-array / keyed hash materializer; until that lands they stay
+        // unsupported so reflection reports the existing diagnostic.
+        _ => None,
+    }
 }
 
 /// Returns `true` if the class declaration carries the PHP 8.2

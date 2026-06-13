@@ -921,6 +921,55 @@ foreach ($attrs as $attr) {
     assert_eq!(out, "2\nAuthor:[Ada][1815]\nVersion:[1.0][1]\n");
 }
 
+/// Verifies that floating-point attribute arguments (including a negated
+/// literal) round-trip through `ReflectionClass::getAttributes()` /
+/// `getArguments()` and echo identically to PHP.
+#[test]
+fn test_reflection_attribute_float_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+#[Config(3.14, 2.5, -0.5)]
+class Widget {}
+$args = (new ReflectionClass('Widget'))->getAttributes()[0]->getArguments();
+echo $args[0], "|", $args[1], "|", $args[2];
+"#,
+    );
+    assert_eq!(out, "3.14|2.5|-0.5");
+}
+
+/// Verifies that floating-point attribute arguments are exposed by the
+/// `class_attribute_args()` procedural helper (runtime data-table path).
+#[test]
+fn test_class_attribute_args_float_value() {
+    let out = compile_and_run(
+        r#"<?php
+#[Threshold(0.75, 1)]
+class Sensor {}
+$args = class_attribute_args('Sensor', 'Threshold');
+echo count($args), "/", $args[0], "/", $args[1];
+"#,
+    );
+    assert_eq!(out, "2/0.75/1");
+}
+
+/// Verifies that `ReflectionAttribute::newInstance()` constructs the attribute
+/// object with floating-point constructor arguments, mixed with an int.
+#[test]
+fn test_reflection_attribute_new_instance_float_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class Range {
+    public function __construct(public float $min, public float $max, public int $steps) {}
+}
+#[Range(1.5, 9.5, 4)]
+class Dial {}
+$r = (new ReflectionClass('Dial'))->getAttributes()[0]->newInstance();
+echo $r->min, "|", $r->max, "|", $r->steps;
+"#,
+    );
+    assert_eq!(out, "1.5|9.5|4");
+}
+
 /// Verifies that `ReflectionClass::getName()` returns the declared class name
 /// for a regular class reflector.
 #[test]

@@ -15,7 +15,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
-use crate::types::AttrArgValue;
+use crate::types::AttrArgEntry;
 
 use super::super::super::context::FunctionContext;
 
@@ -23,7 +23,7 @@ use super::super::super::context::FunctionContext;
 struct ReflectionOwnerMetadata {
     reflected_name: Option<String>,
     attr_names: Vec<String>,
-    attr_args: Vec<Option<Vec<AttrArgValue>>>,
+    attr_args: Vec<Option<Vec<AttrArgEntry>>>,
 }
 
 /// Returns true for reflection owner classes that need metadata-aware construction.
@@ -646,7 +646,7 @@ fn emit_reflection_attrs_property(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     attr_names: &[String],
-    attr_args: &[Option<Vec<AttrArgValue>>],
+    attr_args: &[Option<Vec<AttrArgEntry>>],
 ) -> Result<()> {
     let (attrs_low_offset, attrs_high_offset) = reflection_attrs_offsets(class_name);
     let result_reg = abi::int_result_reg(ctx.emitter);
