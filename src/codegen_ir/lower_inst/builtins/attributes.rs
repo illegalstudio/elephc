@@ -451,7 +451,16 @@ fn emit_box_scalar_arg_aarch64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue
             ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the captured string length as the mixed high word
         }
         AttrArgValue::Array(_) => {
-            unreachable!("array attribute arguments are not collected until a later phase")
+            unreachable!("array attribute arguments are boxed by emit_box_arg")
+        }
+        AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(..) => {
+            // Deferred symbolic references (global/class constants, enum cases)
+            // are materialized by the factory-dispatched getArguments()/
+            // newInstance() bodies; the fallback $__args array stores a null
+            // placeholder so this path never resolves a constant at asm-emit time.
+            ctx.emitter.instruction("mov x0, #8");                              // runtime tag 8 = null placeholder
+            ctx.emitter.instruction("mov x1, xzr");                             // null mixed payloads carry no low word
+            ctx.emitter.instruction("mov x2, xzr");                             // null mixed payloads carry no high word
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
@@ -489,7 +498,16 @@ fn emit_box_scalar_arg_x86_64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue)
             ctx.emitter.instruction(&format!("mov rsi, {}", len));              // pass the captured string length as the mixed high word
         }
         AttrArgValue::Array(_) => {
-            unreachable!("array attribute arguments are not collected until a later phase")
+            unreachable!("array attribute arguments are boxed by emit_box_arg")
+        }
+        AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(..) => {
+            // Deferred symbolic references (global/class constants, enum cases)
+            // are materialized by the factory-dispatched getArguments()/
+            // newInstance() bodies; the fallback $__args array stores a null
+            // placeholder so this path never resolves a constant at asm-emit time.
+            ctx.emitter.instruction("mov rax, 8");                              // runtime tag 8 = null placeholder
+            ctx.emitter.instruction("xor rdi, rdi");                            // null mixed payloads carry no low word
+            ctx.emitter.instruction("xor rsi, rsi");                            // null mixed payloads carry no high word
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");

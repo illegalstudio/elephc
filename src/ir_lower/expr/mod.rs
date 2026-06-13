@@ -5586,6 +5586,12 @@ fn assoc_array_literal_value_type_for_ir(
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+        // A class constant or enum case must be typed the way `lower_scoped_constant`
+        // resolves it, not by the syntactic `::class`-is-string default, or the hash
+        // value-type stamp would diverge from the lowered value and corrupt reads.
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_value_type_for_ir(ctx, receiver, name, value)
+        }
         ExprKind::Variable(name) => ir_array_storage_type(
             ctx.local_types
                 .get(name)
@@ -5612,6 +5618,24 @@ fn assoc_array_literal_value_type_for_ir(
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
         _ => ir_array_storage_type(infer_expr_type_syntactic(value)),
     }
+}
+
+/// Returns the EIR storage value type for a scoped-constant array value,
+/// resolving a class/interface constant the same way `lower_scoped_constant`
+/// lowers it so the hash value-type stamp matches the value actually stored
+/// (rather than the syntactic `::class`-is-string default). Falls back to the
+/// syntactic guess when the constant cannot be resolved.
+fn scoped_constant_value_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    member: &str,
+    value: &Expr,
+) -> PhpType {
+    let class_name = scoped_constant_receiver_name(ctx, receiver);
+    if let Some(const_expr) = ctx.scoped_constant_value(&class_name, member) {
+        return ir_array_storage_type(infer_expr_type_syntactic(&const_expr));
+    }
+    ir_array_storage_type(infer_expr_type_syntactic(value))
 }
 
 /// Returns the element/value type for an array-access expression used inside a literal.

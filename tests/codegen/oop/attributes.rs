@@ -1455,3 +1455,131 @@ echo "|", $t1->getName(), "|", $t1->isBuiltin() ? "b" : "-", "|", $t1->allowsNul
     );
     assert_eq!(out, "Widget|-|n|string|b|-");
 }
+
+/// Verifies a global-constant attribute argument (`#[A(CONST)]`) resolves to the
+/// constant's value through `getArguments()`, preserving its integer type.
+#[test]
+fn test_attribute_global_constant_argument() {
+    let out = compile_and_run(
+        r#"<?php
+const MAX_LEN = 50;
+#[Constraint(MAX_LEN)]
+class Field {}
+$args = (new ReflectionClass('Field'))->getAttributes()[0]->getArguments();
+var_dump($args[0]);
+"#,
+    );
+    assert_eq!(out, "int(50)\n");
+}
+
+/// Verifies a class-constant attribute argument (`#[A(C::CONST)]`) resolves to
+/// the constant's value, not the syntactic `::class`-is-string default, so the
+/// hash value-type stamp matches the lowered value.
+#[test]
+fn test_attribute_class_constant_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Limits { const DEFAULT_MAX = 7; const LABEL = "hi"; }
+#[Constraint(Limits::DEFAULT_MAX, Limits::LABEL)]
+class Field {}
+$args = (new ReflectionClass('Field'))->getAttributes()[0]->getArguments();
+var_dump($args[0]);
+var_dump($args[1]);
+"#,
+    );
+    assert_eq!(out, "int(7)\nstring(2) \"hi\"\n");
+}
+
+/// Verifies an enum-case attribute argument (`#[A(E::Case)]`) is parsed and
+/// compiles, and the attribute name is still reflectable. Materializing the enum
+/// *case object* through `getArguments()` is a documented follow-up (it has a
+/// `linux-x86_64`-specific ownership bug), so the arguments are not reflectable
+/// yet — only the attribute name is.
+#[test]
+fn test_attribute_enum_case_argument_compiles_and_lists_name() {
+    let out = compile_and_run(
+        r#"<?php
+enum Priority: string { case High = 'high'; case Low = 'low'; }
+#[Level(Priority::High)]
+class Task {}
+foreach (class_attribute_names('Task') as $name) {
+    echo $name;
+}
+"#,
+    );
+    assert_eq!(out, "Level");
+}
+
+/// Verifies symbolic references nested inside an array attribute argument
+/// resolve element-by-element through `getArguments()`.
+#[test]
+fn test_attribute_constant_argument_in_array() {
+    let out = compile_and_run(
+        r#"<?php
+const FLOOR = 1;
+class Limits { const CEIL = 9; }
+#[Range([FLOOR, Limits::CEIL])]
+class Field {}
+$bounds = (new ReflectionClass('Field'))->getAttributes()[0]->getArguments()[0];
+echo $bounds[0], "-", $bounds[1];
+"#,
+    );
+    assert_eq!(out, "1-9");
+}
+
+/// Verifies a class-constant supplied as a named argument resolves and is
+/// returned under its string key by `getArguments()`.
+#[test]
+fn test_attribute_named_constant_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Limits { const DEFAULT_MAX = 42; }
+#[Constraint(max: Limits::DEFAULT_MAX)]
+class Field {}
+$args = (new ReflectionClass('Field'))->getAttributes()[0]->getArguments();
+var_dump($args['max']);
+"#,
+    );
+    assert_eq!(out, "int(42)\n");
+}
+
+/// Verifies `newInstance()` constructs the attribute with global- and
+/// class-constant arguments resolved to their values.
+#[test]
+fn test_attribute_new_instance_with_constant_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+const MAX_LEN = 50;
+class Limits { const DEFAULT_MAX = 7; }
+#[\Attribute]
+class Config {
+    public int $limit;
+    public int $max;
+    public function __construct(int $limit, int $max) {
+        $this->limit = $limit;
+        $this->max = $max;
+    }
+}
+#[Config(MAX_LEN, Limits::DEFAULT_MAX)]
+class Service {}
+$cfg = (new ReflectionClass('Service'))->getAttributes()[0]->newInstance();
+echo $cfg->limit, "|", $cfg->max;
+"#,
+    );
+    assert_eq!(out, "50|7");
+}
+
+/// Verifies an attribute argument referencing an *unresolvable* class constant
+/// (the built-in `Attribute::TARGET_CLASS`, which elephc does not register)
+/// still compiles — its arguments are simply not reflectable.
+#[test]
+fn test_attribute_unresolvable_constant_argument_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute(Attribute::TARGET_CLASS)]
+class MyAttr {}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}

@@ -24,6 +24,15 @@ use super::{FunctionSig, PhpType};
 /// `f64` so the enum can keep deriving `Eq`/`Hash`/`Ord` (used by the
 /// reflection de-duplication `BTreeMap` and schema hashing). Reconstruct the
 /// value with `f64::from_bits`.
+///
+/// `ConstRef` and `ScopedConst` are *deferred symbolic references* — a global
+/// constant name, or a `Type::MEMBER` class-constant / enum-case reference.
+/// Their values are not known at schema-collection time (global constants are
+/// not yet registered and enum cases are not yet built), so they carry the
+/// canonical names and are resolved later, when the synthetic reflection method
+/// bodies (`getArguments()` / `newInstance()`) are lowered through the normal
+/// constant/enum resolution path. Enum-case references resolve to the case
+/// *object*, matching PHP's `ReflectionAttribute::getArguments()`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AttrArgValue {
     Null,
@@ -32,6 +41,11 @@ pub enum AttrArgValue {
     Str(String),
     Float(u64),
     Array(Vec<AttrArgEntry>),
+    /// Reference to a global constant by canonical name (`#[A(SOME_CONST)]`).
+    ConstRef(String),
+    /// Reference to a class constant or enum case, carried as
+    /// (canonical type name, member name) — e.g. `#[A(C::BAR)]` or `#[A(E::Case)]`.
+    ScopedConst(String, String),
 }
 
 /// One entry of an attribute argument list or of a nested attribute array.

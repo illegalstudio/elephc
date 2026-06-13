@@ -22,7 +22,7 @@ use crate::codegen::expr::arrays::emit_array_value_type_stamp;
 use crate::codegen::expr::objects::emit_new_object;
 use crate::codegen::platform::Arch;
 use crate::names::{php_symbol_key, Name};
-use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, PhpType};
 
 #[derive(Clone)]
@@ -174,10 +174,15 @@ fn factory_condition(factory_id: i64) -> Expr {
     )
 }
 
-/// Converts one captured literal attribute argument into a synthetic AST
-/// expression. Nested arrays (positional or associative) become the
-/// corresponding array-literal expression so they lower through the normal,
-/// architecture-independent array path.
+/// Converts one captured attribute argument into a synthetic AST expression.
+/// Nested arrays (positional or associative) become the corresponding
+/// array-literal expression, and symbolic references (global constant, class
+/// constant, enum case) become the corresponding reference expression — all so
+/// they lower through the normal, architecture-independent paths. Reference
+/// names were canonicalised by name resolution at capture time, so the
+/// re-emitted nodes resolve directly during lowering (the global/class constant
+/// folds to its value; an enum case materializes the case object, matching
+/// PHP's `ReflectionAttribute::getArguments()`).
 fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
     let span = crate::span::Span::dummy();
     match arg {
@@ -187,6 +192,16 @@ fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
         AttrArgValue::Bool(value) => Expr::new(ExprKind::BoolLiteral(*value), span),
         AttrArgValue::Str(value) => Expr::new(ExprKind::StringLiteral(value.clone()), span),
         AttrArgValue::Array(entries) => entries_to_array_expr(entries, false),
+        AttrArgValue::ConstRef(name) => {
+            Expr::new(ExprKind::ConstRef(name_from_canonical(name)), span)
+        }
+        AttrArgValue::ScopedConst(type_name, member) => Expr::new(
+            ExprKind::ScopedConstantAccess {
+                receiver: StaticReceiver::Named(name_from_canonical(type_name)),
+                name: member.clone(),
+            },
+            span,
+        ),
     }
 }
 
@@ -541,10 +556,12 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             abi::emit_symbol_address(emitter, "x1", &sym);                      // x1 = string data address
             emitter.instruction(&format!("mov x2, #{}", len));                  // x2 = string length
         }
-        AttrArgValue::Array(_) => {
-            // The frozen legacy AST backend does not materialize nested array
-            // attribute arguments; emit a null placeholder. The active EIR
-            // backend builds the real array.
+        AttrArgValue::Array(_) | AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(..) => {
+            // The frozen legacy AST backend does not materialize nested arrays or
+            // deferred symbolic references (global/class constants, enum cases) in
+            // the fallback `$__args` array; emit a null placeholder. The active EIR
+            // backend materializes the real value through the factory-dispatched
+            // `getArguments()` body instead.
             emitter.instruction("mov x0, #8");                                  // runtime tag 8 = null placeholder
             emitter.instruction("mov x1, xzr");                                 // null carries no low word
             emitter.instruction("mov x2, xzr");                                 // null carries no high word
@@ -586,10 +603,12 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             abi::emit_symbol_address(emitter, "rdi", &sym);                     // rdi = string data address
             emitter.instruction(&format!("mov rsi, {}", len));                  // rsi = string length
         }
-        AttrArgValue::Array(_) => {
-            // The frozen legacy AST backend does not materialize nested array
-            // attribute arguments; emit a null placeholder. The active EIR
-            // backend builds the real array.
+        AttrArgValue::Array(_) | AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(..) => {
+            // The frozen legacy AST backend does not materialize nested arrays or
+            // deferred symbolic references (global/class constants, enum cases) in
+            // the fallback `$__args` array; emit a null placeholder. The active EIR
+            // backend materializes the real value through the factory-dispatched
+            // `getArguments()` body instead.
             emitter.instruction("mov rax, 8");                                  // runtime tag 8 = null placeholder
             emitter.instruction("xor rdi, rdi");                                // null carries no low word
             emitter.instruction("xor rsi, rsi");                                // null carries no high word
