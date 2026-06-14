@@ -247,6 +247,7 @@ pub enum Op {
     HashGet,
     ArraySet,
     HashSet,
+    HashUnset,
     ArrayPush,
     MixedArrayAppend,
     HashAppend,
@@ -393,7 +394,7 @@ impl Op {
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet => E::READS_HEAP,
-            ArraySet | HashSet | ArrayPush | HashAppend | OffsetUnset | PropSet
+            ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
@@ -544,6 +545,7 @@ impl Op {
             HashGet => "hash_get",
             ArraySet => "array_set",
             HashSet => "hash_set",
+            HashUnset => "hash_unset",
             ArrayPush => "array_push",
             MixedArrayAppend => "mixed_array_append",
             HashAppend => "hash_append",

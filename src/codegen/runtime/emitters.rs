@@ -208,6 +208,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_hash_grow(emitter);
     arrays::emit_hash_may_have_cyclic_values(emitter);
     arrays::emit_hash_set(emitter);
+    arrays::emit_hash_unset(emitter);
     arrays::emit_hash_append(emitter);
     arrays::emit_hash_insert_owned(emitter);
     arrays::emit_hash_get(emitter);

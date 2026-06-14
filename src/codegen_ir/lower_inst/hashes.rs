@@ -104,6 +104,42 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     Ok(())
 }
 
+/// Lowers `unset($hash[$key])` for associative arrays through the shared hash-unset helper.
+///
+/// Materializes the key into the hash ABI key registers, then calls `__rt_hash_unset`, which
+/// copy-on-write splits the table, removes the matching entry (releasing its owned key/value
+/// payloads), and returns the unique (possibly cloned) table pointer. That pointer is written
+/// back to the source SSA slot and array local, mirroring `lower_hash_set`. A missing key is a
+/// runtime no-op.
+pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let hash_ty = ctx.value_php_type(hash)?;
+    require_hash(hash_ty.clone(), inst)?;
+    let source_local = source_load_local_slot(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(hash, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+        }
+    }
+    ctx.store_result_value(hash)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, hash)?;
+    }
+    Ok(())
+}
+
 /// Lowers `$hash[] = $value` runtime fallback appends for associative arrays.
 pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let hash = expect_operand(inst, 0)?;

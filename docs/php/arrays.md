@@ -57,6 +57,36 @@ echo $map[2];    // two
 echo $map["02"]; // leading
 ```
 
+## Removing elements with unset
+
+`unset($map[$key])` removes a single entry from an associative array. The removed key's owned
+key and value storage is released, the live `count()` drops by one, and `isset()`, `foreach`,
+and re-insertion all observe the entry as gone. Iteration order follows PHP: surviving entries
+keep their original order, and re-adding a removed key appends it at the end.
+
+```php
+<?php
+$map = ["a" => 1, "b" => 2, "c" => 3];
+unset($map["b"]);
+
+echo count($map);          // 2
+echo isset($map["b"]) ? "y" : "n"; // n
+$map["b"] = 9;             // re-added at the end
+foreach ($map as $k => $v) { echo "$k=$v "; } // a=1 c=3 b=9
+```
+
+`unset()` respects copy-on-write: removing a key from one array never mutates another array that
+was assigned from it. Unsetting a key that is not present is a no-op.
+
+```php
+<?php
+$a = ["x" => 1, "y" => 2];
+$b = $a;
+unset($b["x"]);
+echo count($a); // 2 — original is untouched
+echo count($b); // 1
+```
+
 ## Array union
 
 `+` between arrays follows PHP union semantics: keys from the left operand win, and only keys that are missing from the left are copied from the right.
