@@ -24,6 +24,9 @@ $insert->execute([":name" => "Grace Hopper",  ":email" => "grace@example.com", "
 
 echo "Inserted, last id = " . $db->lastInsertId() . "\n\n";
 
+$shared = new PDO("sqlite::memory:", null, null, [PDO::ATTR_PERSISTENT => true]);
+echo "Persistent shared count: " . $shared->query("SELECT COUNT(*) FROM contacts")->fetchColumn() . "\n\n";
+
 // Positional bind: look up one contact.
 $one = $db->prepare("SELECT name, score FROM contacts WHERE id = ?");
 $one->execute([2]);

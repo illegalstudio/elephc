@@ -13,9 +13,11 @@
 //!
 //! Key details:
 //! - Two global handle tables index live connections / statements by `i64` IDs,
-//!   each wrapped in a driver-tagged enum (`Conn`, `Stmt`). The C ABI never
-//!   exposes raw pointers. elephc programs are effectively single-threaded, so
-//!   the table mutexes are simplicity, not contention management.
+//!   each wrapped in a driver-tagged enum (`Conn`, `Stmt`). A small persistent
+//!   DSN pool can keep selected connections open for process-local reuse. The C
+//!   ABI never exposes raw pointers. elephc programs are effectively
+//!   single-threaded, so the table mutexes are simplicity, not contention
+//!   management.
 //! - Fallible entry points collapse failure to a `-1`/`0` sentinel. String
 //!   results return `*const c_char` into a per-result static buffer that elephc
 //!   copies into an owned PHP string immediately on return.
@@ -26,7 +28,7 @@ mod my;
 mod pg;
 mod sqlite;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -56,6 +58,20 @@ fn conns() -> &'static Mutex<HashMap<i64, Conn>> {
 fn stmts() -> &'static Mutex<HashMap<i64, Stmt>> {
     static STMTS: OnceLock<Mutex<HashMap<i64, Stmt>>> = OnceLock::new();
     STMTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Process-local persistent connection pool, keyed by the fully materialized
+/// DSN passed into the bridge after constructor credentials have been folded in.
+fn persistent_conns() -> &'static Mutex<HashMap<String, i64>> {
+    static PERSISTENT_CONNS: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+    PERSISTENT_CONNS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Set of connection handles owned by the persistent pool. `elephc_pdo_close`
+/// leaves these handles open so later persistent opens can reuse them.
+fn persistent_ids() -> &'static Mutex<HashSet<i64>> {
+    static PERSISTENT_IDS: OnceLock<Mutex<HashSet<i64>>> = OnceLock::new();
+    PERSISTENT_IDS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 /// Returns a fresh, never-reused handle ID. IDs start at 1 so `0` and `-1`
@@ -138,10 +154,69 @@ unsafe fn cstr_arg<'a>(p: *const c_char) -> Option<&'a str> {
     CStr::from_ptr(p).to_str().ok()
 }
 
+/// Opens the driver connection for a validated DSN string.
+fn open_conn_for_dsn(dsn: &str) -> Result<Conn, String> {
+    if let Some(path) = dsn.strip_prefix("sqlite:") {
+        sqlite::SqliteConn::open(path).map(Conn::Sqlite)
+    } else if dsn.starts_with("pgsql:") {
+        pg::PgConn::open(dsn).map(Conn::Postgres)
+    } else if dsn.starts_with("mysql:") {
+        my::MyConn::open(dsn).map(Conn::Mysql)
+    } else {
+        Err(
+            "could not find driver (only sqlite:, pgsql:, and mysql: DSNs are supported)"
+                .to_string(),
+        )
+    }
+}
+
+/// Registers a newly opened connection and returns the public handle ID.
+fn register_conn(conn: Conn) -> i64 {
+    let id = next_id();
+    conns().lock().unwrap().insert(id, conn);
+    id
+}
+
+/// Opens a non-persistent connection and stores any failure message for the PDO
+/// constructor's `elephc_pdo_last_open_error()` call.
+fn open_nonpersistent_dsn(dsn: &str) -> i64 {
+    match open_conn_for_dsn(dsn) {
+        Ok(conn) => register_conn(conn),
+        Err(msg) => {
+            store_cstr(open_error_cell(), &msg);
+            -1
+        }
+    }
+}
+
+/// Opens or reuses a process-local persistent connection for the full DSN.
+fn open_persistent_dsn(dsn: &str) -> i64 {
+    if let Some(id) = persistent_conns().lock().unwrap().get(dsn).copied() {
+        if conns().lock().unwrap().contains_key(&id) {
+            return id;
+        }
+    }
+    match open_conn_for_dsn(dsn) {
+        Ok(conn) => {
+            let id = register_conn(conn);
+            persistent_conns()
+                .lock()
+                .unwrap()
+                .insert(dsn.to_string(), id);
+            persistent_ids().lock().unwrap().insert(id);
+            id
+        }
+        Err(msg) => {
+            store_cstr(open_error_cell(), &msg);
+            -1
+        }
+    }
+}
+
 /// Returns the bridge ABI version. Bumped when the C ABI shape changes.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    5
+    6
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -159,10 +234,9 @@ pub extern "C" fn elephc_pdo_driver_name(conn_id: i64) -> *const c_char {
     store_cstr(drivername_cell(), name)
 }
 
-/// Opens a database for a PDO DSN, dispatching on the driver prefix: `sqlite:`
-/// (file / `:memory:` / private temp DB) or `pgsql:` (host=…;dbname=…;…). Returns
-/// an `i64` connection handle, or `-1` on failure with the message stashed for
-/// `elephc_pdo_last_open_error`.
+/// Opens a non-persistent database for a PDO DSN, dispatching on the driver
+/// prefix. Returns an `i64` connection handle, or `-1` on failure with the
+/// message stashed for `elephc_pdo_last_open_error`.
 ///
 /// # Safety
 /// `dsn` must point to a NUL-terminated string valid for the duration of the call.
@@ -172,28 +246,28 @@ pub unsafe extern "C" fn elephc_pdo_open(dsn: *const c_char) -> i64 {
         store_cstr(open_error_cell(), "invalid DSN");
         return -1;
     };
-    let opened = if let Some(path) = dsn.strip_prefix("sqlite:") {
-        sqlite::SqliteConn::open(path).map(Conn::Sqlite)
-    } else if dsn.starts_with("pgsql:") {
-        pg::PgConn::open(dsn).map(Conn::Postgres)
-    } else if dsn.starts_with("mysql:") {
-        my::MyConn::open(dsn).map(Conn::Mysql)
-    } else {
-        Err(
-            "could not find driver (only sqlite:, pgsql:, and mysql: DSNs are supported)"
-                .to_string(),
-        )
+    open_nonpersistent_dsn(dsn)
+}
+
+/// Opens a database for a PDO DSN, reusing a process-local pooled connection when
+/// `persistent` is non-zero. Persistent handles stay registered until process
+/// exit; `elephc_pdo_close` is a no-op for them.
+///
+/// # Safety
+/// `dsn` must point to a NUL-terminated string valid for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_open_persistent(
+    dsn: *const c_char,
+    persistent: i64,
+) -> i64 {
+    let Some(dsn) = cstr_arg(dsn) else {
+        store_cstr(open_error_cell(), "invalid DSN");
+        return -1;
     };
-    match opened {
-        Ok(conn) => {
-            let id = next_id();
-            conns().lock().unwrap().insert(id, conn);
-            id
-        }
-        Err(msg) => {
-            store_cstr(open_error_cell(), &msg);
-            -1
-        }
+    if persistent == 0 {
+        open_nonpersistent_dsn(dsn)
+    } else {
+        open_persistent_dsn(dsn)
     }
 }
 
@@ -208,6 +282,9 @@ pub extern "C" fn elephc_pdo_last_open_error() -> *const c_char {
 /// it) and removes it from the table. Unknown handles are ignored.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_close(conn_id: i64) {
+    if persistent_ids().lock().unwrap().contains(&conn_id) {
+        return;
+    }
     // The SQLite db pointer of the connection being closed, so only *its*
     // statements are finalized (statements from other open SQLite connections
     // must be left alone). `None` when the connection is PostgreSQL or unknown.
@@ -703,10 +780,11 @@ mod tests {
         std::slice::from_raw_parts(p as *const u8, len as usize).to_vec()
     }
 
-    /// The ABI version constant is the v5 (sqlite + pgsql + mysql + raw data) surface.
+    /// The ABI version constant is the v6 (sqlite + pgsql + mysql + raw data +
+    /// persistent open) surface.
     #[test]
-    fn version_is_v5() {
-        assert_eq!(elephc_pdo_version(), 5);
+    fn version_is_v6() {
+        assert_eq!(elephc_pdo_version(), 6);
     }
 
     /// A DSN for an unsupported driver is rejected with a driver error.
@@ -791,6 +869,30 @@ mod tests {
 
         assert_eq!(elephc_pdo_finalize(stmt), 1);
         elephc_pdo_close(conn);
+    }
+
+    /// SQLite persistent opens reuse a process-local connection by DSN and a
+    /// close call leaves that pooled connection available to the next open.
+    #[test]
+    fn sqlite_persistent_pool_reuses_connection_after_close() {
+        let dsn = cs("sqlite::memory:");
+        let first = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1) };
+        assert!(first > 0, "open failed");
+
+        let ddl = cs("CREATE TABLE persistent_pool (n INTEGER)");
+        assert_eq!(unsafe { elephc_pdo_exec(first, ddl.as_ptr()) }, 0);
+        let ins = cs("INSERT INTO persistent_pool VALUES (77)");
+        assert_eq!(unsafe { elephc_pdo_exec(first, ins.as_ptr()) }, 1);
+        elephc_pdo_close(first);
+
+        let second = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1) };
+        assert_eq!(second, first);
+        let sql = cs("SELECT n FROM persistent_pool");
+        let stmt = unsafe { elephc_pdo_prepare(second, sql.as_ptr()) };
+        assert!(stmt > 0, "prepare failed");
+        assert_eq!(elephc_pdo_step(stmt), 1);
+        assert_eq!(elephc_pdo_column_int(stmt, 0), 77);
+        assert_eq!(elephc_pdo_finalize(stmt), 1);
     }
 
     /// Placeholder translation: `?` → `$1`, `:name` → `$N` (deduped), with

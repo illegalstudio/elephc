@@ -40,6 +40,7 @@ pub const PDO_PRELUDE_SRC: &str = r#"<?php
 
 extern "elephc_pdo" {
     function elephc_pdo_open(string $dsn): int;
+    function elephc_pdo_open_persistent(string $dsn, int $persistent): int;
     function elephc_pdo_last_open_error(): string;
     function elephc_pdo_close(int $conn): void;
     function elephc_pdo_exec(int $conn, string $sql): int;
@@ -103,6 +104,20 @@ class PDO {
         $this->errMode = 2;
         $this->persistent = false;
         $this->attributes = [];
+        // Constructor options affect the connection that is opened below, so
+        // apply them before the bridge sees the DSN. In particular,
+        // ATTR_PERSISTENT selects the bridge's process-local DSN pool.
+        if ($options !== null) {
+            foreach ($options as $_attr => $_val) {
+                $_iattr = (int) $_attr;
+                if ($_iattr == 3) {
+                    $this->errMode = (int) $_val;
+                } elseif ($_iattr == 12) {
+                    $this->persistent = (bool) $_val;
+                }
+                $this->attributes[$_iattr] = $_val;
+            }
+        }
         // SQLite ignores credentials. For PostgreSQL and MySQL, the user/password
         // may be passed as the PDO constructor arguments (PHP-style); fold them
         // into the DSN's `key=value` list, where the bridge parses them (a `user=`
@@ -116,16 +131,9 @@ class PDO {
                 $_dsn = $_dsn . ";password=" . $password;
             }
         }
-        $this->conn = elephc_pdo_open($_dsn);
+        $this->conn = elephc_pdo_open_persistent($_dsn, $this->persistent ? 1 : 0);
         if ($this->conn < 0) {
             throw new PDOException(elephc_pdo_last_open_error());
-        }
-        // A driver-options array may seed attributes, e.g.
-        // new PDO($dsn, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_SILENT]).
-        if ($options !== null) {
-            foreach ($options as $_attr => $_val) {
-                $this->setAttribute((int) $_attr, $_val);
-            }
         }
     }
 

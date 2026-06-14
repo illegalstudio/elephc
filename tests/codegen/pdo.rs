@@ -517,6 +517,40 @@ echo ":" . ($db->getAttribute(PDO::ATTR_PERSISTENT) ? "1" : "0");
     assert_eq!(out, "1:0");
 }
 
+/// Constructor-level `ATTR_PERSISTENT` opens through the process-local DSN pool:
+/// two `sqlite::memory:` handles with the option share the same in-memory DB.
+#[test]
+fn test_pdo_persistent_sqlite_memory_reuses_connection() {
+    let out = compile_and_run(
+        r#"<?php
+$a = new PDO("sqlite::memory:", null, null, [PDO::ATTR_PERSISTENT => true]);
+$a->exec("CREATE TABLE pdo_persist (n INTEGER)");
+$a->exec("INSERT INTO pdo_persist VALUES (42)");
+
+$b = new PDO("sqlite::memory:", null, null, [PDO::ATTR_PERSISTENT => true]);
+echo $b->query("SELECT n FROM pdo_persist")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Non-persistent `sqlite::memory:` connections stay isolated, so the persistent
+/// pool only applies when requested by constructor options.
+#[test]
+fn test_pdo_nonpersistent_sqlite_memory_stays_isolated() {
+    let out = compile_and_run(
+        r#"<?php
+$a = new PDO("sqlite::memory:");
+$a->exec("CREATE TABLE pdo_isolated (n INTEGER)");
+$a->exec("INSERT INTO pdo_isolated VALUES (7)");
+
+$b = new PDO("sqlite::memory:", null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_SILENT]);
+echo ($b->query("SELECT n FROM pdo_isolated") === false) ? "isolated" : "shared";
+"#,
+    );
+    assert_eq!(out, "isolated");
+}
+
 /// `ERRMODE_SILENT` suppresses exceptions: `exec()`, `query()`, and `prepare()`
 /// all return `false` (a real `false`, matched with `=== false`) on a SQL error
 /// instead of throwing.

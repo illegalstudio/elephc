@@ -34,11 +34,17 @@ $my = new PDO("mysql:host=127.0.0.1;dbname=app", "me", "secret");
 ```
 
 The DSN must start with `sqlite:`, `pgsql:`, or `mysql:`. For SQLite, the
-`$username`, `$password`, and `$options` arguments are accepted for signature
-compatibility but ignored. For PostgreSQL and MySQL, `$username` / `$password` are
-folded into the connection (other keys like `host`, `port`, `dbname`, and — for
-MySQL — `unix_socket` come from the `key=value;…` DSN). A failed connection throws
-a `PDOException`.
+`$username` and `$password` arguments are accepted for signature compatibility
+but ignored; constructor options still seed PDO attributes. For PostgreSQL and
+MySQL, `$username` / `$password` are folded into the connection (other keys like
+`host`, `port`, `dbname`, and — for MySQL — `unix_socket` come from the
+`key=value;…` DSN). A failed connection throws a `PDOException`.
+
+Constructor options may include `PDO::ATTR_PERSISTENT => true`. Persistent PDO
+instances use a process-local pool keyed by the fully materialized DSN, so a later
+PDO constructed with the same DSN and persistent option reuses the existing
+connection inside the same compiled program. Non-persistent connections are
+opened independently.
 
 ## Executing statements
 
@@ -246,9 +252,10 @@ The mode can also be seeded from the constructor's options array:
 Prepared statements inherit the connection's current error mode when they are
 created. `getAttribute()` reads attributes back; `ATTR_DRIVER_NAME` reports the
 active driver (`"sqlite"`, `"pgsql"`, or `"mysql"`). `ATTR_PERSISTENT` can be set
-in the constructor options or with `setAttribute()` and is reported by
-`getAttribute()`. In standalone binaries it records the PDO setting for
-compatibility; it does not create a cross-process connection pool.
+in the constructor options to use the process-local DSN pool; setting it later
+with `setAttribute()` updates the reported attribute but does not reopen an
+already-created connection. Persistent connections are local to the running
+native process; there is no cross-process pool.
 
 ## Supported surface
 
