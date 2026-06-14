@@ -89,3 +89,55 @@ $format = function($val) use ($prefix, $suffix) {
 };
 echo $format("42");
 echo "\n";
+
+// Closures defined in an instance method auto-bind $this (no use($this) needed).
+// The closure sees the live object, so mutations through $this persist.
+class Tally {
+    private int $total = 0;
+
+    public function adder(): callable {
+        return function (int $n): int {
+            $this->total += $n;     // mutates the live object
+            return $this->total;
+        };
+    }
+
+    public function reporter(): callable {
+        return fn (): string => "total=" . $this->total;  // arrow binds $this too
+    }
+}
+
+$tally = new Tally();
+$add = $tally->adder();
+echo "running total: ";
+echo $add(5);
+echo " ";
+echo $add(3);
+echo "\n";
+echo ($tally->reporter())();
+echo "\n";
+
+// A closure's bound $this can be rebound to another object with bindTo /
+// Closure::bind, producing a new closure and leaving the original untouched.
+class Box {
+    public int $value;
+    public function __construct(int $value) { $this->value = $value; }
+    public function reader(): callable {
+        return function (): int { return $this->value; };
+    }
+}
+
+$first = new Box(10);
+$second = new Box(20);
+$read = $first->reader();
+$rebound = $read->bindTo($second);
+echo "rebound: ";
+echo $read();      // 10 — original
+echo " ";
+echo $rebound();   // 20 — rebound to $second
+echo "\n";
+
+// call() binds $this and invokes the closure in one step.
+echo "call: ";
+echo $read->call($second);   // 20 — bound to $second for this call only
+echo "\n";

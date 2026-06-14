@@ -118,6 +118,101 @@ $values = array_map(function(int $x) use ($factor): int {
 echo $values[2]; // 9
 ```
 
+## Binding `$this` in closures
+
+A non-static closure or arrow function defined inside an instance method
+automatically binds `$this` — no `use ($this)` is needed (and, as in PHP,
+`use ($this)` is not allowed). The closure sees the live object, so reads,
+writes, and method calls through `$this` all work and persist on the instance:
+
+```php
+<?php
+class Counter {
+    private int $count = 0;
+
+    public function incrementer(): callable {
+        return function (): int {
+            $this->count += 1;       // mutates the live object
+            return $this->count;
+        };
+    }
+
+    public function labelled(string $suffix): callable {
+        return fn (): string => $this->count . $suffix;  // arrow binds $this too
+    }
+}
+
+$c = new Counter();
+$next = $c->incrementer();
+echo $next(), $next();           // 12
+echo ($c->labelled("!"))();      // 2!
+```
+
+`$this` also flows into nested closures: an inner closure defined inside an
+outer one captures `$this` transitively from the enclosing scope.
+
+### Rebinding `$this` with `Closure::bind` / `bindTo`
+
+A closure's bound `$this` can be swapped for another object, producing a new
+closure. Both the instance method `$closure->bindTo($newThis)` and the static
+`Closure::bind($closure, $newThis)` are supported; the original closure is left
+unchanged:
+
+```php
+<?php
+class Box {
+    public int $value;
+    public function __construct(int $value) { $this->value = $value; }
+    public function reader(): callable {
+        return function (): int { return $this->value; };
+    }
+}
+
+$a = new Box(7);
+$b = new Box(99);
+$read = $a->reader();
+echo $read();              // 7
+
+$rebound = $read->bindTo($b);
+echo $rebound();           // 99  (rebound to $b)
+
+$static = Closure::bind($read, $b);
+echo $static();            // 99  (static spelling)
+
+echo $read();              // 7   (original is unchanged)
+```
+
+An optional third `$scope` argument is accepted for source compatibility and
+ignored (member visibility is resolved at compile time).
+
+`$closure->call($newThis, ...$args)` binds `$this` and invokes the closure in a
+single step, returning its result:
+
+```php
+<?php
+$add = $a->reader();              // reusing Box from above (returns $this->value)
+echo $add->call($b);              // 99 — bound to $b for this one call
+```
+
+A closure defined outside any class may also reference `$this` and be bound
+later — the canonical "scope-stealing" accessor:
+
+```php
+<?php
+class Account {
+    private int $balance = 250;
+}
+
+$peek = function() { return $this->balance; };
+$read = Closure::bind($peek, new Account(), Account::class);
+echo $read();   // 250 — bound access reaches the private property
+```
+
+Rebinding supports closures that capture `$this` and nothing else (the typical
+accessor closure, whether created inside a method or standalone). Binding a
+closure that also has `use(...)` captures aborts with a fatal error rather than
+producing an incorrectly bound closure.
+
 ## Static closures
 
 A closure prefixed with `static` does not capture `$this` from its enclosing

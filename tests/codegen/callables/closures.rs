@@ -1047,3 +1047,295 @@ echo $fn(7);
     );
     assert_eq!(out, "21");
 }
+
+// --- Closures auto-bind $this when defined in an instance method ---
+
+/// Verifies a non-static closure defined in a method auto-captures `$this`, so
+/// reading a property through `$this->prop` works without an explicit `use`.
+#[test]
+fn test_closure_in_method_auto_captures_this_property() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $v = 5;
+    public function make() {
+        return function() { return $this->v + 1; };
+    }
+}
+$c = new C();
+$f = $c->make();
+echo $f();
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies an arrow function defined in a method auto-captures `$this`.
+#[test]
+fn test_arrow_in_method_auto_captures_this() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $v = 5;
+    public function make() {
+        return fn() => $this->v * 10;
+    }
+}
+$c = new C();
+$f = $c->make();
+echo $f();
+"#,
+    );
+    assert_eq!(out, "50");
+}
+
+/// Verifies a captured `$this` can call instance methods inside the closure body.
+#[test]
+fn test_closure_in_method_calls_this_method() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public function greet() { return "hi"; }
+    public function make() {
+        return function() { return $this->greet() . "!"; };
+    }
+}
+$c = new C();
+$f = $c->make();
+echo $f();
+"#,
+    );
+    assert_eq!(out, "hi!");
+}
+
+/// Verifies a closure captures `$this` alongside an explicit `use($var)` capture.
+#[test]
+fn test_closure_captures_this_and_use_variable() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $base = 100;
+    public function make($add) {
+        return function() use ($add) { return $this->base + $add; };
+    }
+}
+$c = new C();
+$f = $c->make(7);
+echo $f();
+"#,
+    );
+    assert_eq!(out, "107");
+}
+
+/// Verifies the captured `$this` is the live object: mutations through the
+/// closure persist across calls and are visible on the object.
+#[test]
+fn test_closure_mutates_this_property() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $n = 0;
+    public function bump() {
+        return function() { $this->n = $this->n + 1; return $this->n; };
+    }
+}
+$c = new C();
+$f = $c->bump();
+echo $f(), $f(), $f();
+"#,
+    );
+    assert_eq!(out, "123");
+}
+
+/// Verifies `$this` flows transitively into a nested closure defined inside an
+/// outer closure: each level captures `$this` from the level above.
+#[test]
+fn test_nested_closures_share_this() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $v = 3;
+    public function make() {
+        return function() {
+            $inner = fn() => $this->v * 2;
+            return $inner();
+        };
+    }
+}
+$c = new C();
+$f = $c->make();
+echo $f();
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies a closure that returns the captured `$this`'s state keeps the object
+/// alive and readable after the defining method has returned.
+#[test]
+fn test_closure_reads_this_after_method_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public string $name = "Ada";
+    public function greeter() {
+        return function() { return "Hi " . $this->name; };
+    }
+}
+$c = new C();
+$g = $c->greeter();
+echo $g();
+"#,
+    );
+    assert_eq!(out, "Hi Ada");
+}
+
+// --- Closure::bind / ->bindTo() rebind a closure's captured $this ---
+
+/// Verifies `$closure->bindTo($newThis)` returns a closure whose `$this` is the
+/// new receiver, leaving the original closure unchanged.
+#[test]
+fn test_closure_bindto_rebinds_this() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+    public function getter() {
+        return function() { return $this->v; };
+    }
+}
+$c1 = new C(7);
+$c2 = new C(99);
+$f = $c1->getter();
+$bound = $f->bindTo($c2);
+echo $f(), $bound(), $f();
+"#,
+    );
+    assert_eq!(out, "7997");
+}
+
+/// Verifies the static `Closure::bind($closure, $newThis)` form rebinds `$this`.
+#[test]
+fn test_closure_bind_static_form() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+    public function getter() {
+        return function() { return $this->v; };
+    }
+}
+$c1 = new C(7);
+$c2 = new C(50);
+$f = $c1->getter();
+$bound = Closure::bind($f, $c2);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "50");
+}
+
+/// Verifies the optional `$scope` argument is accepted by both bind spellings.
+#[test]
+fn test_closure_bind_accepts_scope_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+    public function getter() {
+        return function() { return $this->v; };
+    }
+}
+$c1 = new C(1);
+$c2 = new C(42);
+$f = $c1->getter();
+$a = Closure::bind($f, $c2, C::class);
+$b = $f->bindTo($c2, C::class);
+echo $a(), " ", $b();
+"#,
+    );
+    assert_eq!(out, "42 42");
+}
+
+/// Verifies `$closure->call($newThis, ...$args)` binds `$this` and invokes the
+/// closure in one step, passing through the trailing arguments.
+#[test]
+fn test_closure_call_binds_and_invokes() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+    public function adder() {
+        return function(int $n) { return $this->v + $n; };
+    }
+}
+$c1 = new C(7);
+$c2 = new C(100);
+$f = $c1->adder();
+echo $f->call($c2, 5);   // 105 — bound to $c2
+echo " ";
+echo $f->call($c1, 1);   // 8   — bound to $c1
+"#,
+    );
+    assert_eq!(out, "105 8");
+}
+
+// --- A closure defined outside a class may reference $this and be bound later ---
+
+/// Verifies a top-level closure that references `$this` can be bound to an object
+/// via `Closure::bind`, dispatching member access against the bound object.
+#[test]
+fn test_top_level_closure_bind_reads_property() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $x = 42;
+}
+$reader = function() { return $this->x; };
+$bound = Closure::bind($reader, new C());
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies the canonical scope-stealing pattern: a standalone closure bound to
+/// an object reads a private property (visibility is permissive once bound).
+#[test]
+fn test_top_level_closure_bind_reads_private_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Account {
+    private int $balance = 250;
+}
+$peek = function() { return $this->balance; };
+$read = Closure::bind($peek, new Account(), Account::class);
+echo $read();
+"#,
+    );
+    assert_eq!(out, "250");
+}
+
+/// Verifies a top-level closure that calls a method on `$this` and takes an
+/// argument, bound via both `bindTo` and `call`.
+#[test]
+fn test_top_level_closure_bind_method_and_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public string $name = "Ada";
+    public function hi(): string { return "Hi " . $this->name; }
+}
+$f = function(string $suffix) { return $this->hi() . $suffix; };
+$bound = $f->bindTo(new Greeter());
+echo $bound("!");
+echo "|";
+echo $f->call(new Greeter(), "?");
+"#,
+    );
+    assert_eq!(out, "Hi Ada!|Hi Ada?");
+}
