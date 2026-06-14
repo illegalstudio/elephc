@@ -699,6 +699,104 @@ echo "\n";
     assert_eq!(out, "2\na=1 b=2 \n");
 }
 
+/// Verifies `unset($arr[$key])` on a packed indexed array removes the element without renumbering
+/// the survivors: PHP keeps the original keys (a hole), so the array becomes sparse/associative.
+#[test]
+fn test_unset_indexed_creates_hole() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = [1, 2, 3];
+unset($arr[1]);
+foreach ($arr as $k => $v) { echo "$k=$v "; }
+echo "\n", count($arr), "\n";
+echo isset($arr[1]) ? "has1\n" : "no1\n";
+echo isset($arr[2]) ? "has2\n" : "no2\n";
+"#,
+    );
+    assert_eq!(out, "0=1 2=3 \n2\nno1\nhas2\n");
+}
+
+/// Verifies that appending after an indexed unset continues at `max_key + 1`, matching PHP.
+#[test]
+fn test_unset_indexed_then_append_continues_max_key() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = [1, 2, 3];
+unset($arr[1]);
+$arr[] = 9;
+foreach ($arr as $k => $v) { echo "$k=$v "; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "0=1 2=3 3=9 \n");
+}
+
+/// Verifies indexed-array element unset inside a function local (the array is converted to a hash
+/// at the unset site).
+#[test]
+fn test_unset_indexed_in_function_local() {
+    let out = compile_and_run(
+        r#"<?php
+function dump(): void {
+    $arr = [10, 20, 30, 40];
+    unset($arr[1]);
+    foreach ($arr as $k => $v) { echo "$k=$v "; }
+    echo "\n";
+}
+dump();
+"#,
+    );
+    assert_eq!(out, "0=10 2=30 3=40 \n");
+}
+
+/// Verifies indexed-array element unset on a by-value array parameter.
+#[test]
+fn test_unset_indexed_by_value_param() {
+    let out = compile_and_run(
+        r#"<?php
+function strip(array $a): int {
+    unset($a[1]);
+    return count($a);
+}
+echo strip([1, 2, 3]), "\n";
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// Verifies copy-on-write for the indexed-unset conversion path: removing an element from a copy
+/// does not mutate the shared original packed array.
+#[test]
+fn test_unset_indexed_copy_on_write() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3, 4];
+$b = $a;
+unset($b[1]);
+echo "a:"; foreach ($a as $k => $v) { echo " $k=$v"; }
+echo "\nb:"; foreach ($b as $k => $v) { echo " $k=$v"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "a: 0=1 1=2 2=3 3=4\nb: 0=1 2=3 3=4\n");
+}
+
+/// Verifies unsetting an element of an empty array is a no-op (the array stays empty and can still
+/// be appended to afterwards).
+#[test]
+fn test_unset_indexed_empty_array_noop() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = [];
+unset($arr[0]);
+echo count($arr), "\n";
+$arr[] = 5;
+echo $arr[0], "\n";
+"#,
+    );
+    assert_eq!(out, "0\n5\n");
+}
+
 /// Verifies isset string offset respects bounds.
 #[test]
 fn test_isset_string_offset_respects_bounds() {

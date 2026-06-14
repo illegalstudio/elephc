@@ -75,6 +75,19 @@ $map["b"] = 9;             // re-added at the end
 foreach ($map as $k => $v) { echo "$k=$v "; } // a=1 c=3 b=9
 ```
 
+`unset()` also works on indexed arrays. PHP removes the key **without renumbering** the survivors,
+so the array becomes sparse (a hole is left). The remaining keys keep their original values, and a
+later `$arr[] = ...` append continues at `max_key + 1`.
+
+```php
+<?php
+$arr = [1, 2, 3];
+unset($arr[1]);
+foreach ($arr as $k => $v) { echo "$k=$v "; } // 0=1 2=3 (no key 1)
+$arr[] = 9;                                    // appended at key 3
+echo isset($arr[1]) ? "y" : "n";               // n
+```
+
 `unset()` respects copy-on-write: removing a key from one array never mutates another array that
 was assigned from it. Unsetting a key that is not present is a no-op.
 
@@ -86,6 +99,9 @@ unset($b["x"]);
 echo count($a); // 2 — original is untouched
 echo count($b); // 1
 ```
+
+> Removing an element from an array passed **by reference** (`function f(array &$a)`) is not yet
+> supported and reports a compile error.
 
 ## Array union
 

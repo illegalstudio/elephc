@@ -3312,7 +3312,7 @@ fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
         ExprKind::Variable(_) => true,
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
-                || unset_array_access_has_hash_receiver(ctx, array)
+                || unset_array_access_has_local_array_receiver(ctx, array)
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -3322,18 +3322,27 @@ fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     }
 }
 
-/// Returns true when an array-access unset receiver is a hash-typed (associative-array) local.
+/// Returns true when an array-access unset receiver is a plain array/hash local whose element the
+/// EIR backend can remove.
 ///
-/// Only plain variable receivers are accepted so the removal can store the unique table pointer
-/// back into the array's local slot. The element removal is lowered through `Op::HashUnset`.
-fn unset_array_access_has_hash_receiver(
+/// Associative arrays remove the element directly; packed indexed arrays are converted to a hash at
+/// the unset site (PHP `unset()` leaves a sparse array). By-reference locals are excluded: their
+/// storage is aliased to a caller whose static type would no longer match after a representation
+/// change.
+fn unset_array_access_has_local_array_receiver(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
 ) -> bool {
     let ExprKind::Variable(name) = &array.kind else {
         return false;
     };
-    matches!(ctx.local_type(name).codegen_repr(), PhpType::AssocArray { .. })
+    if ctx.is_ref_bound_local(name) {
+        return false;
+    }
+    matches!(
+        ctx.local_type(name).codegen_repr(),
+        PhpType::AssocArray { .. } | PhpType::Array(_)
+    )
 }
 
 /// Returns true when an array-access unset receiver is a static ArrayAccess object.
@@ -3354,17 +3363,30 @@ fn unset_array_access_has_object_receiver(
 
 /// Lowers `unset($array[$key])`, dispatching on the receiver kind.
 ///
-/// A hash-typed (associative-array) local is removed in place through `Op::HashUnset`; an
-/// `ArrayAccess` object dispatches to its `offsetUnset($key)` method like before.
+/// An associative-array local removes the element in place through `Op::HashUnset`. A packed
+/// indexed-array local is first converted to a hash (PHP keeps the surviving keys without
+/// renumbering) and then removed. An `ArrayAccess` object dispatches to its `offsetUnset($key)`
+/// method like before. By-reference array locals fall through to the object path.
 fn lower_unset_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     index: &Expr,
     expr: &Expr,
 ) {
-    if unset_array_access_has_hash_receiver(ctx, array) {
-        lower_unset_hash_element(ctx, array, index, expr);
-        return;
+    if let ExprKind::Variable(name) = &array.kind {
+        if !ctx.is_ref_bound_local(name) {
+            match ctx.local_type(name).codegen_repr() {
+                PhpType::AssocArray { .. } => {
+                    lower_unset_hash_element(ctx, name, array.span, index, expr);
+                    return;
+                }
+                PhpType::Array(elem_ty) => {
+                    lower_unset_indexed_element(ctx, name, *elem_ty, array.span, index, expr);
+                    return;
+                }
+                _ => {}
+            }
+        }
     }
     let synthetic = Expr::new(
         ExprKind::MethodCall {
@@ -3384,14 +3406,12 @@ fn lower_unset_array_access(
 /// table pointer back into the local slot, so no explicit store-back is needed here.
 fn lower_unset_hash_element(
     ctx: &mut LoweringContext<'_, '_>,
-    array: &Expr,
+    name: &str,
+    array_span: Span,
     index: &Expr,
     expr: &Expr,
 ) {
-    let ExprKind::Variable(name) = &array.kind else {
-        return;
-    };
-    let array_value = ctx.load_local(name, Some(array.span));
+    let array_value = ctx.load_local(name, Some(array_span));
     let index_value = lower_expr(ctx, index);
     ctx.emit_void(
         Op::HashUnset,
@@ -3400,6 +3420,37 @@ fn lower_unset_hash_element(
         Op::HashUnset.default_effects(),
         Some(expr.span),
     );
+}
+
+/// Lowers `unset($arr[$key])` for a packed indexed-array local.
+///
+/// PHP's `unset()` removes a key without renumbering, so the array can no longer be a contiguous
+/// packed list (e.g. `unset([1,2,3][1])` leaves keys `0` and `2`). The local is converted to a hash
+/// (`Op::ArrayToHash`) and retyped as `AssocArray<Int, T>`, after which the element is removed
+/// through `HashUnset`. Subsequent uses of the local therefore see the associative representation.
+fn lower_unset_indexed_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    elem_ty: PhpType,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let array_value = ctx.load_local(name, Some(array_span));
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: Box::new(elem_ty),
+    };
+    let hash = ctx.emit_value(
+        Op::ArrayToHash,
+        vec![array_value.value],
+        None,
+        assoc_ty.clone(),
+        Op::ArrayToHash.default_effects(),
+        Some(array_span),
+    );
+    ctx.store_mutated_local(name, hash, assoc_ty, Some(array_span));
+    lower_unset_hash_element(ctx, name, array_span, index, expr);
 }
 
 /// Lowers `array_push($local, $value)` as a direct indexed-array mutation.

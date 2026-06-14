@@ -212,6 +212,11 @@ impl Checker {
                         }
                     }
                 }
+                if builtin_name.eq_ignore_ascii_case("unset") {
+                    for arg in &expanded_args {
+                        promote_indexed_local_for_element_unset(arg, env);
+                    }
+                }
                 Ok(ty)
             }
             ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {
@@ -319,4 +324,31 @@ fn preg_match_output_var(arg: &Expr) -> Option<&String> {
         ExprKind::NamedArg { value, .. } => preg_match_output_var(value),
         _ => None,
     }
+}
+
+/// Promotes a packed indexed-array local to an associative array when one of its elements is
+/// removed via `unset($arr[$key])`.
+///
+/// PHP's `unset()` removes a key without renumbering the remaining elements, so the array can no
+/// longer be a contiguous packed list (e.g. `unset([1,2,3][1])` leaves keys `0` and `2`). Re-typing
+/// the local as `AssocArray<Int, T>` makes its literal build as a hash, so the element removal
+/// lowers through `HashUnset`. Only plain `$var[$key]` targets on a currently-packed array are
+/// affected; associative arrays, objects, and non-variable receivers are left unchanged.
+fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
+    let ExprKind::ArrayAccess { array, .. } = &arg.kind else {
+        return;
+    };
+    let ExprKind::Variable(name) = &array.kind else {
+        return;
+    };
+    let Some(PhpType::Array(elem_ty)) = env.get(name).cloned() else {
+        return;
+    };
+    env.insert(
+        name.clone(),
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: elem_ty,
+        },
+    );
 }
