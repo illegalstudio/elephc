@@ -410,3 +410,14 @@ echo "is_callable static string: " . (is_callable($static_callback_name) ? "yes"
 echo "is_callable method array: " . (is_callable($method_callback) ? "yes" : "no") . "\n";
 echo "is_callable static method array: " . (is_callable($static_method_callback) ? "yes" : "no") . "\n";
 echo "is_callable invokable object: " . (is_callable($invokable_runner) ? "yes" : "no") . "\n";
+
+// array_map over a heterogeneous (mixed) array: each element keeps its own runtime type.
+// A closure that returns its parameter infers a `mixed` return type, so the string element
+// survives instead of being coerced to an integer.
+$mixed_values = [1, "two", 3.5, true];
+$identity = array_map(function (mixed $value) { return $value; }, $mixed_values);
+echo "mixed array_map identity: ";
+foreach ($identity as $value) { echo $value . " "; }
+echo "\n";
+$mixed_types = array_map(fn($value) => gettype($value), $mixed_values);
+echo "mixed array_map gettype: " . implode(", ", $mixed_types) . "\n";

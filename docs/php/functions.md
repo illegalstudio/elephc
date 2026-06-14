@@ -118,6 +118,20 @@ $values = array_map(function(int $x) use ($factor): int {
 echo $values[2]; // 9
 ```
 
+A closure parameter typed `mixed` (or left untyped, which is `mixed`) accepts any value,
+and a closure whose body is `return $param;` infers a `mixed` return type. This lets
+`array_map()` and the other callback built-ins run over heterogeneous arrays whose elements
+have different types:
+
+```php
+<?php
+$mixed = [1, "two", 3.5, true];
+$same = array_map(function(mixed $x) { return $x; }, $mixed);
+echo $same[1];                 // two — the string element is preserved, not coerced
+$types = array_map(fn($x) => gettype($x), $mixed);
+echo $types[0] . " " . $types[2]; // integer double
+```
+
 ## Binding `$this` in closures
 
 A non-static closure or arrow function defined inside an instance method
