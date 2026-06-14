@@ -563,7 +563,9 @@ echo isset($map["name"]);
 echo isset($map["missing"]);
 "#,
     );
-    assert_eq!(out, "100110");
+    // `isset` is a bool: echoing `false` yields "" (not "0"), matching PHP.
+    // Set/false sequence T,F,F,T,T,F renders as "1","","","1","1","" = "111".
+    assert_eq!(out, "111");
 }
 
 /// Verifies unset multiple variables.
@@ -612,8 +614,10 @@ echo isset($a[1]) ? "y\n" : "n\n";
 /// Verifies isset null variable is false.
 #[test]
 fn test_isset_null_variable_is_false() {
+    // `isset` is a bool: `isset($x)` on null is `false`, which echoes as "" (not
+    // "0") in PHP; `isset($y)` on 0 is `true`, echoing "1". So the result is "1".
     let out = compile_and_run("<?php $x = null; $y = 0; echo isset($x); echo isset($y);");
-    assert_eq!(out, "01");
+    assert_eq!(out, "1");
 }
 
 /// Verifies array values.

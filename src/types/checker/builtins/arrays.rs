@@ -155,7 +155,7 @@ pub(super) fn check_builtin(
                 }
                 checker.infer_type(arg, env)?;
             }
-            Ok(Some(PhpType::Int))
+            Ok(Some(PhpType::Bool))
         }
         "array_push" => {
             if args.len() != 2 {

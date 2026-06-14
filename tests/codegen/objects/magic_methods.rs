@@ -260,6 +260,49 @@ echo isset($s->token) ? "has:" . $s->token : "none";
     assert_eq!(out, "has:abc123|none");
 }
 
+/// Verifies `empty($obj->prop)` on an overloaded (magic) property consults
+/// `__isset` before `__get`, matching PHP. An unset virtual property is empty
+/// without `__get` ever running; a set property reflects its value's emptiness
+/// (including the `0` falsy case). Regression: `empty` previously evaluated
+/// `__get` and checked only its truthiness, ignoring `__isset` entirely.
+#[test]
+fn test_empty_on_virtual_property_consults_isset() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public function __get($k) { return $k === "zero" ? 0 : 7; }
+    public function __isset($k) { return $k !== "gone"; }
+}
+$b = new Bag();
+var_dump(empty($b->seven));  // __isset true, __get 7 -> not empty
+var_dump(empty($b->zero));   // __isset true, __get 0 -> empty
+var_dump(empty($b->gone));   // __isset false -> empty, __get not called
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\n");
+}
+
+/// Verifies `isset()` and `empty()` evaluate to `bool` (not `int`), both on a
+/// magic property and a plain variable, matching PHP's `var_dump` rendering.
+#[test]
+fn test_isset_empty_return_bool() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public function __get($k) { return 1; }
+    public function __isset($k) { return $k === "set"; }
+}
+$b = new Bag();
+$x = 5;
+var_dump(isset($b->set));
+var_dump(isset($b->nope));
+var_dump(isset($x));
+var_dump(empty($x));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\nbool(false)\n");
+}
+
 /// Compiles and runs the checked-in `examples/magic-methods/main.php` fixture,
 /// exercising every supported magic method end to end.
 #[test]
