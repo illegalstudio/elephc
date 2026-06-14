@@ -149,20 +149,28 @@ echo "Endpoint methods: ", $endpointArgs['methods'][0], " ", $endpointArgs['meth
 $endpointInstance = $endpoint->newInstance();
 echo "Endpoint instance path: ", $endpointInstance->path, "\n";
 
-// Arguments can also be symbolic references — a global constant or a class /
-// interface constant — resolved to their values when reflection reads them back.
+// Arguments can also be symbolic references — a global constant, a class /
+// interface constant, or an enum case — resolved when reflection reads them back.
+// A global/class constant resolves to its value; an enum case resolves to the
+// case object (just like PHP's ReflectionAttribute::getArguments()).
 const DEFAULT_LIMIT = 100;
 
 class Bounds {
     const CEILING = 999;
 }
 
-#[Policy(DEFAULT_LIMIT, Bounds::CEILING)]
+enum Tier: string {
+    case Free = 'free';
+    case Pro = 'pro';
+}
+
+#[Policy(DEFAULT_LIMIT, Bounds::CEILING, Tier::Pro)]
 class Quota {}
 
 $policyArgs = (new ReflectionClass('Quota'))->getAttributes()[0]->getArguments();
 echo "Policy limit: ", $policyArgs[0], "\n";
 echo "Policy ceiling: ", $policyArgs[1], "\n";
+echo "Policy tier: ", $policyArgs[2]->value, "\n";
 
 $method = new ReflectionMethod('Greeter', 'greet');
 echo "ReflectionMethod attrs:";

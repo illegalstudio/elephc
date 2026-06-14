@@ -5932,6 +5932,16 @@ fn scoped_constant_value_type_for_ir(
     value: &Expr,
 ) -> PhpType {
     let class_name = scoped_constant_receiver_name(ctx, receiver);
+    let normalized = class_name.trim_start_matches('\\');
+    // An enum case lowers to the case *object* singleton (see `lower_scoped_constant`),
+    // so the hash must box it as a Mixed cell — stamp the value type Mixed to match.
+    if ctx
+        .enums
+        .get(normalized)
+        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == member))
+    {
+        return PhpType::Mixed;
+    }
     if let Some(const_expr) = ctx.scoped_constant_value(&class_name, member) {
         return ir_array_storage_type(infer_expr_type_syntactic(&const_expr));
     }
