@@ -115,20 +115,14 @@ fn value_has_unresolvable_ref(checker: &Checker, value: &AttrArgValue) -> bool {
     }
 }
 
-/// Returns true when `Type::MEMBER` is a constant reflection can materialize on
-/// every supported target: a constant reachable on a class (through its parent
-/// chain and interfaces) or on an interface.
-///
-/// Enum-case references (`E::Case`) are intentionally treated as *not*
-/// materializable for now. They would resolve to the enum case object, but
-/// boxing that object through a Mixed-valued hash currently exhausts the heap on
-/// `linux-x86_64` (a target-specific ownership bug). Until that is fixed,
-/// enum-case attribute arguments compile but are not reflectable, instead of
-/// shipping a path that only works on some targets.
+/// Returns true when `Type::MEMBER` is a reference reflection can materialize on
+/// every supported target: an enum case (resolved to its case object) or a
+/// constant reachable on a class (through its parent chain and interfaces) or on
+/// an interface.
 fn scoped_const_materializable(checker: &Checker, type_name: &str, member: &str) -> bool {
     let normalized = type_name.trim_start_matches('\\');
-    if checker.enums.contains_key(normalized) {
-        return false;
+    if let Some(enum_info) = checker.enums.get(normalized) {
+        return enum_info.cases.iter().any(|case| case.name == member);
     }
     class_constant_reachable(checker, normalized, member)
         || interface_constant_reachable(checker, normalized, member, &mut HashSet::new())

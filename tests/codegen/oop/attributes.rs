@@ -1490,24 +1490,22 @@ var_dump($args[1]);
     assert_eq!(out, "int(7)\nstring(2) \"hi\"\n");
 }
 
-/// Verifies an enum-case attribute argument (`#[A(E::Case)]`) is parsed and
-/// compiles, and the attribute name is still reflectable. Materializing the enum
-/// *case object* through `getArguments()` is a documented follow-up (it has a
-/// `linux-x86_64`-specific ownership bug), so the arguments are not reflectable
-/// yet — only the attribute name is.
+/// Verifies an enum-case attribute argument (`#[A(E::Case)]`) materializes the
+/// enum *case object* through `getArguments()`, matching PHP — the attribute
+/// name is reflectable and the resolved argument is the case object, so reading
+/// its backing `->value` yields the case value.
 #[test]
-fn test_attribute_enum_case_argument_compiles_and_lists_name() {
+fn test_attribute_enum_case_argument() {
     let out = compile_and_run(
         r#"<?php
 enum Priority: string { case High = 'high'; case Low = 'low'; }
 #[Level(Priority::High)]
 class Task {}
-foreach (class_attribute_names('Task') as $name) {
-    echo $name;
-}
+$attr = (new ReflectionClass('Task'))->getAttributes()[0];
+echo $attr->getName(), ":", $attr->getArguments()[0]->value;
 "#,
     );
-    assert_eq!(out, "Level");
+    assert_eq!(out, "Level:high");
 }
 
 /// Verifies symbolic references nested inside an array attribute argument
