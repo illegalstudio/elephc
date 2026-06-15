@@ -449,6 +449,22 @@ echo function_exists('missing_eval_probe') ? '1' : '0';
     assert_eq!(out, "110");
 }
 
+/// Verifies callable probes inside eval inspect dynamic functions and supported builtins.
+#[test]
+fn test_eval_fragment_function_probes_use_dynamic_context() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_inner_probe() { return 1; }
+echo function_exists("DYN_EVAL_INNER_PROBE") . "x";
+echo is_callable("dyn_eval_inner_probe") . "x";
+echo function_exists("strlen") . "x";
+echo function_exists("eval") . "x";
+echo function_exists("missing_eval_inner_probe") . "x";');
+"#,
+    );
+    assert_eq!(out, "1x1x1xxx");
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {

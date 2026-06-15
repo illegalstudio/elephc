@@ -413,6 +413,9 @@ fn eval_call(
     match name {
         "count" => eval_builtin_count(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
+        "function_exists" | "is_callable" => {
+            eval_builtin_function_probe(args, context, scope, values)
+        }
         "strlen" => eval_builtin_strlen(args, context, scope, values),
         _ => context
             .function(name)
@@ -421,6 +424,34 @@ fn eval_call(
                 eval_dynamic_function(&function, args, context, scope, values)
             }),
     }
+}
+
+/// Evaluates string-name function probes against eval and supported builtin tables.
+fn eval_builtin_function_probe(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [name] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let name = eval_expr(name, context, scope, values)?;
+    let name = values.string_bytes(name)?;
+    let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let name = name.trim_start_matches('\\').to_ascii_lowercase();
+    values.bool_value(eval_function_probe_exists(context, &name))
+}
+
+/// Returns true when a PHP function name is visible to eval builtin probes.
+fn eval_function_probe_exists(context: &ElephcEvalContext, name: &str) -> bool {
+    !name.contains("::")
+        && (context.has_function(name) || eval_php_visible_builtin_exists(name))
+}
+
+/// Returns true for PHP-visible builtin names implemented by the eval interpreter.
+fn eval_php_visible_builtin_exists(name: &str) -> bool {
+    matches!(name, "count" | "function_exists" | "is_callable" | "strlen")
 }
 
 /// Evaluates nested `eval(...)` calls against the current materialized scope.
@@ -1195,6 +1226,26 @@ mod tests {
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(6));
+    }
+
+    /// Verifies eval builtin probes see dynamic functions and supported PHP-visible builtins.
+    #[test]
+    fn execute_program_function_probes_use_eval_context() {
+        let program = parse_fragment(
+            br#"function dyn_probe() { return 1; }
+echo function_exists("DYN_PROBE") . "x";
+echo is_callable("dyn_probe") . "x";
+echo function_exists("strlen") . "x";
+echo function_exists("eval") . "x";
+echo function_exists("missing_probe") . "x";"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "1x1x1xxx");
     }
 
     /// Verifies indexed array writes mutate an existing scope array.
