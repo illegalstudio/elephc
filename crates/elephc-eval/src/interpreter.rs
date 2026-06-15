@@ -244,6 +244,9 @@ fn execute_stmt(
         }
         EvalStmt::Break => Ok(EvalControl::Break),
         EvalStmt::Continue => Ok(EvalControl::Continue),
+        EvalStmt::DoWhile { body, condition } => {
+            execute_do_while_stmt(body, condition, context, scope, values)
+        }
         EvalStmt::Echo(expr) => {
             let value = eval_expr(expr, context, scope, values)?;
             values.echo(value)?;
@@ -335,6 +338,28 @@ fn execute_stmt(
             Ok(EvalControl::None)
         }
     }
+}
+
+/// Executes a PHP `do/while` loop, evaluating the condition after every body run.
+fn execute_do_while_stmt(
+    body: &[EvalStmt],
+    condition: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    loop {
+        match execute_statements(body, context, scope, values)? {
+            EvalControl::None | EvalControl::Continue => {}
+            EvalControl::Break => break,
+            EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+        }
+        let condition = eval_expr(condition, context, scope, values)?;
+        if !values.truthy(condition)? {
+            break;
+        }
+    }
+    Ok(EvalControl::None)
 }
 
 /// Executes a PHP `for` loop while preserving update-on-continue semantics.
@@ -1611,6 +1636,23 @@ mod tests {
 
         assert_eq!(values.output, "2");
         assert_eq!(values.get(flag), FakeValue::Bool(false));
+    }
+
+    /// Verifies do/while runs the body before testing the condition.
+    #[test]
+    fn execute_program_do_while_runs_body_before_condition() {
+        let program = parse_fragment(br#"do { echo $i; $i = $i + 1; } while (false);"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let i = values.int(0).expect("create fake int");
+        scope.set("i", i, ScopeCellOwnership::Owned);
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let i = scope.visible_cell("i").expect("scope should contain i");
+
+        assert_eq!(values.output, "0");
+        assert_eq!(values.get(i), FakeValue::Int(1));
     }
 
     /// Verifies for loops run init, condition, update, and body in PHP order.

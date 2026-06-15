@@ -53,6 +53,10 @@ pub enum EvalStmt {
     },
     Break,
     Continue,
+    DoWhile {
+        body: Vec<EvalStmt>,
+        condition: EvalExpr,
+    },
     Echo(EvalExpr),
     For {
         init: Vec<EvalStmt>,

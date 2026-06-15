@@ -39,6 +39,7 @@ $result = eval('$x = $x + 2; $created = "dynamic"; return $x + 4;');
 eval('$profile["name"] = "Grace";');
 eval('if ($x >= 3) { echo "x>=3\n"; }');
 eval('if ($x < 0) { echo "negative\n"; } elseif ($x == 3) { echo "x==3\n"; }');
+eval('do { echo "do-once\n"; } while (false);');
 eval('foreach ([1, 2] as $n) { echo "n=" . $n . "\n"; }');
 eval('if (isset($profile["name"])) { echo "isset-name\n"; }');
 eval('if (empty($profile["missing"])) { echo "empty-missing\n"; }');
