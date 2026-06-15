@@ -63,6 +63,10 @@ unsafe extern "C" {
     fn __elephc_eval_value_int(value: i64) -> *mut RuntimeCell;
     fn __elephc_eval_value_float(value: f64) -> *mut RuntimeCell;
     fn __elephc_eval_value_string(ptr: *const u8, len: u64) -> *mut RuntimeCell;
+    fn __elephc_eval_value_cast_int(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    fn __elephc_eval_value_cast_float(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    fn __elephc_eval_value_cast_string(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    fn __elephc_eval_value_cast_bool(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_add(left: *mut RuntimeCell, right: *mut RuntimeCell)
         -> *mut RuntimeCell;
     fn __elephc_eval_value_sub(left: *mut RuntimeCell, right: *mut RuntimeCell)
@@ -285,6 +289,26 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Creates a boxed string Mixed cell through the generated runtime wrapper.
     fn string(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_string(value.as_ptr(), value.len() as u64) })
+    }
+
+    /// Casts a boxed Mixed cell to a boxed integer Mixed cell through the generated runtime wrapper.
+    fn cast_int(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_cast_int(value.as_ptr()) })
+    }
+
+    /// Casts a boxed Mixed cell to a boxed float Mixed cell through the generated runtime wrapper.
+    fn cast_float(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_cast_float(value.as_ptr()) })
+    }
+
+    /// Casts a boxed Mixed cell to a boxed string Mixed cell through the generated runtime wrapper.
+    fn cast_string(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_cast_string(value.as_ptr()) })
+    }
+
+    /// Casts a boxed Mixed cell to a boxed boolean Mixed cell through the generated runtime wrapper.
+    fn cast_bool(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_cast_bool(value.as_ptr()) })
     }
 
     /// Adds two boxed Mixed cells using elephc runtime numeric semantics.

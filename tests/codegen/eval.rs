@@ -647,6 +647,23 @@ echo function_exists("is_double");');
     assert_eq!(out, "11111111111ok:111");
 }
 
+/// Verifies eval scalar cast builtins return boxed Mixed cells through direct and callable calls.
+#[test]
+fn test_eval_dispatches_cast_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo intval("42"); echo ":";
+echo floatval("3.5"); echo ":";
+echo strval(12); echo ":";
+echo boolval("0") ? "bad" : "false";
+echo ":"; echo call_user_func("strval", 7);
+echo ":"; echo call_user_func_array("intval", ["9"]);
+echo ":"; echo function_exists("boolval");');
+"#,
+    );
+    assert_eq!(out, "42:3.5:12:false:7:9:1");
+}
+
 /// Verifies eval `isset()` distinguishes missing, null, and falsey non-null values.
 #[test]
 fn test_eval_isset_distinguishes_missing_null_and_falsey_values() {

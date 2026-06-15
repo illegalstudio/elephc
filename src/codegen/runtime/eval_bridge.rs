@@ -264,6 +264,91 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the type-tag wrapper frame
     emitter.instruction("ret");                                                 // return the unboxed runtime tag to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_cast_int");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while casting and boxing the value
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across helper calls
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_cast_int");                              // cast the boxed eval value to a PHP integer payload
+    emitter.instruction("mov x1, x0");                                          // move the integer cast result into mixed value_lo
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
+    emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the cast integer result for Rust
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the cast wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed integer cast result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_cast_float");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while casting and boxing the value
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across helper calls
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the boxed eval value to a PHP double payload
+    emitter.instruction("fmov x1, d0");                                         // move the double cast bits into mixed value_lo
+    emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
+    emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the cast double result for Rust
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the cast wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed double cast result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_cast_string");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while unboxing and boxing the string result
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across helper calls
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the concrete payload tag and value words
+    emitter.instruction("cmp x0, #0");                                          // is the eval value an integer?
+    emitter.instruction("b.eq __elephc_eval_value_cast_string_int");            // integers cast through decimal formatting
+    emitter.instruction("cmp x0, #1");                                          // is the eval value already a string?
+    emitter.instruction("b.eq __elephc_eval_value_cast_string_box");            // strings can be boxed through the normal ownership path
+    emitter.instruction("cmp x0, #2");                                          // is the eval value a double?
+    emitter.instruction("b.eq __elephc_eval_value_cast_string_float");          // doubles cast through decimal formatting
+    emitter.instruction("cmp x0, #3");                                          // is the eval value a boolean?
+    emitter.instruction("b.eq __elephc_eval_value_cast_string_bool");           // booleans cast to "1" or the empty string
+    emitter.label("__elephc_eval_value_cast_string_empty");
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("mov x1, xzr");                                         // unsupported and falsey payloads use an empty string pointer
+    emitter.instruction("mov x2, xzr");                                         // unsupported and falsey payloads use an empty string length
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the empty string result for Rust
+    emitter.instruction("b __elephc_eval_value_cast_string_done");              // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_int");
+    emitter.instruction("mov x0, x1");                                          // pass the integer payload to decimal formatting
+    emitter.instruction("bl __rt_itoa");                                        // format the integer cast result as a string pair
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the formatted integer string
+    emitter.instruction("b __elephc_eval_value_cast_string_done");              // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_box");
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the existing string payload once
+    emitter.instruction("b __elephc_eval_value_cast_string_done");              // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_float");
+    emitter.instruction("fmov d0, x1");                                         // move the double payload bits into the FP argument register
+    emitter.instruction("bl __rt_ftoa");                                        // format the double cast result as a string pair
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the formatted double string
+    emitter.instruction("b __elephc_eval_value_cast_string_done");              // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_bool");
+    emitter.instruction("cbz x1, __elephc_eval_value_cast_string_empty");       // false casts to the empty string
+    emitter.instruction("mov x0, x1");                                          // pass the true payload to decimal formatting
+    emitter.instruction("bl __rt_itoa");                                        // format true as the string "1"
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the true string result
+    emitter.label("__elephc_eval_value_cast_string_done");
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the string-cast wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed string cast result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_cast_bool");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while casting and boxing the value
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across helper calls
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_cast_bool");                             // cast the boxed eval value to PHP truthiness
+    emitter.instruction("mov x1, x0");                                          // move the boolean cast result into mixed value_lo
+    emitter.instruction("mov x0, #3");                                          // runtime tag 3 = boolean
+    emitter.instruction("mov x2, xzr");                                         // boolean payloads do not use a high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the cast boolean result for Rust
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the cast wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed boolean cast result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_int");
     emitter.instruction("mov x1, x0");                                          // move the C integer argument into the mixed payload slot
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
@@ -976,6 +1061,95 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells and return the concrete runtime tag
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the unboxed runtime tag to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_cast_int");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_int input
+    emitter.instruction("call __rt_mixed_cast_int");                            // cast the boxed eval value to a PHP integer payload
+    emitter.instruction("mov rdi, rax");                                        // move the integer cast result into mixed value_lo
+    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
+    emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer
+    emitter.instruction("call __rt_mixed_from_value");                          // box the cast integer result for Rust
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed integer cast result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_cast_float");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the boxed eval value to a PHP double payload
+    emitter.instruction("movq rdi, xmm0");                                      // move the double cast bits into mixed value_lo
+    emitter.instruction("xor esi, esi");                                        // double payloads do not use a high word
+    emitter.instruction("mov eax, 2");                                          // runtime tag 2 = double
+    emitter.instruction("call __rt_mixed_from_value");                          // box the cast double result for Rust
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed double cast result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_cast_string");
+    emitter.instruction("push rbp");                                            // align the stack while unboxing and boxing the string result
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_unbox input
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the concrete payload tag and value words
+    emitter.instruction("cmp rax, 0");                                          // is the eval value an integer?
+    emitter.instruction("je __elephc_eval_value_cast_string_int_x86");          // integers cast through decimal formatting
+    emitter.instruction("cmp rax, 1");                                          // is the eval value already a string?
+    emitter.instruction("je __elephc_eval_value_cast_string_box_x86");          // strings can be boxed through the normal ownership path
+    emitter.instruction("cmp rax, 2");                                          // is the eval value a double?
+    emitter.instruction("je __elephc_eval_value_cast_string_float_x86");        // doubles cast through decimal formatting
+    emitter.instruction("cmp rax, 3");                                          // is the eval value a boolean?
+    emitter.instruction("je __elephc_eval_value_cast_string_bool_x86");         // booleans cast to \"1\" or the empty string
+    emitter.label("__elephc_eval_value_cast_string_empty_x86");
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("xor edi, edi");                                        // unsupported and falsey payloads use an empty string pointer
+    emitter.instruction("xor esi, esi");                                        // unsupported and falsey payloads use an empty string length
+    emitter.instruction("call __rt_mixed_from_value");                          // box the empty string result for Rust
+    emitter.instruction("jmp __elephc_eval_value_cast_string_done_x86");        // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_int_x86");
+    emitter.instruction("mov rax, rdi");                                        // pass the integer payload to decimal formatting
+    emitter.instruction("call __rt_itoa");                                      // format the integer cast result as a string pair
+    emitter.instruction("mov rdi, rax");                                        // move the formatted string pointer into mixed value_lo
+    emitter.instruction("mov rsi, rdx");                                        // move the formatted string length into mixed value_hi
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the formatted integer string
+    emitter.instruction("jmp __elephc_eval_value_cast_string_done_x86");        // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_box_x86");
+    emitter.instruction("mov rsi, rdx");                                        // move the existing string length into mixed value_hi
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the existing string payload once
+    emitter.instruction("jmp __elephc_eval_value_cast_string_done_x86");        // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_float_x86");
+    emitter.instruction("movq xmm0, rdi");                                      // move the double payload bits into the FP argument register
+    emitter.instruction("call __rt_ftoa");                                      // format the double cast result as a string pair
+    emitter.instruction("mov rdi, rax");                                        // move the formatted string pointer into mixed value_lo
+    emitter.instruction("mov rsi, rdx");                                        // move the formatted string length into mixed value_hi
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the formatted double string
+    emitter.instruction("jmp __elephc_eval_value_cast_string_done_x86");        // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_bool_x86");
+    emitter.instruction("test rdi, rdi");                                       // false casts to the empty string
+    emitter.instruction("je __elephc_eval_value_cast_string_empty_x86");        // route false to the empty string boxer
+    emitter.instruction("mov rax, rdi");                                        // pass the true payload to decimal formatting
+    emitter.instruction("call __rt_itoa");                                      // format true as the string \"1\"
+    emitter.instruction("mov rdi, rax");                                        // move the formatted string pointer into mixed value_lo
+    emitter.instruction("mov rsi, rdx");                                        // move the formatted string length into mixed value_hi
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the true string result
+    emitter.label("__elephc_eval_value_cast_string_done_x86");
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed string cast result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_cast_bool");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_bool input
+    emitter.instruction("call __rt_mixed_cast_bool");                           // cast the boxed eval value to PHP truthiness
+    emitter.instruction("mov rdi, rax");                                        // move the boolean cast result into mixed value_lo
+    emitter.instruction("xor esi, esi");                                        // boolean payloads do not use a high word
+    emitter.instruction("mov eax, 3");                                          // runtime tag 3 = boolean
+    emitter.instruction("call __rt_mixed_from_value");                          // box the cast boolean result for Rust
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed boolean cast result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_int");
     emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer
