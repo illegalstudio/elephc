@@ -57,6 +57,7 @@ $dynamic_cufa = eval('return call_user_func_array("plus_one", [8]);');
 $eval_native_call = eval('return compiled_add(2, 8);');
 $logic = eval('return true || missing_eval_rhs();');
 $not_false = eval('return !false;');
+$coalesced = eval('return $missing ?? "coalesced";');
 $negative = eval('return -5 + +2;');
 $magic_line = eval("
 return __LINE__;
@@ -81,6 +82,7 @@ echo "dynamic-cufa=" . $dynamic_cufa . "\n";
 echo "eval-native-call=" . $eval_native_call . "\n";
 echo "logic=" . $logic . "\n";
 echo "not-false=" . $not_false . "\n";
+echo "coalesce=" . $coalesced . "\n";
 echo "ternary=" . $ternary . "\n";
 echo "negative=" . $negative . "\n";
 echo "magic-line=" . $magic_line . "\n";

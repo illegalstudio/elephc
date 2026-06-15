@@ -177,6 +177,21 @@ echo eval('return false ?: "fallback";');
     assert_eq!(out, "yes:no:x:fallback");
 }
 
+/// Verifies eval null coalescing returns defaults only for missing or null values.
+#[test]
+fn test_eval_null_coalesce_executes_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return $missing ?? "fallback";');
+echo ":";
+echo eval('$x = null; return $x ?? "null-fallback";');
+echo ":";
+echo eval('return "set" ?? missing_eval_rhs();');
+"#,
+    );
+    assert_eq!(out, "fallback:null-fallback:set");
+}
+
 /// Verifies eval unary numeric operators execute through runtime numeric helpers.
 #[test]
 fn test_eval_unary_numeric_operators_execute_through_bridge() {

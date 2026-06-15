@@ -530,6 +530,14 @@ fn eval_expr(
             }
             values.method_call(object, method, evaluated_args)
         }
+        EvalExpr::NullCoalesce { value, default } => {
+            let value = eval_expr(value, context, scope, values)?;
+            if values.is_null(value)? {
+                eval_expr(default, context, scope, values)
+            } else {
+                Ok(value)
+            }
+        }
         EvalExpr::PropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             values.property_get(object, property)
@@ -1917,6 +1925,34 @@ mod tests {
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "xfallback");
+    }
+
+    /// Verifies null coalescing uses the default for missing or null values.
+    #[test]
+    fn execute_program_null_coalesce_uses_default_for_missing_or_null() {
+        let program =
+            parse_fragment(br#"echo $missing ?? "fallback"; echo $x ?? "null-fallback";"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let x = values.null().expect("create fake null");
+        scope.set("x", x, ScopeCellOwnership::Owned);
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "fallbacknull-fallback");
+    }
+
+    /// Verifies null coalescing skips the default expression for non-null values.
+    #[test]
+    fn execute_program_null_coalesce_short_circuits_non_null_value() {
+        let program = parse_fragment(br#"echo "set" ?? missing();"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "set");
     }
 
     /// Verifies logical negation returns boolean cells using PHP truthiness.

@@ -62,6 +62,7 @@ enum TokenKind {
     GreaterEqual,
     FatArrow,
     Question,
+    QuestionQuestion,
     Semicolon,
     LParen,
     RParen,
@@ -206,7 +207,12 @@ impl<'a> Lexer<'a> {
             }
             '?' => {
                 self.bump_char();
-                Ok(TokenKind::Question)
+                if self.peek_char() == Some('?') {
+                    self.bump_char();
+                    Ok(TokenKind::QuestionQuestion)
+                } else {
+                    Ok(TokenKind::Question)
+                }
             }
             ';' => {
                 self.bump_char();
@@ -792,7 +798,7 @@ impl Parser {
 
     /// Parses PHP ternary expressions, including the short `expr ?: fallback` form.
     fn parse_ternary(&mut self) -> Result<EvalExpr, EvalParseError> {
-        let condition = self.parse_logical_or()?;
+        let condition = self.parse_null_coalesce()?;
         if !self.consume(TokenKind::Question) {
             return Ok(condition);
         }
@@ -808,6 +814,19 @@ impl Parser {
             condition: Box::new(condition),
             then_branch,
             else_branch: Box::new(else_branch),
+        })
+    }
+
+    /// Parses right-associative null coalescing below logical OR and above ternary.
+    fn parse_null_coalesce(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let value = self.parse_logical_or()?;
+        if !self.consume(TokenKind::QuestionQuestion) {
+            return Ok(value);
+        }
+        let default = self.parse_null_coalesce()?;
+        Ok(EvalExpr::NullCoalesce {
+            value: Box::new(value),
+            default: Box::new(default),
         })
     }
 
@@ -1573,6 +1592,43 @@ mod tests {
                 condition: Box::new(EvalExpr::LoadVar("name".to_string())),
                 then_branch: None,
                 else_branch: Box::new(EvalExpr::Const(EvalConst::String("fallback".to_string()))),
+            }))]
+        );
+    }
+
+    /// Verifies null coalescing parses as a right-associative expression.
+    #[test]
+    fn parse_fragment_accepts_null_coalesce_source() {
+        let program =
+            parse_fragment(br#"return $a ?? $b ?? "fallback";"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::NullCoalesce {
+                value: Box::new(EvalExpr::LoadVar("a".to_string())),
+                default: Box::new(EvalExpr::NullCoalesce {
+                    value: Box::new(EvalExpr::LoadVar("b".to_string())),
+                    default: Box::new(EvalExpr::Const(EvalConst::String("fallback".to_string()))),
+                }),
+            }))]
+        );
+    }
+
+    /// Verifies null coalescing binds tighter than PHP ternary expressions.
+    #[test]
+    fn parse_fragment_null_coalesce_binds_tighter_than_ternary() {
+        let program =
+            parse_fragment(br#"return $a ?? $b ? "yes" : "no";"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Ternary {
+                condition: Box::new(EvalExpr::NullCoalesce {
+                    value: Box::new(EvalExpr::LoadVar("a".to_string())),
+                    default: Box::new(EvalExpr::LoadVar("b".to_string())),
+                }),
+                then_branch: Some(Box::new(EvalExpr::Const(EvalConst::String(
+                    "yes".to_string()
+                )))),
+                else_branch: Box::new(EvalExpr::Const(EvalConst::String("no".to_string()))),
             }))]
         );
     }

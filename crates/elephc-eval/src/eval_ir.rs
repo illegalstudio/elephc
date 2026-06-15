@@ -158,6 +158,10 @@ pub enum EvalExpr {
         args: Vec<EvalExpr>,
     },
     Magic(EvalMagicConst),
+    NullCoalesce {
+        value: Box<EvalExpr>,
+        default: Box<EvalExpr>,
+    },
     PropertyGet {
         object: Box<EvalExpr>,
         property: String,
