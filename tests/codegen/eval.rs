@@ -810,6 +810,7 @@ echo ":"; echo function_exists("trim"); echo function_exists("ltrim"); echo func
 fn test_eval_dispatches_type_predicate_builtin_calls() {
     let out = compile_and_run(
         r#"<?php
+$h = fopen("php://memory", "r+");
 eval('echo is_int(1); echo is_integer(1); echo is_long(1);
 echo is_float(1.5); echo is_double(1.5); echo is_real(1.5);
 echo is_string("x"); echo is_bool(false); echo is_null(null);
@@ -819,14 +820,18 @@ echo is_numeric(42); echo is_numeric(3.14); echo is_numeric("42");
 echo is_numeric("-5"); echo is_numeric("3.14");
 echo is_numeric("abc") ? "bad" : "N";
 echo is_numeric(true) ? "bad" : "B";
+echo is_resource(1) ? "bad" : "R";
+echo is_resource($h) ? "H" : "bad";
 echo ":";
 echo call_user_func("is_string", "x");
 echo call_user_func_array("is_array", [[1]]);
 echo call_user_func("is_numeric", "12");
-echo function_exists("is_double"); echo function_exists("is_numeric");');
+echo call_user_func("is_resource", $h);
+echo call_user_func_array("is_resource", [$h]);
+echo function_exists("is_double"); echo function_exists("is_numeric"); echo function_exists("is_resource");');
 "#,
     );
-    assert_eq!(out, "11111111111ok11111NB:11111");
+    assert_eq!(out, "11111111111ok11111NBRH:11111111");
 }
 
 /// Verifies eval scalar cast builtins return boxed Mixed cells through direct and callable calls.
