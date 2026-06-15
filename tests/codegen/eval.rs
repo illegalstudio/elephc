@@ -707,12 +707,16 @@ fn test_eval_dispatches_string_case_builtin_calls() {
         r#"<?php
 eval('echo strtoupper("Hello World"); echo ":";
 echo strtolower("LOUD"); echo ":";
+echo ucfirst("eval"); echo ":";
+echo lcfirst("LOUD"); echo ":";
 echo call_user_func("strtoupper", "xy"); echo ":";
-echo call_user_func_array("strtolower", ["ZZ"]);
-echo ":"; echo function_exists("strtoupper"); echo function_exists("strtolower");');
+echo call_user_func_array("strtolower", ["ZZ"]); echo ":";
+echo call_user_func("ucfirst", "case"); echo ":";
+echo call_user_func_array("lcfirst", ["CASE"]);
+echo ":"; echo function_exists("strtoupper"); echo function_exists("strtolower"); echo function_exists("ucfirst"); echo function_exists("lcfirst");');
 "#,
     );
-    assert_eq!(out, "HELLO WORLD:loud:XY:zz:11");
+    assert_eq!(out, "HELLO WORLD:loud:Eval:lOUD:XY:zz:Case:cASE:1111");
 }
 
 /// Verifies eval `str_contains()` supports direct and callable byte-string search.

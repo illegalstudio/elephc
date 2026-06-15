@@ -771,7 +771,9 @@ fn eval_call(
         "strcmp" | "strcasecmp" => eval_builtin_string_compare(name, args, context, scope, values),
         "strlen" => eval_builtin_strlen(args, context, scope, values),
         "strpos" | "strrpos" => eval_builtin_string_position(name, args, context, scope, values),
-        "strtolower" | "strtoupper" => eval_builtin_string_case(name, args, context, scope, values),
+        "lcfirst" | "strtolower" | "strtoupper" | "ucfirst" => {
+            eval_builtin_string_case(name, args, context, scope, values)
+        }
         "trim" => eval_builtin_trim_like(name, args, context, scope, values),
         _ => {
             if let Some(function) = context.function(name).cloned() {
@@ -910,6 +912,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_real"
             | "is_resource"
             | "is_string"
+            | "lcfirst"
             | "ord"
             | "pow"
             | "rtrim"
@@ -927,6 +930,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strtoupper"
             | "strval"
             | "trim"
+            | "ucfirst"
     )
 }
 
@@ -1172,7 +1176,7 @@ fn eval_builtin_with_values(
             };
             eval_string_compare_result(name, *left, *right, values)?
         }
-        "strtolower" | "strtoupper" => {
+        "lcfirst" | "strtolower" | "strtoupper" | "ucfirst" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
@@ -1793,6 +1797,16 @@ fn eval_string_case_result(
                 if byte.is_ascii_lowercase() {
                     *byte -= b'a' - b'A';
                 }
+            }
+        }
+        "ucfirst" => {
+            if bytes.first().is_some_and(|byte| byte.is_ascii_lowercase()) {
+                bytes[0] -= b'a' - b'A';
+            }
+        }
+        "lcfirst" => {
+            if bytes.first().is_some_and(|byte| byte.is_ascii_uppercase()) {
+                bytes[0] += b'a' - b'A';
             }
         }
         _ => return Err(EvalStatus::UnsupportedConstruct),
@@ -3706,10 +3720,14 @@ return function_exists("array_search");"#,
         let program = parse_fragment(
             br#"echo strtoupper("Hello World"); echo ":";
 echo strtolower("LOUD"); echo ":";
+echo ucfirst("eval"); echo ":";
+echo lcfirst("LOUD"); echo ":";
 echo call_user_func("strtoupper", "xy"); echo ":";
-echo call_user_func_array("strtolower", ["ZZ"]);
-echo ":"; echo function_exists("strtoupper");
-return function_exists("strtolower");"#,
+echo call_user_func_array("strtolower", ["ZZ"]); echo ":";
+echo call_user_func("ucfirst", "case"); echo ":";
+echo call_user_func_array("lcfirst", ["CASE"]);
+echo ":"; echo function_exists("strtoupper"); echo function_exists("strtolower"); echo function_exists("ucfirst");
+return function_exists("lcfirst");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -3717,7 +3735,10 @@ return function_exists("strtolower");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "HELLO WORLD:loud:XY:zz:1");
+        assert_eq!(
+            values.output,
+            "HELLO WORLD:loud:Eval:lOUD:XY:zz:Case:cASE:111"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
