@@ -750,7 +750,7 @@ fn eval_call(
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
-        | "is_null" | "is_real" | "is_string" => {
+        | "is_null" | "is_numeric" | "is_real" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
@@ -894,6 +894,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_integer"
             | "is_long"
             | "is_null"
+            | "is_numeric"
             | "is_real"
             | "is_string"
             | "pow"
@@ -1105,7 +1106,7 @@ fn eval_builtin_with_values(
             eval_hash_equals_result(*known, *user, values)?
         }
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
-        | "is_null" | "is_real" | "is_string" => {
+        | "is_null" | "is_numeric" | "is_real" | "is_string" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
@@ -1370,9 +1371,52 @@ fn eval_type_predicate_result(
         "is_bool" => tag == EVAL_TAG_BOOL,
         "is_null" => tag == EVAL_TAG_NULL,
         "is_array" => matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC),
+        "is_numeric" => {
+            tag == EVAL_TAG_INT
+                || tag == EVAL_TAG_FLOAT
+                || (tag == EVAL_TAG_STRING && eval_is_numeric_string(&values.string_bytes(value)?))
+        }
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     values.bool_value(result)
+}
+
+/// Matches the static backend's legacy ASCII numeric-string scan.
+fn eval_is_numeric_string(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+
+    let mut index = 0;
+    let mut consumed_digits = 0;
+    if bytes[index] == b'-' {
+        index += 1;
+        if index >= bytes.len() {
+            return false;
+        }
+    }
+
+    while index < bytes.len() {
+        if bytes[index] == b'.' {
+            index += 1;
+            break;
+        }
+        if !bytes[index].is_ascii_digit() {
+            return false;
+        }
+        consumed_digits += 1;
+        index += 1;
+    }
+
+    while index < bytes.len() {
+        if !bytes[index].is_ascii_digit() {
+            return false;
+        }
+        consumed_digits += 1;
+        index += 1;
+    }
+
+    consumed_digits > 0
 }
 
 /// Evaluates PHP's `hash_equals(...)` over two eval expressions.
@@ -3517,8 +3561,14 @@ echo is_float(1.5); echo is_double(1.5); echo is_real(1.5);
 echo is_string("x"); echo is_bool(false); echo is_null(null);
 echo is_array([1]); echo is_array(["a" => 1]);
 echo is_array(1) ? "bad" : "ok";
+echo is_numeric(42); echo is_numeric(3.14); echo is_numeric("42");
+echo is_numeric("-5"); echo is_numeric("3.14");
+echo is_numeric("abc") ? "bad" : "N";
+echo is_numeric(true) ? "bad" : "B";
 echo ":"; echo call_user_func("is_string", "x");
 echo call_user_func_array("is_array", [[1]]);
+echo call_user_func("is_numeric", "12");
+echo function_exists("is_numeric");
 return function_exists("is_double");"#,
         )
         .expect("parse eval fragment");
@@ -3527,7 +3577,7 @@ return function_exists("is_double");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "11111111111ok:11");
+        assert_eq!(values.output, "11111111111ok11111NB:1111");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

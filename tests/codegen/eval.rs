@@ -743,13 +743,18 @@ echo is_float(1.5); echo is_double(1.5); echo is_real(1.5);
 echo is_string("x"); echo is_bool(false); echo is_null(null);
 echo is_array([1]); echo is_array(["a" => 1]);
 echo is_array(1) ? "bad" : "ok";
+echo is_numeric(42); echo is_numeric(3.14); echo is_numeric("42");
+echo is_numeric("-5"); echo is_numeric("3.14");
+echo is_numeric("abc") ? "bad" : "N";
+echo is_numeric(true) ? "bad" : "B";
 echo ":";
 echo call_user_func("is_string", "x");
 echo call_user_func_array("is_array", [[1]]);
-echo function_exists("is_double");');
+echo call_user_func("is_numeric", "12");
+echo function_exists("is_double"); echo function_exists("is_numeric");');
 "#,
     );
-    assert_eq!(out, "11111111111ok:111");
+    assert_eq!(out, "11111111111ok11111NB:11111");
 }
 
 /// Verifies eval scalar cast builtins return boxed Mixed cells through direct and callable calls.
