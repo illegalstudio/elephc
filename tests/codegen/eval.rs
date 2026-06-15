@@ -468,6 +468,26 @@ echo $box->x;
     assert_eq!(out, "2");
 }
 
+/// Verifies eval keeps PHP property names case-sensitive while parsing keywords case-insensitively.
+#[test]
+fn test_eval_fragment_preserves_this_property_case() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCasePropBox {
+    public int $camelName = 42;
+
+    public function read(): void {
+        echo eval('RETURN $this->camelName;');
+    }
+}
+
+$box = new EvalCasePropBox();
+$box->read();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// Verifies eval fragments can call public zero-argument AOT methods through `$this`.
 #[test]
 fn test_eval_fragment_can_call_this_public_zero_arg_method() {

@@ -190,7 +190,7 @@ impl<'a> Lexer<'a> {
                 self.bump_char();
                 Ok(TokenKind::Comma)
             }
-            _ if is_ident_start(ch) => Ok(TokenKind::Ident(self.lex_ident().to_ascii_lowercase())),
+            _ if is_ident_start(ch) => Ok(TokenKind::Ident(self.lex_ident())),
             _ => Err(EvalParseError::UnexpectedToken),
         }
     }
@@ -330,27 +330,29 @@ impl Parser {
     /// Parses one source statement, expanding `unset($a, $b)` to one statement per variable.
     fn parse_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         match self.current() {
-            TokenKind::Ident(name) if name == "break" => {
+            TokenKind::Ident(name) if ident_eq(name, "break") => {
                 self.advance();
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Break])
             }
-            TokenKind::Ident(name) if name == "continue" => {
+            TokenKind::Ident(name) if ident_eq(name, "continue") => {
                 self.advance();
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Continue])
             }
-            TokenKind::Ident(name) if name == "echo" => {
+            TokenKind::Ident(name) if ident_eq(name, "echo") => {
                 self.advance();
                 let expr = self.parse_expr()?;
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Echo(expr)])
             }
-            TokenKind::Ident(name) if name == "for" => self.parse_for_stmt(),
-            TokenKind::Ident(name) if name == "foreach" => self.parse_foreach_stmt(),
-            TokenKind::Ident(name) if name == "function" => self.parse_function_decl_stmt(),
-            TokenKind::Ident(name) if name == "if" => self.parse_if_stmt(),
-            TokenKind::Ident(name) if name == "return" => {
+            TokenKind::Ident(name) if ident_eq(name, "for") => self.parse_for_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "foreach") => self.parse_foreach_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "function") => {
+                self.parse_function_decl_stmt()
+            }
+            TokenKind::Ident(name) if ident_eq(name, "if") => self.parse_if_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "return") => {
                 self.advance();
                 if self.consume_semicolon() {
                     return Ok(vec![EvalStmt::Return(None)]);
@@ -359,8 +361,8 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Return(Some(expr))])
             }
-            TokenKind::Ident(name) if name == "unset" => self.parse_unset_stmt(),
-            TokenKind::Ident(name) if name == "while" => self.parse_while_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "unset") => self.parse_unset_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(true)
             }
@@ -423,7 +425,7 @@ impl Parser {
         self.advance();
         self.expect(TokenKind::LParen)?;
         let array = self.parse_expr()?;
-        if !matches!(self.current(), TokenKind::Ident(name) if name == "as") {
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "as")) {
             return Err(EvalParseError::UnexpectedToken);
         }
         self.advance();
@@ -447,7 +449,7 @@ impl Parser {
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
-        let name = name.clone();
+        let name = name.to_ascii_lowercase();
         self.advance();
         self.expect(TokenKind::LParen)?;
         let params = self.parse_function_params()?;
@@ -578,15 +580,15 @@ impl Parser {
 
     /// Parses `elseif`, `else if`, or `else` branches after an `if` body.
     fn parse_optional_else_branch(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
-        if matches!(self.current(), TokenKind::Ident(name) if name == "elseif") {
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "elseif")) {
             self.advance();
             return Ok(vec![self.parse_if_after_keyword()?]);
         }
-        if !matches!(self.current(), TokenKind::Ident(name) if name == "else") {
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "else")) {
             return Ok(Vec::new());
         }
         self.advance();
-        if matches!(self.current(), TokenKind::Ident(name) if name == "if") {
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "if")) {
             self.advance();
             Ok(vec![self.parse_if_after_keyword()?])
         } else {
@@ -761,7 +763,7 @@ impl Parser {
                     let args = self.parse_call_args()?;
                     expr = EvalExpr::MethodCall {
                         object: Box::new(expr),
-                        method: member,
+                        method: member.to_ascii_lowercase(),
                         args,
                     };
                 } else {
@@ -800,19 +802,19 @@ impl Parser {
                 self.advance();
                 Ok(EvalExpr::LoadVar(name))
             }
-            TokenKind::Ident(name) if name == "null" => {
+            TokenKind::Ident(name) if ident_eq(name, "null") => {
                 self.advance();
                 Ok(EvalExpr::Const(EvalConst::Null))
             }
-            TokenKind::Ident(name) if name == "true" => {
+            TokenKind::Ident(name) if ident_eq(name, "true") => {
                 self.advance();
                 Ok(EvalExpr::Const(EvalConst::Bool(true)))
             }
-            TokenKind::Ident(name) if name == "false" => {
+            TokenKind::Ident(name) if ident_eq(name, "false") => {
                 self.advance();
                 Ok(EvalExpr::Const(EvalConst::Bool(false)))
             }
-            TokenKind::Ident(name) if name == "print" => {
+            TokenKind::Ident(name) if ident_eq(name, "print") => {
                 self.advance();
                 let expr = self.parse_expr()?;
                 Ok(EvalExpr::Print(Box::new(expr)))
@@ -836,7 +838,10 @@ impl Parser {
     fn parse_call_expr(&mut self, name: String) -> Result<EvalExpr, EvalParseError> {
         self.advance();
         let args = self.parse_call_args()?;
-        Ok(EvalExpr::Call { name, args })
+        Ok(EvalExpr::Call {
+            name: name.to_ascii_lowercase(),
+            args,
+        })
     }
 
     /// Parses a parenthesized source-order argument list.
@@ -944,6 +949,11 @@ fn is_ident_start(ch: char) -> bool {
 /// Returns true for subsequent characters in a PHP variable/function identifier.
 fn is_ident_continue(ch: char) -> bool {
     is_ident_start(ch) || ch.is_ascii_digit()
+}
+
+/// Compares a source identifier to a PHP keyword using ASCII case-insensitive rules.
+fn ident_eq(actual: &str, expected: &str) -> bool {
+    actual.eq_ignore_ascii_case(expected)
 }
 
 #[cfg(test)]
@@ -1218,10 +1228,24 @@ mod tests {
         );
     }
 
+    /// Verifies property names preserve source case while keywords remain case-insensitive.
+    #[test]
+    fn parse_fragment_preserves_property_case_source() {
+        let program =
+            parse_fragment(br#"RETURN $this->camelName;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::PropertyGet {
+                object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                property: "camelName".to_string(),
+            }))]
+        );
+    }
+
     /// Verifies object method calls parse as postfix EvalIR call expressions.
     #[test]
     fn parse_fragment_accepts_method_call_source() {
-        let program = parse_fragment(br#"return $this->answer();"#).expect("fragment should parse");
+        let program = parse_fragment(br#"return $this->Answer();"#).expect("fragment should parse");
         assert_eq!(
             program.statements(),
             &[EvalStmt::Return(Some(EvalExpr::MethodCall {
