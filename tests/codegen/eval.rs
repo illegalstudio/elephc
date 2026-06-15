@@ -630,6 +630,10 @@ echo eval('return ["2" => "two", "tail"][3];');
 echo ":";
 echo eval('return ["02" => "two", "tail"][0];');
 echo ":";
+echo eval('return [null => "empty"][""];');
+echo ":";
+echo eval('return [null => "empty", "tail"][0];');
+echo ":";
 echo eval('return [true => "yes", "tail"][2];');
 echo ":";
 echo eval('return [false => "no", "tail"][1];');
@@ -637,7 +641,7 @@ echo ":";
 echo eval('return [2.7 => "two", "tail"][3];');
 "#,
     );
-    assert_eq!(out, "Grace:tail:tail:tail:tail:tail:tail:tail");
+    assert_eq!(out, "Grace:tail:tail:tail:tail:empty:tail:tail:tail:tail");
 }
 
 /// Verifies eval-created associative arrays remain visible to native code.

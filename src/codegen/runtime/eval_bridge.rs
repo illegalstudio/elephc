@@ -258,6 +258,8 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b.eq __elephc_eval_key_normalize_string");             // normalize PHP string array keys through hash rules
     emitter.instruction("cmp x0, #0");                                          // is the eval key already an integer?
     emitter.instruction("b.eq __elephc_eval_key_normalize_int");                // integer keys only need the sentinel high word
+    emitter.instruction("cmp x0, #8");                                          // is the eval key null?
+    emitter.instruction("b.eq __elephc_eval_key_normalize_null");               // PHP treats null array keys as the empty string
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the original boxed key for PHP integer coercion
     emitter.instruction("bl __rt_mixed_cast_int");                              // coerce non-string keys to the current integer-key fallback
     emitter.instruction("mov x1, x0");                                          // publish the coerced integer key low word
@@ -268,6 +270,10 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b __elephc_eval_key_normalize_done");                  // return the normalized string/int key tuple
     emitter.label("__elephc_eval_key_normalize_int");
     emitter.instruction("mov x2, #-1");                                         // key_hi = -1 marks an integer array key
+    emitter.instruction("b __elephc_eval_key_normalize_done");                  // finish integer key normalization
+    emitter.label("__elephc_eval_key_normalize_null");
+    emitter.instruction("mov x1, xzr");                                         // null array keys use the empty-string pointer
+    emitter.instruction("mov x2, xzr");                                         // null array keys use the empty-string length
     emitter.label("__elephc_eval_key_normalize_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the key-normalizer helper frame
@@ -1248,6 +1254,8 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("je __elephc_eval_key_normalize_string");               // normalize PHP string array keys through hash rules
     emitter.instruction("test rax, rax");                                       // is the eval key already an integer?
     emitter.instruction("jz __elephc_eval_key_normalize_int");                  // integer keys only need the sentinel high word
+    emitter.instruction("cmp rax, 8");                                          // is the eval key null?
+    emitter.instruction("je __elephc_eval_key_normalize_null");                 // PHP treats null array keys as the empty string
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the original boxed key for PHP integer coercion
     emitter.instruction("mov rax, rdi");                                        // satisfy mixed_cast_int's mixed_unbox input convention
     emitter.instruction("call __rt_mixed_cast_int");                            // coerce non-string keys to the current integer-key fallback
@@ -1260,6 +1268,10 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_key_normalize_int");
     emitter.instruction("mov rax, rdi");                                        // publish the unboxed integer key low word
     emitter.instruction("mov rdx, -1");                                         // key_hi = -1 marks an integer array key
+    emitter.instruction("jmp __elephc_eval_key_normalize_done");                // finish integer key normalization
+    emitter.label("__elephc_eval_key_normalize_null");
+    emitter.instruction("xor eax, eax");                                        // null array keys use the empty-string pointer
+    emitter.instruction("xor edx, edx");                                        // null array keys use the empty-string length
     emitter.label("__elephc_eval_key_normalize_done");
     emitter.instruction("add rsp, 16");                                         // release the key-normalizer spill slot
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

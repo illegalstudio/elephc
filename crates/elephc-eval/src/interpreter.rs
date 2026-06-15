@@ -2612,6 +2612,7 @@ fn eval_array_next_key_after_explicit_key(
             };
             values.int(key)?
         }
+        EVAL_TAG_NULL => return Ok(current_next_key),
         _ => values.cast_int(key)?,
     };
     let one = values.int(1)?;
@@ -2779,6 +2780,7 @@ mod tests {
                 FakeValue::String(value) => eval_numeric_string_array_key(value.as_bytes())
                     .map(FakeKey::Int)
                     .map_or_else(|| Ok(FakeKey::String(value)), Ok),
+                FakeValue::Null => Ok(FakeKey::String(String::new())),
                 value => Ok(FakeKey::Int(self.fake_int(&value))),
             }
         }
@@ -4177,6 +4179,32 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
+    }
+
+    /// Verifies null literal keys normalize to empty strings without advancing automatic keys.
+    #[test]
+    fn execute_program_assoc_array_literal_unkeyed_after_null_key() {
+        let program = parse_fragment(br#"return [null => "empty", "tail"][0];"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
+    }
+
+    /// Verifies null literal keys are readable through the empty-string key.
+    #[test]
+    fn execute_program_assoc_array_literal_reads_null_key_as_empty_string() {
+        let program =
+            parse_fragment(br#"return [null => "empty"][""];"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("empty".to_string()));
     }
 
     /// Verifies boolean literal keys update the next automatic key after integer normalization.
