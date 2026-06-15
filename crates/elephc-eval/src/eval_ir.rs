@@ -76,6 +76,11 @@ pub enum EvalStmt {
         else_branch: Vec<EvalStmt>,
     },
     Return(Option<EvalExpr>),
+    PropertySet {
+        object: EvalExpr,
+        property: String,
+        value: EvalExpr,
+    },
     StoreVar {
         name: String,
         value: EvalExpr,
@@ -128,6 +133,10 @@ pub enum EvalExpr {
     },
     Const(EvalConst),
     LoadVar(String),
+    PropertyGet {
+        object: Box<EvalExpr>,
+        property: String,
+    },
     Print(Box<EvalExpr>),
     Binary {
         op: EvalBinOp,

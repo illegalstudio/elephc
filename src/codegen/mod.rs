@@ -11,6 +11,7 @@
 
 mod block_emit;
 pub(crate) mod context;
+mod eval_property_helpers;
 mod fibers;
 mod frame;
 mod function_variants;
@@ -187,10 +188,11 @@ pub fn generate_user_asm_from_ir_with_options(
 fn finalize_user_asm(
     module: &Module,
     mut emitter: Emitter,
-    data: DataSection,
+    mut data: DataSection,
     emit: Emit,
     exported_functions: &HashMap<String, ExportedFunction>,
 ) -> String {
+    eval_property_helpers::emit_eval_property_helpers(module, &mut emitter, &mut data);
     let data_output = data.emit();
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();

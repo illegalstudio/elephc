@@ -387,6 +387,7 @@ fn eval_sync_type_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::Object(_)
             | PhpType::Mixed
             | PhpType::Union(_)
     )
@@ -531,6 +532,15 @@ fn store_mixed_scope_cell_to_local(
             abi::store_at_offset(ctx.emitter, ptr_reg, offset);
             abi::store_at_offset(ctx.emitter, len_reg, offset - 8);
         }
+        PhpType::Object(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let offset = ctx.local_offset(local.slot)?;
+            let object_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x1",
+                Arch::X86_64 => "rdi",
+            };
+            abi::store_at_offset(ctx.emitter, object_reg, offset);
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "eval scope reload for PHP type {:?}",
@@ -589,6 +599,10 @@ fn store_missing_scope_entry_to_local(
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
             abi::store_at_offset(ctx.emitter, ptr_reg, offset);
             abi::store_at_offset(ctx.emitter, len_reg, offset - 8);
+        }
+        PhpType::Object(_) => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(

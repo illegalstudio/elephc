@@ -447,6 +447,27 @@ eval('echo native_eval_add(4, 6); echo ":"; echo function_exists("native_eval_ad
     assert_eq!(out, "10:1");
 }
 
+/// Verifies eval fragments called from methods can mutate public properties through `$this`.
+#[test]
+fn test_eval_fragment_can_mutate_this_public_property() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalPropBox {
+    public int $x = 1;
+
+    public function bump(): void {
+        eval('$this->x = $this->x + 1;');
+    }
+}
+
+$box = new EvalPropBox();
+$box->bump();
+echo $box->x;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {

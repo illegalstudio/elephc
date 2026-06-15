@@ -51,6 +51,21 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Reads a named property from a runtime object held in a boxed Mixed cell.
+    fn property_get(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Writes a named property on a runtime object held in a boxed Mixed cell.
+    fn property_set(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+        value: RuntimeCellHandle,
+    ) -> Result<(), EvalStatus>;
+
     /// Returns the visible element count for an array-like runtime cell.
     fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus>;
 
@@ -255,6 +270,16 @@ fn execute_stmt(
             Ok(EvalControl::Return(eval_expr(expr, context, scope, values)?))
         }
         EvalStmt::Return(None) => Ok(EvalControl::Return(values.null()?)),
+        EvalStmt::PropertySet {
+            object,
+            property,
+            value,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let value = eval_expr(value, context, scope, values)?;
+            values.property_set(object, property, value)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_expr(value, context, scope, values)?;
             if let Some(replaced) = scope.set(name.clone(), value, ScopeCellOwnership::Owned) {
@@ -378,6 +403,10 @@ fn eval_expr(
         EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::LoadVar(name) => scope.visible_cell(name).map_or_else(|| values.null(), Ok),
+        EvalExpr::PropertyGet { object, property } => {
+            let object = eval_expr(object, context, scope, values)?;
+            values.property_get(object, property)
+        }
         EvalExpr::Print(inner) => {
             let value = eval_expr(inner, context, scope, values)?;
             values.echo(value)?;
@@ -658,6 +687,7 @@ mod tests {
         String(String),
         Array(Vec<RuntimeCellHandle>),
         Assoc(HashMap<FakeKey, RuntimeCellHandle>),
+        Object(HashMap<String, RuntimeCellHandle>),
     }
 
     /// Test runtime hooks that allocate stable fake handles and record echo output.
@@ -761,6 +791,35 @@ mod tests {
                 _ => return Err(EvalStatus::UnsupportedConstruct),
             }
             Ok(array)
+        }
+
+        /// Reads one fake object property by name.
+        fn property_get(
+            &mut self,
+            object: RuntimeCellHandle,
+            property: &str,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            match self.get(object) {
+                FakeValue::Object(properties) => {
+                    properties.get(property).copied().map_or_else(|| self.null(), Ok)
+                }
+                _ => Err(EvalStatus::UnsupportedConstruct),
+            }
+        }
+
+        /// Writes one fake object property by name.
+        fn property_set(
+            &mut self,
+            object: RuntimeCellHandle,
+            property: &str,
+            value: RuntimeCellHandle,
+        ) -> Result<(), EvalStatus> {
+            let id = object.as_ptr() as usize;
+            let Some(FakeValue::Object(properties)) = self.values.get_mut(&id) else {
+                return Err(EvalStatus::UnsupportedConstruct);
+            };
+            properties.insert(property.to_string(), value);
+            Ok(())
         }
 
         /// Returns the visible element count for fake array values.
@@ -901,6 +960,7 @@ mod tests {
                 FakeValue::String(value) => !value.is_empty() && value != "0",
                 FakeValue::Array(value) => !value.is_empty(),
                 FakeValue::Assoc(value) => !value.is_empty(),
+                FakeValue::Object(_) => true,
             })
         }
     }
@@ -946,6 +1006,7 @@ mod tests {
                 FakeValue::String(value) => value.parse::<f64>().unwrap_or(0.0),
                 FakeValue::Array(value) => value.len() as f64,
                 FakeValue::Assoc(value) => value.len() as f64,
+                FakeValue::Object(_) => 1.0,
             }
         }
 
@@ -959,6 +1020,7 @@ mod tests {
                 FakeValue::String(value) => !value.is_empty() && value != "0",
                 FakeValue::Array(value) => !value.is_empty(),
                 FakeValue::Assoc(value) => !value.is_empty(),
+                FakeValue::Object(_) => true,
             }
         }
 
@@ -973,6 +1035,7 @@ mod tests {
                 FakeValue::String(value) => value,
                 FakeValue::Array(_) => "Array".to_string(),
                 FakeValue::Assoc(_) => "Array".to_string(),
+                FakeValue::Object(_) => "Object".to_string(),
             }
         }
     }
@@ -1027,6 +1090,32 @@ mod tests {
 
         assert_eq!(values.output, "p");
         assert_eq!(values.get(result), FakeValue::Int(1));
+    }
+
+    /// Verifies eval property reads and writes dispatch through runtime hooks.
+    #[test]
+    fn execute_program_reads_and_writes_object_property() {
+        let program =
+            parse_fragment(br#"$this->x = $this->x + 1; return $this->x;"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let x = values.int(1).expect("create fake int");
+        let mut properties = HashMap::new();
+        properties.insert("x".to_string(), x);
+        let object = values.alloc(FakeValue::Object(properties));
+        scope.set("this", object, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(2));
+        assert_eq!(
+            values
+                .property_get(object, "x")
+                .map(|value| values.get(value))
+                .expect("property should be readable"),
+            FakeValue::Int(2)
+        );
     }
 
     /// Verifies if/else executes only the PHP-truthy branch.
