@@ -436,6 +436,14 @@ fn eval_expr(
         EvalExpr::Unary { op, expr } => {
             let value = eval_expr(expr, context, scope, values)?;
             match op {
+                EvalUnaryOp::Plus => {
+                    let zero = values.int(0)?;
+                    values.add(zero, value)
+                }
+                EvalUnaryOp::Negate => {
+                    let zero = values.int(0)?;
+                    values.sub(zero, value)
+                }
                 EvalUnaryOp::LogicalNot => {
                     let truthy = values.truthy(value)?;
                     values.bool_value(!truthy)
@@ -1410,6 +1418,21 @@ mod tests {
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "1");
+    }
+
+    /// Verifies unary numeric operators delegate to PHP numeric runtime operations.
+    #[test]
+    fn execute_program_evaluates_unary_numeric_ops() {
+        let program = parse_fragment(br#"return -$x + +2;"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let x = values.int(5).expect("create fake int");
+        scope.set("x", x, ScopeCellOwnership::Owned);
+
+        let result =
+            execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(-3));
     }
 
     /// Verifies foreach assigns each indexed element to the value variable.

@@ -149,6 +149,13 @@ echo eval('return !"x";');
     assert_eq!(out, "1:");
 }
 
+/// Verifies eval unary numeric operators execute through runtime numeric helpers.
+#[test]
+fn test_eval_unary_numeric_operators_execute_through_bridge() {
+    let out = compile_and_run("<?php echo eval('return -5 + +2;');");
+    assert_eq!(out, "-3");
+}
+
 /// Verifies eval if/else branches use PHP truthiness and update the caller scope.
 #[test]
 fn test_eval_if_else_updates_scope() {

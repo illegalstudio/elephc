@@ -793,6 +793,20 @@ impl Parser {
 
     /// Parses right-associative unary prefix expressions.
     fn parse_unary(&mut self) -> Result<EvalExpr, EvalParseError> {
+        if self.consume(TokenKind::Plus) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::Plus,
+                expr: Box::new(expr),
+            });
+        }
+        if self.consume(TokenKind::Minus) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::Negate,
+                expr: Box::new(expr),
+            });
+        }
         if self.consume(TokenKind::Bang) {
             let expr = self.parse_unary()?;
             return Ok(EvalExpr::Unary {
@@ -1239,6 +1253,27 @@ mod tests {
                     expr: Box::new(EvalExpr::LoadVar("flag".to_string())),
                 }),
                 right: Box::new(EvalExpr::Const(EvalConst::Bool(true))),
+            }))]
+        );
+    }
+
+    /// Verifies unary numeric operators bind tighter than multiplication.
+    #[test]
+    fn parse_fragment_accepts_unary_numeric_source() {
+        let program =
+            parse_fragment(br#"return -$x * +2;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::Mul,
+                left: Box::new(EvalExpr::Unary {
+                    op: EvalUnaryOp::Negate,
+                    expr: Box::new(EvalExpr::LoadVar("x".to_string())),
+                }),
+                right: Box::new(EvalExpr::Unary {
+                    op: EvalUnaryOp::Plus,
+                    expr: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+                }),
             }))]
         );
     }
