@@ -625,9 +625,13 @@ echo ":";
 echo eval('return [2 => "two", "tail"][3];');
 echo ":";
 echo eval('return [-2 => "minus", "tail"][-1];');
+echo ":";
+echo eval('return ["2" => "two", "tail"][3];');
+echo ":";
+echo eval('return ["02" => "two", "tail"][0];');
 "#,
     );
-    assert_eq!(out, "Grace:tail:tail");
+    assert_eq!(out, "Grace:tail:tail:tail:tail");
 }
 
 /// Verifies eval-created associative arrays remain visible to native code.

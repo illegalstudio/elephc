@@ -2603,9 +2603,17 @@ fn eval_array_next_key_after_explicit_key(
     current_next_key: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if values.type_tag(key)? != EVAL_TAG_INT {
-        return Ok(current_next_key);
-    }
+    let key = match values.type_tag(key)? {
+        EVAL_TAG_INT => key,
+        EVAL_TAG_STRING => {
+            let bytes = values.string_bytes(key)?;
+            let Some(key) = eval_numeric_string_array_key(&bytes) else {
+                return Ok(current_next_key);
+            };
+            values.int(key)?
+        }
+        _ => return Ok(current_next_key),
+    };
     let one = values.int(1)?;
     let candidate = values.add(key, one)?;
     let replace = if let Some(current_next_key) = current_next_key {
@@ -2619,6 +2627,56 @@ fn eval_array_next_key_after_explicit_key(
     } else {
         current_next_key
     })
+}
+
+/// Parses PHP integer-string array keys that normalize to integer keys.
+fn eval_numeric_string_array_key(bytes: &[u8]) -> Option<i64> {
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let (negative, digits) = if bytes[0] == b'-' {
+        if bytes.len() == 1 {
+            return None;
+        }
+        (true, &bytes[1..])
+    } else {
+        (false, bytes)
+    };
+
+    if digits[0] == b'0' {
+        return if !negative && digits.len() == 1 {
+            Some(0)
+        } else {
+            None
+        };
+    }
+    if digits.iter().any(|byte| !byte.is_ascii_digit()) {
+        return None;
+    }
+
+    let limit = if negative {
+        i64::MAX as u128 + 1
+    } else {
+        i64::MAX as u128
+    };
+    let mut value = 0u128;
+    for digit in digits {
+        value = (value * 10) + u128::from(digit - b'0');
+        if value > limit {
+            return None;
+        }
+    }
+
+    if negative {
+        if value == i64::MAX as u128 + 1 {
+            Some(i64::MIN)
+        } else {
+            Some(-(value as i64))
+        }
+    } else {
+        Some(value as i64)
+    }
 }
 
 /// Converts one EvalIR constant into a runtime-cell handle.
@@ -4084,6 +4142,32 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
     fn execute_program_assoc_array_literal_unkeyed_after_negative_int_key() {
         let program =
             parse_fragment(br#"return [-2 => "minus", "tail"][-1];"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
+    }
+
+    /// Verifies numeric string literal keys update the next automatic key.
+    #[test]
+    fn execute_program_assoc_array_literal_unkeyed_after_numeric_string_key() {
+        let program =
+            parse_fragment(br#"return ["2" => "two", "tail"][3];"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
+    }
+
+    /// Verifies leading-zero string literal keys do not update the automatic key.
+    #[test]
+    fn execute_program_assoc_array_literal_unkeyed_after_leading_zero_string_key() {
+        let program =
+            parse_fragment(br#"return ["02" => "two", "tail"][0];"#).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
