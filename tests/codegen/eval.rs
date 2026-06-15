@@ -1120,6 +1120,17 @@ echo eval('function dyn_eval_add($x) { return $x + 1; } return dyn_eval_add(4);'
     assert_eq!(out, "5");
 }
 
+/// Verifies eval-declared functions bind named arguments inside eval fragments.
+#[test]
+fn test_eval_declared_function_accepts_named_args_in_fragment() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('function dyn_eval_named($x, $y) { return ($x * 10) + $y; } return dyn_eval_named(y: 2, x: 1);');
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
 /// Verifies eval magic constants use fragment line and eval-declared function metadata.
 #[test]
 fn test_eval_magic_line_function_and_method_execute_through_bridge() {

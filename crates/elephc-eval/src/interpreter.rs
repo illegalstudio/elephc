@@ -14,8 +14,8 @@
 use crate::context::{ElephcEvalContext, NativeFunction};
 use crate::errors::EvalStatus;
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalFunction, EvalMagicConst, EvalProgram,
-    EvalStmt, EvalSwitchCase, EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalFunction, EvalMagicConst,
+    EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership};
@@ -658,10 +658,7 @@ fn eval_expr(
             args,
         } => {
             let object = eval_expr(object, context, scope, values)?;
-            let mut evaluated_args = Vec::with_capacity(args.len());
-            for arg in args {
-                evaluated_args.push(eval_expr(arg, context, scope, values)?);
-            }
+            let evaluated_args = eval_positional_call_arg_values(args, context, scope, values)?;
             values.method_call(object, method, evaluated_args)
         }
         EvalExpr::NullCoalesce { value, default } => {
@@ -771,8 +768,60 @@ fn eval_expr(
     }
 }
 
+/// Returns cloned positional argument expressions, rejecting named arguments.
+fn positional_call_arg_exprs(args: &[EvalCallArg]) -> Result<Vec<EvalExpr>, EvalStatus> {
+    if args.iter().any(|arg| arg.name().is_some()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(args.iter().map(|arg| arg.value().clone()).collect())
+}
+
+/// Evaluates a positional-only call argument list in source order.
+fn eval_positional_call_arg_values(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    if args.iter().any(|arg| arg.name().is_some()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let mut evaluated_args = Vec::with_capacity(args.len());
+    for arg in args {
+        evaluated_args.push(eval_expr(arg.value(), context, scope, values)?);
+    }
+    Ok(evaluated_args)
+}
+
 /// Evaluates supported function-like calls from a runtime eval fragment.
 fn eval_call(
+    name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if eval_positional_expr_call_name(name) {
+        let args = positional_call_arg_exprs(args)?;
+        return eval_positional_expr_call(name, &args, context, scope, values);
+    }
+
+    if let Some(function) = context.function(name).cloned() {
+        return eval_dynamic_function(&function, args, context, scope, values);
+    }
+    if let Some(function) = context.native_function(name) {
+        return eval_native_function(function, args, context, scope, values);
+    }
+    Err(EvalStatus::UnsupportedConstruct)
+}
+
+/// Returns true for eval calls that still accept only positional expressions.
+fn eval_positional_expr_call_name(name: &str) -> bool {
+    matches!(name, "empty" | "eval" | "isset") || eval_php_visible_builtin_exists(name)
+}
+
+/// Evaluates builtins and language constructs after positional-only argument validation.
+fn eval_positional_expr_call(
     name: &str,
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -831,15 +880,7 @@ fn eval_call(
             eval_builtin_string_case(name, args, context, scope, values)
         }
         "trim" => eval_builtin_trim_like(name, args, context, scope, values),
-        _ => {
-            if let Some(function) = context.function(name).cloned() {
-                return eval_dynamic_function(&function, args, context, scope, values);
-            }
-            if let Some(function) = context.native_function(name) {
-                return eval_native_function(function, args, context, scope, values);
-            }
-            Err(EvalStatus::UnsupportedConstruct)
-        }
+        _ => Err(EvalStatus::UnsupportedConstruct),
     }
 }
 
@@ -2086,22 +2127,61 @@ fn eval_builtin_count(
     values.int(len)
 }
 
-/// Evaluates an eval-declared user function with positional argument binding.
+/// Evaluates an eval-declared user function with PHP-style argument binding.
 fn eval_dynamic_function(
     function: &EvalFunction,
-    args: &[EvalExpr],
+    args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if args.len() != function.params().len() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated_args.push(eval_expr(arg, context, caller_scope, values)?);
-    }
+    let evaluated_args =
+        eval_dynamic_function_call_args(function, args, context, caller_scope, values)?;
     eval_dynamic_function_with_values(function, evaluated_args, context, values)
+}
+
+/// Evaluates and binds eval-declared function arguments to parameter order.
+fn eval_dynamic_function_call_args(
+    function: &EvalFunction,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let params = function.params();
+    let mut bound_args = vec![None; params.len()];
+    let mut next_positional = 0;
+    let mut saw_named = false;
+
+    for arg in args {
+        if let Some(name) = arg.name() {
+            saw_named = true;
+            let value = eval_expr(arg.value(), context, caller_scope, values)?;
+            let Some(param_index) = params.iter().position(|param| param == name) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            if bound_args[param_index].is_some() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            bound_args[param_index] = Some(value);
+            continue;
+        }
+
+        if saw_named {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let value = eval_expr(arg.value(), context, caller_scope, values)?;
+        if next_positional >= params.len() || bound_args[next_positional].is_some() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        bound_args[next_positional] = Some(value);
+        next_positional += 1;
+    }
+
+    bound_args
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or(EvalStatus::RuntimeFatal)
 }
 
 /// Evaluates an eval-declared function after its positional arguments are prepared.
@@ -2128,18 +2208,12 @@ fn eval_dynamic_function_with_values(
 /// Evaluates a registered AOT function through its descriptor-compatible invoker.
 fn eval_native_function(
     function: NativeFunction,
-    args: &[EvalExpr],
+    args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if args.len() != function.param_count() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated_args.push(eval_expr(arg, context, caller_scope, values)?);
-    }
+    let evaluated_args = eval_positional_call_arg_values(args, context, caller_scope, values)?;
     eval_native_function_with_values(function, evaluated_args, values)
 }
 
@@ -3697,6 +3771,37 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(5));
+    }
+
+    /// Verifies eval-declared functions bind named arguments by parameter name.
+    #[test]
+    fn execute_program_calls_declared_function_with_named_args() {
+        let program = parse_fragment(
+            br#"function dyn($x, $y) { return ($x * 10) + $y; } return dyn(y: 2, x: 1);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(12));
+    }
+
+    /// Verifies named calls reject positional arguments that follow named arguments.
+    #[test]
+    fn execute_program_rejects_positional_after_named_arg() {
+        let program = parse_fragment(
+            br#"function dyn($x, $y) { return $x + $y; } return dyn(x: 1, print "late");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values);
+
+        assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+        assert_eq!(values.output, "");
     }
 
     /// Verifies function-scope magic constants keep the eval declaration spelling.

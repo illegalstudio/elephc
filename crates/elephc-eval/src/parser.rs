@@ -15,8 +15,8 @@
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalMagicConst, EvalProgram, EvalStmt,
-    EvalSwitchCase, EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalMagicConst, EvalProgram,
+    EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
 
 /// Parses an eval fragment into by-name EvalIR statements.
@@ -1451,14 +1451,14 @@ impl Parser {
     }
 
     /// Parses a parenthesized source-order argument list.
-    fn parse_call_args(&mut self) -> Result<Vec<EvalExpr>, EvalParseError> {
+    fn parse_call_args(&mut self) -> Result<Vec<EvalCallArg>, EvalParseError> {
         self.expect(TokenKind::LParen)?;
         let mut args = Vec::new();
         if self.consume(TokenKind::RParen) {
             return Ok(args);
         }
         loop {
-            args.push(self.parse_expr()?);
+            args.push(self.parse_call_arg()?);
             if !self.consume(TokenKind::Comma) {
                 break;
             }
@@ -1468,6 +1468,20 @@ impl Parser {
         }
         self.expect(TokenKind::RParen)?;
         Ok(args)
+    }
+
+    /// Parses one positional or named argument within a call argument list.
+    fn parse_call_arg(&mut self) -> Result<EvalCallArg, EvalParseError> {
+        if matches!(self.peek(), TokenKind::Colon) {
+            if let TokenKind::Ident(name) = self.current() {
+                let name = name.clone();
+                self.advance();
+                self.expect(TokenKind::Colon)?;
+                let value = self.parse_expr()?;
+                return Ok(EvalCallArg::named(name, value));
+            }
+        }
+        self.parse_expr().map(EvalCallArg::positional)
     }
 
     /// Parses an array literal with source-order optional key/value element expressions.
@@ -2447,7 +2461,25 @@ mod tests {
             program.statements(),
             &[EvalStmt::Return(Some(EvalExpr::Call {
                 name: "eval".to_string(),
-                args: vec![EvalExpr::Const(EvalConst::String("return 1;".to_string()))],
+                args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                    "return 1;".to_string()
+                )))],
+            }))]
+        );
+    }
+
+    /// Verifies function calls preserve named arguments in source order.
+    #[test]
+    fn parse_fragment_accepts_named_call_argument_source() {
+        let program = parse_fragment(br#"return add(y: 2, x: 1);"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Call {
+                name: "add".to_string(),
+                args: vec![
+                    EvalCallArg::named("y", EvalExpr::Const(EvalConst::Int(2))),
+                    EvalCallArg::named("x", EvalExpr::Const(EvalConst::Int(1))),
+                ],
             }))]
         );
     }
@@ -2462,11 +2494,11 @@ mod tests {
             &[EvalStmt::Return(Some(EvalExpr::Call {
                 name: "isset".to_string(),
                 args: vec![
-                    EvalExpr::LoadVar("x".to_string()),
-                    EvalExpr::ArrayGet {
+                    EvalCallArg::positional(EvalExpr::LoadVar("x".to_string())),
+                    EvalCallArg::positional(EvalExpr::ArrayGet {
                         array: Box::new(EvalExpr::LoadVar("items".to_string())),
                         index: Box::new(EvalExpr::Const(EvalConst::String("k".to_string()))),
-                    },
+                    }),
                 ],
             }))]
         );
@@ -2481,10 +2513,10 @@ mod tests {
             program.statements(),
             &[EvalStmt::Return(Some(EvalExpr::Call {
                 name: "empty".to_string(),
-                args: vec![EvalExpr::ArrayGet {
+                args: vec![EvalCallArg::positional(EvalExpr::ArrayGet {
                     array: Box::new(EvalExpr::LoadVar("items".to_string())),
                     index: Box::new(EvalExpr::Const(EvalConst::String("k".to_string()))),
-                }],
+                })],
             }))]
         );
     }
@@ -2616,11 +2648,11 @@ mod tests {
             &[EvalStmt::Return(Some(EvalExpr::MethodCall {
                 object: Box::new(EvalExpr::LoadVar("this".to_string())),
                 method: "add".to_string(),
-                args: vec![EvalExpr::Binary {
+                args: vec![EvalCallArg::positional(EvalExpr::Binary {
                     op: EvalBinOp::Add,
                     left: Box::new(EvalExpr::LoadVar("x".to_string())),
                     right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
-                }],
+                })],
             }))]
         );
     }
@@ -2636,8 +2668,8 @@ mod tests {
                 object: Box::new(EvalExpr::LoadVar("this".to_string())),
                 method: "label".to_string(),
                 args: vec![
-                    EvalExpr::LoadVar("x".to_string()),
-                    EvalExpr::Const(EvalConst::String("ok".to_string())),
+                    EvalCallArg::positional(EvalExpr::LoadVar("x".to_string())),
+                    EvalCallArg::positional(EvalExpr::Const(EvalConst::String("ok".to_string()))),
                 ],
             }))]
         );
