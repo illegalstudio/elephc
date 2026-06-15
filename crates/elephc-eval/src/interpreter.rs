@@ -2440,6 +2440,21 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
         );
     }
 
+    /// Verifies eval class, namespace, and trait magic constants are empty in eval scope.
+    #[test]
+    fn execute_program_scope_magic_constants_are_empty_strings() {
+        let program = parse_fragment(
+            br#"return "[" . __CLASS__ . "|" . __NAMESPACE__ . "|" . __TRAIT__ . "]";"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("[||]".to_string()));
+    }
+
     /// Verifies eval-declared functions can be called by the same fragment.
     #[test]
     fn execute_program_calls_declared_function() {

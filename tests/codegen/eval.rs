@@ -720,6 +720,23 @@ if (strlen(__FILE__) > strlen(__DIR__)) { echo "F"; } else { echo "f"; }');
     assert_eq!(out, "D:F");
 }
 
+/// Verifies eval scope magic constants are empty even from namespaced method callers.
+#[test]
+fn test_eval_scope_magic_constants_are_empty_strings() {
+    let out = compile_and_run(
+        r#"<?php
+namespace EvalMagicScope;
+class Box {
+    public function run() {
+        eval('echo "[" . __CLASS__ . "|" . __NAMESPACE__ . "|" . __TRAIT__ . "]";');
+    }
+}
+(new Box())->run();
+"#,
+    );
+    assert_eq!(out, "[||]");
+}
+
 /// Verifies eval-declared functions persist across eval calls in the same generated context.
 #[test]
 fn test_eval_declared_function_persists_across_eval_calls() {

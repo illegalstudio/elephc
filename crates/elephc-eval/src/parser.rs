@@ -2130,6 +2130,29 @@ mod tests {
         );
     }
 
+    /// Verifies eval scope magic constants lower to explicit EvalIR nodes.
+    #[test]
+    fn parse_fragment_accepts_scope_magic_constants() {
+        let program = parse_fragment(b"return __CLASS__ . __NAMESPACE__ . __TRAIT__ . __METHOD__;")
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::Concat,
+                left: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::Concat,
+                    left: Box::new(EvalExpr::Binary {
+                        op: EvalBinOp::Concat,
+                        left: Box::new(EvalExpr::Magic(EvalMagicConst::Class)),
+                        right: Box::new(EvalExpr::Magic(EvalMagicConst::Namespace)),
+                    }),
+                    right: Box::new(EvalExpr::Magic(EvalMagicConst::Trait)),
+                }),
+                right: Box::new(EvalExpr::Magic(EvalMagicConst::Method)),
+            }))]
+        );
+    }
+
     /// Verifies PHP comments are skipped while preserving fragment line numbers.
     #[test]
     fn parse_fragment_skips_comments_and_preserves_line_metadata() {
