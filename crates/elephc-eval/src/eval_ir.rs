@@ -226,6 +226,8 @@ pub enum EvalBinOp {
     Add,
     Sub,
     Mul,
+    Div,
+    Mod,
     Concat,
     LogicalAnd,
     LogicalOr,
