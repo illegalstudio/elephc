@@ -136,6 +136,19 @@ echo eval('return true || missing_eval_rhs();');
     assert_eq!(out, "ab:1");
 }
 
+/// Verifies eval logical negation returns PHP boolean cells through the bridge.
+#[test]
+fn test_eval_logical_not_executes_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return !false;');
+echo ":";
+echo eval('return !"x";');
+"#,
+    );
+    assert_eq!(out, "1:");
+}
+
 /// Verifies eval if/else branches use PHP truthiness and update the caller scope.
 #[test]
 fn test_eval_if_else_updates_scope() {

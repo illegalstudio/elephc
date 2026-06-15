@@ -15,6 +15,7 @@ use crate::errors::EvalStatus;
 use crate::context::{ElephcEvalContext, NativeFunction};
 use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalFunction, EvalProgram, EvalStmt,
+    EvalUnaryOp,
 };
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership};
@@ -431,6 +432,15 @@ fn eval_expr(
             let value = eval_expr(inner, context, scope, values)?;
             values.echo(value)?;
             values.int(1)
+        }
+        EvalExpr::Unary { op, expr } => {
+            let value = eval_expr(expr, context, scope, values)?;
+            match op {
+                EvalUnaryOp::LogicalNot => {
+                    let truthy = values.truthy(value)?;
+                    values.bool_value(!truthy)
+                }
+            }
         }
         EvalExpr::Binary { op, left, right } => {
             if *op == EvalBinOp::LogicalAnd {
@@ -1387,6 +1397,19 @@ mod tests {
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies logical negation returns boolean cells using PHP truthiness.
+    #[test]
+    fn execute_program_evaluates_logical_not() {
+        let program =
+            parse_fragment(br#"echo !false; echo !"x";"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "1");
     }
 
     /// Verifies foreach assigns each indexed element to the value variable.

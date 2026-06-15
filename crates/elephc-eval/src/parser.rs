@@ -13,7 +13,9 @@
 //! - Fragment spans must be based on call-site metadata when implemented.
 
 use crate::errors::EvalParseError;
-use crate::eval_ir::{EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalProgram, EvalStmt};
+use crate::eval_ir::{
+    EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalProgram, EvalStmt, EvalUnaryOp,
+};
 
 /// Parses an eval fragment into by-name EvalIR statements.
 pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseError> {
@@ -45,6 +47,7 @@ enum TokenKind {
     Dot,
     Equal,
     EqualEqual,
+    Bang,
     NotEqual,
     AndAnd,
     OrOr,
@@ -139,7 +142,7 @@ impl<'a> Lexer<'a> {
                     self.bump_char();
                     Ok(TokenKind::NotEqual)
                 } else {
-                    Err(EvalParseError::UnexpectedToken)
+                    Ok(TokenKind::Bang)
                 }
             }
             '&' => {
@@ -776,9 +779,9 @@ impl Parser {
 
     /// Parses left-associative numeric multiplication.
     fn parse_mul(&mut self) -> Result<EvalExpr, EvalParseError> {
-        let mut expr = self.parse_postfix()?;
+        let mut expr = self.parse_unary()?;
         while self.consume(TokenKind::Star) {
-            let right = self.parse_postfix()?;
+            let right = self.parse_unary()?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::Mul,
                 left: Box::new(expr),
@@ -786,6 +789,18 @@ impl Parser {
             };
         }
         Ok(expr)
+    }
+
+    /// Parses right-associative unary prefix expressions.
+    fn parse_unary(&mut self) -> Result<EvalExpr, EvalParseError> {
+        if self.consume(TokenKind::Bang) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::LogicalNot,
+                expr: Box::new(expr),
+            });
+        }
+        self.parse_postfix()
     }
 
     /// Parses postfix array reads, property reads, and method calls after a primary expression.
@@ -1206,6 +1221,24 @@ mod tests {
                     right: Box::new(EvalExpr::LoadVar("b".to_string())),
                 }),
                 right: Box::new(EvalExpr::Const(EvalConst::Bool(false))),
+            }))]
+        );
+    }
+
+    /// Verifies logical negation parses as a unary expression before comparisons.
+    #[test]
+    fn parse_fragment_accepts_logical_not_source() {
+        let program =
+            parse_fragment(br#"return !$flag == true;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::LooseEq,
+                left: Box::new(EvalExpr::Unary {
+                    op: EvalUnaryOp::LogicalNot,
+                    expr: Box::new(EvalExpr::LoadVar("flag".to_string())),
+                }),
+                right: Box::new(EvalExpr::Const(EvalConst::Bool(true))),
             }))]
         );
     }

@@ -143,6 +143,10 @@ pub enum EvalExpr {
         property: String,
     },
     Print(Box<EvalExpr>),
+    Unary {
+        op: EvalUnaryOp,
+        expr: Box<EvalExpr>,
+    },
     Binary {
         op: EvalBinOp,
         left: Box<EvalExpr>,
@@ -182,4 +186,10 @@ pub enum EvalBinOp {
     LtEq,
     Gt,
     GtEq,
+}
+
+/// Unary operations supported by the initial EvalIR parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalUnaryOp {
+    LogicalNot,
 }
