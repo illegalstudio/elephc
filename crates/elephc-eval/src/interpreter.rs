@@ -760,6 +760,7 @@ fn eval_call(
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
+        "ord" => eval_builtin_ord(args, context, scope, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
         "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
@@ -908,6 +909,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_numeric"
             | "is_real"
             | "is_string"
+            | "ord"
             | "pow"
             | "rtrim"
             | "round"
@@ -1103,6 +1105,12 @@ fn eval_builtin_with_values(
             let len = values.array_len(*value)?;
             let len = i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
             values.int(len)?
+        }
+        "ord" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_ord_result(*value, values)?
         }
         "trim" | "ltrim" | "rtrim" | "chop" => match evaluated_args {
             [value] => eval_trim_like_result(name, *value, None, values)?,
@@ -1821,6 +1829,29 @@ fn eval_builtin_strlen(
     let bytes = values.string_bytes(value)?;
     let len = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.int(len)
+}
+
+/// Evaluates the builtin `ord(...)` for the first byte of one coerced string.
+fn eval_builtin_ord(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_ord_result(value, values)
+}
+
+/// Returns the first byte of one converted string, or zero for an empty string.
+fn eval_ord_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    values.int(i64::from(bytes.first().copied().unwrap_or(0)))
 }
 
 /// Evaluates the builtin `count(...)` for one runtime array-like argument.
@@ -3562,6 +3593,27 @@ return call_user_func_array("dyn", [4, 5]);"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(6));
+    }
+
+    /// Verifies eval `ord()` returns the first byte and supports callable dispatch.
+    #[test]
+    fn execute_program_dispatches_ord_builtin() {
+        let program = parse_fragment(
+            br#"echo ord("A");
+echo ":" . ord("");
+echo ":" . call_user_func("ord", "B");
+echo ":" . call_user_func_array("ord", ["C"]);
+echo ":"; echo function_exists("ord");
+return ord("Z");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "65:0:66:67:1");
+        assert_eq!(values.get(result), FakeValue::Int(90));
     }
 
     /// Verifies eval array aggregate builtins iterate array values and support callable dispatch.

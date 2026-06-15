@@ -628,6 +628,21 @@ eval('echo STRLEN("abcd") . ":" . count([1, 2, 3]);');
     assert_eq!(out, "4:3");
 }
 
+/// Verifies eval `ord()` returns the first byte and dispatches dynamically.
+#[test]
+fn test_eval_dispatches_ord_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo ord("A");
+echo ":" . ord("");
+echo ":" . call_user_func("ord", "B");
+echo ":" . call_user_func_array("ord", ["C"]);
+echo ":"; echo function_exists("ord");');
+"#,
+    );
+    assert_eq!(out, "65:0:66:67:1");
+}
+
 /// Verifies eval array aggregate builtins iterate values and dispatch dynamically.
 #[test]
 fn test_eval_dispatches_array_aggregate_builtin_calls() {
