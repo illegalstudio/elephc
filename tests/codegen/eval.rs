@@ -628,6 +628,24 @@ eval('echo STRLEN("abcd") . ":" . count([1, 2, 3]);');
     assert_eq!(out, "4:3");
 }
 
+/// Verifies eval array aggregate builtins iterate values and dispatch dynamically.
+#[test]
+fn test_eval_dispatches_array_aggregate_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo array_sum([1, 2, 3]);
+echo ":" . array_product([2, 3, 4]);
+echo ":" . array_sum([]);
+echo ":" . array_product([]);
+echo ":" . array_sum(["a" => 2, "b" => 5]);
+echo ":" . call_user_func("array_sum", [3, 4]);
+echo ":" . call_user_func_array("array_product", [[2, 5]]);
+echo ":"; echo function_exists("array_sum"); echo function_exists("array_product");');
+"#,
+    );
+    assert_eq!(out, "6:24:0:1:7:7:10:11");
+}
+
 /// Verifies eval ASCII case-conversion builtins work directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_string_case_builtin_calls() {
