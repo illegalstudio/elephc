@@ -1527,6 +1527,30 @@ $box->run();
     assert_eq!(out, "50!");
 }
 
+/// Verifies eval fragments can unpack numeric arrays into public AOT method calls.
+#[test]
+fn test_eval_fragment_can_call_this_public_method_with_spread_args() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodSpreadBox {
+    public int $x = 41;
+
+    public function label(int $amount, string $suffix): string {
+        return ($this->x + $amount) . $suffix;
+    }
+
+    public function run(): void {
+        echo eval('return $this->label(...[9, "!"]);');
+    }
+}
+
+$box = new EvalMethodSpreadBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "50!");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {

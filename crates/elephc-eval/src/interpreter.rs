@@ -690,7 +690,7 @@ fn eval_expr(
             args,
         } => {
             let object = eval_expr(object, context, scope, values)?;
-            let evaluated_args = eval_positional_call_arg_values(args, context, scope, values)?;
+            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
             values.method_call(object, method, evaluated_args)
         }
         EvalExpr::NullCoalesce { value, default } => {
@@ -829,6 +829,20 @@ fn eval_positional_call_arg_values(
         evaluated_args.push(eval_expr(arg.value(), context, scope, values)?);
     }
     Ok(evaluated_args)
+}
+
+/// Evaluates method-call arguments, allowing numeric spread but not named args.
+fn eval_method_call_arg_values(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+    if evaluated_args.iter().any(|arg| arg.name.is_some()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(evaluated_args.into_iter().map(|arg| arg.value).collect())
 }
 
 /// Evaluates supported function-like calls from a runtime eval fragment.
@@ -3573,6 +3587,24 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
     fn execute_program_calls_object_method_with_two_arguments() {
         let program =
             parse_fragment(br#"return $this->add2_x(5, 6);"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let x = values.int(7).expect("create fake int");
+        let mut properties = HashMap::new();
+        properties.insert("x".to_string(), x);
+        let object = values.alloc(FakeValue::Object(properties));
+        scope.set("this", object, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(18));
+    }
+
+    /// Verifies eval method calls forward numerically unpacked arguments.
+    #[test]
+    fn execute_program_calls_object_method_with_spread_arguments() {
+        let program =
+            parse_fragment(br#"return $this->add2_x(...[5, 6]);"#).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
         let x = values.int(7).expect("create fake int");
