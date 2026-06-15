@@ -741,6 +741,7 @@ fn eval_call(
         | "is_null" | "is_real" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
+        "pow" => eval_builtin_pow(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "strlen" => eval_builtin_strlen(args, context, scope, values),
@@ -870,6 +871,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_null"
             | "is_real"
             | "is_string"
+            | "pow"
             | "sqrt"
             | "strlen"
             | "strval"
@@ -993,6 +995,12 @@ fn eval_builtin_with_values(
             };
             values.floor(*value)?
         }
+        "pow" => {
+            let [left, right] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            values.pow(*left, *right)?
+        }
         "sqrt" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -1099,6 +1107,21 @@ fn eval_builtin_floor(
     };
     let value = eval_expr(value, context, scope, values)?;
     values.floor(value)
+}
+
+/// Evaluates PHP's `pow(...)` over two eval expressions.
+fn eval_builtin_pow(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [left, right] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let left = eval_expr(left, context, scope, values)?;
+    let right = eval_expr(right, context, scope, values)?;
+    values.pow(left, right)
 }
 
 /// Evaluates PHP's `sqrt(...)` over one eval expression.
@@ -3089,6 +3112,26 @@ return function_exists("ceil");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "3:double:4:double:4:5:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `pow()` dispatches through the existing exponentiation runtime hook.
+    #[test]
+    fn execute_program_dispatches_pow_builtin() {
+        let program = parse_fragment(
+            br#"echo pow(2, 3); echo ":";
+echo gettype(pow(2, 3)); echo ":";
+echo call_user_func("pow", 2, 5); echo ":";
+echo call_user_func_array("pow", [3, 3]);
+return function_exists("pow");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "8:double:32:27");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

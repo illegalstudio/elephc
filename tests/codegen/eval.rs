@@ -720,6 +720,21 @@ echo ":"; echo function_exists("floor"); echo function_exists("ceil");');
     assert_eq!(out, "3:double:4:double:4:5:11");
 }
 
+/// Verifies eval `pow()` reuses exponentiation runtime hooks through direct and callable calls.
+#[test]
+fn test_eval_dispatches_pow_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo pow(2, 3); echo ":";
+echo gettype(pow(2, 3)); echo ":";
+echo call_user_func("pow", 2, 5); echo ":";
+echo call_user_func_array("pow", [3, 3]);
+echo ":"; echo function_exists("pow");');
+"#,
+    );
+    assert_eq!(out, "8:double:32:27:1");
+}
+
 /// Verifies eval `sqrt()` returns boxed double cells through direct and callable calls.
 #[test]
 fn test_eval_dispatches_sqrt_builtin_call() {
