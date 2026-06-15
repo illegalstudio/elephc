@@ -227,6 +227,52 @@ accessor closure, whether created inside a method or standalone). Binding a
 closure that also has `use(...)` captures aborts with a fatal error rather than
 producing an incorrectly bound closure.
 
+## Untyped closure parameters
+
+A closure parameter without a type hint accepts any value, and the same closure
+may be called with arguments of different types at different call sites:
+
+```php
+<?php
+$describe = function ($value) {
+    if (is_string($value)) {
+        return "string \"" . $value . "\"";
+    }
+    if (is_int($value)) {
+        return "int " . $value;
+    }
+    return "other";
+};
+
+echo $describe("hello"), "\n"; // string "hello"
+echo $describe(42), "\n";      // int 42
+```
+
+A pass-through closure returns its argument unchanged, regardless of type, and
+that result is not coerced when returned from an enclosing function:
+
+```php
+<?php
+$identity = function ($x) { return $x; };
+
+function first(array $items, callable $fn) {
+    return $fn($items[0]);
+}
+
+echo $identity("text"), "\n";          // text
+echo first(["alpha", "beta"], $identity), "\n"; // alpha
+```
+
+Untyped parameters also work through `call_user_func` and
+`call_user_func_array`:
+
+```php
+<?php
+$identity = function ($x) { return $x; };
+echo call_user_func($identity, "world"), "\n";      // world
+echo call_user_func_array($identity, [128]), "\n";  // 128
+```
+
 ## Static closures
 
 A closure prefixed with `static` does not capture `$this` from its enclosing

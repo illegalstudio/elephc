@@ -11,7 +11,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -135,6 +135,7 @@ impl Checker {
         &mut self,
         body: &[Stmt],
         return_type: &Option<TypeExpr>,
+        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         span: Span,
         env: &TypeEnv,
     ) -> Result<(PhpType, bool), CompileError> {
@@ -200,7 +201,94 @@ impl Checker {
             for return_info in &all_return_infos[1..] {
                 inferred_return = wider_type_syntactic(&inferred_return, &return_info.ty);
             }
+            // A bare `return $param` of an untyped closure parameter yields a boxed
+            // `Mixed` value at runtime, not the `Int` monomorphic-hint env type used to
+            // check the body. Force the inferred return to `Mixed` (the widest type, which
+            // subsumes any other branch) so a caller that returns the closure result
+            // (e.g. `function () { return $cb($x); }`) is not coerced to int.
+            // `wider_type_syntactic` cannot do this — it keeps the left operand for the
+            // `Int`/`Mixed` pair — so set it directly. Only bare-variable returns are
+            // affected; arithmetic such as `return $param + 1` keeps its `Int` inference,
+            // and a declared return type takes the branch above and is unaffected.
+            if Self::body_returns_bare_untyped_param(body, params) {
+                inferred_return = PhpType::Mixed;
+            }
             Ok((inferred_return, false))
+        }
+    }
+
+    /// Returns true when `body` contains a `return $p;` whose operand is a bare variable
+    /// naming an untyped (unannotated) parameter in `params`. Such a return is `Mixed` at
+    /// runtime even though the body is checked with the parameter's `Int` monomorphic-hint
+    /// type. Recurses through the same nested statement shapes as return collection.
+    fn body_returns_bare_untyped_param(
+        body: &[Stmt],
+        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    ) -> bool {
+        body.iter()
+            .any(|stmt| Self::stmt_returns_bare_untyped_param(stmt, params))
+    }
+
+    /// Recursive worker for [`Self::body_returns_bare_untyped_param`]: inspects a single
+    /// statement (and its nested blocks) for a bare untyped-parameter return.
+    fn stmt_returns_bare_untyped_param(
+        stmt: &Stmt,
+        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    ) -> bool {
+        let is_untyped_param = |name: &str| {
+            params
+                .iter()
+                .any(|(param_name, type_ann, _, _)| param_name == name && type_ann.is_none())
+        };
+        match &stmt.kind {
+            StmtKind::Return(Some(expr)) => {
+                matches!(&expr.kind, ExprKind::Variable(name) if is_untyped_param(name.as_str()))
+            }
+            StmtKind::Synthetic(stmts) | StmtKind::NamespaceBlock { body: stmts, .. } => {
+                Self::body_returns_bare_untyped_param(stmts, params)
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                Self::body_returns_bare_untyped_param(then_body, params)
+                    || elseif_clauses
+                        .iter()
+                        .any(|(_, body)| Self::body_returns_bare_untyped_param(body, params))
+                    || else_body
+                        .as_ref()
+                        .is_some_and(|body| Self::body_returns_bare_untyped_param(body, params))
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                Self::body_returns_bare_untyped_param(body, params)
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                Self::body_returns_bare_untyped_param(try_body, params)
+                    || catches
+                        .iter()
+                        .any(|catch| Self::body_returns_bare_untyped_param(&catch.body, params))
+                    || finally_body
+                        .as_ref()
+                        .is_some_and(|body| Self::body_returns_bare_untyped_param(body, params))
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                cases
+                    .iter()
+                    .any(|(_, body)| Self::body_returns_bare_untyped_param(body, params))
+                    || default
+                        .as_ref()
+                        .is_some_and(|body| Self::body_returns_bare_untyped_param(body, params))
+            }
+            _ => false,
         }
     }
 
@@ -233,6 +321,7 @@ impl Checker {
                 let (return_type, declared_return) = self.resolve_closure_return_type(
                     body,
                     return_type,
+                    params,
                     expr.span,
                     &closure_sig.env,
                 )?;

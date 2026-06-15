@@ -1339,3 +1339,135 @@ echo $f->call(new Greeter(), "?");
     );
     assert_eq!(out, "Hi Ada!|Hi Ada?");
 }
+
+// --- Untyped closure parameters at heterogeneous call sites ---
+//
+// An untyped closure parameter must not lock to the type of its first call site.
+// Previously a second call with a different type was rejected at type-check time,
+// and a string argument passed through `return $param` was miscompiled to `0`
+// (the closure was typed `-> I64` and cast the boxed `Mixed` argument to an int).
+
+/// Verifies that an untyped closure parameter accepts heterogeneous direct call
+/// sites: a string call followed by an int call both type-check and return their
+/// argument unchanged, instead of the second call being rejected as "expects Str,
+/// got Int".
+#[test]
+fn test_untyped_closure_param_heterogeneous_direct_calls() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = function($a) { return $a; };
+echo $cb("hello");
+echo "|";
+echo $cb(42);
+"#,
+    );
+    assert_eq!(out, "hello|42");
+}
+
+/// Verifies that a string argument passed through a pass-through closure returns the
+/// string (not `0`): the closure return type must adopt the boxed `Mixed` parameter
+/// type rather than the syntactic `Int` default.
+#[test]
+fn test_untyped_closure_param_via_call_user_func_string_arg() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = function($a) { return $a; };
+echo call_user_func($cb, "hello");
+"#,
+    );
+    assert_eq!(out, "hello");
+}
+
+/// Verifies the same pass-through fix through `call_user_func_array` with a string
+/// element, which previously also returned `0`.
+#[test]
+fn test_untyped_closure_param_via_call_user_func_array_string_arg() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = function($a) { return $a; };
+echo call_user_func_array($cb, ["hello"]);
+"#,
+    );
+    assert_eq!(out, "hello");
+}
+
+/// Verifies three distinct argument types (string, int, float) through the same
+/// untyped pass-through closure all round-trip, exercising the widen-to-`Mixed`
+/// path across more than two call sites.
+#[test]
+fn test_untyped_closure_param_three_distinct_types() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = function($a) { return $a; };
+echo $cb("a"), $cb(7), $cb(2.5);
+"#,
+    );
+    assert_eq!(out, "a72.5");
+}
+
+/// Verifies a closure whose body branches on the runtime type of its untyped
+/// parameter (string interpolation vs arithmetic) behaves correctly when invoked
+/// with both a string and an int.
+#[test]
+fn test_untyped_closure_param_polymorphic_body() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function($v) { return is_string($v) ? "S:$v" : "N:" . ($v + 1); };
+echo $f("x"), "/", $f(10);
+"#,
+    );
+    assert_eq!(out, "S:x/N:11");
+}
+
+/// Verifies heterogeneous `call_user_func` invocations of the same untyped closure
+/// (string then int) both round-trip their argument.
+#[test]
+fn test_untyped_closure_param_heterogeneous_call_user_func() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = function($a) { return $a; };
+echo call_user_func($cb, "hi"), "/", call_user_func($cb, 99);
+"#,
+    );
+    assert_eq!(out, "hi/99");
+}
+
+/// Regression guard: an untyped closure parameter called only with strings stays
+/// monomorphic and still passes its argument through unchanged.
+#[test]
+fn test_untyped_closure_param_monomorphic_string_still_works() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = function($a) { return $a; };
+echo $cb("a"), $cb("b");
+"#,
+    );
+    assert_eq!(out, "ab");
+}
+
+/// Regression guard: an untyped closure parameter used only with ints keeps integer
+/// arithmetic semantics across repeated calls.
+#[test]
+fn test_untyped_closure_param_monomorphic_int_still_works() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = function($a) { return $a + 1; };
+echo $cb(1), $cb(2);
+"#,
+    );
+    assert_eq!(out, "23");
+}
+
+/// Verifies the return-type-consults-parameter fix for a typed parameter without a
+/// declared return type: `return $s` of a `string` parameter must be typed as a
+/// string, not the syntactic `Int` fallback.
+#[test]
+fn test_typed_param_no_declared_return_closure_passthrough() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function(string $s) { return $s; };
+echo $f("hi");
+"#,
+    );
+    assert_eq!(out, "hi");
+}

@@ -132,7 +132,7 @@ fn contextual_closure_sig(
     }
 
     let (return_type, declared_return) =
-        checker.resolve_closure_return_type(body, return_type, callback.span, &closure_env)?;
+        checker.resolve_closure_return_type(body, return_type, params, callback.span, &closure_env)?;
     Ok(Some(FunctionSig {
         params: param_types,
         defaults,

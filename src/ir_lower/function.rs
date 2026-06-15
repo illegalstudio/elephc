@@ -926,13 +926,13 @@ fn direct_closure_return_expr_type(
     params: &[(String, PhpType)],
 ) -> PhpType {
     if let ExprKind::Variable(name) = &expr.kind {
+        if let Some((_, php_type)) = params.iter().find(|(param_name, _)| param_name == name) {
+            return php_type.clone();
+        }
         if let Some((_, php_type, _)) = captures
             .iter()
             .find(|(capture_name, _, _)| capture_name == name)
         {
-            return php_type.clone();
-        }
-        if let Some((_, php_type)) = params.iter().find(|(param_name, _)| param_name == name) {
             return php_type.clone();
         }
     }

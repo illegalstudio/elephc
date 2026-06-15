@@ -363,7 +363,7 @@ impl Checker {
         });
         self.closure_depth -= 1;
         body_result?;
-        self.resolve_closure_return_type(body, return_type, expr.span, &closure_sig.env)?;
+        self.resolve_closure_return_type(body, return_type, params, expr.span, &closure_sig.env)?;
         Ok(PhpType::Callable)
     }
 
@@ -1109,11 +1109,37 @@ impl Checker {
                     .copied()
                     .unwrap_or(false)
                 && !sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                && sig.params[param_idx].1 == PhpType::Mixed
                 && actual_ty != PhpType::Never
             {
-                sig.params[param_idx].1 = actual_ty;
-                changed = true;
+                // Mirror the regular-function specialization protocol so a closure
+                // variable invoked at heterogeneous call sites widens to the union
+                // (ultimately `Mixed`) instead of locking to the first call's type
+                // and rejecting every later differing call. The key is NUL-prefixed
+                // so it cannot collide with a real function name in the shared
+                // `param_specialization_seen` set.
+                let key = (format!("\0closure\0{}", var), param_idx);
+                let seen = self.param_specialization_seen.contains(&key);
+                if sig.params[param_idx].1 == PhpType::Mixed && !seen {
+                    // First call: adopt the actual type so a closure only ever
+                    // called with one type stays monomorphic (the common case).
+                    // Marking the key ensures a later differing call widens rather
+                    // than re-adopting.
+                    self.param_specialization_seen.insert(key);
+                    if sig.params[param_idx].1 != actual_ty {
+                        sig.params[param_idx].1 = actual_ty;
+                        changed = true;
+                    }
+                } else {
+                    // Later call (or an already-specialized param): widen toward the
+                    // union. A no-op when the actual type already matches; otherwise
+                    // heterogeneous sites become `Mixed`, which the boxed-Mixed
+                    // closure parameter ABI accepts.
+                    let widened = Self::union_param_type(&sig.params[param_idx].1, &actual_ty);
+                    if sig.params[param_idx].1 != widened {
+                        sig.params[param_idx].1 = widened;
+                        changed = true;
+                    }
+                }
             }
             param_idx += 1;
         }
