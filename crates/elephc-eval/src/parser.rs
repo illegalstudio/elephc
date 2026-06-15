@@ -304,6 +304,7 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Echo(expr)])
             }
+            TokenKind::Ident(name) if name == "for" => self.parse_for_stmt(),
             TokenKind::Ident(name) if name == "if" => self.parse_if_stmt(),
             TokenKind::Ident(name) if name == "return" => {
                 self.advance();
@@ -345,6 +346,77 @@ impl Parser {
         self.expect(TokenKind::Equal)?;
         let value = self.parse_expr()?;
         self.expect_semicolon()?;
+        Ok(vec![EvalStmt::ArraySetVar { name, index, value }])
+    }
+
+    /// Parses `for (init; condition; update) { ... }`.
+    fn parse_for_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let init = self.parse_for_init_clause()?;
+        self.expect_semicolon()?;
+        let condition = if matches!(self.current(), TokenKind::Semicolon) {
+            None
+        } else {
+            Some(self.parse_expr()?)
+        };
+        self.expect_semicolon()?;
+        let update = self.parse_for_update_clause()?;
+        let body = self.parse_block()?;
+        Ok(vec![EvalStmt::For {
+            init,
+            condition,
+            update,
+            body,
+        }])
+    }
+
+    /// Parses the optional first clause of a `for` loop.
+    fn parse_for_init_clause(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        if matches!(self.current(), TokenKind::Semicolon) {
+            return Ok(Vec::new());
+        }
+        self.parse_for_clause_stmt()
+    }
+
+    /// Parses the optional update clause of a `for` loop.
+    fn parse_for_update_clause(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        if self.consume(TokenKind::RParen) {
+            return Ok(Vec::new());
+        }
+        let statements = self.parse_for_clause_stmt()?;
+        self.expect(TokenKind::RParen)?;
+        Ok(statements)
+    }
+
+    /// Parses one statement-like `for` clause without consuming a delimiter.
+    fn parse_for_clause_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        match self.current() {
+            TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::LBracket) => {
+                self.parse_array_set_clause(name.clone())
+            }
+            TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::Equal) => {
+                let name = name.clone();
+                self.advance();
+                self.advance();
+                let value = self.parse_expr()?;
+                Ok(vec![EvalStmt::StoreVar { name, value }])
+            }
+            _ => {
+                let expr = self.parse_expr()?;
+                Ok(vec![EvalStmt::Expr(expr)])
+            }
+        }
+    }
+
+    /// Parses `$name[index] = expr` in a `for` clause.
+    fn parse_array_set_clause(&mut self, name: String) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LBracket)?;
+        let index = self.parse_expr()?;
+        self.expect(TokenKind::RBracket)?;
+        self.expect(TokenKind::Equal)?;
+        let value = self.parse_expr()?;
         Ok(vec![EvalStmt::ArraySetVar { name, index, value }])
     }
 
@@ -692,6 +764,32 @@ mod tests {
                     name: "x".to_string(),
                     value: EvalExpr::Const(EvalConst::String("no".to_string())),
                 }],
+            }]
+        );
+    }
+
+    /// Verifies for loops lower clauses and body statements separately.
+    #[test]
+    fn parse_fragment_accepts_for_source() {
+        let program = parse_fragment(br#"for ($i = 2; $i; $i = $i - 1) { echo $i; }"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::For {
+                init: vec![EvalStmt::StoreVar {
+                    name: "i".to_string(),
+                    value: EvalExpr::Const(EvalConst::Int(2)),
+                }],
+                condition: Some(EvalExpr::LoadVar("i".to_string())),
+                update: vec![EvalStmt::StoreVar {
+                    name: "i".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::Sub,
+                        left: Box::new(EvalExpr::LoadVar("i".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                    },
+                }],
+                body: vec![EvalStmt::Echo(EvalExpr::LoadVar("i".to_string()))],
             }]
         );
     }

@@ -132,6 +132,30 @@ echo ":" . $i;
     assert_eq!(out, "done:0");
 }
 
+/// Verifies `for` loops inside eval run init, body, update, and condition in order.
+#[test]
+fn test_eval_for_loop_updates_scope() {
+    let out = compile_and_run(
+        r#"<?php
+eval('for ($i = 3; $i; $i = $i - 1) { echo $i; }');
+echo ":" . $i;
+"#,
+    );
+    assert_eq!(out, "321:0");
+}
+
+/// Verifies `continue` inside an eval `for` loop still runs the update clause.
+#[test]
+fn test_eval_for_continue_runs_update() {
+    let out = compile_and_run(
+        r#"<?php
+eval('for ($i = 3; $i; $i = $i - 1) { if ($i - 1) { continue; } echo "done"; }');
+echo ":" . $i;
+"#,
+    );
+    assert_eq!(out, "done:0");
+}
+
 /// Verifies eval indexed-array literals and reads execute through Mixed array helpers.
 #[test]
 fn test_eval_indexed_array_literal_and_read() {

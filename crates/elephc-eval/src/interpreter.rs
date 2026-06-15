@@ -171,6 +171,12 @@ fn execute_stmt(
             values.echo(value)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => execute_for_stmt(init, condition.as_ref(), update, body, scope, values),
         EvalStmt::If {
             condition,
             then_branch,
@@ -216,6 +222,41 @@ fn execute_stmt(
             Ok(EvalControl::None)
         }
     }
+}
+
+/// Executes a PHP `for` loop while preserving update-on-continue semantics.
+fn execute_for_stmt(
+    init: &[EvalStmt],
+    condition: Option<&EvalExpr>,
+    update: &[EvalStmt],
+    body: &[EvalStmt],
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    match execute_statements(init, scope, values)? {
+        EvalControl::None | EvalControl::Continue => {}
+        EvalControl::Break => return Ok(EvalControl::None),
+        EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+    }
+    loop {
+        if let Some(condition) = condition {
+            let condition = eval_expr(condition, scope, values)?;
+            if !values.truthy(condition)? {
+                break;
+            }
+        }
+        match execute_statements(body, scope, values)? {
+            EvalControl::None | EvalControl::Continue => {}
+            EvalControl::Break => break,
+            EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+        }
+        match execute_statements(update, scope, values)? {
+            EvalControl::None | EvalControl::Continue => {}
+            EvalControl::Break => break,
+            EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+        }
+    }
+    Ok(EvalControl::None)
 }
 
 /// Evaluates one expression to an opaque runtime-cell handle.
@@ -679,6 +720,38 @@ mod tests {
 
         assert_eq!(values.output, "2");
         assert_eq!(values.get(flag), FakeValue::Bool(false));
+    }
+
+    /// Verifies for loops run init, condition, update, and body in PHP order.
+    #[test]
+    fn execute_program_for_loop_updates_after_body() {
+        let program = parse_fragment(br#"for ($i = 3; $i; $i = $i - 1) { echo $i; }"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let i = scope.visible_cell("i").expect("scope should contain i");
+
+        assert_eq!(values.output, "321");
+        assert_eq!(values.get(i), FakeValue::Int(0));
+    }
+
+    /// Verifies `continue` in a for loop still runs the update clause.
+    #[test]
+    fn execute_program_for_continue_runs_update_clause() {
+        let program = parse_fragment(
+            br#"for ($i = 3; $i; $i = $i - 1) { if ($i - 1) { continue; } echo "done"; }"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let i = scope.visible_cell("i").expect("scope should contain i");
+
+        assert_eq!(values.output, "done");
+        assert_eq!(values.get(i), FakeValue::Int(0));
     }
 
     /// Verifies indexed array literals and reads execute through runtime hooks.
