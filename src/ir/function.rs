@@ -167,6 +167,7 @@ pub enum LocalKind {
     NamedArgTemp,
     IteratorState,
     GeneratorState,
+    EvalScope,
 }
 
 /// Function-level shape flags used by lowering and later codegen.

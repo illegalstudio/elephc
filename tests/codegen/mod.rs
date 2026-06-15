@@ -17,6 +17,7 @@ mod case_insensitive_symbols;
 mod cli;
 mod benchmarks;
 mod echo_vars;
+mod eval;
 mod operators;
 mod control_flow;
 mod scalar_strings;

@@ -15,6 +15,8 @@
 //! - The dynamic builtin dispatcher (descriptor invoker) emits per-builtin
 //!   wrappers — including md5/sha1/hash — that reference the `elephc_crypto`
 //!   staticlib, so its detection forces that crate to link.
+//! - `eval()` enables the optional libelephc-eval bridge only when lowered EIR
+//!   actually references the eval bridge call path.
 
 use std::collections::HashMap;
 
@@ -34,6 +36,8 @@ pub struct RuntimeFeatures {
     /// True when codegen can emit the runtime callable dispatcher (descriptor
     /// invoker) that builds per-builtin wrappers referencing `elephc_crypto`.
     pub descriptor_invoker: bool,
+    /// True when codegen can call the optional eval bridge staticlib.
+    pub eval: bool,
 }
 
 impl RuntimeFeatures {
@@ -43,6 +47,7 @@ impl RuntimeFeatures {
             regex: false,
             phar_archive: false,
             descriptor_invoker: false,
+            eval: false,
         }
     }
 
@@ -53,6 +58,7 @@ impl RuntimeFeatures {
             regex: true,
             phar_archive: true,
             descriptor_invoker: true,
+            eval: true,
         }
     }
 }
@@ -87,6 +93,9 @@ pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec
         // The dynamic builtin dispatcher emits md5/sha1/hash wrappers that
         // reference `elephc_crypto_hash`; force the crate to link on all targets.
         libs.push("elephc_crypto".to_string());
+    }
+    if features.eval {
+        libs.push("elephc_eval".to_string());
     }
     libs
 }
@@ -880,6 +889,18 @@ mod tests {
         assert!(required_libraries_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
+    /// Verifies eval runtime features request the eval bridge staticlib for final linking.
+    #[test]
+    fn test_eval_runtime_features_require_elephc_eval_library() {
+        assert_eq!(
+            required_libraries_for_runtime_features(RuntimeFeatures {
+                eval: true,
+                ..RuntimeFeatures::none()
+            }),
+            vec!["elephc_eval".to_string()]
+        );
+    }
+
     /// Verifies literal callback dispatch to preg builtins enables regex helpers.
     #[test]
     fn test_runtime_features_include_regex_for_call_user_func_literal() {
@@ -1002,6 +1023,7 @@ mod tests {
             regex: false,
             phar_archive: false,
             descriptor_invoker: true,
+            eval: false,
         })
         .iter()
         .any(|lib| lib == "elephc_crypto"));

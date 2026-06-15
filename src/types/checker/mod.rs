@@ -127,6 +127,11 @@ pub(crate) struct Checker {
     pub active_globals: HashSet<String>,
     /// Names introduced via `static` declarations in the current local scope.
     pub active_statics: HashSet<String>,
+    /// Whether the active local statement stream has crossed an `eval()` call.
+    ///
+    /// Once set, unknown local reads are treated as dynamic `Mixed` values because
+    /// eval fragments can create caller-scope variables at runtime.
+    pub eval_barrier_active: bool,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,

@@ -12,6 +12,7 @@ use super::arrays;
 use super::buffers;
 use super::callables;
 use super::diagnostics;
+use super::eval_bridge;
 use super::exceptions;
 use super::fibers;
 use super::generators;
@@ -287,6 +288,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_object_free_deep(emitter);
     arrays::emit_refcount(emitter);
+    if features.eval {
+        eval_bridge::emit_eval_bridge_runtime(emitter);
+    }
 
     // SPL runtime-managed containers
     spl::emit_doubly_linked_list_runtime(emitter);

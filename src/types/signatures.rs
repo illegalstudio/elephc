@@ -78,6 +78,8 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
 /// - optimizer effect modeling for builtins
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
+        "eval" => Some(fixed(&["code"])),
+
         "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
         | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" | "hash_algos" => Some(fixed(&[])),
 

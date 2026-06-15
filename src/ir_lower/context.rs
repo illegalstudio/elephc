@@ -80,6 +80,8 @@ pub(crate) struct ClosureCapture {
     pub value: ValueId,
 }
 
+const EVAL_SCOPE_LOCAL_NAME: &str = "__eir_eval_scope";
+
 /// Mutable state for one function body while it is lowered.
 pub(crate) struct LoweringContext<'m, 'f> {
     pub builder: Builder<'f>,
@@ -387,6 +389,43 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
     ) -> LocalSlotId {
         self.declare_local_with_kind(name, php_type, LocalKind::HiddenTemp)
+    }
+
+    /// Ensures this function has a persistent eval scope handle slot.
+    pub(crate) fn declare_eval_scope_local(&mut self) -> LocalSlotId {
+        self.declare_local_with_kind(EVAL_SCOPE_LOCAL_NAME, PhpType::Int, LocalKind::EvalScope)
+    }
+
+    /// Applies the static part of the eval barrier to visible PHP local storage.
+    pub(crate) fn apply_eval_barrier(&mut self) {
+        self.declare_eval_scope_local();
+        let local_names = self
+            .local_slots
+            .iter()
+            .filter_map(|(name, slot)| {
+                let kind = self
+                    .local_kinds
+                    .get(name)
+                    .copied()
+                    .unwrap_or(LocalKind::PhpLocal);
+                (kind == LocalKind::PhpLocal).then_some((name.clone(), *slot))
+            })
+            .collect::<Vec<_>>();
+        for (name, slot) in local_names {
+            if eval_barrier_can_widen(&self.builder.local_php_type(slot)) {
+                self.set_local_type(&name, PhpType::Mixed);
+            }
+        }
+        for (name, ty) in self.local_types.clone() {
+            let kind = self
+                .local_kinds
+                .get(&name)
+                .copied()
+                .unwrap_or(LocalKind::PhpLocal);
+            if kind == LocalKind::PhpLocal && eval_barrier_can_widen(&ty) {
+                self.local_types.insert(name, PhpType::Mixed);
+            }
+        }
     }
 
     /// Declares a hidden owner slot for a promoted local ref-cell pointer.
@@ -1032,6 +1071,14 @@ fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
             | "ptr_read_string"
             | "strpos"
             | "strrpos"
+    )
+}
+
+/// Returns true when eval can replace a local value with an arbitrary boxed cell.
+fn eval_barrier_can_widen(php_type: &PhpType) -> bool {
+    !matches!(
+        php_type.codegen_repr(),
+        PhpType::Never | PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_)
     )
 }
 

@@ -90,6 +90,7 @@ fn include_lowered_runtime_features(module: &mut Module) {
     module.required_runtime_features.regex |= features.regex;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
+    module.required_runtime_features.eval |= features.eval;
 }
 
 /// Derives optional runtime features from the actual EIR instruction stream.
@@ -107,6 +108,9 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     }
                     if builtin_call_requires_descriptor_invoker(module, function, inst) {
                         features.descriptor_invoker = true;
+                    }
+                    if builtin_call_requires_eval(module, inst) {
+                        features.eval = true;
                     }
                 }
                 Op::ExprCall | Op::CallableDescriptorInvoke => {
@@ -183,6 +187,14 @@ fn builtin_call_requires_descriptor_invoker(
         .is_some_and(|value| value.php_type.codegen_repr() == PhpType::Str)
 }
 
+/// Returns true when a lowered builtin call references the optional eval bridge.
+fn builtin_call_requires_eval(module: &Module, inst: &crate::ir::Instruction) -> bool {
+    let Some(name) = builtin_call_name(module, inst) else {
+        return false;
+    };
+    is_eval_builtin_name(name)
+}
+
 /// Returns the canonical builtin name attached to a lowered builtin instruction.
 fn builtin_call_name<'a>(module: &'a Module, inst: &crate::ir::Instruction) -> Option<&'a str> {
     let Some(Immediate::Data(data)) = inst.immediate else {
@@ -203,6 +215,11 @@ fn string_callback_operand_index(name: &str) -> Option<usize> {
         | "iterator_apply" | "preg_replace_callback" => Some(1),
         _ => None,
     }
+}
+
+/// Returns true when a builtin name denotes PHP's eval language construct.
+fn is_eval_builtin_name(name: &str) -> bool {
+    php_symbol_key(name.trim_start_matches('\\')) == "eval"
 }
 
 /// Returns true when a builtin name is lowered through the regex runtime helpers.

@@ -1,0 +1,12 @@
+[package]
+name = "elephc-eval"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Optional eval bridge staticlib for elephc compiled PHP programs"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]

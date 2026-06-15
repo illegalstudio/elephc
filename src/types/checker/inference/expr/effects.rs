@@ -45,6 +45,10 @@ impl Checker {
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
         match &expr.kind {
+            ExprKind::Variable(name) if self.eval_barrier_active && !env.contains_key(name) => {
+                env.insert(name.clone(), PhpType::Mixed);
+                Ok(PhpType::Mixed)
+            }
             ExprKind::Assignment {
                 target,
                 value,
@@ -192,6 +196,9 @@ impl Checker {
                         }
                     }
                 }
+                if builtin_name.eq_ignore_ascii_case("eval") {
+                    self.mark_eval_barrier(env);
+                }
                 Ok(ty)
             }
             ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {
@@ -281,6 +288,22 @@ impl Checker {
         self.first_class_callable_targets
             .get(var_name)
             .is_some_and(callable_target_is_preg_replace_callback)
+    }
+
+    /// Marks the active statement stream as having crossed eval and widens local facts.
+    fn mark_eval_barrier(&mut self, env: &mut TypeEnv) {
+        self.eval_barrier_active = true;
+        let local_names = env.keys().cloned().collect::<Vec<_>>();
+        for ty in env.values_mut() {
+            *ty = PhpType::Mixed;
+        }
+        for name in local_names {
+            self.closure_return_types.remove(&name);
+            self.callable_sigs.remove(&name);
+            self.callable_captures.remove(&name);
+            self.callable_array_targets.remove(&name);
+            self.first_class_callable_targets.remove(&name);
+        }
     }
 }
 

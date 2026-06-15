@@ -1,0 +1,424 @@
+//! Purpose:
+//! Lowers PHP `eval()` calls to the optional libelephc-eval bridge ABI.
+//! Materializes a persistent per-function eval scope handle, flushes visible
+//! locals into that scope, calls the bridge, and reloads synchronized locals
+//! from boxed Mixed cells after the call returns.
+//!
+//! Called from:
+//! - `crate::codegen_ir::lower_inst::builtins::lower_builtin_call()`.
+//!
+//! Key details:
+//! - Argument evaluation has already happened in PHP source order during EIR
+//!   lowering; this module only materializes the bridge ABI call.
+//! - The bridge is target-mangled like other C staticlib symbols.
+
+use crate::codegen::platform::Arch;
+use crate::codegen::{abi, emit_box_current_value_as_mixed};
+use crate::codegen_ir::{CodegenIrError, Result};
+use crate::ir::{Instruction, LocalKind, LocalSlotId};
+use crate::types::PhpType;
+
+use super::super::super::context::FunctionContext;
+use super::super::{expect_operand, store_if_result};
+
+const EVAL_STATUS_PARSE_ERROR: i64 = 1;
+const EVAL_STATUS_UNSUPPORTED: i64 = 4;
+const EVAL_PARSE_ERROR_MESSAGE: &str = "Parse error: eval() fragment is invalid\n";
+const EVAL_UNSUPPORTED_MESSAGE: &str =
+    "Fatal error: eval() fragment uses an unsupported construct\n";
+const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";
+const EVAL_STACK_BYTES: usize = 64;
+const EVAL_RESULT_VALUE_CELL_OFFSET: usize = 8;
+const EVAL_SCOPE_HANDLE_OFFSET: usize = 32;
+const EVAL_TEMP_CELL_OFFSET: usize = 40;
+const EVAL_CODE_PTR_OFFSET: usize = 48;
+const EVAL_CODE_LEN_OFFSET: usize = 56;
+const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
+const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
+
+/// Local slot metadata needed for conservative eval scope synchronization.
+#[derive(Clone)]
+struct EvalSyncLocal {
+    name: String,
+    slot: LocalSlotId,
+    ty: PhpType,
+}
+
+/// Lowers `eval($code)` to the eval bridge ABI and leaves the eval return cell in result registers.
+pub(super) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "eval", 1)?;
+    let code = expect_operand(inst, 0)?;
+    let ty = ctx.load_value_to_result(code)?.codegen_repr();
+    if ty != PhpType::Str {
+        return Err(CodegenIrError::unsupported(format!(
+            "eval() argument lowering for PHP type {:?}",
+            ty
+        )));
+    }
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    save_eval_code_string(ctx);
+    ensure_eval_scope(ctx)?;
+    let sync_locals = eval_sync_locals(ctx);
+    flush_eval_scope_locals(ctx, &sync_locals)?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    load_eval_scope_to_arg(ctx, 1);
+    move_saved_eval_code_to_eval_args(ctx);
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_execute");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    reload_eval_scope_locals(ctx, &sync_locals)?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
+/// Saves the loaded eval source string while scope setup calls use argument registers.
+fn save_eval_code_string(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_store_to_sp(ctx.emitter, ptr_reg, EVAL_CODE_PTR_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, len_reg, EVAL_CODE_LEN_OFFSET);
+}
+
+/// Reloads the saved eval source string into the bridge code pointer/length arguments.
+fn move_saved_eval_code_to_eval_args(ctx: &mut FunctionContext<'_>) {
+    let code_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let code_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, code_ptr_arg, EVAL_CODE_PTR_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, code_len_arg, EVAL_CODE_LEN_OFFSET);
+}
+
+/// Ensures a persistent eval scope exists and stores its handle in the scratch frame.
+fn ensure_eval_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let slot = eval_scope_slot(ctx)?;
+    let offset = ctx.local_offset(slot)?;
+    let ready = ctx.next_label("eval_scope_ready");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_new");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::store_at_offset(ctx.emitter, result_reg, offset);
+    ctx.emitter.label(&ready);
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_SCOPE_HANDLE_OFFSET);
+    Ok(())
+}
+
+/// Returns the hidden frame slot that owns this function's persistent eval scope.
+fn eval_scope_slot(ctx: &FunctionContext<'_>) -> Result<LocalSlotId> {
+    ctx.function
+        .locals
+        .iter()
+        .find(|local| local.kind == LocalKind::EvalScope)
+        .map(|local| local.id)
+        .ok_or_else(|| CodegenIrError::invalid_module("eval call missing eval scope local"))
+}
+
+/// Loads the current eval scope handle into the selected integer argument register.
+fn load_eval_scope_to_arg(ctx: &mut FunctionContext<'_>, arg_index: usize) {
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, EVAL_SCOPE_HANDLE_OFFSET);
+}
+
+/// Collects PHP-visible locals that the current conservative scope sync can round-trip.
+fn eval_sync_locals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncLocal> {
+    ctx.function
+        .locals
+        .iter()
+        .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter_map(|local| {
+            let name = local.name.clone()?;
+            let ty = local.php_type.codegen_repr();
+            eval_sync_type_supported(&ty).then_some(EvalSyncLocal {
+                name,
+                slot: local.id,
+                ty,
+            })
+        })
+        .collect()
+}
+
+/// Returns true when a local type can be boxed to Mixed and restored from Mixed after eval.
+fn eval_sync_type_supported(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
+}
+
+/// Flushes visible native locals into the materialized eval scope before executing eval.
+fn flush_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[EvalSyncLocal]) -> Result<()> {
+    for local in locals {
+        let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
+        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+            emit_box_current_value_as_mixed(ctx.emitter, &ty);
+        }
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+        emit_eval_scope_set(ctx, local, scope_set_flags_for_type(&ty));
+    }
+    Ok(())
+}
+
+/// Returns ABI flags for a scope value produced from the given native type.
+fn scope_set_flags_for_type(ty: &PhpType) -> i64 {
+    if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        0
+    } else {
+        EVAL_SCOPE_FLAG_OWNED
+    }
+}
+
+/// Calls `__elephc_eval_scope_set` for one boxed local value.
+fn emit_eval_scope_set(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal, flags: i64) {
+    let (name_label, name_len) = ctx.data.add_string(local.name.as_bytes());
+    load_eval_scope_to_arg(ctx, 0);
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        EVAL_TEMP_CELL_OFFSET,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        flags,
+    );
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+}
+
+/// Reloads synchronized locals from the eval scope after the eval interpreter returns.
+fn reload_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[EvalSyncLocal]) -> Result<()> {
+    for local in locals {
+        emit_eval_scope_get(ctx, local);
+        let missing = ctx.next_label("eval_scope_reload_missing");
+        let done = ctx.next_label("eval_scope_reload_done");
+        emit_branch_if_scope_entry_missing(ctx, &missing);
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+        store_mixed_scope_cell_to_local(ctx, local)?;
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&missing);
+        store_missing_scope_entry_to_local(ctx, local)?;
+        ctx.emitter.label(&done);
+    }
+    Ok(())
+}
+
+/// Calls `__elephc_eval_scope_get` and stores out cell/flags at the start of eval scratch.
+fn emit_eval_scope_get(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) {
+    let (name_label, name_len) = ctx.data.add_string(local.name.as_bytes());
+    load_eval_scope_to_arg(ctx, 0);
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    let out_cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_temporary_stack_address(ctx.emitter, out_cell_arg, 0);
+    let out_flags_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_temporary_stack_address(ctx.emitter, out_flags_arg, 8);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_get");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+}
+
+/// Branches to `label` when the latest scope-get flags do not mark a visible value.
+fn emit_branch_if_scope_entry_missing(ctx: &mut FunctionContext<'_>, label: &str) {
+    let flags_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, flags_reg, 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // skip reload when eval unset or omitted the local
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
+            ctx.emitter.instruction(&format!("je {}", label));                  // skip reload when eval unset or omitted the local
+        }
+    }
+}
+
+/// Converts a scope Mixed cell back to the local's native storage type.
+fn store_mixed_scope_cell_to_local(
+    ctx: &mut FunctionContext<'_>,
+    local: &EvalSyncLocal,
+) -> Result<()> {
+    match local.ty.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_retain_scope_cell_if_owned(ctx);
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            let offset = ctx.local_offset(local.slot)?;
+            abi::store_at_offset(ctx.emitter, result_reg, offset);
+        }
+        PhpType::Int => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            let offset = ctx.local_offset(local.slot)?;
+            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        }
+        PhpType::Bool => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            let offset = ctx.local_offset(local.slot)?;
+            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        }
+        PhpType::Float => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+            let offset = ctx.local_offset(local.slot)?;
+            abi::store_at_offset(ctx.emitter, abi::float_result_reg(ctx.emitter), offset);
+        }
+        PhpType::Str => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            let offset = ctx.local_offset(local.slot)?;
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::store_at_offset(ctx.emitter, ptr_reg, offset);
+            abi::store_at_offset(ctx.emitter, len_reg, offset - 8);
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "eval scope reload for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Retains a scope-owned Mixed cell before storing it into a native local owner.
+fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
+    let flags_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let skip = ctx.next_label("eval_scope_reload_borrowed");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, flags_reg, 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
+            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // borrowed scope entries can be copied back without retaining
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
+            ctx.emitter.instruction(&format!("je {}", skip));                   // borrowed scope entries can be copied back without retaining
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.label(&skip);
+}
+
+/// Stores the local fallback used when eval unsets or removes a synchronized local.
+fn store_missing_scope_entry_to_local(
+    ctx: &mut FunctionContext<'_>,
+    local: &EvalSyncLocal,
+) -> Result<()> {
+    let offset = ctx.local_offset(local.slot)?;
+    match local.ty.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
+            abi::emit_call_label(ctx.emitter, &symbol);
+            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        }
+        PhpType::Int | PhpType::Bool => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        }
+        PhpType::Float => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            abi::emit_int_result_to_float_result(ctx.emitter);
+            abi::store_at_offset(ctx.emitter, abi::float_result_reg(ctx.emitter), offset);
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+            abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+            abi::store_at_offset(ctx.emitter, ptr_reg, offset);
+            abi::store_at_offset(ctx.emitter, len_reg, offset - 8);
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "eval scope missing reload for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Emits a fatal diagnostic when the eval bridge reports any non-zero status.
+fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
+    let ok_label = ctx.next_label("eval_status_ok");
+    let parse_error_label = ctx.next_label("eval_status_parse_error");
+    let unsupported_label = ctx.next_label("eval_status_unsupported");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
+    emit_branch_if_eval_status(ctx, EVAL_STATUS_PARSE_ERROR, &parse_error_label);
+    emit_branch_if_eval_status(ctx, EVAL_STATUS_UNSUPPORTED, &unsupported_label);
+    emit_eval_fatal_message(ctx, EVAL_RUNTIME_FATAL_MESSAGE);
+    ctx.emitter.label(&parse_error_label);
+    emit_eval_fatal_message(ctx, EVAL_PARSE_ERROR_MESSAGE);
+    ctx.emitter.label(&unsupported_label);
+    emit_eval_fatal_message(ctx, EVAL_UNSUPPORTED_MESSAGE);
+    ctx.emitter.label(&ok_label);
+}
+
+/// Branches to a label when the eval bridge returned a specific status code.
+fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: i64, label: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, #{}", result_reg, status)); // compare the eval bridge status against the handled code
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching eval status handler
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, status)); // compare the eval bridge status against the handled code
+            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching eval status handler
+        }
+    }
+}
+
+/// Emits an eval diagnostic message and exits the process.
+fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // write the eval runtime diagnostic to stderr
+            ctx.emitter.adrp("x1", &message_label);
+            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            ctx.emitter
+                .instruction(&format!("mov x2, #{}", message_len)); // pass the eval runtime diagnostic byte length
+            ctx.emitter.syscall(4);
+            abi::emit_exit(ctx.emitter, 1);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov edi, 2");                              // write the eval runtime diagnostic to Linux stderr
+            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
+            ctx.emitter
+                .instruction(&format!("mov edx, {}", message_len)); // pass the eval runtime diagnostic byte length
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the eval runtime diagnostic before exiting
+            abi::emit_exit(ctx.emitter, 1);
+        }
+    }
+}

@@ -41,6 +41,10 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_phar",
         package: "elephc-phar",
     },
+    TestBridgeStaticlib {
+        lib_name: "elephc_eval",
+        package: "elephc-eval",
+    },
 ];
 
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
@@ -264,6 +268,7 @@ pub(crate) fn link_binary(
                 || *l == "elephc_pdo"
                 || *l == "elephc_crypto"
                 || *l == "elephc_phar"
+                || *l == "elephc_eval"
         });
     let bridge_staticlib_dir = match std::env::var("CARGO_TARGET_DIR") {
         Ok(dir) if !dir.is_empty() => format!("{}/debug", dir),

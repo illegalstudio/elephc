@@ -98,6 +98,7 @@ impl Checker {
             active_ref_params: HashSet::new(),
             active_globals: HashSet::new(),
             active_statics: HashSet::new(),
+            eval_barrier_active: false,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
             warnings: Vec::new(),

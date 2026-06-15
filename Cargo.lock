@@ -514,6 +514,7 @@ dependencies = [
  "bitflags",
  "bzip2-rs",
  "elephc-crypto",
+ "elephc-eval",
  "elephc-pdo",
  "elephc-phar",
  "elephc-tls",
@@ -540,6 +541,10 @@ dependencies = [
  "sha3",
  "whirlpool",
 ]
+
+[[package]]
+name = "elephc-eval"
+version = "0.1.0"
 
 [[package]]
 name = "elephc-pdo"

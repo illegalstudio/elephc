@@ -27,6 +27,7 @@ mod buffers;
 mod class_relations;
 mod ctype;
 mod debug;
+mod eval;
 mod io;
 mod isset;
 mod is_numeric;
@@ -72,6 +73,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "max" => math::lower_min_max(ctx, inst, true),
         "pi" => lower_pi(ctx, inst),
         "phpversion" => lower_phpversion(ctx, inst),
+        "eval" => eval::lower_eval(ctx, inst),
         "strlen" => lower_strlen(ctx, inst),
         "count" => lower_count(ctx, inst),
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),

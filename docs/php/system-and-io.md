@@ -19,6 +19,7 @@ sidebar:
 | `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
 | `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |
+| `eval()` | `eval($code): mixed` | Parse and execute a PHP fragment in the caller's local scope |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
 | `phpversion()` | `phpversion(): string` | Get the elephc package version from `Cargo.toml` |
 | `exec()` | `exec($command): string` | Execute command, return output |
@@ -27,6 +28,10 @@ sidebar:
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
 
 `define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode.
+
+`eval()` is a PHP language construct rather than a normal callable: `function_exists("eval")` and `is_callable("eval")` return `false`, and first-class callable syntax for `eval` is rejected. Programs that call `eval()` link the optional `elephc_eval` bridge; programs that do not use it keep the normal native runtime only.
+
+The evaluated string must be a PHP fragment without an opening `<?php` tag. Variables from the caller's local scope are visible in the fragment, assignments and `unset()` are reflected back into that scope, variables created by the fragment remain visible after `eval()`, and `return expr;` returns from `eval()` itself. The initial runtime fragment subset supports scalar expressions, variable reads/writes, `echo`, `print`, `return`, `unset()`, `if`/`else`, `while`, `break`, `continue`, indexed and associative array literals, numeric-index reads/writes, string-key reads/writes on associative arrays, `+`, `-`, `*`, `.`, and parentheses. Unsupported constructs fail at runtime with an eval fatal diagnostic.
 
 `php_uname()` supports PHP's standard one-character modes:
 

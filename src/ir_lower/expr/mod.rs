@@ -1546,14 +1546,18 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         );
     }
     let data = ctx.intern_function_name(canonical);
-    ctx.emit_value(
+    let value = ctx.emit_value(
         Op::BuiltinCall,
         operands,
         Some(Immediate::Data(data)),
         php_type,
         effects_lookup::builtin_effects(canonical),
         Some(expr.span),
-    )
+    );
+    if php_symbol_key(canonical.trim_start_matches('\\')) == "eval" {
+        ctx.apply_eval_barrier();
+    }
+    value
 }
 
 /// Lowers `isset()` as a lazy language construct instead of an eager builtin call.
@@ -3127,6 +3131,7 @@ fn lower_builtin_call_args(
     }
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "date" => lower_date_args(ctx, sig, args),
+        "eval" => lower_eval_args(ctx, sig, args),
         "json_decode" => lower_json_decode_args(ctx, sig, args),
         "preg_replace_callback"
             if !crate::types::call_args::has_named_args(args)
@@ -3142,6 +3147,24 @@ fn lower_builtin_call_args(
         }
         _ => lower_args_with_signature(ctx, sig, args),
     }
+}
+
+/// Lowers eval's code operand and coerces it through PHP string-conversion rules.
+fn lower_eval_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let operands = lower_args_with_signature(ctx, sig, args);
+    let Some(code) = operands.first().copied() else {
+        return operands;
+    };
+    let code_value = LoweredValue {
+        value: code,
+        ir_type: ctx.builder.value_type(code),
+    };
+    let span = args.first().map(|arg| arg.span);
+    vec![coerce_to_string_at_span(ctx, code_value, span).value]
 }
 
 /// Returns true when the call uses exactly one static empty indexed spread.

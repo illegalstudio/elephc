@@ -29,6 +29,13 @@ pub(super) fn check_builtin(
     env: &TypeEnv,
 ) -> BuiltinResult {
     match name {
+        "eval" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "eval() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Mixed))
+        }
         "time" => {
             if !args.is_empty() {
                 return Err(CompileError::new(span, "time() takes no arguments"));

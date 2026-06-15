@@ -104,6 +104,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     store_argv_local_if_present(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    zero_initialize_eval_scope_locals(ctx);
 }
 
 /// Emits a callable function prologue using an already-resolved entry label.
@@ -142,6 +143,7 @@ pub(super) fn emit_function_prologue_with_label(
     }
     zero_initialize_function_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    zero_initialize_eval_scope_locals(ctx);
     Ok(())
 }
 
@@ -199,6 +201,7 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             _ => {}
         }
     }
+    emit_eval_scope_epilogue_cleanup(ctx);
 }
 
 /// Returns main local slots that receive owned refcounted values through `StoreLocal`.
@@ -221,7 +224,9 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
                 .as_deref()
                 .is_none_or(|name| !param_names.contains(name))
         })
-        .filter(|local| local_slot_has_store(ctx.function, local.id))
+        .filter(|local| {
+            local_slot_has_store(ctx.function, local.id) || function_has_eval_scope(ctx.function)
+        })
         .filter_map(|local| {
             let ty = local.php_type.codegen_repr();
             if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
@@ -302,6 +307,65 @@ fn ref_cell_owner_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId,
         .collect::<Vec<_>>();
     locals.sort_by_key(|(_, _, _, offset)| *offset);
     locals
+}
+
+/// Zero-initializes persistent eval scope handles before the first eval call can allocate one.
+fn zero_initialize_eval_scope_locals(ctx: &mut FunctionContext<'_>) {
+    for (_, offset) in eval_scope_locals(ctx) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
+}
+
+/// Releases persistent eval scopes allocated for this frame.
+fn emit_eval_scope_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    for (name, offset) in eval_scope_locals(ctx) {
+        ctx.emitter.comment(&format!("epilogue cleanup {}", name));
+        emit_eval_scope_cleanup(ctx, offset);
+    }
+}
+
+/// Frees one persistent eval scope handle when it was allocated.
+fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let done = ctx.next_label("eval_scope_cleanup_done");
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if arg_reg != result_reg {
+        ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));   // pass the persistent eval scope handle to the free helper
+    }
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_free");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    ctx.emitter.label(&done);
+}
+
+/// Returns hidden eval scope slots and their frame offsets.
+fn eval_scope_locals(ctx: &FunctionContext<'_>) -> Vec<(String, usize)> {
+    let mut locals = ctx
+        .function
+        .locals
+        .iter()
+        .filter(|local| local.kind == LocalKind::EvalScope)
+        .filter_map(|local| {
+            let offset = ctx.local_offset(local.id).ok()?;
+            let name = local
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("slot{}", local.id.as_raw()));
+            Some((name, offset))
+        })
+        .collect::<Vec<_>>();
+    locals.sort_by_key(|(_, offset)| *offset);
+    locals
+}
+
+/// Returns true when the function owns a persistent eval scope local.
+fn function_has_eval_scope(function: &Function) -> bool {
+    function
+        .locals
+        .iter()
+        .any(|local| local.kind == LocalKind::EvalScope)
 }
 
 /// Returns true when a local slot is written by an explicit EIR `StoreLocal`.
@@ -408,6 +472,7 @@ fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             _ => {}
         }
     }
+    emit_eval_scope_epilogue_cleanup(ctx);
     if preserves_return {
         pop_return_value(ctx, &return_ty);
     }
@@ -435,7 +500,9 @@ fn function_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotI
                 .is_none_or(|name| !param_names.contains(name))
         })
         .filter(|local| !returned_slots.contains(&local.id))
-        .filter(|local| local_slot_has_store(ctx.function, local.id))
+        .filter(|local| {
+            local_slot_has_store(ctx.function, local.id) || function_has_eval_scope(ctx.function)
+        })
         .filter_map(|local| {
             let ty = local.php_type.codegen_repr();
             if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {

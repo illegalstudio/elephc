@@ -10,6 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
+use crate::span::Span;
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, packed_type_size, PhpType, TypeEnv,
 };
@@ -36,9 +37,7 @@ impl Checker {
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
-            ExprKind::Variable(name) => env.get(name).cloned().ok_or_else(|| {
-                CompileError::new(expr.span, &format!("Undefined variable: ${}", name))
-            }),
+            ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
                 match ty {
@@ -68,6 +67,7 @@ impl Checker {
                     expr.span,
                     &format!("Cannot increment/decrement ${} of type {:?}", name, other),
                 )),
+                None if self.eval_barrier_active => Ok(PhpType::Int),
                 None => Err(CompileError::new(
                     expr.span,
                     &format!("Undefined variable: ${}", name),
@@ -617,6 +617,19 @@ impl Checker {
                 unreachable!("MagicConstant must be lowered before type inference")
             }
         }
+    }
+
+    /// Returns a variable type, allowing dynamic eval-created locals after an eval barrier.
+    fn variable_type_or_eval_dynamic(
+        &self,
+        name: &str,
+        span: Span,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        env.get(name)
+            .cloned()
+            .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
+            .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
     }
 
     /// Returns the element type of an array literal that contains at least one

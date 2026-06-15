@@ -85,6 +85,14 @@ const BRIDGES: &[BridgeStaticlib] = &[
         macos_frameworks: &[],
         needs_libdl: true,
     },
+    BridgeStaticlib {
+        lib_name: "elephc_eval",
+        env_var: "ELEPHC_EVAL_LIB_DIR",
+        crate_name: "elephc-eval",
+        whole_archive: false,
+        macos_frameworks: &[],
+        needs_libdl: true,
+    },
 ];
 
 impl BridgeStaticlib {
@@ -469,5 +477,18 @@ mod tests {
         assert_eq!(entry.env_var, "ELEPHC_PHAR_LIB_DIR");
         assert_eq!(entry.archive_filename(), "libelephc_phar.a");
         assert!(!entry.whole_archive, "phar bridge must not force-load");
+    }
+
+    /// Verifies the optional eval bridge is registered for programs that use `eval()`.
+    #[test]
+    fn bridges_includes_elephc_eval() {
+        let entry = BRIDGES
+            .iter()
+            .find(|b| b.lib_name == "elephc_eval")
+            .expect("elephc_eval must be a registered bridge");
+        assert_eq!(entry.crate_name, "elephc-eval");
+        assert_eq!(entry.env_var, "ELEPHC_EVAL_LIB_DIR");
+        assert_eq!(entry.archive_filename(), "libelephc_eval.a");
+        assert!(!entry.whole_archive, "eval bridge must not force-load");
     }
 }

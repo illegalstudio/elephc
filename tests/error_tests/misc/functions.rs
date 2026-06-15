@@ -48,6 +48,15 @@ fn test_error_first_class_callable_rejects_unsupported_builtin() {
     );
 }
 
+/// Verifies `eval` remains a language construct and is rejected as a first-class callable.
+#[test]
+fn test_error_eval_first_class_callable_is_rejected() {
+    expect_error(
+        "<?php $f = eval(...);",
+        "does not support builtin 'eval' yet",
+    );
+}
+
 /// Verifies that a by-reference parameter on a first-class callable must be passed a
 /// variable at the call site; passing a literal produces an error.
 #[test]

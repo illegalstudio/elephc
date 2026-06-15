@@ -9,6 +9,8 @@
 //! Key details:
 //! - `SUPPORTED_BUILTIN_FUNCTIONS` is the source of truth for PHP-visible builtin names.
 //! - `INTERNAL_BUILTIN_FUNCTIONS` exists only for compiler-generated synthetic bodies.
+//! - `LANGUAGE_CONSTRUCT_FUNCTIONS` participates in call resolution but stays
+//!   hidden from `function_exists()` and first-class callable surfaces.
 
 const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "abs",
@@ -415,10 +417,14 @@ const INTERNAL_BUILTIN_FUNCTIONS: &[&str] = &[
     "__elephc_phar_set_compression",
 ];
 
-/// Checks if the exact (lowercase) name is in the PHP-visible or internal builtin lists.
+const LANGUAGE_CONSTRUCT_FUNCTIONS: &[&str] = &["eval"];
+
+/// Checks if the exact (lowercase) name is in any callable-resolution builtin list.
 /// Does not perform case folding; use `is_supported_builtin_function` for case-insensitive lookup.
 fn is_supported_builtin_function_exact(name: &str) -> bool {
-    SUPPORTED_BUILTIN_FUNCTIONS.contains(&name) || INTERNAL_BUILTIN_FUNCTIONS.contains(&name)
+    SUPPORTED_BUILTIN_FUNCTIONS.contains(&name)
+        || INTERNAL_BUILTIN_FUNCTIONS.contains(&name)
+        || LANGUAGE_CONSTRUCT_FUNCTIONS.contains(&name)
 }
 
 /// Returns the static slice of PHP-visible supported builtin function names.
