@@ -44,6 +44,12 @@ unsafe extern "C" {
         name_len: u64,
         value: *mut RuntimeCell,
     ) -> u64;
+    fn __elephc_eval_value_method_call(
+        object: *mut RuntimeCell,
+        name_ptr: *const u8,
+        name_len: u64,
+        args: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_null() -> *mut RuntimeCell;
@@ -165,6 +171,35 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         } else {
             Ok(())
         }
+    }
+
+    /// Calls a boxed Mixed object method through the generated user helper.
+    fn method_call(
+        &mut self,
+        object: RuntimeCellHandle,
+        method: &str,
+        args: Vec<RuntimeCellHandle>,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
+        let arg_array = Self::handle(arg_array)?;
+        for (index, value) in args.into_iter().enumerate() {
+            let index = Self::handle(unsafe { __elephc_eval_value_int(index as i64) })?;
+            Self::handle(unsafe {
+                __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
+            })?;
+        }
+        let result = Self::handle(unsafe {
+            __elephc_eval_value_method_call(
+                object.as_ptr(),
+                method.as_ptr(),
+                method.len() as u64,
+                arg_array.as_ptr(),
+            )
+        });
+        unsafe {
+            __elephc_eval_value_release(arg_array.as_ptr());
+        }
+        result
     }
 
     /// Returns the visible element count for a boxed Mixed array through the generated runtime wrapper.

@@ -356,10 +356,8 @@ fn emit_aarch64_property_name_compare(
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
     emitter.instruction("bl __rt_str_eq");                                      // compare requested property name with this declared property
-    emitter.instruction(&format!(
-        "cbnz x0, {}",
-        slot_body_label(module, slot, mode)
-    )); // dispatch to the property body when the names match
+    let target_label = slot_body_label(module, slot, mode);
+    emitter.instruction(&format!("cbnz x0, {}", target_label));                 // dispatch to the property body when the names match
 }
 
 /// Emits one x86_64 property-name comparison and branch to the matching body.

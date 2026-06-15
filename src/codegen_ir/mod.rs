@@ -14,6 +14,7 @@
 
 mod block_emit;
 mod context;
+mod eval_method_helpers;
 mod eval_property_helpers;
 mod fibers;
 mod frame;
@@ -138,6 +139,7 @@ fn finalize_user_asm(
     exported_functions: &HashMap<String, ExportedFunction>,
 ) -> String {
     eval_property_helpers::emit_eval_property_helpers(module, &mut emitter, &mut data);
+    eval_method_helpers::emit_eval_method_helpers(module, &mut emitter, &mut data);
     let data_output = data.emit();
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();

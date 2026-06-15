@@ -66,6 +66,14 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus>;
 
+    /// Calls a named method on a runtime object held in a boxed Mixed cell.
+    fn method_call(
+        &mut self,
+        object: RuntimeCellHandle,
+        method: &str,
+        args: Vec<RuntimeCellHandle>,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Returns the visible element count for an array-like runtime cell.
     fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus>;
 
@@ -403,6 +411,18 @@ fn eval_expr(
         EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::LoadVar(name) => scope.visible_cell(name).map_or_else(|| values.null(), Ok),
+        EvalExpr::MethodCall {
+            object,
+            method,
+            args,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let mut evaluated_args = Vec::with_capacity(args.len());
+            for arg in args {
+                evaluated_args.push(eval_expr(arg, context, scope, values)?);
+            }
+            values.method_call(object, method, evaluated_args)
+        }
         EvalExpr::PropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             values.property_get(object, property)
@@ -822,6 +842,25 @@ mod tests {
             Ok(())
         }
 
+        /// Calls one fake object method by name.
+        fn method_call(
+            &mut self,
+            object: RuntimeCellHandle,
+            method: &str,
+            args: Vec<RuntimeCellHandle>,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            if !args.is_empty() {
+                return Err(EvalStatus::UnsupportedConstruct);
+            }
+            match (self.get(object), method) {
+                (FakeValue::Object(_), "answer") => self.int(42),
+                (FakeValue::Object(properties), "read_x") => {
+                    properties.get("x").copied().map_or_else(|| self.null(), Ok)
+                }
+                _ => Err(EvalStatus::UnsupportedConstruct),
+            }
+        }
+
         /// Returns the visible element count for fake array values.
         fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus> {
             match self.get(array) {
@@ -1116,6 +1155,20 @@ mod tests {
                 .expect("property should be readable"),
             FakeValue::Int(2)
         );
+    }
+
+    /// Verifies eval method calls dispatch through the runtime method hook.
+    #[test]
+    fn execute_program_calls_object_method() {
+        let program = parse_fragment(br#"return $this->answer();"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let object = values.alloc(FakeValue::Object(HashMap::new()));
+        scope.set("this", object, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(42));
     }
 
     /// Verifies if/else executes only the PHP-truthy branch.

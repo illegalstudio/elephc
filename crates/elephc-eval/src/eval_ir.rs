@@ -133,6 +133,11 @@ pub enum EvalExpr {
     },
     Const(EvalConst),
     LoadVar(String),
+    MethodCall {
+        object: Box<EvalExpr>,
+        method: String,
+        args: Vec<EvalExpr>,
+    },
     PropertyGet {
         object: Box<EvalExpr>,
         property: String,

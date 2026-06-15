@@ -738,7 +738,7 @@ impl Parser {
         Ok(expr)
     }
 
-    /// Parses postfix array reads after a primary expression.
+    /// Parses postfix array reads, property reads, and method calls after a primary expression.
     fn parse_postfix(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_primary()?;
         loop {
@@ -752,15 +752,24 @@ impl Parser {
                 continue;
             }
             if self.consume(TokenKind::Arrow) {
-                let TokenKind::Ident(property) = self.current() else {
+                let TokenKind::Ident(member) = self.current() else {
                     return Err(EvalParseError::UnexpectedToken);
                 };
-                let property = property.clone();
+                let member = member.clone();
                 self.advance();
-                expr = EvalExpr::PropertyGet {
-                    object: Box::new(expr),
-                    property,
-                };
+                if matches!(self.current(), TokenKind::LParen) {
+                    let args = self.parse_call_args()?;
+                    expr = EvalExpr::MethodCall {
+                        object: Box::new(expr),
+                        method: member,
+                        args,
+                    };
+                } else {
+                    expr = EvalExpr::PropertyGet {
+                        object: Box::new(expr),
+                        property: member,
+                    };
+                }
                 continue;
             }
             break;
@@ -826,10 +835,16 @@ impl Parser {
     /// Parses a function-like call expression and its source-order arguments.
     fn parse_call_expr(&mut self, name: String) -> Result<EvalExpr, EvalParseError> {
         self.advance();
+        let args = self.parse_call_args()?;
+        Ok(EvalExpr::Call { name, args })
+    }
+
+    /// Parses a parenthesized source-order argument list.
+    fn parse_call_args(&mut self) -> Result<Vec<EvalExpr>, EvalParseError> {
         self.expect(TokenKind::LParen)?;
         let mut args = Vec::new();
         if self.consume(TokenKind::RParen) {
-            return Ok(EvalExpr::Call { name, args });
+            return Ok(args);
         }
         loop {
             args.push(self.parse_expr()?);
@@ -837,11 +852,11 @@ impl Parser {
                 break;
             }
             if self.consume(TokenKind::RParen) {
-                return Ok(EvalExpr::Call { name, args });
+                return Ok(args);
             }
         }
         self.expect(TokenKind::RParen)?;
-        Ok(EvalExpr::Call { name, args })
+        Ok(args)
     }
 
     /// Parses an array literal with source-order optional key/value element expressions.
@@ -1199,6 +1214,20 @@ mod tests {
             &[EvalStmt::Return(Some(EvalExpr::PropertyGet {
                 object: Box::new(EvalExpr::LoadVar("this".to_string())),
                 property: "x".to_string(),
+            }))]
+        );
+    }
+
+    /// Verifies object method calls parse as postfix EvalIR call expressions.
+    #[test]
+    fn parse_fragment_accepts_method_call_source() {
+        let program = parse_fragment(br#"return $this->answer();"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::MethodCall {
+                object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                method: "answer".to_string(),
+                args: Vec::new(),
             }))]
         );
     }

@@ -7,6 +7,14 @@ class EvalCounter {
     public function bump(): void {
         eval('$this->value = $this->value + 1;');
     }
+
+    public function read(): int {
+        return $this->value;
+    }
+
+    public function echoReadThroughEval(): void {
+        echo "eval-this-method=" . eval('return $this->read();') . "\n";
+    }
 }
 
 $x = 1;
@@ -34,6 +42,7 @@ echo "eval-native-call=" . $eval_native_call . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";
+$counter->echoReadThroughEval();
 echo "native-dynamic-call=" . native_add(40, 2) . "\n";
 echo "call-user-func=" . call_user_func('native_double', 6) . "\n";
 echo "function-exists=" . (function_exists('native_double') ? "yes" : "no") . "\n";

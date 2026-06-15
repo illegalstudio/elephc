@@ -468,6 +468,30 @@ echo $box->x;
     assert_eq!(out, "2");
 }
 
+/// Verifies eval fragments can call public zero-argument AOT methods through `$this`.
+#[test]
+fn test_eval_fragment_can_call_this_public_zero_arg_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodBox {
+    public int $x = 41;
+
+    public function answer(): int {
+        return $this->x + 1;
+    }
+
+    public function run(): void {
+        echo eval('return $this->answer();');
+    }
+}
+
+$box = new EvalMethodBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {
