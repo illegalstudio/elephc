@@ -666,6 +666,25 @@ echo ":"; echo function_exists("array_keys"); echo function_exists("array_values
     assert_eq!(out, "10:20:a:b:0:z:8:11");
 }
 
+/// Verifies eval array search builtins return booleans or matching keys.
+#[test]
+fn test_eval_dispatches_array_search_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo in_array(2, [1, 2, 3]) ? "Y" : "bad";
+echo ":"; echo in_array(4, [1, 2, 3]) ? "bad" : "N";
+echo ":" . array_search(20, [10, 20, 30]);
+echo ":" . array_search("Grace", ["name" => "Grace"]);
+echo ":"; echo array_search("x", ["name" => "Grace"]) === false ? "F" : "bad";
+echo ":"; echo call_user_func("in_array", "b", ["a", "b"]) ? "C" : "bad";
+$found = call_user_func_array("array_search", ["v", ["k" => "v"]]);
+echo ":" . $found;
+echo ":"; echo function_exists("in_array"); echo function_exists("array_search");');
+"#,
+    );
+    assert_eq!(out, "Y:N:1:name:F:C:k:11");
+}
+
 /// Verifies eval ASCII case-conversion builtins work directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_string_case_builtin_calls() {

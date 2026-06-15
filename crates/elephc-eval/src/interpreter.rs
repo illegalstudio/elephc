@@ -736,6 +736,9 @@ fn eval_call(
         "array_product" | "array_sum" => {
             eval_builtin_array_aggregate(name, args, context, scope, values)
         }
+        "array_search" | "in_array" => {
+            eval_builtin_array_search(name, args, context, scope, values)
+        }
         "ceil" => eval_builtin_ceil(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
@@ -875,6 +878,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
         "abs"
             | "array_keys"
             | "array_product"
+            | "array_search"
             | "array_sum"
             | "array_values"
             | "ceil"
@@ -888,6 +892,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "function_exists"
             | "gettype"
             | "hash_equals"
+            | "in_array"
             | "intval"
             | "ltrim"
             | "is_callable"
@@ -1035,6 +1040,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_projection_result(name, *array, values)?
+        }
+        "array_search" | "in_array" => {
+            let [needle, array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_search_result(name, *needle, *array, values)?
         }
         "ceil" => {
             let [value] = evaluated_args else {
@@ -1241,6 +1252,49 @@ fn eval_array_projection_result(
         result = values.array_set(result, index, value)?;
     }
     Ok(result)
+}
+
+/// Evaluates PHP array search builtins over a needle and haystack expression.
+fn eval_builtin_array_search(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [needle, array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let needle = eval_expr(needle, context, scope, values)?;
+    let array = eval_expr(array, context, scope, values)?;
+    eval_array_search_result(name, needle, array, values)
+}
+
+/// Searches an eval array with PHP's default loose comparison semantics.
+fn eval_array_search_result(
+    name: &str,
+    needle: RuntimeCellHandle,
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        let equal = values.compare(EvalBinOp::LooseEq, needle, value)?;
+        if values.truthy(equal)? {
+            return match name {
+                "in_array" => values.bool_value(true),
+                "array_search" => Ok(key),
+                _ => Err(EvalStatus::UnsupportedConstruct),
+            };
+        }
+    }
+    match name {
+        "in_array" => values.bool_value(false),
+        "array_search" => values.bool_value(false),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
 }
 
 /// Evaluates PHP's `ceil(...)` over one eval expression.
@@ -3503,6 +3557,31 @@ return function_exists("array_values");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "10:20:a:b:0:z:8:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval array search builtins use loose comparison and return keys or booleans.
+    #[test]
+    fn execute_program_dispatches_array_search_builtins() {
+        let program = parse_fragment(
+            br#"echo in_array(2, [1, 2, 3]) ? "Y" : "bad";
+echo ":"; echo in_array(4, [1, 2, 3]) ? "bad" : "N";
+echo ":" . array_search(20, [10, 20, 30]);
+echo ":" . array_search("Grace", ["name" => "Grace"]);
+echo ":"; echo array_search("x", ["name" => "Grace"]) === false ? "F" : "bad";
+echo ":"; echo call_user_func("in_array", "b", ["a", "b"]) ? "C" : "bad";
+$found = call_user_func_array("array_search", ["v", ["k" => "v"]]);
+echo ":" . $found;
+echo ":"; echo function_exists("in_array");
+return function_exists("array_search");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "Y:N:1:name:F:C:k:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
