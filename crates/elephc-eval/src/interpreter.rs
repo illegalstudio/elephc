@@ -2142,19 +2142,18 @@ fn eval_dynamic_function(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args =
-        eval_dynamic_function_call_args(function, args, context, caller_scope, values)?;
+        eval_function_call_args(function.params(), args, context, caller_scope, values)?;
     eval_dynamic_function_with_values(function, evaluated_args, context, values)
 }
 
-/// Evaluates and binds eval-declared function arguments to parameter order.
-fn eval_dynamic_function_call_args(
-    function: &EvalFunction,
+/// Evaluates and binds function-like arguments to parameter order.
+fn eval_function_call_args(
+    params: &[String],
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    let params = function.params();
     let mut bound_args = vec![None; params.len()];
     let mut next_positional = 0;
     let mut saw_named = false;
@@ -2271,7 +2270,11 @@ fn eval_native_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = eval_positional_call_arg_values(args, context, caller_scope, values)?;
+    let evaluated_args = if function.param_names().len() == function.param_count() {
+        eval_function_call_args(function.param_names(), args, context, caller_scope, values)?
+    } else {
+        eval_positional_call_arg_values(args, context, caller_scope, values)?
+    };
     eval_native_function_with_values(function, evaluated_args, values)
 }
 
@@ -4722,6 +4725,52 @@ echo function_exists("missing_probe") . "x";"#,
         let expected = values.int(42).expect("allocate fake result");
         let native =
             NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 0);
+        assert!(context
+            .define_native_function("native_answer", native)
+            .is_ok());
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(result, expected);
+    }
+
+    /// Verifies direct eval calls can bind registered native parameters by name.
+    #[test]
+    fn execute_program_calls_registered_native_function_with_named_args() {
+        let program = parse_fragment(br#"return native_answer(right: 2, left: 1);"#)
+            .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let expected = values.int(42).expect("allocate fake result");
+        let mut native =
+            NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 2);
+        assert!(native.set_param_name(0, "left"));
+        assert!(native.set_param_name(1, "right"));
+        assert!(context
+            .define_native_function("native_answer", native)
+            .is_ok());
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(result, expected);
+    }
+
+    /// Verifies direct eval calls can unpack arrays into registered native parameters.
+    #[test]
+    fn execute_program_calls_registered_native_function_with_spread_args() {
+        let program =
+            parse_fragment(br#"return native_answer(...[1, 2]);"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let expected = values.int(42).expect("allocate fake result");
+        let mut native =
+            NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 2);
+        assert!(native.set_param_name(0, "left"));
+        assert!(native.set_param_name(1, "right"));
         assert!(context
             .define_native_function("native_answer", native)
             .is_ok());

@@ -359,7 +359,60 @@ fn register_eval_native_function(
         .target
         .extern_symbol("__elephc_eval_register_native_function");
     abi::emit_call_label(ctx.emitter, &symbol);
+    for (index, (param_name, _)) in registration.signature.params.iter().enumerate() {
+        register_eval_native_function_param(
+            ctx,
+            context_offset,
+            &name_label,
+            name_len,
+            index,
+            param_name,
+        );
+    }
     Ok(())
+}
+
+/// Emits one native-function parameter-name registration call.
+fn register_eval_native_function_param(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    function_name_label: &str,
+    function_name_len: usize,
+    param_index: usize,
+    param_name: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        function_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        function_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    let (param_name_label, param_name_len) = ctx.data.add_string(param_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        &param_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        param_name_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_function_param");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Loads the persistent eval context local into the selected integer argument register.
