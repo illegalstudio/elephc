@@ -826,7 +826,52 @@ impl Parser {
 
     /// Parses an expression using PHP-like logical, comparison, concatenation, and arithmetic precedence.
     fn parse_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
-        self.parse_ternary()
+        self.parse_keyword_or()
+    }
+
+    /// Parses PHP keyword `or`, whose precedence is lower than `xor`, `and`, and ternary.
+    fn parse_keyword_or(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_keyword_xor()?;
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "or")) {
+            self.advance();
+            let right = self.parse_keyword_xor()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalOr,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses PHP keyword `xor`, whose operands are evaluated before boolean XOR.
+    fn parse_keyword_xor(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_keyword_and()?;
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "xor")) {
+            self.advance();
+            let right = self.parse_keyword_and()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalXor,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses PHP keyword `and`, whose precedence is lower than ternary and `&&`.
+    fn parse_keyword_and(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_ternary()?;
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "and")) {
+            self.advance();
+            let right = self.parse_ternary()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalAnd,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
     }
 
     /// Parses PHP ternary expressions, including the short `expr ?: fallback` form.
@@ -1609,6 +1654,44 @@ mod tests {
                     op: EvalBinOp::LogicalAnd,
                     left: Box::new(EvalExpr::LoadVar("a".to_string())),
                     right: Box::new(EvalExpr::LoadVar("b".to_string())),
+                }),
+                right: Box::new(EvalExpr::Const(EvalConst::Bool(false))),
+            }))]
+        );
+    }
+
+    /// Verifies PHP logical keywords parse case-insensitively with their own precedence.
+    #[test]
+    fn parse_fragment_accepts_keyword_logical_source() {
+        let program =
+            parse_fragment(br#"return false || true AnD false;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::LogicalAnd,
+                left: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::LogicalOr,
+                    left: Box::new(EvalExpr::Const(EvalConst::Bool(false))),
+                    right: Box::new(EvalExpr::Const(EvalConst::Bool(true))),
+                }),
+                right: Box::new(EvalExpr::Const(EvalConst::Bool(false))),
+            }))]
+        );
+    }
+
+    /// Verifies PHP `xor` binds between `or` and `and` in eval expressions.
+    #[test]
+    fn parse_fragment_accepts_keyword_xor_source() {
+        let program =
+            parse_fragment(br#"return true XoR false or false;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::LogicalOr,
+                left: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::LogicalXor,
+                    left: Box::new(EvalExpr::Const(EvalConst::Bool(true))),
+                    right: Box::new(EvalExpr::Const(EvalConst::Bool(false))),
                 }),
                 right: Box::new(EvalExpr::Const(EvalConst::Bool(false))),
             }))]

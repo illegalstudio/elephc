@@ -606,6 +606,11 @@ fn eval_expr(
                 EvalBinOp::Sub => values.sub(left, right),
                 EvalBinOp::Mul => values.mul(left, right),
                 EvalBinOp::Concat => values.concat(left, right),
+                EvalBinOp::LogicalXor => {
+                    let left_truthy = values.truthy(left)?;
+                    let right_truthy = values.truthy(right)?;
+                    values.bool_value(left_truthy ^ right_truthy)
+                }
                 EvalBinOp::LooseEq
                 | EvalBinOp::LooseNotEq
                 | EvalBinOp::StrictEq
@@ -1478,7 +1483,8 @@ mod tests {
                 | EvalBinOp::Mul
                 | EvalBinOp::Concat
                 | EvalBinOp::LogicalAnd
-                | EvalBinOp::LogicalOr => {
+                | EvalBinOp::LogicalOr
+                | EvalBinOp::LogicalXor => {
                     return Err(EvalStatus::UnsupportedConstruct);
                 }
             };
@@ -1898,6 +1904,37 @@ mod tests {
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies PHP keyword logical operators use PHP precedence and short-circuiting.
+    #[test]
+    fn execute_program_evaluates_keyword_logical_operators() {
+        let program = parse_fragment(
+            br#"echo (false || true and false) ? "T" : "F"; return true or missing();"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "F");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies PHP keyword `xor` evaluates both operands and returns a boolean cell.
+    #[test]
+    fn execute_program_evaluates_keyword_xor() {
+        let program = parse_fragment(
+            br#"echo (true xor false) ? "T" : "F"; echo (true xor true) ? "T" : "F";"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "TF");
     }
 
     /// Verifies ternary expressions evaluate only the selected branch.

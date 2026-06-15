@@ -229,6 +229,7 @@ pub enum EvalBinOp {
     Concat,
     LogicalAnd,
     LogicalOr,
+    LogicalXor,
     LooseEq,
     LooseNotEq,
     StrictEq,

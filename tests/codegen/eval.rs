@@ -158,6 +158,23 @@ echo eval('return true || missing_eval_rhs();');
     assert_eq!(out, "ab:1");
 }
 
+/// Verifies eval supports PHP logical keyword operators with PHP precedence.
+#[test]
+fn test_eval_logical_keyword_operators_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return (false || true and false) ? "T" : "F";');
+echo ":";
+echo eval('return (true xor false) ? "T" : "F";');
+echo ":";
+echo eval('return (true xor true) ? "T" : "F";');
+echo ":";
+echo eval('return true or missing_eval_rhs();');
+"#,
+    );
+    assert_eq!(out, "F:T:F:1");
+}
+
 /// Verifies eval logical negation returns PHP boolean cells through the bridge.
 #[test]
 fn test_eval_logical_not_executes_through_bridge() {
