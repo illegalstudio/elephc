@@ -870,6 +870,22 @@ mod tests {
                     };
                     self.int(x + arg)
                 }
+                (FakeValue::Object(properties), "add2_x") => {
+                    let [left, right] = args.as_slice() else {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    };
+                    let x = properties.get("x").copied().ok_or(EvalStatus::RuntimeFatal)?;
+                    let FakeValue::Int(x) = self.get(x) else {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    };
+                    let FakeValue::Int(left) = self.get(*left) else {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    };
+                    let FakeValue::Int(right) = self.get(*right) else {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    };
+                    self.int(x + left + right)
+                }
                 _ => Err(EvalStatus::UnsupportedConstruct),
             }
         }
@@ -1199,6 +1215,24 @@ mod tests {
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(12));
+    }
+
+    /// Verifies eval method calls forward multiple evaluated arguments to the runtime hook.
+    #[test]
+    fn execute_program_calls_object_method_with_two_arguments() {
+        let program =
+            parse_fragment(br#"return $this->add2_x(5, 6);"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let x = values.int(7).expect("create fake int");
+        let mut properties = HashMap::new();
+        properties.insert("x".to_string(), x);
+        let object = values.alloc(FakeValue::Object(properties));
+        scope.set("this", object, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(18));
     }
 
     /// Verifies if/else executes only the PHP-truthy branch.

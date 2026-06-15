@@ -1251,6 +1251,24 @@ mod tests {
         );
     }
 
+    /// Verifies object method calls parse multiple argument expressions in source order.
+    #[test]
+    fn parse_fragment_accepts_method_call_multiple_args_source() {
+        let program =
+            parse_fragment(br#"return $this->label($x, "ok");"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::MethodCall {
+                object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                method: "label".to_string(),
+                args: vec![
+                    EvalExpr::LoadVar("x".to_string()),
+                    EvalExpr::Const(EvalConst::String("ok".to_string())),
+                ],
+            }))]
+        );
+    }
+
     /// Verifies object property writes parse as dedicated EvalIR statements.
     #[test]
     fn parse_fragment_accepts_property_write_source() {

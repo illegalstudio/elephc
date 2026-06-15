@@ -516,6 +516,30 @@ $box->run();
     assert_eq!(out, "50");
 }
 
+/// Verifies eval fragments pass two scalar arguments to public AOT methods through `$this`.
+#[test]
+fn test_eval_fragment_can_call_this_public_two_arg_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodTwoArgBox {
+    public int $x = 41;
+
+    public function label(int $amount, string $suffix): string {
+        return ($this->x + $amount) . $suffix;
+    }
+
+    public function run(): void {
+        echo eval('return $this->label(9, "!");');
+    }
+}
+
+$box = new EvalMethodTwoArgBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "50!");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {
