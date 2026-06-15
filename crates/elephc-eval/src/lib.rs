@@ -65,6 +65,26 @@ pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext)
     }
 }
 
+/// Records source metadata for the next eval fragment executed in this context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `file_ptr` and `dir_ptr` must be
+/// readable for their matching lengths when the length is greater than zero.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_set_call_site(
+    ctx: *mut ElephcEvalContext,
+    file_ptr: *const u8,
+    file_len: u64,
+    dir_ptr: *const u8,
+    dir_len: u64,
+    line: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_context_set_call_site_inner(ctx, file_ptr, file_len, dir_ptr, dir_len, line)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Allocates a materialized activation scope handle for generated code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_scope_new() -> *mut ElephcEvalScope {
@@ -341,6 +361,38 @@ unsafe fn register_native_function_inner(
     )
 }
 
+/// Runs the call-site metadata setter ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_context_set_call_site`; callers must pass a valid
+/// context and readable UTF-8 file/directory byte slices.
+unsafe fn eval_context_set_call_site_inner(
+    ctx: *mut ElephcEvalContext,
+    file_ptr: *const u8,
+    file_len: u64,
+    dir_ptr: *const u8,
+    dir_len: u64,
+    line: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    let Ok(file) = abi_name_to_string(file_ptr, file_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Ok(dir) = abi_name_to_string(dir_ptr, dir_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Ok(line) = i64::try_from(line) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    context.set_call_site(file, dir, line);
+    EvalStatus::Ok.code()
+}
+
 /// Runs the dynamic function-call ABI body after installing a panic boundary.
 ///
 /// # Safety
@@ -597,6 +649,29 @@ mod tests {
             __elephc_eval_context_free(ctx);
         }
         assert_eq!(version, ABI_VERSION);
+    }
+
+    /// Verifies call-site metadata can be set through the stable context ABI.
+    #[test]
+    fn context_set_call_site_records_file_dir_and_line() {
+        let mut ctx = ElephcEvalContext::new();
+        let file = b"/tmp/source.php";
+        let dir = b"/tmp";
+
+        let status = unsafe {
+            __elephc_eval_context_set_call_site(
+                &mut ctx,
+                file.as_ptr(),
+                file.len() as u64,
+                dir.as_ptr(),
+                dir.len() as u64,
+                9,
+            )
+        };
+
+        assert_eq!(status, EvalStatus::Ok.code());
+        assert_eq!(ctx.call_dir(), "/tmp");
+        assert_eq!(ctx.eval_file_magic(), "/tmp/source.php(9) : eval()'d code");
     }
 
     /// Verifies the function-exists ABI probes eval-declared functions by folded name.

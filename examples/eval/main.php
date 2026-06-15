@@ -57,6 +57,8 @@ return __LINE__;
 ");
 eval('function EvalMagicName() { return __FUNCTION__; }');
 $magic_function = eval('return evalmagicname();');
+$magic_file_has_path = eval('return strlen(__FILE__) > strlen(__DIR__);');
+$magic_dir_has_path = eval('return strlen(__DIR__) > 0;');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -74,6 +76,8 @@ echo "not-false=" . $not_false . "\n";
 echo "negative=" . $negative . "\n";
 echo "magic-line=" . $magic_line . "\n";
 echo "magic-function=" . $magic_function . "\n";
+echo "magic-file=" . $magic_file_has_path . "\n";
+echo "magic-dir=" . $magic_dir_has_path . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";

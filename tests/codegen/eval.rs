@@ -476,6 +476,19 @@ eval('function DynEvalMagic() { return __FUNCTION__; } echo dynevalmagic();');
     assert_eq!(out, "2:DynEvalMagic");
 }
 
+/// Verifies eval file-dependent magic constants receive generated call-site metadata.
+#[test]
+fn test_eval_magic_file_and_dir_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval('if (strlen(__DIR__) > 0) { echo "D"; } else { echo "d"; }
+echo ":";
+if (strlen(__FILE__) > strlen(__DIR__)) { echo "F"; } else { echo "f"; }');
+"#,
+    );
+    assert_eq!(out, "D:F");
+}
+
 /// Verifies eval-declared functions persist across eval calls in the same generated context.
 #[test]
 fn test_eval_declared_function_persists_across_eval_calls() {

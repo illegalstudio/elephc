@@ -39,6 +39,7 @@ impl DataId {
 #[derive(Debug, Clone)]
 pub struct Module {
     pub target: Target,
+    pub source_path: Option<String>,
     pub functions: Vec<Function>,
     pub class_methods: Vec<Function>,
     pub closures: Vec<Function>,
@@ -72,6 +73,7 @@ impl Module {
     pub fn new(target: Target) -> Self {
         Self {
             target,
+            source_path: None,
             functions: Vec::new(),
             class_methods: Vec::new(),
             closures: Vec::new(),

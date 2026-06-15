@@ -971,6 +971,8 @@ fn eval_magic_const(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match magic {
+        EvalMagicConst::File => values.string(&context.eval_file_magic()),
+        EvalMagicConst::Dir => values.string(context.call_dir()),
         EvalMagicConst::Line(line) => values.int(*line),
         EvalMagicConst::Function => values.string(context.current_function().unwrap_or("")),
         EvalMagicConst::Class
@@ -1791,6 +1793,25 @@ mod tests {
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(2));
+    }
+
+    /// Verifies file-dependent eval magic constants use call-site metadata from the context.
+    #[test]
+    fn execute_program_magic_file_and_dir_use_context_call_site() {
+        let program =
+            parse_fragment(br#"return __FILE__ . "|" . __DIR__;"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        context.set_call_site("/tmp/main.php", "/tmp", 17);
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(
+            values.get(result),
+            FakeValue::String("/tmp/main.php(17) : eval()'d code|/tmp".to_string())
+        );
     }
 
     /// Verifies eval-declared functions can be called by the same fragment.
