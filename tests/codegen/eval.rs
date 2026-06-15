@@ -959,6 +959,21 @@ echo ":"; echo function_exists("min"); echo function_exists("max");');
     assert_eq!(out, "1:3:1.5:2.5:4:8:11");
 }
 
+/// Verifies eval `pi()` returns the PHP math constant through direct and callable calls.
+#[test]
+fn test_eval_dispatches_pi_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo round(pi(), 2); echo ":";
+echo gettype(pi()); echo ":";
+echo round(call_user_func("pi"), 3); echo ":";
+echo round(call_user_func_array("pi", []), 4);
+echo ":"; echo function_exists("pi");');
+"#,
+    );
+    assert_eq!(out, "3.14:double:3.142:3.1416:1");
+}
+
 /// Verifies eval `sqrt()` returns boxed double cells through direct and callable calls.
 #[test]
 fn test_eval_dispatches_sqrt_builtin_call() {
