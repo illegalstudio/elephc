@@ -541,6 +541,21 @@ echo $items[0] . $items[1];
     assert_eq!(out, "ab");
 }
 
+/// Verifies eval indexed-array append syntax writes the next visible element.
+#[test]
+fn test_eval_indexed_array_append_is_visible_after_eval() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$items = []; $items[] = "a"; $items[] = "b";');
+echo $items[0] . ":" . $items[1] . ":" . count($items);
+$existing = eval('return ["x"];');
+eval('$existing[] = "y";');
+echo ":" . $existing[1] . ":" . count($existing);
+"#,
+    );
+    assert_eq!(out, "a:b:2:y:2");
+}
+
 /// Verifies eval can read a native Mixed array through runtime array helpers.
 #[test]
 fn test_eval_reads_native_mixed_array() {

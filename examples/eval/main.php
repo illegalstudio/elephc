@@ -99,6 +99,7 @@ $boundaries = eval('return (str_starts_with("dynamic eval", "dynamic") ? "starts
 $trimmed = eval('return trim("  boxed  ") . ":" . ltrim("0007", "0") . ":" . chop("tail...", ".");');
 $aggregates = eval('return array_sum([1, 2, 3]) . ":" . array_product([2, 3, 4]);');
 $array_projection = eval('$vals = array_values(["a" => 10, "b" => 20]); $keys = array_keys(["a" => 10, "b" => 20]); return $keys[0] . ":" . $vals[1];');
+$append_items = eval('$items = []; $items[] = "left"; $items[] = "right"; return $items[0] . ":" . $items[1] . ":" . count($items);');
 $array_key_probe = eval('$m = ["name" => null]; return (array_key_exists("name", $m) ? "present" : "missing") . ":" . (array_key_exists("age", $m) ? "bad" : "absent");');
 $array_search = eval('return (in_array("b", ["a", "b"]) ? "in" : "missing") . ":" . array_search("Grace", ["name" => "Grace"]);');
 $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" . (strcasecmp("Hello", "hello") === 0 ? "ci" : "bad") . ":" . (hash_equals("abc", "abc") ? "hash" : "bad");');
@@ -153,6 +154,7 @@ echo "boundaries=" . $boundaries . "\n";
 echo "trimmed=" . $trimmed . "\n";
 echo "aggregates=" . $aggregates . "\n";
 echo "array-projection=" . $array_projection . "\n";
+echo "append-items=" . $append_items . "\n";
 echo "array-key-exists=" . $array_key_probe . "\n";
 echo "array-search=" . $array_search . "\n";
 echo "string-compare=" . $string_compare . "\n";

@@ -46,6 +46,10 @@ impl EvalProgram {
 /// Dynamic eval statements that operate on a materialized activation scope.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalStmt {
+    ArrayAppendVar {
+        name: String,
+        value: EvalExpr,
+    },
     ArraySetVar {
         name: String,
         index: EvalExpr,

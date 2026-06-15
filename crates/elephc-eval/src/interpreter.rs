@@ -334,6 +334,33 @@ fn execute_stmt(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     match stmt {
+        EvalStmt::ArrayAppendVar { name, value } => {
+            let mut ownership = ScopeCellOwnership::Owned;
+            let array = if let Some(existing) =
+                scope.entry(name).filter(|entry| entry.flags().is_visible())
+            {
+                if values.is_array_like(existing.cell())? {
+                    if values.type_tag(existing.cell())? != EVAL_TAG_ARRAY {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    }
+                    ownership = existing.flags().ownership;
+                    existing.cell()
+                } else {
+                    values.array_new(1)?
+                }
+            } else {
+                values.array_new(1)?
+            };
+            let index = values.array_len(array)?;
+            let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+            let index = values.int(index)?;
+            let value = eval_expr(value, context, scope, values)?;
+            let array = values.array_set(array, index, value)?;
+            if let Some(replaced) = scope.set(name.clone(), array, ownership) {
+                values.release(replaced)?;
+            }
+            Ok(EvalControl::None)
+        }
         EvalStmt::ArraySetVar { name, index, value } => {
             let mut ownership = ScopeCellOwnership::Owned;
             let array = if let Some(existing) =
@@ -4501,6 +4528,19 @@ echo function_exists("missing_probe") . "x";"#,
     #[test]
     fn execute_program_writes_indexed_scope_array() {
         let program = parse_fragment(br#"$items = ["a"]; $items[1] = "b"; return $items[1];"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("b".to_string()));
+    }
+
+    /// Verifies indexed array append writes use the next visible index.
+    #[test]
+    fn execute_program_appends_indexed_scope_array() {
+        let program = parse_fragment(br#"$items = ["a"]; $items[] = "b"; return $items[1];"#)
             .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();

@@ -619,10 +619,16 @@ impl Parser {
         Ok(vec![EvalStmt::DoWhile { body, condition }])
     }
 
-    /// Parses `$name[index] = expr;` for indexed-array eval writes.
+    /// Parses `$name[index] = expr;` and `$name[] = expr;` eval writes.
     fn parse_array_set_stmt(&mut self, name: String) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LBracket)?;
+        if self.consume(TokenKind::RBracket) {
+            self.expect(TokenKind::Equal)?;
+            let value = self.parse_expr()?;
+            self.expect_semicolon()?;
+            return Ok(vec![EvalStmt::ArrayAppendVar { name, value }]);
+        }
         let index = self.parse_expr()?;
         self.expect(TokenKind::RBracket)?;
         self.expect(TokenKind::Equal)?;
@@ -770,10 +776,15 @@ impl Parser {
         }
     }
 
-    /// Parses `$name[index] = expr` in a `for` clause.
+    /// Parses `$name[index] = expr` and `$name[] = expr` in a `for` clause.
     fn parse_array_set_clause(&mut self, name: String) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LBracket)?;
+        if self.consume(TokenKind::RBracket) {
+            self.expect(TokenKind::Equal)?;
+            let value = self.parse_expr()?;
+            return Ok(vec![EvalStmt::ArrayAppendVar { name, value }]);
+        }
         let index = self.parse_expr()?;
         self.expect(TokenKind::RBracket)?;
         self.expect(TokenKind::Equal)?;
@@ -2520,6 +2531,36 @@ mod tests {
                 name: "items".to_string(),
                 index: EvalExpr::Const(EvalConst::Int(1)),
                 value: EvalExpr::Const(EvalConst::String("x".to_string())),
+            }]
+        );
+    }
+
+    /// Verifies indexed array append syntax parses as a variable-target append statement.
+    #[test]
+    fn parse_fragment_accepts_indexed_array_append_source() {
+        let program = parse_fragment(br#"$items[] = "x";"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::ArrayAppendVar {
+                name: "items".to_string(),
+                value: EvalExpr::Const(EvalConst::String("x".to_string())),
+            }]
+        );
+    }
+
+    /// Verifies array append syntax is accepted inside `for` update clauses.
+    #[test]
+    fn parse_fragment_accepts_array_append_in_for_update_source() {
+        let program = parse_fragment(br#"for ($i = 0; $i < 2; $items[] = $i) { $i += 1; }"#)
+            .expect("fragment should parse");
+        let [EvalStmt::For { update, .. }] = program.statements() else {
+            panic!("expected for statement");
+        };
+        assert_eq!(
+            update,
+            &vec![EvalStmt::ArrayAppendVar {
+                name: "items".to_string(),
+                value: EvalExpr::LoadVar("i".to_string()),
             }]
         );
     }
