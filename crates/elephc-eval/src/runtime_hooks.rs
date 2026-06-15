@@ -335,6 +335,11 @@ fn compare_op_tag(op: EvalBinOp) -> u64 {
         EvalBinOp::LtEq => 3,
         EvalBinOp::Gt => 4,
         EvalBinOp::GtEq => 5,
-        EvalBinOp::Add | EvalBinOp::Sub | EvalBinOp::Mul | EvalBinOp::Concat => 0,
+        EvalBinOp::Add
+        | EvalBinOp::Sub
+        | EvalBinOp::Mul
+        | EvalBinOp::Concat
+        | EvalBinOp::LogicalAnd
+        | EvalBinOp::LogicalOr => 0,
     }
 }

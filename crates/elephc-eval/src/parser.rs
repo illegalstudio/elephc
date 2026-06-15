@@ -46,6 +46,8 @@ enum TokenKind {
     Equal,
     EqualEqual,
     NotEqual,
+    AndAnd,
+    OrOr,
     Less,
     LessEqual,
     Greater,
@@ -136,6 +138,24 @@ impl<'a> Lexer<'a> {
                 if self.peek_char() == Some('=') {
                     self.bump_char();
                     Ok(TokenKind::NotEqual)
+                } else {
+                    Err(EvalParseError::UnexpectedToken)
+                }
+            }
+            '&' => {
+                self.bump_char();
+                if self.peek_char() == Some('&') {
+                    self.bump_char();
+                    Ok(TokenKind::AndAnd)
+                } else {
+                    Err(EvalParseError::UnexpectedToken)
+                }
+            }
+            '|' => {
+                self.bump_char();
+                if self.peek_char() == Some('|') {
+                    self.bump_char();
+                    Ok(TokenKind::OrOr)
                 } else {
                     Err(EvalParseError::UnexpectedToken)
                 }
@@ -640,9 +660,37 @@ impl Parser {
         Ok(statements)
     }
 
-    /// Parses an expression using PHP-like comparison, concatenation, and arithmetic precedence.
+    /// Parses an expression using PHP-like logical, comparison, concatenation, and arithmetic precedence.
     fn parse_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
-        self.parse_equality()
+        self.parse_logical_or()
+    }
+
+    /// Parses left-associative logical OR with lower precedence than logical AND.
+    fn parse_logical_or(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_logical_and()?;
+        while self.consume(TokenKind::OrOr) {
+            let right = self.parse_logical_and()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalOr,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative logical AND with lower precedence than equality.
+    fn parse_logical_and(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_equality()?;
+        while self.consume(TokenKind::AndAnd) {
+            let right = self.parse_equality()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalAnd,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
     }
 
     /// Parses left-associative loose equality and inequality comparisons.
@@ -1139,6 +1187,25 @@ mod tests {
                 op: EvalBinOp::LooseNotEq,
                 left: Box::new(EvalExpr::Const(EvalConst::String("a".to_string()))),
                 right: Box::new(EvalExpr::Const(EvalConst::String("b".to_string()))),
+            }))]
+        );
+    }
+
+    /// Verifies logical operators parse with `&&` binding tighter than `||`.
+    #[test]
+    fn parse_fragment_accepts_short_circuit_logical_source() {
+        let program =
+            parse_fragment(br#"return $a && $b || false;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::LogicalOr,
+                left: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::LogicalAnd,
+                    left: Box::new(EvalExpr::LoadVar("a".to_string())),
+                    right: Box::new(EvalExpr::LoadVar("b".to_string())),
+                }),
+                right: Box::new(EvalExpr::Const(EvalConst::Bool(false))),
             }))]
         );
     }

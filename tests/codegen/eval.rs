@@ -123,6 +123,19 @@ eval('echo "a" == "a"; echo "a" != "b"; echo "" == null; echo "10" == 10; echo "
     assert_eq!(out, "111111");
 }
 
+/// Verifies eval logical operators short-circuit before evaluating unsupported RHS calls.
+#[test]
+fn test_eval_logical_operators_short_circuit() {
+    let out = compile_and_run(
+        r#"<?php
+echo "a" . eval('return false && missing_eval_rhs();') . "b";
+echo ":";
+echo eval('return true || missing_eval_rhs();');
+"#,
+    );
+    assert_eq!(out, "ab:1");
+}
+
 /// Verifies eval if/else branches use PHP truthiness and update the caller scope.
 #[test]
 fn test_eval_if_else_updates_scope() {

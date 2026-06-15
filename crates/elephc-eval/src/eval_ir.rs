@@ -174,6 +174,8 @@ pub enum EvalBinOp {
     Sub,
     Mul,
     Concat,
+    LogicalAnd,
+    LogicalOr,
     LooseEq,
     LooseNotEq,
     Lt,
