@@ -499,6 +499,7 @@ fn eval_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
+        "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "count" => eval_builtin_count(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
         "function_exists" | "is_callable" => {
@@ -542,7 +543,106 @@ fn eval_function_probe_exists(context: &ElephcEvalContext, name: &str) -> bool {
 
 /// Returns true for PHP-visible builtin names implemented by the eval interpreter.
 fn eval_php_visible_builtin_exists(name: &str) -> bool {
-    matches!(name, "count" | "function_exists" | "is_callable" | "strlen")
+    matches!(
+        name,
+        "call_user_func" | "count" | "function_exists" | "is_callable" | "strlen"
+    )
+}
+
+/// Evaluates `call_user_func($name, ...$args)` inside a runtime eval fragment.
+fn eval_builtin_call_user_func(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let mut evaluated_args = Vec::with_capacity(args.len());
+    for arg in args {
+        evaluated_args.push(eval_expr(arg, context, scope, values)?);
+    }
+    eval_call_user_func_with_values(evaluated_args, context, values)
+}
+
+/// Dispatches `call_user_func` after its callback and arguments are already evaluated.
+fn eval_call_user_func_with_values(
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some((callback, callback_args)) = evaluated_args.split_first() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let callback = values.string_bytes(*callback)?;
+    let callback = String::from_utf8(callback).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let callback = callback.trim_start_matches('\\').to_ascii_lowercase();
+    if callback.contains("::") {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    eval_callable_with_values(&callback, callback_args.to_vec(), context, values)
+}
+
+/// Invokes a PHP-visible callable name with source-order positional values.
+fn eval_callable_with_values(
+    name: &str,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? {
+        return Ok(result);
+    }
+    if let Some(function) = context.function(name).cloned() {
+        return eval_dynamic_function_with_values(&function, evaluated_args, context, values);
+    }
+    if let Some(function) = context.native_function(name) {
+        return eval_native_function_with_values(function, evaluated_args, values);
+    }
+    Err(EvalStatus::UnsupportedConstruct)
+}
+
+/// Evaluates PHP-visible builtins when they are invoked through a dynamic callable name.
+fn eval_builtin_with_values(
+    name: &str,
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let result = match name {
+        "call_user_func" => {
+            return eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)
+                .map(Some);
+        }
+        "count" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let len = values.array_len(*value)?;
+            let len = i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
+            values.int(len)?
+        }
+        "function_exists" | "is_callable" => {
+            let [name] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let name = values.string_bytes(*name)?;
+            let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
+            let name = name.trim_start_matches('\\').to_ascii_lowercase();
+            values.bool_value(eval_function_probe_exists(context, &name))?
+        }
+        "strlen" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let bytes = values.string_bytes(*value)?;
+            let len = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
+            values.int(len)?
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(result))
 }
 
 /// Evaluates nested `eval(...)` calls against the current materialized scope.
@@ -640,10 +740,25 @@ fn eval_native_function(
     if args.len() != function.param_count() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let arg_array = values.array_new(args.len())?;
-    for (index, arg) in args.iter().enumerate() {
+    let mut evaluated_args = Vec::with_capacity(args.len());
+    for arg in args {
+        evaluated_args.push(eval_expr(arg, context, caller_scope, values)?);
+    }
+    eval_native_function_with_values(function, evaluated_args, values)
+}
+
+/// Invokes a registered AOT function after its positional arguments are prepared.
+fn eval_native_function_with_values(
+    function: NativeFunction,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if evaluated_args.len() != function.param_count() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let arg_array = values.array_new(evaluated_args.len())?;
+    for (index, value) in evaluated_args.into_iter().enumerate() {
         let index = values.int(index as i64)?;
-        let value = eval_expr(arg, context, caller_scope, values)?;
         let _ = values.array_set(arg_array, index, value)?;
     }
     let result = unsafe { function.call(arg_array) };
@@ -1537,6 +1652,61 @@ mod tests {
             .expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(5));
+    }
+
+    /// Verifies `call_user_func` inside eval can dispatch an eval-declared function.
+    #[test]
+    fn execute_program_call_user_func_dispatches_declared_function() {
+        let program = parse_fragment(
+            br#"function dyn($x) { return $x + 1; }
+return call_user_func("dyn", 4);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(5));
+    }
+
+    /// Verifies `call_user_func` inside eval can dispatch a supported builtin.
+    #[test]
+    fn execute_program_call_user_func_dispatches_builtin() {
+        let program = parse_fragment(br#"return call_user_func("strlen", "abcd");"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(4));
+    }
+
+    /// Verifies `call_user_func` inside eval can dispatch a registered native function.
+    #[test]
+    fn execute_program_call_user_func_dispatches_registered_native_function() {
+        let program = parse_fragment(br#"return call_user_func("native_answer");"#)
+            .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let expected = values.int(42).expect("allocate fake result");
+        let native = NativeFunction::new(
+            expected.as_ptr().cast(),
+            fake_native_return_descriptor,
+            0,
+        );
+        assert!(
+            context
+                .define_native_function("native_answer", native)
+                .is_ok()
+        );
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(result, expected);
     }
 
     /// Verifies duplicate eval-declared function names fail in a shared context.
