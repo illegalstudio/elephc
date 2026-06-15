@@ -760,6 +760,7 @@ fn eval_call(
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
+        "max" | "min" => eval_builtin_min_max(name, args, context, scope, values),
         "ord" => eval_builtin_ord(args, context, scope, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
         "round" => eval_builtin_round(args, context, scope, values),
@@ -913,6 +914,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_resource"
             | "is_string"
             | "lcfirst"
+            | "max"
+            | "min"
             | "ord"
             | "pow"
             | "rtrim"
@@ -1117,6 +1120,7 @@ fn eval_builtin_with_values(
             };
             eval_ord_result(*value, values)?
         }
+        "max" | "min" => eval_min_max_result(name, evaluated_args, values)?,
         "trim" | "ltrim" | "rtrim" | "chop" => match evaluated_args {
             [value] => eval_trim_like_result(name, *value, None, values)?,
             [value, mask] => eval_trim_like_result(name, *value, Some(*mask), values)?,
@@ -1395,6 +1399,48 @@ fn eval_builtin_sqrt(
     };
     let value = eval_expr(value, context, scope, values)?;
     values.sqrt(value)
+}
+
+/// Evaluates PHP numeric `min(...)` and `max(...)` over eval expressions.
+fn eval_builtin_min_max(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.len() < 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let mut evaluated_args = Vec::with_capacity(args.len());
+    for arg in args {
+        evaluated_args.push(eval_expr(arg, context, scope, values)?);
+    }
+    eval_min_max_result(name, &evaluated_args, values)
+}
+
+/// Selects the smallest or largest evaluated cell using runtime comparison hooks.
+fn eval_min_max_result(
+    name: &str,
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some((&first, rest)) = evaluated_args.split_first() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let op = match name {
+        "min" => EvalBinOp::Lt,
+        "max" => EvalBinOp::Gt,
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    let mut selected = first;
+    for candidate in rest {
+        let better = values.compare(op, *candidate, selected)?;
+        if values.truthy(better)? {
+            selected = *candidate;
+        }
+    }
+    Ok(selected)
 }
 
 /// Evaluates PHP scalar cast builtins over one eval expression.
@@ -4045,6 +4091,29 @@ return function_exists("round");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "4:3.14:double:3:1.6");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `min()` and `max()` select numeric values directly and by callable.
+    #[test]
+    fn execute_program_dispatches_min_max_builtins() {
+        let program = parse_fragment(
+            br#"echo min(3, 1, 2); echo ":";
+echo max(1, 3, 2); echo ":";
+echo min(2.5, 1.5); echo ":";
+echo max(1.5, 2.5); echo ":";
+echo call_user_func("min", 9, 4, 7); echo ":";
+echo call_user_func_array("max", [4, 8, 6]); echo ":";
+echo function_exists("min");
+return function_exists("max");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "1:3:1.5:2.5:4:8:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

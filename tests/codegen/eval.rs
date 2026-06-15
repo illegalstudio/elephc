@@ -942,6 +942,23 @@ echo ":"; echo function_exists("round");');
     assert_eq!(out, "4:3.14:double:3:1.6:1");
 }
 
+/// Verifies eval `min()` and `max()` select numeric values directly and through callables.
+#[test]
+fn test_eval_dispatches_min_max_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo min(3, 1, 2); echo ":";
+echo max(1, 3, 2); echo ":";
+echo min(2.5, 1.5); echo ":";
+echo max(1.5, 2.5); echo ":";
+echo call_user_func("min", 9, 4, 7); echo ":";
+echo call_user_func_array("max", [4, 8, 6]);
+echo ":"; echo function_exists("min"); echo function_exists("max");');
+"#,
+    );
+    assert_eq!(out, "1:3:1.5:2.5:4:8:11");
+}
+
 /// Verifies eval `sqrt()` returns boxed double cells through direct and callable calls.
 #[test]
 fn test_eval_dispatches_sqrt_builtin_call() {
