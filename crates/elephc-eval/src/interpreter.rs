@@ -15,7 +15,7 @@ use crate::context::{ElephcEvalContext, NativeFunction};
 use crate::errors::EvalStatus;
 use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalFunction, EvalMagicConst, EvalProgram,
-    EvalStmt, EvalUnaryOp,
+    EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership};
@@ -314,6 +314,9 @@ fn execute_stmt(
             }
             Ok(EvalControl::None)
         }
+        EvalStmt::Switch { expr, cases } => {
+            execute_switch_stmt(expr, cases, context, scope, values)
+        }
         EvalStmt::UnsetVar { name } => {
             if let Some(replaced) = scope.unset(name.clone()) {
                 values.release(replaced)?;
@@ -338,6 +341,44 @@ fn execute_stmt(
             Ok(EvalControl::None)
         }
     }
+}
+
+/// Executes a PHP switch with loose case matching, default fallback, and fallthrough.
+fn execute_switch_stmt(
+    expr: &EvalExpr,
+    cases: &[EvalSwitchCase],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    let subject = eval_expr(expr, context, scope, values)?;
+    let mut default_index = None;
+    let mut matched_index = None;
+    for (index, case) in cases.iter().enumerate() {
+        let Some(condition) = &case.condition else {
+            if default_index.is_none() {
+                default_index = Some(index);
+            }
+            continue;
+        };
+        let condition = eval_expr(condition, context, scope, values)?;
+        let matches = values.compare(EvalBinOp::LooseEq, subject, condition)?;
+        if values.truthy(matches)? {
+            matched_index = Some(index);
+            break;
+        }
+    }
+    let Some(start_index) = matched_index.or(default_index) else {
+        return Ok(EvalControl::None);
+    };
+    for case in &cases[start_index..] {
+        match execute_statements(&case.body, context, scope, values)? {
+            EvalControl::None => {}
+            EvalControl::Break | EvalControl::Continue => break,
+            EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+        }
+    }
+    Ok(EvalControl::None)
 }
 
 /// Executes a PHP `do/while` loop, evaluating the condition after every body run.
@@ -1653,6 +1694,22 @@ mod tests {
 
         assert_eq!(values.output, "0");
         assert_eq!(values.get(i), FakeValue::Int(1));
+    }
+
+    /// Verifies switch uses loose matching and falls through after the matching case.
+    #[test]
+    fn execute_program_switch_matches_and_falls_through() {
+        let program =
+            parse_fragment(br#"switch ($x) { case 1: echo "one"; break; case 2: echo "two"; default: echo "default"; }"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let x = values.int(2).expect("create fake int");
+        scope.set("x", x, ScopeCellOwnership::Owned);
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "twodefault");
     }
 
     /// Verifies for loops run init, condition, update, and body in PHP order.

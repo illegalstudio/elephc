@@ -89,6 +89,10 @@ pub enum EvalStmt {
         name: String,
         value: EvalExpr,
     },
+    Switch {
+        expr: EvalExpr,
+        cases: Vec<EvalSwitchCase>,
+    },
     UnsetVar {
         name: String,
     },
@@ -174,6 +178,13 @@ pub enum EvalExpr {
 pub enum EvalArrayElement {
     Value(EvalExpr),
     KeyValue { key: EvalExpr, value: EvalExpr },
+}
+
+/// One ordered case arm in a PHP switch parsed from an eval fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalSwitchCase {
+    pub condition: Option<EvalExpr>,
+    pub body: Vec<EvalStmt>,
 }
 
 /// Literal syntax supported by the initial EvalIR parser.

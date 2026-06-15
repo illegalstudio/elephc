@@ -231,6 +231,17 @@ echo ":" . $i;
     assert_eq!(out, "0:1");
 }
 
+/// Verifies eval switch supports matching, default fallback, and fallthrough.
+#[test]
+fn test_eval_switch_matches_default_and_fallthrough() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$x = 2; switch ($x) { default: echo "d"; case 2: echo "2"; break; } $x = 3; switch ($x) { default: echo "D"; case 2: echo "F"; break; }');
+"#,
+    );
+    assert_eq!(out, "2DF");
+}
+
 /// Verifies break and continue control a loop interpreted inside eval.
 #[test]
 fn test_eval_break_and_continue_control_loop() {

@@ -16,7 +16,7 @@
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalMagicConst, EvalProgram, EvalStmt,
-    EvalUnaryOp,
+    EvalSwitchCase, EvalUnaryOp,
 };
 
 /// Parses an eval fragment into by-name EvalIR statements.
@@ -67,6 +67,7 @@ enum TokenKind {
     LBrace,
     RBrace,
     Comma,
+    Colon,
     Eof,
 }
 
@@ -221,6 +222,10 @@ impl<'a> Lexer<'a> {
             ',' => {
                 self.bump_char();
                 Ok(TokenKind::Comma)
+            }
+            ':' => {
+                self.bump_char();
+                Ok(TokenKind::Colon)
             }
             _ if is_ident_start(ch) => {
                 let ident = self.lex_ident();
@@ -398,6 +403,7 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Return(Some(expr))])
             }
+            TokenKind::Ident(name) if ident_eq(name, "switch") => self.parse_switch_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "unset") => self.parse_unset_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
@@ -646,6 +652,54 @@ impl Parser {
         } else {
             self.parse_statement_body()
         }
+    }
+
+    /// Parses `switch (expr) { case expr: ... default: ... }`.
+    fn parse_switch_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let expr = self.parse_expr()?;
+        self.expect(TokenKind::RParen)?;
+        self.expect(TokenKind::LBrace)?;
+        let mut cases = Vec::new();
+        while !matches!(self.current(), TokenKind::RBrace) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            cases.push(self.parse_switch_case()?);
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(vec![EvalStmt::Switch { expr, cases }])
+    }
+
+    /// Parses one `case` or `default` arm inside a switch body.
+    fn parse_switch_case(&mut self) -> Result<EvalSwitchCase, EvalParseError> {
+        let condition = if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "case"))
+        {
+            self.advance();
+            let condition = self.parse_expr()?;
+            Some(condition)
+        } else if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "default")) {
+            self.advance();
+            None
+        } else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        self.expect(TokenKind::Colon)?;
+        let body = self.parse_switch_case_body()?;
+        Ok(EvalSwitchCase { condition, body })
+    }
+
+    /// Parses case body statements until the next case boundary or switch close.
+    fn parse_switch_case_body(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let mut body = Vec::new();
+        while !is_switch_case_boundary(self.current()) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            body.extend(self.parse_stmt()?);
+        }
+        Ok(body)
     }
 
     /// Parses `unset($name[, ...]);`.
@@ -1095,6 +1149,12 @@ fn magic_const_token(name: &str, line: i64) -> Option<TokenKind> {
     Some(TokenKind::Magic(magic))
 }
 
+/// Returns true when the current token closes or starts a switch case arm.
+fn is_switch_case_boundary(token: &TokenKind) -> bool {
+    matches!(token, TokenKind::RBrace)
+        || matches!(token, TokenKind::Ident(name) if ident_eq(name, "case") || ident_eq(name, "default"))
+}
+
 /// Compares a source identifier to a PHP keyword using ASCII case-insensitive rules.
 fn ident_eq(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected)
@@ -1234,6 +1294,35 @@ mod tests {
                     },
                 }],
                 body: vec![EvalStmt::Echo(EvalExpr::LoadVar("i".to_string()))],
+            }]
+        );
+    }
+
+    /// Verifies switch fragments preserve ordered case and default bodies.
+    #[test]
+    fn parse_fragment_accepts_switch_source() {
+        let program =
+            parse_fragment(br#"switch ($x) { case 1: echo "one"; break; default: echo "other"; }"#)
+                .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Switch {
+                expr: EvalExpr::LoadVar("x".to_string()),
+                cases: vec![
+                    EvalSwitchCase {
+                        condition: Some(EvalExpr::Const(EvalConst::Int(1))),
+                        body: vec![
+                            EvalStmt::Echo(EvalExpr::Const(EvalConst::String("one".to_string()))),
+                            EvalStmt::Break,
+                        ],
+                    },
+                    EvalSwitchCase {
+                        condition: None,
+                        body: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
+                            "other".to_string()
+                        )))],
+                    },
+                ],
             }]
         );
     }
