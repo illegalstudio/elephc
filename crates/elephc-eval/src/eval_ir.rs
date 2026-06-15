@@ -54,6 +54,12 @@ pub enum EvalStmt {
     Break,
     Continue,
     Echo(EvalExpr),
+    For {
+        init: Vec<EvalStmt>,
+        condition: Option<EvalExpr>,
+        update: Vec<EvalStmt>,
+        body: Vec<EvalStmt>,
+    },
     If {
         condition: EvalExpr,
         then_branch: Vec<EvalStmt>,
