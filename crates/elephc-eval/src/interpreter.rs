@@ -1133,6 +1133,22 @@ mod tests {
         assert_eq!(values.get(result), FakeValue::Int(5));
     }
 
+    /// Verifies duplicate eval-declared function names fail in a shared context.
+    #[test]
+    fn execute_program_rejects_duplicate_declared_function() {
+        let define = parse_fragment(br#"function dyn() { return 1; }"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program_with_context(&mut context, &define, &mut scope, &mut values)
+            .expect("execute first declaration");
+        let err = execute_program_with_context(&mut context, &define, &mut scope, &mut values)
+            .expect_err("duplicate function declaration should fail");
+
+        assert_eq!(err, EvalStatus::RuntimeFatal);
+    }
+
     /// Verifies dynamic builtin calls inside eval dispatch through runtime value hooks.
     #[test]
     fn execute_program_dispatches_simple_builtins() {

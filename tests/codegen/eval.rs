@@ -399,6 +399,21 @@ eval('echo dyn_eval_inc(4);');
     assert_eq!(out, "5");
 }
 
+/// Verifies duplicate eval-declared functions fail through the runtime bridge.
+#[test]
+fn test_eval_duplicate_declared_function_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('function dyn_eval_dup() { return 1; }');
+eval('function dyn_eval_dup() { return 2; }');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies `return` inside eval becomes the expression result of `eval(...)`.
 #[test]
 fn test_eval_return_value_is_available_to_native_code() {
