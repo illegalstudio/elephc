@@ -628,6 +628,25 @@ eval('echo STRLEN("abcd") . ":" . count([1, 2, 3]);');
     assert_eq!(out, "4:3");
 }
 
+/// Verifies eval scalar type-predicate builtins inspect boxed Mixed runtime tags.
+#[test]
+fn test_eval_dispatches_type_predicate_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo is_int(1); echo is_integer(1); echo is_long(1);
+echo is_float(1.5); echo is_double(1.5); echo is_real(1.5);
+echo is_string("x"); echo is_bool(false); echo is_null(null);
+echo is_array([1]); echo is_array(["a" => 1]);
+echo is_array(1) ? "bad" : "ok";
+echo ":";
+echo call_user_func("is_string", "x");
+echo call_user_func_array("is_array", [[1]]);
+echo function_exists("is_double");');
+"#,
+    );
+    assert_eq!(out, "11111111111ok:111");
+}
+
 /// Verifies eval `isset()` distinguishes missing, null, and falsey non-null values.
 #[test]
 fn test_eval_isset_distinguishes_missing_null_and_falsey_values() {

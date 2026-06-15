@@ -91,6 +91,9 @@ pub trait RuntimeValueOps {
     /// Returns whether a runtime cell holds PHP null.
     fn is_null(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
 
+    /// Returns the concrete boxed Mixed runtime tag after unwrapping nested Mixed cells.
+    fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
+
     /// Releases one owned runtime cell that is no longer held by the eval scope.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
@@ -193,6 +196,16 @@ pub trait RuntimeValueOps {
     /// Converts one runtime cell to PHP boolean truthiness.
     fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
 }
+
+const EVAL_TAG_INT: u64 = 0;
+const EVAL_TAG_STRING: u64 = 1;
+const EVAL_TAG_FLOAT: u64 = 2;
+const EVAL_TAG_BOOL: u64 = 3;
+const EVAL_TAG_ARRAY: u64 = 4;
+const EVAL_TAG_ASSOC: u64 = 5;
+#[cfg(test)]
+const EVAL_TAG_OBJECT: u64 = 6;
+const EVAL_TAG_NULL: u64 = 8;
 
 /// Executes an EvalIR program and returns the eval result cell.
 pub fn execute_program(
@@ -693,6 +706,10 @@ fn eval_call(
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
         }
+        "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
+        | "is_null" | "is_real" | "is_string" => {
+            eval_builtin_type_predicate(name, args, context, scope, values)
+        }
         "isset" => eval_builtin_isset(args, context, scope, values),
         "strlen" => eval_builtin_strlen(args, context, scope, values),
         _ => {
@@ -804,6 +821,16 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "count"
             | "function_exists"
             | "is_callable"
+            | "is_array"
+            | "is_bool"
+            | "is_double"
+            | "is_float"
+            | "is_int"
+            | "is_integer"
+            | "is_long"
+            | "is_null"
+            | "is_real"
+            | "is_string"
             | "strlen"
     )
 }
@@ -935,6 +962,13 @@ fn eval_builtin_with_values(
             let name = name.trim_start_matches('\\').to_ascii_lowercase();
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
+        "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
+        | "is_null" | "is_real" | "is_string" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_type_predicate_result(name, *value, values)?
+        }
         "strlen" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -946,6 +980,40 @@ fn eval_builtin_with_values(
         _ => return Ok(None),
     };
     Ok(Some(result))
+}
+
+/// Evaluates PHP scalar/container type predicate builtins over one eval expression.
+fn eval_builtin_type_predicate(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_type_predicate_result(name, value, values)
+}
+
+/// Converts a concrete runtime tag into a PHP `is_*` predicate result.
+fn eval_type_predicate_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    let result = match name {
+        "is_int" | "is_integer" | "is_long" => tag == EVAL_TAG_INT,
+        "is_float" | "is_double" | "is_real" => tag == EVAL_TAG_FLOAT,
+        "is_string" => tag == EVAL_TAG_STRING,
+        "is_bool" => tag == EVAL_TAG_BOOL,
+        "is_null" => tag == EVAL_TAG_NULL,
+        "is_array" => matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC),
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    values.bool_value(result)
 }
 
 /// Evaluates nested `eval(...)` calls against the current materialized scope.
@@ -1431,6 +1499,20 @@ mod tests {
         /// Returns whether a fake runtime cell is null.
         fn is_null(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
             Ok(matches!(self.get(value), FakeValue::Null))
+        }
+
+        /// Returns the fake runtime tag corresponding to a test value.
+        fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+            Ok(match self.get(value) {
+                FakeValue::Int(_) => EVAL_TAG_INT,
+                FakeValue::String(_) => EVAL_TAG_STRING,
+                FakeValue::Float(_) => EVAL_TAG_FLOAT,
+                FakeValue::Bool(_) => EVAL_TAG_BOOL,
+                FakeValue::Array(_) => EVAL_TAG_ARRAY,
+                FakeValue::Assoc(_) => EVAL_TAG_ASSOC,
+                FakeValue::Object(_) => EVAL_TAG_OBJECT,
+                FakeValue::Null => EVAL_TAG_NULL,
+            })
         }
 
         /// Records fake releases without freeing handles needed for assertions.
@@ -2632,6 +2714,29 @@ return call_user_func_array("dyn", [4, 5]);"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(6));
+    }
+
+    /// Verifies eval type-predicate builtins inspect boxed runtime tags directly and by callable.
+    #[test]
+    fn execute_program_dispatches_type_predicate_builtins() {
+        let program = parse_fragment(
+            br#"echo is_int(1); echo is_integer(1); echo is_long(1);
+echo is_float(1.5); echo is_double(1.5); echo is_real(1.5);
+echo is_string("x"); echo is_bool(false); echo is_null(null);
+echo is_array([1]); echo is_array(["a" => 1]);
+echo is_array(1) ? "bad" : "ok";
+echo ":"; echo call_user_func("is_string", "x");
+echo call_user_func_array("is_array", [[1]]);
+return function_exists("is_double");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "11111111111ok:11");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
     /// Verifies `isset` distinguishes missing, null, and other falsey values.
