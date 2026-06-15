@@ -716,6 +716,24 @@ echo ":"; echo function_exists("str_contains");');
     assert_eq!(out, "Y:N:E:C:A:1");
 }
 
+/// Verifies eval `strpos()` and `strrpos()` return byte offsets or false.
+#[test]
+fn test_eval_dispatches_string_position_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strpos("banana", "na");
+echo ":"; echo strrpos("banana", "na");
+echo ":"; echo strpos("abc", "z") === false ? "F" : "bad";
+echo ":"; echo strpos("abc", "");
+echo ":"; echo strrpos("abc", "");
+echo ":"; echo call_user_func("strpos", "abc", "b");
+echo ":"; echo call_user_func_array("strrpos", ["ababa", "ba"]);
+echo ":"; echo function_exists("strpos"); echo function_exists("strrpos");');
+"#,
+    );
+    assert_eq!(out, "2:4:F:0:3:1:3:11");
+}
+
 /// Verifies eval string boundary builtins support direct and callable byte-string checks.
 #[test]
 fn test_eval_dispatches_string_boundary_builtin_calls() {

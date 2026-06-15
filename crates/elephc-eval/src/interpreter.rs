@@ -769,6 +769,7 @@ fn eval_call(
         }
         "strcmp" | "strcasecmp" => eval_builtin_string_compare(name, args, context, scope, values),
         "strlen" => eval_builtin_strlen(args, context, scope, values),
+        "strpos" | "strrpos" => eval_builtin_string_position(name, args, context, scope, values),
         "strtolower" | "strtoupper" => eval_builtin_string_case(name, args, context, scope, values),
         "trim" => eval_builtin_trim_like(name, args, context, scope, values),
         _ => {
@@ -917,6 +918,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "str_starts_with"
             | "strcmp"
             | "strlen"
+            | "strpos"
+            | "strrpos"
             | "strtolower"
             | "strtoupper"
             | "strval"
@@ -1141,6 +1144,12 @@ fn eval_builtin_with_values(
             let bytes = values.string_bytes(*value)?;
             let len = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
             values.int(len)?
+        }
+        "strpos" | "strrpos" => {
+            let [haystack, needle] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_string_position_result(name, *haystack, *needle, values)?
         }
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             let [haystack, needle] = evaluated_args else {
@@ -1631,6 +1640,51 @@ fn eval_string_search_result(
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     values.bool_value(matched)
+}
+
+/// Evaluates PHP byte-string position builtins over two eval expressions.
+fn eval_builtin_string_position(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [haystack, needle] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let haystack = eval_expr(haystack, context, scope, values)?;
+    let needle = eval_expr(needle, context, scope, values)?;
+    eval_string_position_result(name, haystack, needle, values)
+}
+
+/// Returns the first or last byte offset of a converted needle, or PHP `false`.
+fn eval_string_position_result(
+    name: &str,
+    haystack: RuntimeCellHandle,
+    needle: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let haystack = values.string_bytes(haystack)?;
+    let needle = values.string_bytes(needle)?;
+    let position = match name {
+        "strpos" if needle.is_empty() => Some(0),
+        "strpos" => haystack
+            .windows(needle.len())
+            .position(|window| window == needle),
+        "strrpos" if needle.is_empty() => Some(haystack.len()),
+        "strrpos" => haystack
+            .windows(needle.len())
+            .rposition(|window| window == needle),
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    match position {
+        Some(position) => {
+            let position = i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?;
+            values.int(position)
+        }
+        None => values.bool_value(false),
+    }
 }
 
 const PHP_DEFAULT_TRIM_MASK: &[u8] = b" \n\r\t\x0B\x0C\0";
@@ -3624,6 +3678,30 @@ return function_exists("str_contains");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "Y:N:E:C:A");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval string position builtins return byte offsets or PHP false.
+    #[test]
+    fn execute_program_dispatches_string_position_builtins() {
+        let program = parse_fragment(
+            br#"echo strpos("banana", "na");
+echo ":" . strrpos("banana", "na");
+echo ":"; echo strpos("abc", "z") === false ? "F" : "bad";
+echo ":" . strpos("abc", "");
+echo ":" . strrpos("abc", "");
+echo ":" . call_user_func("strpos", "abc", "b");
+echo ":" . call_user_func_array("strrpos", ["ababa", "ba"]);
+echo ":"; echo function_exists("strpos");
+return function_exists("strrpos");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "2:4:F:0:3:1:3:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
