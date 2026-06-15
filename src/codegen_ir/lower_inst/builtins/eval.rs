@@ -13,13 +13,17 @@
 //! - The bridge is target-mangled like other C staticlib symbols.
 
 use crate::codegen::platform::Arch;
-use crate::codegen::{abi, emit_box_current_value_as_mixed};
+use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed};
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::{Instruction, LocalKind, LocalSlotId};
-use crate::types::PhpType;
+use crate::ir::{Function, Instruction, LocalKind, LocalSlotId};
+use crate::names::function_symbol;
+use crate::types::{FunctionSig, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::super::{expect_data, expect_operand, store_if_result};
+use super::super::{
+    emit_runtime_callable_invoker_inline, expect_data, expect_operand, function_signature_from_eir,
+    store_if_result,
+};
 
 const EVAL_STATUS_PARSE_ERROR: i64 = 1;
 const EVAL_STATUS_UNSUPPORTED: i64 = 4;
@@ -43,6 +47,12 @@ struct EvalSyncLocal {
     name: String,
     slot: LocalSlotId,
     ty: PhpType,
+}
+
+/// A module-local function that can be registered with the eval context.
+struct EvalNativeFunctionRegistration {
+    name: String,
+    signature: FunctionSig,
 }
 
 /// Lowers `eval($code)` to the eval bridge ABI and leaves the eval return cell in result registers.
@@ -186,6 +196,7 @@ fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_new");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
+    register_eval_native_functions(ctx, offset)?;
     ctx.emitter.label(&ready);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
@@ -200,6 +211,106 @@ fn eval_context_slot(ctx: &FunctionContext<'_>) -> Result<LocalSlotId> {
         .find(|local| local.kind == LocalKind::EvalContext)
         .map(|local| local.id)
         .ok_or_else(|| CodegenIrError::invalid_module("eval call missing eval context local"))
+}
+
+/// Registers eligible AOT global functions with a newly allocated eval context.
+fn register_eval_native_functions(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+) -> Result<()> {
+    let registrations = eval_native_function_registrations(ctx);
+    for registration in registrations {
+        register_eval_native_function(ctx, context_offset, &registration)?;
+    }
+    Ok(())
+}
+
+/// Collects global PHP functions that can use the descriptor-invoker bridge.
+fn eval_native_function_registrations(
+    ctx: &FunctionContext<'_>,
+) -> Vec<EvalNativeFunctionRegistration> {
+    ctx.module
+        .functions
+        .iter()
+        .filter(|function| function_can_register_with_eval(function))
+        .map(|function| EvalNativeFunctionRegistration {
+            name: function.name.clone(),
+            signature: function_signature_from_eir(function),
+        })
+        .collect()
+}
+
+/// Returns true when a module function is a PHP-visible AOT function supported by this bridge.
+fn function_can_register_with_eval(function: &Function) -> bool {
+    !function.flags.is_main
+        && !function.name.starts_with('_')
+        && function.params.iter().all(|param| !param.by_ref && !param.variadic)
+}
+
+/// Emits one native-function registration call into the just-created eval context.
+fn register_eval_native_function(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    registration: &EvalNativeFunctionRegistration,
+) -> Result<()> {
+    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &registration.signature, &[]);
+    let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+        ctx.data,
+        &function_symbol(&registration.name),
+        Some(&registration.name),
+        callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+        Some(&registration.signature),
+        &[],
+        &[],
+        callable_descriptor::CallableDescriptorInvocation::named(
+            callable_descriptor::CallableDescriptorShape::Function,
+            registration.name.clone(),
+        ),
+        Some(&invoker_label),
+    );
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let (name_label, name_len) = ctx.data.add_string(registration.name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        &descriptor_label,
+    );
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        &invoker_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        registration.signature.params.len() as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_function");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
+}
+
+/// Loads the persistent eval context local into the selected integer argument register.
+fn load_eval_context_local_to_arg(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    arg_index: usize,
+) {
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
+    abi::load_at_offset(ctx.emitter, arg_reg, context_offset);
 }
 
 /// Loads the current eval context handle into the selected integer argument register.

@@ -12,7 +12,7 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 use crate::errors::EvalStatus;
-use crate::context::ElephcEvalContext;
+use crate::context::{ElephcEvalContext, NativeFunction};
 use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalFunction, EvalProgram, EvalStmt,
 };
@@ -417,12 +417,15 @@ fn eval_call(
             eval_builtin_function_probe(args, context, scope, values)
         }
         "strlen" => eval_builtin_strlen(args, context, scope, values),
-        _ => context
-            .function(name)
-            .cloned()
-            .map_or(Err(EvalStatus::UnsupportedConstruct), |function| {
-                eval_dynamic_function(&function, args, context, scope, values)
-            }),
+        _ => {
+            if let Some(function) = context.function(name).cloned() {
+                return eval_dynamic_function(&function, args, context, scope, values);
+            }
+            if let Some(function) = context.native_function(name) {
+                return eval_native_function(function, args, context, scope, values);
+            }
+            Err(EvalStatus::UnsupportedConstruct)
+        }
     }
 }
 
@@ -538,6 +541,31 @@ fn eval_dynamic_function_with_values(
     }
 }
 
+/// Evaluates a registered AOT function through its descriptor-compatible invoker.
+fn eval_native_function(
+    function: NativeFunction,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.len() != function.param_count() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let arg_array = values.array_new(args.len())?;
+    for (index, arg) in args.iter().enumerate() {
+        let index = values.int(index as i64)?;
+        let value = eval_expr(arg, context, caller_scope, values)?;
+        let _ = values.array_set(arg_array, index, value)?;
+    }
+    let result = unsafe { function.call(arg_array) };
+    values.release(arg_array)?;
+    if result.is_null() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(result)
+}
+
 /// Evaluates an indexed array literal into a boxed runtime Mixed array.
 fn eval_indexed_array(
     elements: &[EvalArrayElement],
@@ -606,6 +634,7 @@ pub fn current_stub_status() -> EvalStatus {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::ffi::c_void;
 
     use crate::parser::parse_fragment;
     use crate::value::RuntimeCell;
@@ -948,6 +977,14 @@ mod tests {
         }
     }
 
+    /// Test native invoker that returns the descriptor pointer as a runtime cell.
+    unsafe extern "C" fn fake_native_return_descriptor(
+        descriptor: *mut c_void,
+        _args: *mut RuntimeCell,
+    ) -> *mut RuntimeCell {
+        descriptor.cast()
+    }
+
     /// Verifies assignment writes a named scope entry and return reads it back.
     #[test]
     fn execute_program_stores_and_returns_scope_value() {
@@ -1236,16 +1273,50 @@ mod tests {
 echo function_exists("DYN_PROBE") . "x";
 echo is_callable("dyn_probe") . "x";
 echo function_exists("strlen") . "x";
+echo function_exists("native_probe") . "x";
 echo function_exists("eval") . "x";
 echo function_exists("missing_probe") . "x";"#,
         )
         .expect("parse eval fragment");
+        let native = NativeFunction::new(
+            1usize as *mut c_void,
+            fake_native_return_descriptor,
+            0,
+        );
+        let mut context = ElephcEvalContext::new();
+        assert!(context.define_native_function("native_probe", native).is_ok());
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
-        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let _ = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
 
-        assert_eq!(values.output, "1x1x1xxx");
+        assert_eq!(values.output, "1x1x1x1xxx");
+    }
+
+    /// Verifies eval fragments can dispatch registered native AOT functions.
+    #[test]
+    fn execute_program_calls_registered_native_function() {
+        let program = parse_fragment(br#"return native_answer();"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let expected = values.int(42).expect("allocate fake result");
+        let native = NativeFunction::new(
+            expected.as_ptr().cast(),
+            fake_native_return_descriptor,
+            0,
+        );
+        assert!(
+            context
+                .define_native_function("native_answer", native)
+                .is_ok()
+        );
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(result, expected);
     }
 
     /// Verifies indexed array writes mutate an existing scope array.

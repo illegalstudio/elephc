@@ -435,6 +435,18 @@ echo call_user_func('dyn_eval_cuf', 4);
     assert_eq!(out, "5");
 }
 
+/// Verifies eval fragments can call AOT user functions registered in the eval context.
+#[test]
+fn test_eval_fragment_can_call_native_user_function() {
+    let out = compile_and_run(
+        r#"<?php
+function native_eval_add($x, $y) { return $x + $y; }
+eval('echo native_eval_add(4, 6); echo ":"; echo function_exists("native_eval_add");');
+"#,
+    );
+    assert_eq!(out, "10:1");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {

@@ -12,9 +12,52 @@
 //! - No Rust-owned layout is promised across the C ABI.
 
 use std::collections::HashMap;
+use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::EvalFunction;
+use crate::value::{RuntimeCell, RuntimeCellHandle};
+
+/// Native descriptor-invoker ABI registered by generated code for AOT functions.
+pub type NativeFunctionInvoker =
+    unsafe extern "C" fn(*mut c_void, *mut RuntimeCell) -> *mut RuntimeCell;
+
+/// Native AOT function callback metadata visible to runtime eval fragments.
+#[derive(Clone, Copy)]
+pub struct NativeFunction {
+    descriptor: *mut c_void,
+    invoker: NativeFunctionInvoker,
+    param_count: usize,
+}
+
+impl NativeFunction {
+    /// Creates callback metadata for a descriptor-compatible AOT function.
+    pub const fn new(
+        descriptor: *mut c_void,
+        invoker: NativeFunctionInvoker,
+        param_count: usize,
+    ) -> Self {
+        Self {
+            descriptor,
+            invoker,
+            param_count,
+        }
+    }
+
+    /// Returns the visible positional parameter count accepted by this callback.
+    pub const fn param_count(self) -> usize {
+        self.param_count
+    }
+
+    /// Invokes the descriptor-compatible callback with a boxed Mixed arg array.
+    ///
+    /// # Safety
+    /// `arg_array` must be a boxed Mixed indexed array whose elements are boxed
+    /// Mixed cells following the descriptor-invoker ABI.
+    pub unsafe fn call(self, arg_array: RuntimeCellHandle) -> RuntimeCellHandle {
+        RuntimeCellHandle::from_raw((self.invoker)(self.descriptor, arg_array.as_ptr()))
+    }
+}
 
 /// Process-level eval context passed opaquely across the C ABI.
 ///
@@ -24,6 +67,7 @@ use crate::eval_ir::EvalFunction;
 pub struct ElephcEvalContext {
     abi_version: u32,
     functions: HashMap<String, EvalFunction>,
+    native_functions: HashMap<String, NativeFunction>,
 }
 
 impl ElephcEvalContext {
@@ -32,6 +76,7 @@ impl ElephcEvalContext {
         Self {
             abi_version: ABI_VERSION,
             functions: HashMap::new(),
+            native_functions: HashMap::new(),
         }
     }
 
@@ -41,6 +86,7 @@ impl ElephcEvalContext {
         Self {
             abi_version,
             functions: HashMap::new(),
+            native_functions: HashMap::new(),
         }
     }
 
@@ -56,10 +102,24 @@ impl ElephcEvalContext {
         function: EvalFunction,
     ) -> Result<(), EvalFunction> {
         let name = name.into();
-        if self.functions.contains_key(&name) {
+        if self.functions.contains_key(&name) || self.native_functions.contains_key(&name) {
             return Err(function);
         }
         self.functions.insert(name, function);
+        Ok(())
+    }
+
+    /// Defines a generated native function callback, failing if the name already exists.
+    pub fn define_native_function(
+        &mut self,
+        name: impl Into<String>,
+        function: NativeFunction,
+    ) -> Result<(), NativeFunction> {
+        let name = name.into();
+        if self.functions.contains_key(&name) || self.native_functions.contains_key(&name) {
+            return Err(function);
+        }
+        self.native_functions.insert(name, function);
         Ok(())
     }
 
@@ -68,9 +128,14 @@ impl ElephcEvalContext {
         self.functions.get(name)
     }
 
-    /// Returns true when the context has a dynamic function with this lowercase PHP name.
+    /// Returns a native AOT function callback by its lowercase PHP function name.
+    pub fn native_function(&self, name: &str) -> Option<NativeFunction> {
+        self.native_functions.get(name).copied()
+    }
+
+    /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
     pub fn has_function(&self, name: &str) -> bool {
-        self.functions.contains_key(name)
+        self.functions.contains_key(name) || self.native_functions.contains_key(name)
     }
 }
 

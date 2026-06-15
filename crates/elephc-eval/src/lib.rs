@@ -27,10 +27,12 @@ use abi::{
     ElephcEvalContext, ElephcEvalResult, ElephcEvalScope, ABI_VERSION, SCOPE_FLAG_BY_REF,
     SCOPE_FLAG_DIRTY, SCOPE_FLAG_OWNED, SCOPE_FLAG_PRESENT, SCOPE_FLAG_UNSET,
 };
+use context::{NativeFunction, NativeFunctionInvoker};
 use errors::EvalStatus;
 #[cfg(not(test))]
 use runtime_hooks::ElephcRuntimeOps;
 use scope::{ScopeCellOwnership, ScopeEntry};
+use std::ffi::c_void;
 use std::slice;
 use value::{RuntimeCell, RuntimeCellHandle};
 
@@ -221,6 +223,27 @@ pub unsafe extern "C" fn __elephc_eval_function_exists(
     .unwrap_or(0)
 }
 
+/// Registers a generated native PHP function callback in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `name_ptr` must be readable for
+/// `name_len` bytes when `name_len > 0`. `descriptor` and `invoker` must follow
+/// the descriptor-invoker ABI emitted by generated code.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    descriptor: *mut c_void,
+    invoker: Option<NativeFunctionInvoker>,
+    param_count: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_inner(ctx, name_ptr, name_len, descriptor, invoker, param_count)
+    })
+    .unwrap_or(0)
+}
+
 /// Calls a zero-argument function previously declared through `eval()`.
 ///
 /// # Safety
@@ -282,6 +305,42 @@ unsafe fn eval_function_exists_inner(
         return 0;
     };
     i32::from(context.has_function(&name.to_ascii_lowercase()))
+}
+
+/// Runs the native registration ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function`; invalid handles, names, or
+/// callback pointers fail closed as `false`.
+unsafe fn register_native_function_inner(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    descriptor: *mut c_void,
+    invoker: Option<NativeFunctionInvoker>,
+    param_count: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION || descriptor.is_null() {
+        return 0;
+    }
+    let Some(invoker) = invoker else {
+        return 0;
+    };
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+        return 0;
+    };
+    let Ok(param_count) = usize::try_from(param_count) else {
+        return 0;
+    };
+    let function = NativeFunction::new(descriptor, invoker, param_count);
+    i32::from(
+        context
+            .define_native_function(name.to_ascii_lowercase(), function)
+            .is_ok(),
+    )
 }
 
 /// Runs the dynamic function-call ABI body after installing a panic boundary.
@@ -492,6 +551,14 @@ fn release_scope_cell(cell: RuntimeCellHandle) {
 mod tests {
     use super::*;
 
+    /// Test native invoker placeholder used only to validate ABI registration.
+    unsafe extern "C" fn fake_native_invoker(
+        _descriptor: *mut c_void,
+        _args: *mut RuntimeCell,
+    ) -> *mut RuntimeCell {
+        std::ptr::null_mut()
+    }
+
     /// Verifies the exported version entry point reports the crate ABI constant.
     #[test]
     fn abi_version_matches_constant() {
@@ -555,6 +622,31 @@ mod tests {
 
         assert_eq!(existing_result, 1);
         assert_eq!(missing_result, 0);
+    }
+
+    /// Verifies native AOT registration makes functions visible through the ABI probe.
+    #[test]
+    fn register_native_function_reports_function_exists() {
+        let mut ctx = ElephcEvalContext::new();
+        let name = b"NATIVE_PROBE";
+        let descriptor = 1usize as *mut c_void;
+
+        let registered = unsafe {
+            __elephc_eval_register_native_function(
+                &mut ctx,
+                name.as_ptr(),
+                name.len() as u64,
+                descriptor,
+                Some(fake_native_invoker),
+                0,
+            )
+        };
+        let exists = unsafe {
+            __elephc_eval_function_exists(&ctx, b"native_probe".as_ptr(), 12)
+        };
+
+        assert_eq!(registered, 1);
+        assert_eq!(exists, 1);
     }
 
     /// Verifies scope allocation returns an empty opaque activation scope handle.
