@@ -109,6 +109,7 @@ $trimmed = eval('return trim("  boxed  ") . ":" . ltrim("0007", "0") . ":" . cho
 $aggregates = eval('return array_sum([1, 2, 3]) . ":" . array_product([2, 3, 4]);');
 $named_builtins = eval('return strlen(string: "eval") . ":" . (str_contains(...["haystack" => "dynamic eval", "needle" => "eval"]) ? "yes" : "no");');
 $array_projection = eval('$vals = array_values(["a" => 10, "b" => 20]); $keys = array_keys(["a" => 10, "b" => 20]); return $keys[0] . ":" . $vals[1];');
+$mixed_literal = eval('return [2 => "two", "tail"][3];');
 $append_items = eval('$items = []; $items[] = "left"; $items[] = "right"; return $items[0] . ":" . $items[1] . ":" . count($items);');
 $append_assoc = eval('$items = ["name" => "Ada"]; $items[] = "Grace"; return $items[0];');
 $array_key_probe = eval('$m = ["name" => null]; return (array_key_exists("name", $m) ? "present" : "missing") . ":" . (array_key_exists("age", $m) ? "bad" : "absent");');
@@ -171,6 +172,7 @@ echo "trimmed=" . $trimmed . "\n";
 echo "aggregates=" . $aggregates . "\n";
 echo "named-builtins=" . $named_builtins . "\n";
 echo "array-projection=" . $array_projection . "\n";
+echo "mixed-literal=" . $mixed_literal . "\n";
 echo "append-items=" . $append_items . "\n";
 echo "append-assoc=" . $append_assoc . "\n";
 echo "array-key-exists=" . $array_key_probe . "\n";

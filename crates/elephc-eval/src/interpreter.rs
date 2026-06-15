@@ -2573,16 +2573,21 @@ fn eval_assoc_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let array = values.assoc_new(elements.len())?;
-    let mut next_index = 0;
+    let mut next_key = None;
     for element in elements {
         let (key, value) = match element {
             EvalArrayElement::Value(value) => {
-                let key = values.int(next_index)?;
-                next_index += 1;
+                let key = match next_key {
+                    Some(next_key) => next_key,
+                    None => values.int(0)?,
+                };
+                let one = values.int(1)?;
+                next_key = Some(values.add(key, one)?);
                 (key, value)
             }
             EvalArrayElement::KeyValue { key, value } => {
                 let key = eval_expr(key, context, scope, values)?;
+                next_key = eval_array_next_key_after_explicit_key(key, next_key, values)?;
                 (key, value)
             }
         };
@@ -2590,6 +2595,30 @@ fn eval_assoc_array(
         let _ = values.array_set(array, key, value)?;
     }
     Ok(array)
+}
+
+/// Advances an array literal's automatic key after an explicit PHP integer key.
+fn eval_array_next_key_after_explicit_key(
+    key: RuntimeCellHandle,
+    current_next_key: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if values.type_tag(key)? != EVAL_TAG_INT {
+        return Ok(current_next_key);
+    }
+    let one = values.int(1)?;
+    let candidate = values.add(key, one)?;
+    let replace = if let Some(current_next_key) = current_next_key {
+        let is_greater = values.compare(EvalBinOp::Gt, candidate, current_next_key)?;
+        values.truthy(is_greater)?
+    } else {
+        true
+    };
+    Ok(if replace {
+        Some(candidate)
+    } else {
+        current_next_key
+    })
 }
 
 /// Converts one EvalIR constant into a runtime-cell handle.
@@ -4022,6 +4051,45 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::String("Ada".to_string()));
+    }
+
+    /// Verifies unkeyed assoc literal entries start at zero after string keys.
+    #[test]
+    fn execute_program_assoc_array_literal_unkeyed_after_string_key_starts_at_zero() {
+        let program = parse_fragment(br#"return ["name" => "Ada", "Grace"][0];"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("Grace".to_string()));
+    }
+
+    /// Verifies unkeyed assoc literal entries use one plus the largest integer key.
+    #[test]
+    fn execute_program_assoc_array_literal_unkeyed_after_positive_int_key() {
+        let program =
+            parse_fragment(br#"return [2 => "two", "tail"][3];"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
+    }
+
+    /// Verifies unkeyed assoc literal entries preserve PHP's negative-key rule.
+    #[test]
+    fn execute_program_assoc_array_literal_unkeyed_after_negative_int_key() {
+        let program =
+            parse_fragment(br#"return [-2 => "minus", "tail"][-1];"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
     }
 
     /// Verifies nested eval calls parse and execute against the same dynamic scope.

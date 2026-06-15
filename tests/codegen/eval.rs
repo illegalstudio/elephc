@@ -615,6 +615,21 @@ fn test_eval_assoc_array_literal_and_string_key_read() {
     assert_eq!(out, "Ada");
 }
 
+/// Verifies eval associative-array literals use PHP's next automatic key.
+#[test]
+fn test_eval_assoc_array_literal_unkeyed_entries_use_next_key() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return ["name" => "Ada", "Grace"][0];');
+echo ":";
+echo eval('return [2 => "two", "tail"][3];');
+echo ":";
+echo eval('return [-2 => "minus", "tail"][-1];');
+"#,
+    );
+    assert_eq!(out, "Grace:tail:tail");
+}
+
 /// Verifies eval-created associative arrays remain visible to native code.
 #[test]
 fn test_eval_created_assoc_array_is_visible_after_eval() {
