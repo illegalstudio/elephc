@@ -975,10 +975,10 @@ fn eval_magic_const(
         EvalMagicConst::Dir => values.string(context.call_dir()),
         EvalMagicConst::Line(line) => values.int(*line),
         EvalMagicConst::Function => values.string(context.current_function().unwrap_or("")),
-        EvalMagicConst::Class
-        | EvalMagicConst::Method
-        | EvalMagicConst::Namespace
-        | EvalMagicConst::Trait => values.string(""),
+        EvalMagicConst::Method => values.string(context.current_function().unwrap_or("")),
+        EvalMagicConst::Class | EvalMagicConst::Namespace | EvalMagicConst::Trait => {
+            values.string("")
+        }
     }
 }
 
@@ -1827,11 +1827,11 @@ mod tests {
         assert_eq!(values.get(result), FakeValue::Int(5));
     }
 
-    /// Verifies `__FUNCTION__` inside an eval-declared function keeps the declaration spelling.
+    /// Verifies function-scope magic constants keep the eval declaration spelling.
     #[test]
-    fn execute_program_magic_function_uses_eval_declared_name() {
+    fn execute_program_magic_function_and_method_use_eval_declared_name() {
         let program = parse_fragment(
-            br#"function DynMagicCase() { return __FUNCTION__; } return dynmagiccase();"#,
+            br#"function DynMagicCase() { return __FUNCTION__ . ":" . __METHOD__; } return dynmagiccase();"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -1841,7 +1841,7 @@ mod tests {
 
         assert_eq!(
             values.get(result),
-            FakeValue::String("DynMagicCase".to_string())
+            FakeValue::String("DynMagicCase:DynMagicCase".to_string())
         );
     }
 
