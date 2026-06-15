@@ -123,6 +123,17 @@ eval('echo "a" == "a"; echo "a" != "b"; echo "" == null; echo "10" == 10; echo "
     assert_eq!(out, "111111");
 }
 
+/// Verifies strict scalar equality in eval preserves PHP type identity.
+#[test]
+fn test_eval_scalar_strict_equality_executes_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo "10" == 10; echo "10" === 10; echo "10" === "10"; echo "10" !== 10; echo null === null;');
+"#,
+    );
+    assert_eq!(out, "1111");
+}
+
 /// Verifies eval logical operators short-circuit before evaluating unsupported RHS calls.
 #[test]
 fn test_eval_logical_operators_short_circuit() {

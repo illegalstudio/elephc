@@ -50,8 +50,10 @@ enum TokenKind {
     Dot,
     Equal,
     EqualEqual,
+    EqualEqualEqual,
     Bang,
     NotEqual,
+    NotEqualEqual,
     AndAnd,
     OrOr,
     Less,
@@ -138,7 +140,12 @@ impl<'a> Lexer<'a> {
                 self.bump_char();
                 if self.peek_char() == Some('=') {
                     self.bump_char();
-                    Ok(TokenKind::EqualEqual)
+                    if self.peek_char() == Some('=') {
+                        self.bump_char();
+                        Ok(TokenKind::EqualEqualEqual)
+                    } else {
+                        Ok(TokenKind::EqualEqual)
+                    }
                 } else if self.peek_char() == Some('>') {
                     self.bump_char();
                     Ok(TokenKind::FatArrow)
@@ -150,7 +157,12 @@ impl<'a> Lexer<'a> {
                 self.bump_char();
                 if self.peek_char() == Some('=') {
                     self.bump_char();
-                    Ok(TokenKind::NotEqual)
+                    if self.peek_char() == Some('=') {
+                        self.bump_char();
+                        Ok(TokenKind::NotEqualEqual)
+                    } else {
+                        Ok(TokenKind::NotEqual)
+                    }
                 } else {
                     Ok(TokenKind::Bang)
                 }
@@ -788,7 +800,7 @@ impl Parser {
         Ok(expr)
     }
 
-    /// Parses left-associative loose equality and inequality comparisons.
+    /// Parses left-associative equality and inequality comparisons.
     fn parse_equality(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_ordering()?;
         loop {
@@ -796,6 +808,10 @@ impl Parser {
                 EvalBinOp::LooseEq
             } else if self.consume(TokenKind::NotEqual) {
                 EvalBinOp::LooseNotEq
+            } else if self.consume(TokenKind::EqualEqualEqual) {
+                EvalBinOp::StrictEq
+            } else if self.consume(TokenKind::NotEqualEqual) {
+                EvalBinOp::StrictNotEq
             } else {
                 break;
             };
@@ -1418,6 +1434,29 @@ mod tests {
                 op: EvalBinOp::LooseNotEq,
                 left: Box::new(EvalExpr::Const(EvalConst::String("a".to_string()))),
                 right: Box::new(EvalExpr::Const(EvalConst::String("b".to_string()))),
+            }))]
+        );
+    }
+
+    /// Verifies strict equality operators parse as distinct EvalIR comparisons.
+    #[test]
+    fn parse_fragment_accepts_strict_equality_source() {
+        let program = parse_fragment(br#"return "10" === "10" && "10" !== 10;"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::LogicalAnd,
+                left: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::StrictEq,
+                    left: Box::new(EvalExpr::Const(EvalConst::String("10".to_string()))),
+                    right: Box::new(EvalExpr::Const(EvalConst::String("10".to_string()))),
+                }),
+                right: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::StrictNotEq,
+                    left: Box::new(EvalExpr::Const(EvalConst::String("10".to_string()))),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(10))),
+                }),
             }))]
         );
     }
