@@ -737,6 +737,21 @@ echo ":"; echo function_exists("strtoupper"); echo function_exists("strtolower")
     assert_eq!(out, "HELLO WORLD:loud:Eval:lOUD:XY:zz:Case:cASE:1111");
 }
 
+/// Verifies eval `strrev()` reverses byte strings directly and by callable dispatch.
+#[test]
+fn test_eval_dispatches_strrev_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strrev("Hello"); echo ":";
+echo strrev(123); echo ":";
+echo call_user_func("strrev", "ABC"); echo ":";
+echo call_user_func_array("strrev", ["def"]);
+echo ":"; echo function_exists("strrev");');
+"#,
+    );
+    assert_eq!(out, "olleH:321:CBA:fed:1");
+}
+
 /// Verifies eval `str_contains()` supports direct and callable byte-string search.
 #[test]
 fn test_eval_dispatches_str_contains_builtin_call() {

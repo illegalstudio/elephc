@@ -457,6 +457,18 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the sqrt wrapper frame
     emitter.instruction("ret");                                                 // return the boxed sqrt result to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_strrev");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while casting and reversing
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across helper calls
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_cast_string");                           // cast the boxed eval argument to a PHP string pair
+    emitter.instruction("bl __rt_strrev");                                      // reverse the PHP byte string into concat storage
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the reversed string for Rust
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the strrev wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed reversed string to Rust
+
     label_c_global(emitter, "__elephc_eval_value_fdiv");
     emitter.instruction("sub sp, sp, #32");                                     // allocate wrapper slots for the right operand and left double
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
@@ -1435,6 +1447,19 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box the sqrt result into a Mixed cell
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed sqrt result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_strrev");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_string input
+    emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed eval argument to a PHP string pair
+    emitter.instruction("call __rt_strrev");                                    // reverse the PHP byte string into concat storage
+    emitter.instruction("mov rdi, rax");                                        // move the reversed string pointer into mixed value_lo
+    emitter.instruction("mov rsi, rdx");                                        // move the reversed string length into mixed value_hi
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the reversed string for Rust
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed reversed string to Rust
 
     label_c_global(emitter, "__elephc_eval_value_fdiv");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
