@@ -240,6 +240,21 @@ eval('for ($i = 0; $i < 3; $i += 1) { echo $i; }');
     assert_eq!(out, "v15:012");
 }
 
+/// Verifies eval simple variable increment and decrement statements execute in loops.
+#[test]
+fn test_eval_inc_dec_statements_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$i = 1; $i++; ++$i; $i--; --$i; echo $i;');
+echo ":";
+eval('for ($j = 0; $j < 3; $j++) { echo $j; }');
+echo ":";
+eval('for ($k = 3; $k > 0; --$k) { echo $k; }');
+"#,
+    );
+    assert_eq!(out, "1:012:321");
+}
+
 /// Verifies eval if/else branches use PHP truthiness and update the caller scope.
 #[test]
 fn test_eval_if_else_updates_scope() {

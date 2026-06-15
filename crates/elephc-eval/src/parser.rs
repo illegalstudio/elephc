@@ -44,8 +44,10 @@ enum TokenKind {
     Float(f64),
     String(String),
     Plus,
+    PlusPlus,
     PlusEqual,
     Minus,
+    MinusMinus,
     MinusEqual,
     Arrow,
     Star,
@@ -123,7 +125,10 @@ impl<'a> Lexer<'a> {
             '0'..='9' => self.lex_number(),
             '+' => {
                 self.bump_char();
-                if self.peek_char() == Some('=') {
+                if self.peek_char() == Some('+') {
+                    self.bump_char();
+                    Ok(TokenKind::PlusPlus)
+                } else if self.peek_char() == Some('=') {
                     self.bump_char();
                     Ok(TokenKind::PlusEqual)
                 } else {
@@ -135,6 +140,9 @@ impl<'a> Lexer<'a> {
                 if self.peek_char() == Some('>') {
                     self.bump_char();
                     Ok(TokenKind::Arrow)
+                } else if self.peek_char() == Some('-') {
+                    self.bump_char();
+                    Ok(TokenKind::MinusMinus)
                 } else if self.peek_char() == Some('=') {
                     self.bump_char();
                     Ok(TokenKind::MinusEqual)
@@ -484,11 +492,17 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "switch") => self.parse_switch_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "unset") => self.parse_unset_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
+            TokenKind::PlusPlus | TokenKind::MinusMinus => self.parse_prefix_inc_dec_stmt(true),
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(true)
             }
             TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::LBracket) => {
                 self.parse_array_set_stmt(name.clone())
+            }
+            TokenKind::DollarIdent(name)
+                if matches!(self.peek(), TokenKind::PlusPlus | TokenKind::MinusMinus) =>
+            {
+                self.parse_postfix_inc_dec_stmt(name.clone(), true)
             }
             TokenKind::DollarIdent(name) if assignment_op(self.peek()).is_some() => {
                 let name = name.clone();
@@ -646,11 +660,17 @@ impl Parser {
     /// Parses one statement-like `for` clause without consuming a delimiter.
     fn parse_for_clause_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         match self.current() {
+            TokenKind::PlusPlus | TokenKind::MinusMinus => self.parse_prefix_inc_dec_stmt(false),
             TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::LBracket) => {
                 self.parse_array_set_clause(name.clone())
             }
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(false)
+            }
+            TokenKind::DollarIdent(name)
+                if matches!(self.peek(), TokenKind::PlusPlus | TokenKind::MinusMinus) =>
+            {
+                self.parse_postfix_inc_dec_stmt(name.clone(), false)
             }
             TokenKind::DollarIdent(name) if assignment_op(self.peek()).is_some() => {
                 let name = name.clone();
@@ -691,6 +711,39 @@ impl Parser {
         }
         let value = assignment_value(&name, op, value);
         Ok(vec![EvalStmt::StoreVar { name, value }])
+    }
+
+    /// Parses prefix `++$name` and `--$name` as simple statement effects.
+    fn parse_prefix_inc_dec_stmt(
+        &mut self,
+        require_semicolon: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let increment = matches!(self.current(), TokenKind::PlusPlus);
+        self.advance();
+        let TokenKind::DollarIdent(name) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let name = name.clone();
+        self.advance();
+        if require_semicolon {
+            self.expect_semicolon()?;
+        }
+        Ok(vec![inc_dec_store(name, increment)])
+    }
+
+    /// Parses postfix `$name++` and `$name--` as simple statement effects.
+    fn parse_postfix_inc_dec_stmt(
+        &mut self,
+        name: String,
+        require_semicolon: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let increment = matches!(self.current(), TokenKind::PlusPlus);
+        self.advance();
+        if require_semicolon {
+            self.expect_semicolon()?;
+        }
+        Ok(vec![inc_dec_store(name, increment)])
     }
 
     /// Parses `$object->property` as either an expression statement or property write.
@@ -1365,6 +1418,22 @@ fn assignment_value(name: &str, op: Option<EvalBinOp>, value: EvalExpr) -> EvalE
     }
 }
 
+/// Builds the StoreVar statement for a simple variable increment or decrement.
+fn inc_dec_store(name: String, increment: bool) -> EvalStmt {
+    EvalStmt::StoreVar {
+        value: EvalExpr::Binary {
+            op: if increment {
+                EvalBinOp::Add
+            } else {
+                EvalBinOp::Sub
+            },
+            left: Box::new(EvalExpr::LoadVar(name.clone())),
+            right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+        },
+        name,
+    }
+}
+
 /// Compares a source identifier to a PHP keyword using ASCII case-insensitive rules.
 fn ident_eq(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected)
@@ -1428,6 +1497,21 @@ mod tests {
                         right: Box::new(EvalExpr::Const(EvalConst::String("ok".to_string()))),
                     },
                 },
+            ]
+        );
+    }
+
+    /// Verifies simple variable increment and decrement statements lower to StoreVar.
+    #[test]
+    fn parse_fragment_accepts_inc_dec_statement_source() {
+        let program = parse_fragment(br#"$i++; ++$j; $k--; --$m;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[
+                inc_dec_store("i".to_string(), true),
+                inc_dec_store("j".to_string(), true),
+                inc_dec_store("k".to_string(), false),
+                inc_dec_store("m".to_string(), false),
             ]
         );
     }
