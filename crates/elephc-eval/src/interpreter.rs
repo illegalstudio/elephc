@@ -29,6 +29,12 @@ enum EvalControl {
     Continue,
 }
 
+/// One already evaluated function-like call argument.
+struct EvaluatedCallArg {
+    name: Option<String>,
+    value: RuntimeCellHandle,
+}
+
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
     /// Creates a runtime indexed-array cell with room for at least `capacity` elements.
@@ -1089,13 +1095,11 @@ fn eval_call_user_func_array_with_values(
     if callback.contains("::") {
         return Err(EvalStatus::UnsupportedConstruct);
     }
-    let len = values.array_len(arg_array)?;
-    let mut evaluated_args = Vec::with_capacity(len);
-    for index in 0..len {
-        let index = values.int(index as i64)?;
-        evaluated_args.push(values.array_get(arg_array, index)?);
+    if !values.is_array_like(arg_array)? {
+        return Err(EvalStatus::RuntimeFatal);
     }
-    eval_callable_with_values(&callback, evaluated_args, context, values)
+    let evaluated_args = eval_array_call_arg_values(arg_array, values)?;
+    eval_callable_with_call_array_args(&callback, evaluated_args, context, values)
 }
 
 /// Dispatches `call_user_func` after its callback and arguments are already evaluated.
@@ -1130,6 +1134,34 @@ fn eval_callable_with_values(
         return eval_dynamic_function_with_values(&function, evaluated_args, context, values);
     }
     if let Some(function) = context.native_function(name) {
+        return eval_native_function_with_values(function, evaluated_args, values);
+    }
+    Err(EvalStatus::UnsupportedConstruct)
+}
+
+/// Invokes a callable with arguments that may carry `call_user_func_array` names.
+fn eval_callable_with_call_array_args(
+    name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
+        let evaluated_args = evaluated_args.into_iter().map(|arg| arg.value).collect();
+        return eval_callable_with_values(name, evaluated_args, context, values);
+    }
+    if eval_php_visible_builtin_exists(name) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Some(function) = context.function(name).cloned() {
+        let evaluated_args = bind_evaluated_function_args(function.params(), evaluated_args)?;
+        return eval_dynamic_function_with_values(&function, evaluated_args, context, values);
+    }
+    if let Some(function) = context.native_function(name) {
+        if function.param_names().len() != function.param_count() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let evaluated_args = bind_evaluated_function_args(function.param_names(), evaluated_args)?;
         return eval_native_function_with_values(function, evaluated_args, values);
     }
     Err(EvalStatus::UnsupportedConstruct)
@@ -2154,8 +2186,18 @@ fn eval_function_call_args(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    let mut bound_args = vec![None; params.len()];
-    let mut next_positional = 0;
+    let evaluated_args = eval_call_arg_values(args, context, caller_scope, values)?;
+    bind_evaluated_function_args(params, evaluated_args)
+}
+
+/// Evaluates source-order call arguments while preserving named-argument metadata.
+fn eval_call_arg_values(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    let mut evaluated_args = Vec::with_capacity(args.len());
     let mut saw_named = false;
 
     for arg in args {
@@ -2167,33 +2209,17 @@ fn eval_function_call_args(
             if !values.is_array_like(spread)? {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let len = values.array_len(spread)?;
-            for position in 0..len {
-                let key = values.array_iter_key(spread, position)?;
-                let value = values.array_get(spread, key)?;
-                match values.type_tag(key)? {
-                    EVAL_TAG_INT => {
-                        if saw_named {
-                            return Err(EvalStatus::RuntimeFatal);
-                        }
-                        bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, value)?;
-                    }
-                    EVAL_TAG_STRING => {
-                        saw_named = true;
-                        let name = values.string_bytes(key)?;
-                        let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
-                        bind_dynamic_named_arg(params, &mut bound_args, &name, value)?;
-                    }
-                    _ => return Err(EvalStatus::RuntimeFatal),
-                }
-            }
+            append_unpacked_call_arg_values(spread, &mut evaluated_args, &mut saw_named, values)?;
             continue;
         }
 
         if let Some(name) = arg.name() {
             saw_named = true;
             let value = eval_expr(arg.value(), context, caller_scope, values)?;
-            bind_dynamic_named_arg(params, &mut bound_args, name, value)?;
+            evaluated_args.push(EvaluatedCallArg {
+                name: Some(name.to_string()),
+                value,
+            });
             continue;
         }
 
@@ -2201,7 +2227,71 @@ fn eval_function_call_args(
             return Err(EvalStatus::RuntimeFatal);
         }
         let value = eval_expr(arg.value(), context, caller_scope, values)?;
-        bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, value)?;
+        evaluated_args.push(EvaluatedCallArg { name: None, value });
+    }
+
+    Ok(evaluated_args)
+}
+
+/// Converts a `call_user_func_array` argument array into ordered call arguments.
+fn eval_array_call_arg_values(
+    arg_array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    let len = values.array_len(arg_array)?;
+    let mut evaluated_args = Vec::with_capacity(len);
+    let mut saw_named = false;
+    append_unpacked_call_arg_values(arg_array, &mut evaluated_args, &mut saw_named, values)?;
+    Ok(evaluated_args)
+}
+
+/// Appends one unpacked array's values using PHP named-argument key semantics.
+fn append_unpacked_call_arg_values(
+    array: RuntimeCellHandle,
+    evaluated_args: &mut Vec<EvaluatedCallArg>,
+    saw_named: &mut bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let len = values.array_len(array)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        match values.type_tag(key)? {
+            EVAL_TAG_INT => {
+                if *saw_named {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                evaluated_args.push(EvaluatedCallArg { name: None, value });
+            }
+            EVAL_TAG_STRING => {
+                *saw_named = true;
+                let name = values.string_bytes(key)?;
+                let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
+                evaluated_args.push(EvaluatedCallArg {
+                    name: Some(name),
+                    value,
+                });
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        }
+    }
+    Ok(())
+}
+
+/// Binds evaluated positional and named values to declared parameter order.
+fn bind_evaluated_function_args(
+    params: &[String],
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let mut bound_args = vec![None; params.len()];
+    let mut next_positional = 0;
+
+    for arg in evaluated_args {
+        if let Some(name) = arg.name {
+            bind_dynamic_named_arg(params, &mut bound_args, &name, arg.value)?;
+        } else {
+            bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, arg.value)?;
+        }
     }
 
     bound_args
@@ -4012,6 +4102,38 @@ return call_user_func_array("dyn", [4, 5]);"#,
         assert_eq!(values.get(result), FakeValue::Int(9));
     }
 
+    /// Verifies `call_user_func_array` string keys bind eval-declared parameters by name.
+    #[test]
+    fn execute_program_call_user_func_array_binds_declared_named_args() {
+        let program = parse_fragment(
+            br#"function dyn($x, $y) { return ($x * 10) + $y; }
+return call_user_func_array("dyn", ["y" => 2, "x" => 1]);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(12));
+    }
+
+    /// Verifies `call_user_func_array` rejects positional values after named keys.
+    #[test]
+    fn execute_program_call_user_func_array_rejects_positional_after_named_arg() {
+        let program = parse_fragment(
+            br#"function dyn($x, $y) { return $x + $y; }
+return call_user_func_array("dyn", ["y" => 2, 1]);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values);
+
+        assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    }
+
     /// Verifies `call_user_func_array` inside eval can dispatch a supported builtin.
     #[test]
     fn execute_program_call_user_func_array_dispatches_builtin() {
@@ -4036,6 +4158,31 @@ return call_user_func_array("dyn", [4, 5]);"#,
         let expected = values.int(42).expect("allocate fake result");
         let native =
             NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 2);
+        assert!(context
+            .define_native_function("native_answer", native)
+            .is_ok());
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(result, expected);
+    }
+
+    /// Verifies `call_user_func_array` named keys can bind registered native parameters.
+    #[test]
+    fn execute_program_call_user_func_array_binds_registered_native_named_args() {
+        let program = parse_fragment(
+            br#"return call_user_func_array("native_answer", ["right" => 2, "left" => 1]);"#,
+        )
+        .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let expected = values.int(42).expect("allocate fake result");
+        let mut native =
+            NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 2);
+        assert!(native.set_param_name(0, "left"));
+        assert!(native.set_param_name(1, "right"));
         assert!(context
             .define_native_function("native_answer", native)
             .is_ok());
