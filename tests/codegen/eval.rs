@@ -160,6 +160,23 @@ echo eval('return !"x";');
     assert_eq!(out, "1:");
 }
 
+/// Verifies eval ternary operators short-circuit and return the selected branch.
+#[test]
+fn test_eval_ternary_executes_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return true ? "yes" : missing_eval_rhs();');
+echo ":";
+echo eval('return false ? missing_eval_rhs() : "no";');
+echo ":";
+echo eval('return "x" ?: "fallback";');
+echo ":";
+echo eval('return false ?: "fallback";');
+"#,
+    );
+    assert_eq!(out, "yes:no:x:fallback");
+}
+
 /// Verifies eval unary numeric operators execute through runtime numeric helpers.
 #[test]
 fn test_eval_unary_numeric_operators_execute_through_bridge() {

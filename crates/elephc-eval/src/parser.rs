@@ -61,6 +61,7 @@ enum TokenKind {
     Greater,
     GreaterEqual,
     FatArrow,
+    Question,
     Semicolon,
     LParen,
     RParen,
@@ -202,6 +203,10 @@ impl<'a> Lexer<'a> {
                 } else {
                     Ok(TokenKind::Greater)
                 }
+            }
+            '?' => {
+                self.bump_char();
+                Ok(TokenKind::Question)
             }
             ';' => {
                 self.bump_char();
@@ -782,7 +787,28 @@ impl Parser {
 
     /// Parses an expression using PHP-like logical, comparison, concatenation, and arithmetic precedence.
     fn parse_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
-        self.parse_logical_or()
+        self.parse_ternary()
+    }
+
+    /// Parses PHP ternary expressions, including the short `expr ?: fallback` form.
+    fn parse_ternary(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let condition = self.parse_logical_or()?;
+        if !self.consume(TokenKind::Question) {
+            return Ok(condition);
+        }
+        let then_branch = if self.consume(TokenKind::Colon) {
+            None
+        } else {
+            let expr = self.parse_expr()?;
+            self.expect(TokenKind::Colon)?;
+            Some(Box::new(expr))
+        };
+        let else_branch = self.parse_expr()?;
+        Ok(EvalExpr::Ternary {
+            condition: Box::new(condition),
+            then_branch,
+            else_branch: Box::new(else_branch),
+        })
     }
 
     /// Parses left-associative logical OR with lower precedence than logical AND.
@@ -1511,6 +1537,42 @@ mod tests {
                     right: Box::new(EvalExpr::LoadVar("b".to_string())),
                 }),
                 right: Box::new(EvalExpr::Const(EvalConst::Bool(false))),
+            }))]
+        );
+    }
+
+    /// Verifies ternary expressions parse below logical OR and preserve both branches.
+    #[test]
+    fn parse_fragment_accepts_ternary_source() {
+        let program =
+            parse_fragment(br#"return $a || $b ? "yes" : "no";"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Ternary {
+                condition: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::LogicalOr,
+                    left: Box::new(EvalExpr::LoadVar("a".to_string())),
+                    right: Box::new(EvalExpr::LoadVar("b".to_string())),
+                }),
+                then_branch: Some(Box::new(EvalExpr::Const(EvalConst::String(
+                    "yes".to_string()
+                )))),
+                else_branch: Box::new(EvalExpr::Const(EvalConst::String("no".to_string()))),
+            }))]
+        );
+    }
+
+    /// Verifies PHP's short ternary form omits the explicit then branch in EvalIR.
+    #[test]
+    fn parse_fragment_accepts_short_ternary_source() {
+        let program =
+            parse_fragment(br#"return $name ?: "fallback";"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Ternary {
+                condition: Box::new(EvalExpr::LoadVar("name".to_string())),
+                then_branch: None,
+                else_branch: Box::new(EvalExpr::Const(EvalConst::String("fallback".to_string()))),
             }))]
         );
     }
