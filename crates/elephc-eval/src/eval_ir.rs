@@ -191,5 +191,7 @@ pub enum EvalBinOp {
 /// Unary operations supported by the initial EvalIR parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalUnaryOp {
+    Plus,
+    Negate,
     LogicalNot,
 }

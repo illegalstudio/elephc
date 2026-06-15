@@ -47,6 +47,7 @@ $dynamic_call = eval('return plus_one(4);');
 $eval_native_call = eval('return compiled_add(2, 8);');
 $logic = eval('return true || missing_eval_rhs();');
 $not_false = eval('return !false;');
+$negative = eval('return -5 + +2;');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -59,6 +60,7 @@ echo "dynamic-call=" . $dynamic_call . "\n";
 echo "eval-native-call=" . $eval_native_call . "\n";
 echo "logic=" . $logic . "\n";
 echo "not-false=" . $not_false . "\n";
+echo "negative=" . $negative . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";
