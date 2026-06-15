@@ -417,6 +417,28 @@ echo function_exists("isset") . "x";');
     assert_eq!(out, "001110x");
 }
 
+/// Verifies eval `empty()` uses PHP truthiness without warning on missing variables.
+#[test]
+fn test_eval_empty_uses_php_truthiness_without_missing_warnings() {
+    let out = compile_and_run(
+        r#"<?php
+$nullish = null;
+$zero = 0;
+$empty = "";
+$zero_string = "0";
+$value = "x";
+eval('if (empty($missing)) { echo "1"; } else { echo "0"; }
+if (empty($nullish)) { echo "1"; } else { echo "0"; }
+if (empty($zero)) { echo "1"; } else { echo "0"; }
+if (empty($empty)) { echo "1"; } else { echo "0"; }
+if (empty($zero_string)) { echo "1"; } else { echo "0"; }
+if (empty($value)) { echo "1"; } else { echo "0"; }
+echo function_exists("empty") . "x";');
+"#,
+    );
+    assert_eq!(out, "111110x");
+}
+
 /// Verifies eval builtin dispatch can inspect arrays from the caller scope.
 #[test]
 fn test_eval_count_reads_scope_array() {

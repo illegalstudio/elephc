@@ -507,6 +507,7 @@ fn eval_call(
             eval_builtin_call_user_func_array(args, context, scope, values)
         }
         "count" => eval_builtin_count(args, context, scope, values),
+        "empty" => eval_builtin_empty(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
@@ -558,6 +559,37 @@ fn eval_builtin_isset(
         }
     }
     values.bool_value(true)
+}
+
+/// Evaluates PHP's `empty(...)` language construct over eval-visible values.
+fn eval_builtin_empty(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [arg] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let empty = eval_empty_arg(arg, context, scope, values)?;
+    values.bool_value(empty)
+}
+
+/// Evaluates one `empty` operand without warning or failing on missing variables.
+fn eval_empty_arg(
+    arg: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if let EvalExpr::LoadVar(name) = arg {
+        let Some(value) = scope.visible_cell(name) else {
+            return Ok(true);
+        };
+        return Ok(!values.truthy(value)?);
+    }
+    let value = eval_expr(arg, context, scope, values)?;
+    Ok(!values.truthy(value)?)
 }
 
 /// Evaluates one `isset` operand without allocating a null cell for missing variables.
@@ -1915,6 +1947,37 @@ if (isset($zero, $nullish)) { echo "1"; } else { echo "0"; }"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "001110");
+        assert_eq!(values.get(result), FakeValue::Null);
+    }
+
+    /// Verifies `empty` treats missing, null, and falsey values as empty.
+    #[test]
+    fn execute_program_empty_uses_php_truthiness_without_missing_warnings() {
+        let program = parse_fragment(
+            br#"if (empty($missing)) { echo "1"; } else { echo "0"; }
+if (empty($nullish)) { echo "1"; } else { echo "0"; }
+if (empty($zero)) { echo "1"; } else { echo "0"; }
+if (empty($empty_string)) { echo "1"; } else { echo "0"; }
+if (empty($zero_string)) { echo "1"; } else { echo "0"; }
+if (empty($value)) { echo "1"; } else { echo "0"; }"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let nullish = values.null().expect("create fake null");
+        let zero = values.int(0).expect("create fake int");
+        let empty_string = values.string("").expect("create fake empty string");
+        let zero_string = values.string("0").expect("create fake zero string");
+        let value = values.string("x").expect("create fake non-empty string");
+        scope.set("nullish", nullish, ScopeCellOwnership::Owned);
+        scope.set("zero", zero, ScopeCellOwnership::Owned);
+        scope.set("empty_string", empty_string, ScopeCellOwnership::Owned);
+        scope.set("zero_string", zero_string, ScopeCellOwnership::Owned);
+        scope.set("value", value, ScopeCellOwnership::Owned);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "111110");
         assert_eq!(values.get(result), FakeValue::Null);
     }
 
