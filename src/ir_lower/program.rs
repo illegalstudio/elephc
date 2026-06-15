@@ -113,6 +113,9 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                         features.eval = true;
                     }
                 }
+                Op::EvalFunctionCall => {
+                    features.eval = true;
+                }
                 Op::ExprCall | Op::CallableDescriptorInvoke => {
                     features.descriptor_invoker = true;
                 }

@@ -399,6 +399,18 @@ eval('echo dyn_eval_inc(4);');
     assert_eq!(out, "5");
 }
 
+/// Verifies native code can call a zero-argument function declared by eval.
+#[test]
+fn test_eval_declared_function_can_be_called_from_native_code() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_native() { return 42; }');
+echo dyn_eval_native();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {

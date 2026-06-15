@@ -130,6 +130,13 @@ impl Checker {
             return result;
         }
 
+        if self.eval_barrier_active {
+            for arg in args {
+                self.infer_type(arg, caller_env)?;
+            }
+            return Ok(PhpType::Mixed);
+        }
+
         let decl = self
             .fn_decls
             .get(name)

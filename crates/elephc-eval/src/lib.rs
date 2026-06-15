@@ -204,6 +204,67 @@ pub unsafe extern "C" fn __elephc_eval_execute(
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Calls a zero-argument function previously declared through `eval()`.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `name_ptr` must be readable for
+/// `name_len` bytes when `name_len > 0`, and `out` may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_call_function_zero_args(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        call_eval_function_zero_args_inner(ctx, name_ptr, name_len, out)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Runs the dynamic function-call ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_call_function_zero_args`; callers must provide a valid
+/// context and readable function-name bytes.
+#[cfg(not(test))]
+unsafe fn call_eval_function_zero_args_inner(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if !out.is_null() {
+        (*out).clear();
+    }
+    let mut values = ElephcRuntimeOps::new();
+    match interpreter::execute_context_function_zero_args(
+        context,
+        &name.to_ascii_lowercase(),
+        &mut values,
+    ) {
+        Ok(result) => {
+            if !out.is_null() {
+                (*out).kind = 0;
+                (*out).value_cell = result.as_ptr();
+                (*out).error = std::ptr::null_mut();
+            }
+            EvalStatus::Ok.code()
+        }
+        Err(status) => status.code(),
+    }
+}
+
 /// Runs the eval ABI body after the exported wrapper has installed a panic boundary.
 ///
 /// # Safety

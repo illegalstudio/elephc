@@ -145,6 +145,21 @@ pub fn execute_program_with_context(
     }
 }
 
+/// Executes a zero-argument function declared in the shared eval context.
+pub fn execute_context_function_zero_args(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    context
+        .function(name)
+        .cloned()
+        .map_or(Err(EvalStatus::UnsupportedConstruct), |function| {
+            let mut caller_scope = ElephcEvalScope::new();
+            eval_dynamic_function(&function, &[], context, &mut caller_scope, values)
+        })
+}
+
 /// Executes statements in source order and propagates the first eval `return`.
 fn execute_statements(
     statements: &[EvalStmt],

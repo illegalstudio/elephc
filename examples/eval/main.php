@@ -10,6 +10,7 @@ $meta = eval('return ["source" => "eval"];');
 $meta_count = eval('return count($meta);');
 eval('function plus_one($value) { return $value + 1; }');
 $dynamic_call = eval('return plus_one(4);');
+eval('function native_answer() { return 42; }');
 
 echo "x=" . $x . "\n";
 echo "created=" . $created . "\n";
@@ -17,4 +18,5 @@ echo "name=" . $profile["name"] . "\n";
 echo "source=" . $meta["source"] . "\n";
 echo "meta-count=" . $meta_count . "\n";
 echo "dynamic-call=" . $dynamic_call . "\n";
+echo "native-dynamic-call=" . native_answer() . "\n";
 echo "result=" . $result . "\n";

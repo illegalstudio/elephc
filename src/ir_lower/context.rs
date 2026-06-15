@@ -118,6 +118,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
+    eval_barrier_active: bool,
 }
 
 impl<'m, 'f> LoweringContext<'m, 'f> {
@@ -178,6 +179,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             pending_static_callable_result: None,
             closure_counter: 0,
             hidden_temp_counter: 0,
+            eval_barrier_active: false,
         }
     }
 
@@ -404,6 +406,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Applies the static part of the eval barrier to visible PHP local storage.
     pub(crate) fn apply_eval_barrier(&mut self) {
+        self.eval_barrier_active = true;
         self.declare_eval_context_local();
         self.declare_eval_scope_local();
         let local_names = self
@@ -433,6 +436,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 self.local_types.insert(name, PhpType::Mixed);
             }
         }
+    }
+
+    /// Returns true after this function has lowered an `eval()` call.
+    pub(crate) const fn has_eval_barrier(&self) -> bool {
+        self.eval_barrier_active
     }
 
     /// Declares a hidden owner slot for a promoted local ref-cell pointer.
@@ -847,6 +855,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::GeneratorNew
                     | Op::Call
                     | Op::FunctionVariantCall
+                    | Op::EvalFunctionCall
                     | Op::RuntimeCall
                     | Op::ExternCall
                     | Op::MethodCall

@@ -1545,6 +1545,21 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
             Some(expr.span),
         );
     }
+    if ctx.has_eval_barrier()
+        && args.is_empty()
+        && canonical_builtin_function_name(canonical).is_none()
+    {
+        let dynamic_name = php_symbol_key(canonical.trim_start_matches('\\'));
+        let data = ctx.intern_function_name(&dynamic_name);
+        return ctx.emit_value(
+            Op::EvalFunctionCall,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            PhpType::Mixed,
+            Op::EvalFunctionCall.default_effects(),
+            Some(expr.span),
+        );
+    }
     let data = ctx.intern_function_name(canonical);
     let value = ctx.emit_value(
         Op::BuiltinCall,
