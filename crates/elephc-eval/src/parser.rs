@@ -108,7 +108,7 @@ impl<'a> Lexer<'a> {
 
     /// Reads the next token from the source.
     fn next_token(&mut self) -> Result<TokenKind, EvalParseError> {
-        self.skip_ws();
+        self.skip_trivia()?;
         let Some(ch) = self.peek_char() else {
             return Ok(TokenKind::Eof);
         };
@@ -337,11 +337,44 @@ impl<'a> Lexer<'a> {
         Err(EvalParseError::UnterminatedString)
     }
 
-    /// Advances past ASCII and Unicode whitespace.
-    fn skip_ws(&mut self) {
-        while self.peek_char().is_some_and(char::is_whitespace) {
+    /// Advances past ASCII/Unicode whitespace and PHP comments.
+    fn skip_trivia(&mut self) -> Result<(), EvalParseError> {
+        loop {
+            while self.peek_char().is_some_and(char::is_whitespace) {
+                self.bump_char();
+            }
+            match (self.peek_char(), self.peek_next_char()) {
+                (Some('/'), Some('/')) => self.skip_line_comment(),
+                (Some('#'), _) => self.skip_line_comment(),
+                (Some('/'), Some('*')) => self.skip_block_comment()?,
+                _ => return Ok(()),
+            }
+        }
+    }
+
+    /// Advances past a `//` or `#` comment, including its trailing newline when present.
+    fn skip_line_comment(&mut self) {
+        while let Some(ch) = self.peek_char() {
+            self.bump_char();
+            if ch == '\n' {
+                break;
+            }
+        }
+    }
+
+    /// Advances past a `/* ... */` comment while preserving fragment line metadata.
+    fn skip_block_comment(&mut self) -> Result<(), EvalParseError> {
+        self.bump_char();
+        self.bump_char();
+        while let Some(ch) = self.peek_char() {
+            if ch == '*' && self.peek_next_char() == Some('/') {
+                self.bump_char();
+                self.bump_char();
+                return Ok(());
+            }
             self.bump_char();
         }
+        Err(EvalParseError::UnterminatedComment)
     }
 
     /// Returns the current char without advancing.
@@ -1483,6 +1516,28 @@ mod tests {
                 left: Box::new(EvalExpr::Magic(EvalMagicConst::File)),
                 right: Box::new(EvalExpr::Magic(EvalMagicConst::Dir)),
             }))]
+        );
+    }
+
+    /// Verifies PHP comments are skipped while preserving fragment line numbers.
+    #[test]
+    fn parse_fragment_skips_comments_and_preserves_line_metadata() {
+        let program = parse_fragment(b"// leading\n# hash\n/* block\ncomment */ return __LINE__;")
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Magic(
+                EvalMagicConst::Line(4)
+            )))]
+        );
+    }
+
+    /// Verifies unterminated block comments fail before partial EvalIR is returned.
+    #[test]
+    fn parse_fragment_rejects_unterminated_block_comment() {
+        assert_eq!(
+            parse_fragment(b"/* open").unwrap_err(),
+            EvalParseError::UnterminatedComment
         );
     }
 

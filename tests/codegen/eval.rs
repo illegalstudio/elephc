@@ -70,6 +70,17 @@ fn test_eval_print_return_value_is_one() {
     assert_eq!(out, "x1");
 }
 
+/// Verifies eval fragments accept PHP comments and keep line metadata aligned.
+#[test]
+fn test_eval_comments_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval("// leading\n# hash\n/* block\ncomment */ return __LINE__;");
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
 /// Verifies eval coerces null to an empty fragment and returns null.
 #[test]
 fn test_eval_null_argument_is_empty_fragment() {
