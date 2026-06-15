@@ -1,7 +1,7 @@
 //! Purpose:
 //! Integration tests for the initial `eval()` bridge wiring.
 //! Covers language-construct visibility, conditional bridge linking, and the
-//! base runtime interpreter path for scalar, branch, and indexed-array eval fragments.
+//! base runtime interpreter path for scalar, branch, indexed-array, and simple builtin eval fragments.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests eval` through Rust's test harness.
@@ -319,6 +319,29 @@ echo $x;
 fn test_eval_nested_eval_return_value_is_expression_result() {
     let out = compile_and_run(r#"<?php echo eval('return eval("return 9;");');"#);
     assert_eq!(out, "9");
+}
+
+/// Verifies eval can dispatch simple builtin calls through its dynamic call path.
+#[test]
+fn test_eval_dispatches_simple_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo STRLEN("abcd") . ":" . count([1, 2, 3]);');
+"#,
+    );
+    assert_eq!(out, "4:3");
+}
+
+/// Verifies eval builtin dispatch can inspect arrays from the caller scope.
+#[test]
+fn test_eval_count_reads_scope_array() {
+    let out = compile_and_run(
+        r#"<?php
+$items = eval('return ["a", "b"];');
+eval('echo count($items);');
+"#,
+    );
+    assert_eq!(out, "2");
 }
 
 /// Verifies `return` inside eval becomes the expression result of `eval(...)`.

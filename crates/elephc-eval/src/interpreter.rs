@@ -358,9 +358,20 @@ fn eval_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if name != "eval" {
-        return Err(EvalStatus::UnsupportedConstruct);
+    match name {
+        "count" => eval_builtin_count(args, scope, values),
+        "eval" => eval_nested_eval(args, scope, values),
+        "strlen" => eval_builtin_strlen(args, scope, values),
+        _ => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Evaluates nested `eval(...)` calls against the current materialized scope.
+fn eval_nested_eval(
+    args: &[EvalExpr],
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let [code] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
@@ -368,6 +379,36 @@ fn eval_call(
     let code = values.string_bytes(code)?;
     let program = parse_fragment(&code).map_err(|_| EvalStatus::ParseError)?;
     execute_program(&program, scope, values)
+}
+
+/// Evaluates the builtin `strlen(...)` for one PHP-coerced string argument.
+fn eval_builtin_strlen(
+    args: &[EvalExpr],
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, scope, values)?;
+    let bytes = values.string_bytes(value)?;
+    let len = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.int(len)
+}
+
+/// Evaluates the builtin `count(...)` for one runtime array-like argument.
+fn eval_builtin_count(
+    args: &[EvalExpr],
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, scope, values)?;
+    let len = values.array_len(value)?;
+    let len = i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.int(len)
 }
 
 /// Evaluates an indexed array literal into a boxed runtime Mixed array.
@@ -975,6 +1016,20 @@ mod tests {
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(5));
+    }
+
+    /// Verifies dynamic builtin calls inside eval dispatch through runtime value hooks.
+    #[test]
+    fn execute_program_dispatches_simple_builtins() {
+        let program =
+            parse_fragment(br#"return strlen("abc") + count([1, 2, 3]);"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(6));
     }
 
     /// Verifies indexed array writes mutate an existing scope array.

@@ -6,9 +6,11 @@ eval('$profile["name"] = "Grace";');
 eval('if ($x >= 3) { echo "x>=3\n"; }');
 eval('foreach ([1, 2] as $n) { echo "n=" . $n . "\n"; }');
 $meta = eval('return ["source" => "eval"];');
+$meta_count = eval('return count($meta);');
 
 echo "x=" . $x . "\n";
 echo "created=" . $created . "\n";
 echo "name=" . $profile["name"] . "\n";
 echo "source=" . $meta["source"] . "\n";
+echo "meta-count=" . $meta_count . "\n";
 echo "result=" . $result . "\n";
