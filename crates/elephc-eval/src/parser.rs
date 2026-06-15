@@ -378,6 +378,7 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Continue])
             }
+            TokenKind::Ident(name) if ident_eq(name, "do") => self.parse_do_while_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "echo") => {
                 self.advance();
                 let expr = self.parse_expr()?;
@@ -420,6 +421,21 @@ impl Parser {
                 Ok(vec![EvalStmt::Expr(expr)])
             }
         }
+    }
+
+    /// Parses `do { ... } while (expr);`.
+    fn parse_do_while_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let body = self.parse_block()?;
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "while")) {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let condition = self.parse_expr()?;
+        self.expect(TokenKind::RParen)?;
+        self.expect_semicolon()?;
+        Ok(vec![EvalStmt::DoWhile { body, condition }])
     }
 
     /// Parses `$name[index] = expr;` for indexed-array eval writes.
@@ -1570,6 +1586,26 @@ mod tests {
                         value: EvalExpr::Const(EvalConst::Bool(false)),
                     },
                 ],
+            }]
+        );
+    }
+
+    /// Verifies do/while fragments lower to body-first loop statements.
+    #[test]
+    fn parse_fragment_accepts_do_while_source() {
+        let program = parse_fragment(br#"do { echo $flag; $flag = false; } while ($flag);"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::DoWhile {
+                body: vec![
+                    EvalStmt::Echo(EvalExpr::LoadVar("flag".to_string())),
+                    EvalStmt::StoreVar {
+                        name: "flag".to_string(),
+                        value: EvalExpr::Const(EvalConst::Bool(false)),
+                    },
+                ],
+                condition: EvalExpr::LoadVar("flag".to_string()),
             }]
         );
     }

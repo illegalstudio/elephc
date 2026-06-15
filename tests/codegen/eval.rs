@@ -206,6 +206,19 @@ echo $i;
     assert_eq!(out, "3210");
 }
 
+/// Verifies eval do/while loops execute the body before checking the condition.
+#[test]
+fn test_eval_do_while_runs_body_before_condition() {
+    let out = compile_and_run(
+        r#"<?php
+$i = 0;
+eval('do { echo $i; $i = $i + 1; } while (false);');
+echo ":" . $i;
+"#,
+    );
+    assert_eq!(out, "0:1");
+}
+
 /// Verifies break and continue control a loop interpreted inside eval.
 #[test]
 fn test_eval_break_and_continue_control_loop() {
