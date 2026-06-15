@@ -752,7 +752,9 @@ fn eval_call(
         "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
-        "str_contains" => eval_builtin_str_contains(args, context, scope, values),
+        "str_contains" | "str_starts_with" | "str_ends_with" => {
+            eval_builtin_string_search(name, args, context, scope, values)
+        }
         "strlen" => eval_builtin_strlen(args, context, scope, values),
         "strtolower" | "strtoupper" => eval_builtin_string_case(name, args, context, scope, values),
         _ => {
@@ -885,6 +887,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "round"
             | "sqrt"
             | "str_contains"
+            | "str_ends_with"
+            | "str_starts_with"
             | "strlen"
             | "strtolower"
             | "strtoupper"
@@ -1081,11 +1085,11 @@ fn eval_builtin_with_values(
             let len = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
             values.int(len)?
         }
-        "str_contains" => {
+        "str_contains" | "str_starts_with" | "str_ends_with" => {
             let [haystack, needle] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_str_contains_result(*haystack, *needle, values)?
+            eval_string_search_result(name, *haystack, *needle, values)?
         }
         "strtolower" | "strtoupper" => {
             let [value] = evaluated_args else {
@@ -1292,8 +1296,9 @@ fn eval_type_predicate_result(
     values.bool_value(result)
 }
 
-/// Evaluates PHP's `str_contains(...)` over two eval expressions.
-fn eval_builtin_str_contains(
+/// Evaluates PHP's byte-string search predicates over two eval expressions.
+fn eval_builtin_string_search(
+    name: &str,
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -1304,22 +1309,30 @@ fn eval_builtin_str_contains(
     };
     let haystack = eval_expr(haystack, context, scope, values)?;
     let needle = eval_expr(needle, context, scope, values)?;
-    eval_str_contains_result(haystack, needle, values)
+    eval_string_search_result(name, haystack, needle, values)
 }
 
 /// Checks one converted haystack for one converted needle using PHP byte-string semantics.
-fn eval_str_contains_result(
+fn eval_string_search_result(
+    name: &str,
     haystack: RuntimeCellHandle,
     needle: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let haystack = values.string_bytes(haystack)?;
     let needle = values.string_bytes(needle)?;
-    let contains = needle.is_empty()
-        || haystack
-            .windows(needle.len())
-            .any(|window| window == needle);
-    values.bool_value(contains)
+    let matched = match name {
+        "str_contains" => {
+            needle.is_empty()
+                || haystack
+                    .windows(needle.len())
+                    .any(|window| window == needle)
+        }
+        "str_starts_with" => haystack.starts_with(&needle),
+        "str_ends_with" => haystack.ends_with(&needle),
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    values.bool_value(matched)
 }
 
 /// Evaluates PHP ASCII case-conversion string builtins over one eval expression.
@@ -3177,6 +3190,31 @@ return function_exists("str_contains");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "Y:N:E:C:A");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval prefix/suffix string search builtins use byte-string semantics.
+    #[test]
+    fn execute_program_dispatches_string_boundary_builtins() {
+        let program = parse_fragment(
+            br#"echo str_starts_with("Hello World", "Hello") ? "S" : "bad";
+echo str_starts_with("Hello", "World") ? "bad" : ":s";
+echo str_starts_with("Hello", "") ? ":se" : "bad";
+echo str_ends_with("Hello World", "World") ? ":E" : "bad";
+echo str_ends_with("Hello", "World") ? "bad" : ":e";
+echo str_ends_with("Hello", "") ? ":ee" : "bad";
+echo call_user_func("str_starts_with", "abc", "a") ? ":CS" : "bad";
+echo call_user_func_array("str_ends_with", ["abc", "c"]) ? ":CE" : "bad";
+echo ":"; echo function_exists("str_starts_with");
+return function_exists("str_ends_with");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "S:s:se:E:e:ee:CS:CE:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

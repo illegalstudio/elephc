@@ -659,6 +659,25 @@ echo ":"; echo function_exists("str_contains");');
     assert_eq!(out, "Y:N:E:C:A:1");
 }
 
+/// Verifies eval string boundary builtins support direct and callable byte-string checks.
+#[test]
+fn test_eval_dispatches_string_boundary_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo str_starts_with("Hello World", "Hello") ? "S" : "bad";
+echo str_starts_with("Hello", "World") ? "bad" : ":s";
+echo str_starts_with("Hello", "") ? ":se" : "bad";
+echo str_ends_with("Hello World", "World") ? ":E" : "bad";
+echo str_ends_with("Hello", "World") ? "bad" : ":e";
+echo str_ends_with("Hello", "") ? ":ee" : "bad";
+echo call_user_func("str_starts_with", "abc", "a") ? ":CS" : "bad";
+echo call_user_func_array("str_ends_with", ["abc", "c"]) ? ":CE" : "bad";
+echo ":"; echo function_exists("str_starts_with"); echo function_exists("str_ends_with");');
+"#,
+    );
+    assert_eq!(out, "S:s:se:E:e:ee:CS:CE:11");
+}
+
 /// Verifies eval scalar type-predicate builtins inspect boxed Mixed runtime tags.
 #[test]
 fn test_eval_dispatches_type_predicate_builtin_calls() {
