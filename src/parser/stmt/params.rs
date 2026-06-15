@@ -39,7 +39,7 @@ pub(super) fn parse_function_decl(
         &Token::LParen,
         "Expected '(' after function name",
     )?;
-    let (params, variadic) = parse_params(tokens, pos, span)?;
+    let (params, variadic, variadic_type) = parse_params(tokens, pos, span)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after parameters")?;
 
     // Parse optional return type: `: TypeExpr`
@@ -57,6 +57,7 @@ pub(super) fn parse_function_decl(
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         },
@@ -322,11 +323,13 @@ pub(super) fn parse_params(
     (
         Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         Option<String>,
+        Option<TypeExpr>,
     ),
     CompileError,
 > {
     let mut params = Vec::new();
     let mut variadic = None;
+    let mut variadic_type = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() || variadic.is_some() {
             expect_token(
@@ -361,13 +364,13 @@ pub(super) fn parse_params(
             false
         };
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-            // A type annotation on a variadic (`int ...$xs`) constrains each passed argument.
-            // The collected `$xs` array's element type is inferred from the actual call
-            // arguments, so the declared element type is accepted here without a separate slot.
+            // A type annotation on a variadic (`int ...$xs`) constrains each passed argument; the
+            // declared element type is preserved so call validation can check every collected arg.
             *pos += 1;
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(n)) => {
                     variadic = Some(n.clone());
+                    variadic_type = type_ann;
                     *pos += 1;
                 }
                 _ => return Err(CompileError::new(span, "Expected variable after '...'")),
@@ -389,7 +392,7 @@ pub(super) fn parse_params(
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }
     }
-    Ok((params, variadic))
+    Ok((params, variadic, variadic_type))
 }
 
 /// Parses a comma-separated list of `Name`s until a token that does not start a name is

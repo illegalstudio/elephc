@@ -372,6 +372,7 @@ pub(super) fn resolve_stmt_exprs(
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         } => StmtKind::FunctionDecl {
@@ -385,6 +386,7 @@ pub(super) fn resolve_stmt_exprs(
                 function_variants,
             )?,
             variadic,
+            variadic_type,
             return_type,
             body,
         },

@@ -152,6 +152,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
             is_arrow,
@@ -161,6 +162,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         } => ExprKind::Closure {
             params: propagate_params(params),
             variadic,
+            variadic_type,
             return_type,
             body: propagate_block(body, captured_constant_env(&captures, &capture_refs, env)).0,
             is_arrow,

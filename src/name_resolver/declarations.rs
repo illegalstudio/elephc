@@ -40,6 +40,7 @@ pub(super) fn resolve_decl_stmt(
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         } => {
@@ -49,6 +50,7 @@ pub(super) fn resolve_decl_stmt(
                     name: canonical_name_for_decl(namespace, name),
                     params: resolve_params(params, namespace, imports, symbols),
                     variadic: variadic.clone(),
+                    variadic_type: variadic_type.clone(),
                     return_type: return_type
                         .as_ref()
                         .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),

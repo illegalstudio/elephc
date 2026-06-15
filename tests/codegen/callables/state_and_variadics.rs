@@ -624,3 +624,16 @@ echo sum(...$a);
     );
     assert_eq!(out, "6");
 }
+
+/// Verifies that a typed variadic collects correctly-typed positional arguments and runs
+/// end-to-end, confirming the declared element type does not interfere with valid calls.
+#[test]
+fn test_typed_variadic_positional_arguments_run() {
+    let out = compile_and_run(
+        r#"<?php
+function sum(int ...$n): int { return array_sum($n); }
+echo sum(4, 5, 6);
+"#,
+    );
+    assert_eq!(out, "15");
+}

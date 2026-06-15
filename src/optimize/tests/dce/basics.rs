@@ -29,6 +29,7 @@ fn test_eliminate_dead_code_invalidates_outer_strict_bool_guard_after_local_writ
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {

@@ -212,6 +212,9 @@ pub struct ClassMethod {
     pub has_body: bool,
     pub params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
     pub variadic: Option<String>,
+    /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each argument
+    /// collected into the variadic is checked against this type.
+    pub variadic_type: Option<TypeExpr>,
     #[allow(dead_code)] // Will be used for return type checking in future phases
     pub return_type: Option<TypeExpr>,
     pub body: Vec<Stmt>,

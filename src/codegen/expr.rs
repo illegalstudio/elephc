@@ -186,6 +186,7 @@ pub fn emit_expr(
             is_arrow: _,
             is_static: _,
             variadic,
+            variadic_type: _,
             captures,
             capture_refs,
         } => calls::emit_closure(

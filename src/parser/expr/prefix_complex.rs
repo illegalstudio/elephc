@@ -148,7 +148,7 @@ pub(super) fn parse_closure(
         return Err(CompileError::new(span, "Unexpected token: Function"));
     }
     *pos += 2;
-    let (params, variadic) = parse_closure_params(tokens, pos, span)?;
+    let (params, variadic, variadic_type) = parse_closure_params(tokens, pos, span)?;
     let mut captures = Vec::new();
     let mut capture_refs = Vec::new();
     if *pos < tokens.len() && tokens[*pos].0 == Token::Use {
@@ -203,6 +203,7 @@ pub(super) fn parse_closure(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
             is_arrow: false,
@@ -228,7 +229,7 @@ pub(super) fn parse_arrow_closure(
         return Err(CompileError::new(span, "Expected '(' after 'fn'"));
     }
     *pos += 1;
-    let (params, variadic) = parse_closure_params(tokens, pos, span)?;
+    let (params, variadic, variadic_type) = parse_closure_params(tokens, pos, span)?;
     let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
         return Err(CompileError::new(
@@ -244,6 +245,7 @@ pub(super) fn parse_arrow_closure(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
             is_arrow: true,
@@ -493,11 +495,13 @@ fn parse_closure_params(
     (
         Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
         Option<String>,
+        Option<crate::parser::ast::TypeExpr>,
     ),
     CompileError,
 > {
     let mut params = Vec::new();
     let mut variadic = None;
+    let mut variadic_type = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() || variadic.is_some() {
             if tokens[*pos].0 != Token::Comma {
@@ -533,11 +537,12 @@ fn parse_closure_params(
         };
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
             // A typed variadic (`int ...$xs`) is accepted on closures/arrow functions too; the
-            // collected array's element type is inferred from the actual call arguments.
+            // declared element type is preserved so call validation can check collected args.
             *pos += 1;
             match tokens.get(*pos).map(|(token, _)| token) {
                 Some(Token::Variable(name)) => {
                     variadic = Some(name.clone());
+                    variadic_type = type_ann;
                     *pos += 1;
                 }
                 _ => return Err(CompileError::new(span, "Expected variable after '...'")),
@@ -563,7 +568,7 @@ fn parse_closure_params(
         return Err(CompileError::new(span, "Expected ')' after parameters"));
     }
     *pos += 1;
-    Ok((params, variadic))
+    Ok((params, variadic, variadic_type))
 }
 
 /// Parses a named expression that could be a constant reference, function call, buffer_new<T>, ptr_cast<T>, or static/class method access.

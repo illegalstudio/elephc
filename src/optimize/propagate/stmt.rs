@@ -234,6 +234,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         } => (
@@ -242,6 +243,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                     name,
                     params: propagate_params(params),
                     variadic,
+                    variadic_type,
                     return_type,
                     body: propagate_block(body, HashMap::new()).0,
                 },

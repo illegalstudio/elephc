@@ -99,6 +99,8 @@ pub enum ExprKind {
     Closure {
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         variadic: Option<String>,
+        /// Declared element type hint on the variadic parameter (`int ...$xs`), if any.
+        variadic_type: Option<TypeExpr>,
         return_type: Option<TypeExpr>,
         body: Vec<Stmt>,
         is_arrow: bool,

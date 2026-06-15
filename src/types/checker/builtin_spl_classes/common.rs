@@ -79,6 +79,7 @@ pub(super) fn class_method_with_body(
         has_body: true,
         params,
         variadic: None,
+        variadic_type: None,
         return_type,
         body,
         span: crate::span::Span::dummy(),

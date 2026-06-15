@@ -241,6 +241,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         } => {
@@ -257,6 +258,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 name,
                 params: new_params,
                 variadic,
+                variadic_type,
                 return_type,
                 body: new_body,
             }

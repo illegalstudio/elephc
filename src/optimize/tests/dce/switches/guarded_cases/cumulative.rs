@@ -24,6 +24,7 @@ fn test_eliminate_dead_code_prunes_exhaustive_switch_true_default_from_cumulativ
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::Switch {
@@ -89,6 +90,7 @@ fn test_eliminate_dead_code_uses_cumulative_switch_true_guards_inside_case_body(
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {

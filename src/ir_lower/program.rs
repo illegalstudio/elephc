@@ -414,6 +414,7 @@ fn lower_function_declarations(
                 name,
                 params,
                 variadic: _,
+                variadic_type: _,
                 return_type,
                 body,
             } => function::lower_user_function(

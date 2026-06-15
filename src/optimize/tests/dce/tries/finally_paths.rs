@@ -23,6 +23,7 @@ fn test_eliminate_dead_code_drops_statements_after_try_finally_exit() {
             name: "answer".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -69,6 +70,7 @@ fn test_eliminate_dead_code_preserves_outer_guard_for_finally_when_only_other_lo
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -126,6 +128,7 @@ fn test_eliminate_dead_code_sinks_tail_into_safe_finally_path() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(

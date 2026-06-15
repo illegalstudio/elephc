@@ -429,6 +429,7 @@ impl Checker {
             ExprKind::Closure {
                 params,
                 variadic,
+                variadic_type: _,
                 return_type,
                 body,
                 is_arrow: _,

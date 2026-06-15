@@ -173,6 +173,9 @@ pub enum StmtKind {
         name: String,
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         variadic: Option<String>,
+        /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each
+        /// argument collected into the variadic is checked against this type.
+        variadic_type: Option<TypeExpr>,
         return_type: Option<TypeExpr>,
         body: Vec<Stmt>,
     },

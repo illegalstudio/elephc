@@ -578,7 +578,7 @@ fn parse_class_like_method(
         &Token::LParen,
         "Expected '(' after method name",
     )?;
-    let (params, variadic, promoted_properties, promoted_assignments) =
+    let (params, variadic, variadic_type, promoted_properties, promoted_assignments) =
         parse_method_params(tokens, pos, span, &method_name)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')'")?;
     // Parse optional return type: `: TypeExpr`
@@ -622,6 +622,7 @@ fn parse_class_like_method(
         has_body,
         params,
         variadic,
+        variadic_type,
         return_type,
         body,
         span,
@@ -937,6 +938,7 @@ fn parse_property_hooks(
                     has_body: true,
                     params: Vec::new(),
                     variadic: None,
+                    variadic_type: None,
                     return_type: prop_type.cloned(),
                     body,
                     span: hook_span,
@@ -964,6 +966,7 @@ fn parse_property_hooks(
                     has_body: true,
                     params: vec![(set_param, prop_type.cloned(), None, false)],
                     variadic: None,
+                    variadic_type: None,
                     return_type: Some(TypeExpr::Void),
                     body,
                     span: hook_span,

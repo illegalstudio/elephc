@@ -235,6 +235,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         } => StmtKind::FunctionDecl {
@@ -246,6 +247,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
                 })
                 .collect(),
             variadic,
+            variadic_type,
             return_type,
             body: apply_stmts(body, defines),
         },

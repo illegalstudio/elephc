@@ -43,6 +43,7 @@ fn test_eliminate_dead_code_reduces_empty_if_chain_to_needed_condition_checks() 
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -89,6 +90,7 @@ fn test_eliminate_dead_code_sinks_tail_into_if_fallthrough_branch() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -141,6 +143,7 @@ fn test_eliminate_dead_code_sinks_tail_into_implicit_else_path() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -194,6 +197,7 @@ fn test_eliminate_dead_code_sinks_tail_into_ifdef_fallthrough_paths() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -258,6 +262,7 @@ fn test_eliminate_dead_code_reduces_empty_if_to_effectful_condition_eval() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {

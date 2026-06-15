@@ -276,6 +276,7 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::Closure {
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![stmt(StmtKind::Return(Some(int(1))))],
             is_arrow: false,
@@ -421,6 +422,7 @@ fn lowers_every_stmt_variant_smoke() {
             name: "f".to_string(),
             params: vec![("x".to_string(), Some(TypeExpr::Int), None, false)],
             variadic: None,
+            variadic_type: None,
             return_type: Some(TypeExpr::Int),
             body: vec![stmt(StmtKind::Return(Some(var("x"))))],
         }),
@@ -475,6 +477,7 @@ fn class_method(name: &str, is_static: bool) -> ClassMethod {
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: Some(TypeExpr::Int),
         body: vec![stmt(StmtKind::Return(Some(int(1))))],
         span: sp(),

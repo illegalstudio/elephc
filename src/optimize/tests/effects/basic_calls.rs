@@ -62,6 +62,7 @@ fn test_program_function_effects_recognize_pure_user_functions() {
             name: "len3".to_string(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::Return(Some(Expr::new(
@@ -93,6 +94,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
                 name: "boom".to_string(),
                 params: Vec::new(),
                 variadic: None,
+                variadic_type: None,
                 return_type: None,
                 body: vec![Stmt::new(
                     StmtKind::Throw(Expr::new(
@@ -112,6 +114,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
                 name: "wrapper".to_string(),
                 params: Vec::new(),
                 variadic: None,
+                variadic_type: None,
                 return_type: None,
                 body: vec![Stmt::new(
                     StmtKind::Return(Some(Expr::new(

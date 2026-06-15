@@ -244,6 +244,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         } => vec![Stmt {
@@ -251,6 +252,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 name,
                 params,
                 variadic,
+                variadic_type,
                 return_type,
                 body: prune_block(body),
             },

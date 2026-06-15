@@ -128,6 +128,7 @@ fn test_prune_block_drops_statements_after_return() {
             name: "answer".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(StmtKind::Return(Some(Expr::int_lit(7))), Span::dummy()),
@@ -155,6 +156,7 @@ fn test_prune_drops_pure_expr_stmt() {
             name: "answer".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -227,6 +229,7 @@ fn test_prune_block_drops_statements_after_exhaustive_if() {
             name: "answer".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -270,6 +273,7 @@ fn test_prune_block_drops_statements_after_exhaustive_switch() {
             name: "answer".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(

@@ -26,6 +26,7 @@ fn test_eliminate_dead_code_prunes_negated_strict_switch_true_case() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -79,6 +80,7 @@ fn test_eliminate_dead_code_prunes_exhaustive_negated_and_switch_true_default() 
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::Switch {
@@ -123,6 +125,7 @@ fn test_eliminate_dead_code_prunes_exhaustive_negated_or_switch_true_default() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::Switch {
@@ -169,6 +172,7 @@ fn test_eliminate_dead_code_prunes_switch_true_suffix_after_exhaustive_multi_pat
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::Switch {
@@ -214,6 +218,7 @@ fn test_eliminate_dead_code_prunes_scalar_switch_suffix_after_exhaustive_multi_p
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {

@@ -123,6 +123,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
             is_arrow,
@@ -132,6 +133,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         } => ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body: prune_block(body),
             is_arrow,

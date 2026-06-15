@@ -408,6 +408,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         } => vec![Stmt {
@@ -415,6 +416,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 name,
                 params,
                 variadic,
+                variadic_type,
                 return_type,
                 body: dce_block_with_guards(body, GuardState::default()),
             },
