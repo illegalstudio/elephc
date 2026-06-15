@@ -42,6 +42,7 @@ pub enum EvalParseError {
     UnexpectedEof,
     InvalidNumber,
     UnterminatedString,
+    UnterminatedComment,
     ExpectedVariable,
     ExpectedSemicolon,
 }
