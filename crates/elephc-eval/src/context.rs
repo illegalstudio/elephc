@@ -68,6 +68,7 @@ pub struct ElephcEvalContext {
     abi_version: u32,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
+    function_stack: Vec<String>,
 }
 
 impl ElephcEvalContext {
@@ -77,6 +78,7 @@ impl ElephcEvalContext {
             abi_version: ABI_VERSION,
             functions: HashMap::new(),
             native_functions: HashMap::new(),
+            function_stack: Vec::new(),
         }
     }
 
@@ -87,6 +89,7 @@ impl ElephcEvalContext {
             abi_version,
             functions: HashMap::new(),
             native_functions: HashMap::new(),
+            function_stack: Vec::new(),
         }
     }
 
@@ -136,6 +139,21 @@ impl ElephcEvalContext {
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
     pub fn has_function(&self, name: &str) -> bool {
         self.functions.contains_key(name) || self.native_functions.contains_key(name)
+    }
+
+    /// Pushes an eval-executed function name for magic-constant resolution.
+    pub fn push_function(&mut self, name: impl Into<String>) {
+        self.function_stack.push(name.into());
+    }
+
+    /// Pops the current eval-executed function name after its body completes.
+    pub fn pop_function(&mut self) {
+        self.function_stack.pop();
+    }
+
+    /// Returns the current eval-executed function name, if execution is inside one.
+    pub fn current_function(&self) -> Option<&str> {
+        self.function_stack.last().map(String::as_str)
     }
 }
 

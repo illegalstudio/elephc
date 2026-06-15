@@ -14,7 +14,8 @@
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalProgram, EvalStmt, EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalMagicConst, EvalProgram, EvalStmt,
+    EvalUnaryOp,
 };
 
 /// Parses an eval fragment into by-name EvalIR statements.
@@ -37,6 +38,7 @@ fn contains_php_open_tag(code: &[u8]) -> bool {
 enum TokenKind {
     DollarIdent(String),
     Ident(String),
+    Magic(EvalMagicConst),
     Int(i64),
     Float(f64),
     String(String),
@@ -71,12 +73,17 @@ enum TokenKind {
 struct Lexer<'a> {
     source: &'a str,
     pos: usize,
+    line: i64,
 }
 
 impl<'a> Lexer<'a> {
     /// Creates a lexer over a UTF-8 eval fragment.
     fn new(source: &'a str) -> Self {
-        Self { source, pos: 0 }
+        Self {
+            source,
+            pos: 0,
+            line: 1,
+        }
     }
 
     /// Tokenizes the complete source and appends an EOF sentinel.
@@ -99,6 +106,7 @@ impl<'a> Lexer<'a> {
         let Some(ch) = self.peek_char() else {
             return Ok(TokenKind::Eof);
         };
+        let line = self.line;
         match ch {
             '$' => self.lex_variable(),
             '\'' | '"' => self.lex_string(ch),
@@ -213,7 +221,10 @@ impl<'a> Lexer<'a> {
                 self.bump_char();
                 Ok(TokenKind::Comma)
             }
-            _ if is_ident_start(ch) => Ok(TokenKind::Ident(self.lex_ident())),
+            _ if is_ident_start(ch) => {
+                let ident = self.lex_ident();
+                Ok(magic_const_token(&ident, line).unwrap_or(TokenKind::Ident(ident)))
+            }
             _ => Err(EvalParseError::UnexpectedToken),
         }
     }
@@ -320,6 +331,9 @@ impl<'a> Lexer<'a> {
     fn bump_char(&mut self) {
         if let Some(ch) = self.peek_char() {
             self.pos += ch.len_utf8();
+            if ch == '\n' {
+                self.line += 1;
+            }
         }
     }
 }
@@ -371,9 +385,7 @@ impl Parser {
             }
             TokenKind::Ident(name) if ident_eq(name, "for") => self.parse_for_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "foreach") => self.parse_foreach_stmt(),
-            TokenKind::Ident(name) if ident_eq(name, "function") => {
-                self.parse_function_decl_stmt()
-            }
+            TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_function_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "if") => self.parse_if_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "return") => {
                 self.advance();
@@ -472,7 +484,7 @@ impl Parser {
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
-        let name = name.to_ascii_lowercase();
+        let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
         let params = self.parse_function_params()?;
@@ -879,6 +891,11 @@ impl Parser {
                 self.advance();
                 Ok(EvalExpr::LoadVar(name))
             }
+            TokenKind::Magic(magic) => {
+                let magic = magic.clone();
+                self.advance();
+                Ok(EvalExpr::Magic(magic))
+            }
             TokenKind::Ident(name) if ident_eq(name, "null") => {
                 self.advance();
                 Ok(EvalExpr::Const(EvalConst::Null))
@@ -1028,6 +1045,26 @@ fn is_ident_continue(ch: char) -> bool {
     is_ident_start(ch) || ch.is_ascii_digit()
 }
 
+/// Converts a PHP magic-constant identifier into a parser token when recognized.
+fn magic_const_token(name: &str, line: i64) -> Option<TokenKind> {
+    let magic = if ident_eq(name, "__LINE__") {
+        EvalMagicConst::Line(line)
+    } else if ident_eq(name, "__FUNCTION__") {
+        EvalMagicConst::Function
+    } else if ident_eq(name, "__CLASS__") {
+        EvalMagicConst::Class
+    } else if ident_eq(name, "__METHOD__") {
+        EvalMagicConst::Method
+    } else if ident_eq(name, "__NAMESPACE__") {
+        EvalMagicConst::Namespace
+    } else if ident_eq(name, "__TRAIT__") {
+        EvalMagicConst::Trait
+    } else {
+        return None;
+    };
+    Some(TokenKind::Magic(magic))
+}
+
 /// Compares a source identifier to a PHP keyword using ASCII case-insensitive rules.
 fn ident_eq(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected)
@@ -1089,9 +1126,8 @@ mod tests {
     /// Verifies elseif fragments lower to nested if statements in the else branch.
     #[test]
     fn parse_fragment_accepts_elseif_source() {
-        let program =
-            parse_fragment(br#"if ($a) { $x = "a"; } elseif ($b) { $x = "b"; }"#)
-                .expect("fragment should parse");
+        let program = parse_fragment(br#"if ($a) { $x = "a"; } elseif ($b) { $x = "b"; }"#)
+            .expect("fragment should parse");
         assert_eq!(
             program.statements(),
             &[EvalStmt::If {
@@ -1115,9 +1151,8 @@ mod tests {
     /// Verifies PHP's `else if` spelling follows the same nested branch shape.
     #[test]
     fn parse_fragment_accepts_else_if_source() {
-        let program =
-            parse_fragment(br#"if ($a) { $x = "a"; } else if ($b) { $x = "b"; }"#)
-                .expect("fragment should parse");
+        let program = parse_fragment(br#"if ($a) { $x = "a"; } else if ($b) { $x = "b"; }"#)
+            .expect("fragment should parse");
 
         assert!(matches!(
             program.statements(),
@@ -1188,6 +1223,21 @@ mod tests {
         );
     }
 
+    /// Verifies eval magic constants lower to explicit EvalIR nodes with fragment line metadata.
+    #[test]
+    fn parse_fragment_accepts_magic_constants() {
+        let program =
+            parse_fragment(b"\nreturn __line__ . __FUNCTION__;").expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::Concat,
+                left: Box::new(EvalExpr::Magic(EvalMagicConst::Line(2))),
+                right: Box::new(EvalExpr::Magic(EvalMagicConst::Function)),
+            }))]
+        );
+    }
+
     /// Verifies comparison operators parse with lower precedence than arithmetic.
     #[test]
     fn parse_fragment_accepts_comparison_source() {
@@ -1242,8 +1292,7 @@ mod tests {
     /// Verifies logical negation parses as a unary expression before comparisons.
     #[test]
     fn parse_fragment_accepts_logical_not_source() {
-        let program =
-            parse_fragment(br#"return !$flag == true;"#).expect("fragment should parse");
+        let program = parse_fragment(br#"return !$flag == true;"#).expect("fragment should parse");
         assert_eq!(
             program.statements(),
             &[EvalStmt::Return(Some(EvalExpr::Binary {
@@ -1260,8 +1309,7 @@ mod tests {
     /// Verifies unary numeric operators bind tighter than multiplication.
     #[test]
     fn parse_fragment_accepts_unary_numeric_source() {
-        let program =
-            parse_fragment(br#"return -$x * +2;"#).expect("fragment should parse");
+        let program = parse_fragment(br#"return -$x * +2;"#).expect("fragment should parse");
         assert_eq!(
             program.statements(),
             &[EvalStmt::Return(Some(EvalExpr::Binary {
@@ -1307,8 +1355,8 @@ mod tests {
     /// Verifies `isset` parses as a case-insensitive function-like expression.
     #[test]
     fn parse_fragment_accepts_isset_source() {
-        let program = parse_fragment(br#"return ISSET($x, $items["k"]);"#)
-            .expect("fragment should parse");
+        let program =
+            parse_fragment(br#"return ISSET($x, $items["k"]);"#).expect("fragment should parse");
         assert_eq!(
             program.statements(),
             &[EvalStmt::Return(Some(EvalExpr::Call {
@@ -1327,8 +1375,8 @@ mod tests {
     /// Verifies `empty` parses as a case-insensitive function-like expression.
     #[test]
     fn parse_fragment_accepts_empty_source() {
-        let program = parse_fragment(br#"return EMPTY($items["k"]);"#)
-            .expect("fragment should parse");
+        let program =
+            parse_fragment(br#"return EMPTY($items["k"]);"#).expect("fragment should parse");
         assert_eq!(
             program.statements(),
             &[EvalStmt::Return(Some(EvalExpr::Call {

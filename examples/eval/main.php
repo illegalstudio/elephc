@@ -52,6 +52,11 @@ $eval_native_call = eval('return compiled_add(2, 8);');
 $logic = eval('return true || missing_eval_rhs();');
 $not_false = eval('return !false;');
 $negative = eval('return -5 + +2;');
+$magic_line = eval("
+return __LINE__;
+");
+eval('function EvalMagicName() { return __FUNCTION__; }');
+$magic_function = eval('return evalmagicname();');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -67,6 +72,8 @@ echo "eval-native-call=" . $eval_native_call . "\n";
 echo "logic=" . $logic . "\n";
 echo "not-false=" . $not_false . "\n";
 echo "negative=" . $negative . "\n";
+echo "magic-line=" . $magic_line . "\n";
+echo "magic-function=" . $magic_function . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";

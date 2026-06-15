@@ -462,6 +462,20 @@ echo eval('function dyn_eval_add($x) { return $x + 1; } return dyn_eval_add(4);'
     assert_eq!(out, "5");
 }
 
+/// Verifies eval magic constants use fragment line and eval-declared function metadata.
+#[test]
+fn test_eval_magic_line_and_function_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval("
+echo __LINE__ . ':';
+");
+eval('function DynEvalMagic() { return __FUNCTION__; } echo dynevalmagic();');
+"#,
+    );
+    assert_eq!(out, "2:DynEvalMagic");
+}
+
 /// Verifies eval-declared functions persist across eval calls in the same generated context.
 #[test]
 fn test_eval_declared_function_persists_across_eval_calls() {

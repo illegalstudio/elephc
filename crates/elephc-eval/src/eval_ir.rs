@@ -98,14 +98,24 @@ pub enum EvalStmt {
 /// Runtime user function declared by an eval fragment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalFunction {
+    name: String,
     params: Vec<String>,
     body: Vec<EvalStmt>,
 }
 
 impl EvalFunction {
     /// Creates a dynamic eval function with source-order parameters and body.
-    pub fn new(params: Vec<String>, body: Vec<EvalStmt>) -> Self {
-        Self { params, body }
+    pub fn new(name: impl Into<String>, params: Vec<String>, body: Vec<EvalStmt>) -> Self {
+        Self {
+            name: name.into(),
+            params,
+            body,
+        }
+    }
+
+    /// Returns the original source spelling of this eval-declared function name.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Returns source-order parameter names without leading `$`.
@@ -138,6 +148,7 @@ pub enum EvalExpr {
         method: String,
         args: Vec<EvalExpr>,
     },
+    Magic(EvalMagicConst),
     PropertyGet {
         object: Box<EvalExpr>,
         property: String,
@@ -169,6 +180,17 @@ pub enum EvalConst {
     Int(i64),
     Float(f64),
     String(String),
+}
+
+/// PHP magic constants supported by runtime eval fragments.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalMagicConst {
+    Line(i64),
+    Function,
+    Class,
+    Method,
+    Namespace,
+    Trait,
 }
 
 /// Binary operations supported by the initial EvalIR parser.

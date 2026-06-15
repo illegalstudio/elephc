@@ -11,11 +11,11 @@
 //! - This module does not own PHP values. Constants and operations are delegated
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
-use crate::errors::EvalStatus;
 use crate::context::{ElephcEvalContext, NativeFunction};
+use crate::errors::EvalStatus;
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalFunction, EvalProgram, EvalStmt,
-    EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalFunction, EvalMagicConst, EvalProgram,
+    EvalStmt, EvalUnaryOp,
 };
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership};
@@ -254,15 +254,27 @@ fn execute_stmt(
             condition,
             update,
             body,
-        } => execute_for_stmt(init, condition.as_ref(), update, body, context, scope, values),
+        } => execute_for_stmt(
+            init,
+            condition.as_ref(),
+            update,
+            body,
+            context,
+            scope,
+            values,
+        ),
         EvalStmt::Foreach {
             array,
             value_name,
             body,
         } => execute_foreach_stmt(array, value_name, body, context, scope, values),
         EvalStmt::FunctionDecl { name, params, body } => {
+            let key = name.to_ascii_lowercase();
             context
-                .define_function(name.clone(), EvalFunction::new(params.clone(), body.clone()))
+                .define_function(
+                    key,
+                    EvalFunction::new(name.clone(), params.clone(), body.clone()),
+                )
                 .map_err(|_| EvalStatus::RuntimeFatal)?;
             Ok(EvalControl::None)
         }
@@ -278,9 +290,9 @@ fn execute_stmt(
                 execute_statements(else_branch, context, scope, values)
             }
         }
-        EvalStmt::Return(Some(expr)) => {
-            Ok(EvalControl::Return(eval_expr(expr, context, scope, values)?))
-        }
+        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(eval_expr(
+            expr, context, scope, values,
+        )?)),
         EvalStmt::Return(None) => Ok(EvalControl::Return(values.null()?)),
         EvalStmt::PropertySet {
             object,
@@ -375,8 +387,7 @@ fn execute_foreach_stmt(
     for index in 0..len {
         let index = values.int(index as i64)?;
         let value = values.array_get(array, index)?;
-        if let Some(replaced) =
-            scope.set(value_name.to_string(), value, ScopeCellOwnership::Owned)
+        if let Some(replaced) = scope.set(value_name.to_string(), value, ScopeCellOwnership::Owned)
         {
             values.release(replaced)?;
         }
@@ -415,6 +426,7 @@ fn eval_expr(
         EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::LoadVar(name) => scope.visible_cell(name).map_or_else(|| values.null(), Ok),
+        EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
         EvalExpr::MethodCall {
             object,
             method,
@@ -503,9 +515,7 @@ fn eval_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
-        "call_user_func_array" => {
-            eval_builtin_call_user_func_array(args, context, scope, values)
-        }
+        "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "count" => eval_builtin_count(args, context, scope, values),
         "empty" => eval_builtin_empty(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
@@ -611,8 +621,7 @@ fn eval_isset_arg(
 
 /// Returns true when a PHP function name is visible to eval builtin probes.
 fn eval_function_probe_exists(context: &ElephcEvalContext, name: &str) -> bool {
-    !name.contains("::")
-        && (context.has_function(name) || eval_php_visible_builtin_exists(name))
+    !name.contains("::") && (context.has_function(name) || eval_php_visible_builtin_exists(name))
 }
 
 /// Returns true for PHP-visible builtin names implemented by the eval interpreter.
@@ -845,7 +854,10 @@ fn eval_dynamic_function_with_values(
     for (name, value) in function.params().iter().zip(evaluated_args) {
         function_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);
     }
-    match execute_statements(function.body(), context, &mut function_scope, values)? {
+    context.push_function(function.name());
+    let result = execute_statements(function.body(), context, &mut function_scope, values);
+    context.pop_function();
+    match result? {
         EvalControl::None => values.null(),
         EvalControl::Return(result) => Ok(result),
         EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
@@ -949,6 +961,22 @@ fn eval_const(
         EvalConst::Int(value) => values.int(*value),
         EvalConst::Float(value) => values.float(*value),
         EvalConst::String(value) => values.string(value),
+    }
+}
+
+/// Resolves one eval magic constant against fragment and dynamic-call metadata.
+fn eval_magic_const(
+    magic: &EvalMagicConst,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match magic {
+        EvalMagicConst::Line(line) => values.int(*line),
+        EvalMagicConst::Function => values.string(context.current_function().unwrap_or("")),
+        EvalMagicConst::Class
+        | EvalMagicConst::Method
+        | EvalMagicConst::Namespace
+        | EvalMagicConst::Trait => values.string(""),
     }
 }
 
@@ -1097,9 +1125,10 @@ mod tests {
             property: &str,
         ) -> Result<RuntimeCellHandle, EvalStatus> {
             match self.get(object) {
-                FakeValue::Object(properties) => {
-                    properties.get(property).copied().map_or_else(|| self.null(), Ok)
-                }
+                FakeValue::Object(properties) => properties
+                    .get(property)
+                    .copied()
+                    .map_or_else(|| self.null(), Ok),
                 _ => Err(EvalStatus::UnsupportedConstruct),
             }
         }
@@ -1138,7 +1167,10 @@ mod tests {
                     let [arg] = args.as_slice() else {
                         return Err(EvalStatus::UnsupportedConstruct);
                     };
-                    let x = properties.get("x").copied().ok_or(EvalStatus::RuntimeFatal)?;
+                    let x = properties
+                        .get("x")
+                        .copied()
+                        .ok_or(EvalStatus::RuntimeFatal)?;
                     let FakeValue::Int(x) = self.get(x) else {
                         return Err(EvalStatus::UnsupportedConstruct);
                     };
@@ -1151,7 +1183,10 @@ mod tests {
                     let [left, right] = args.as_slice() else {
                         return Err(EvalStatus::UnsupportedConstruct);
                     };
-                    let x = properties.get("x").copied().ok_or(EvalStatus::RuntimeFatal)?;
+                    let x = properties
+                        .get("x")
+                        .copied()
+                        .ok_or(EvalStatus::RuntimeFatal)?;
                     let FakeValue::Int(x) = self.get(x) else {
                         return Err(EvalStatus::UnsupportedConstruct);
                     };
@@ -1450,9 +1485,8 @@ mod tests {
     /// Verifies eval property reads and writes dispatch through runtime hooks.
     #[test]
     fn execute_program_reads_and_writes_object_property() {
-        let program =
-            parse_fragment(br#"$this->x = $this->x + 1; return $this->x;"#)
-                .expect("parse eval fragment");
+        let program = parse_fragment(br#"$this->x = $this->x + 1; return $this->x;"#)
+            .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
         let x = values.int(1).expect("create fake int");
@@ -1640,8 +1674,7 @@ mod tests {
     /// Verifies logical OR skips an unsupported right-hand expression after a true left side.
     #[test]
     fn execute_program_short_circuits_logical_or() {
-        let program =
-            parse_fragment(br#"return true || missing();"#).expect("parse eval fragment");
+        let program = parse_fragment(br#"return true || missing();"#).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
@@ -1653,8 +1686,7 @@ mod tests {
     /// Verifies logical negation returns boolean cells using PHP truthiness.
     #[test]
     fn execute_program_evaluates_logical_not() {
-        let program =
-            parse_fragment(br#"echo !false; echo !"x";"#).expect("parse eval fragment");
+        let program = parse_fragment(br#"echo !false; echo !"x";"#).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
@@ -1672,8 +1704,7 @@ mod tests {
         let x = values.int(5).expect("create fake int");
         scope.set("x", x, ScopeCellOwnership::Owned);
 
-        let result =
-            execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(-3));
     }
@@ -1681,9 +1712,8 @@ mod tests {
     /// Verifies foreach assigns each indexed element to the value variable.
     #[test]
     fn execute_program_foreach_iterates_indexed_values() {
-        let program =
-            parse_fragment(br#"foreach (["a", "b"] as $item) { echo $item; }"#)
-                .expect("parse eval fragment");
+        let program = parse_fragment(br#"foreach (["a", "b"] as $item) { echo $item; }"#)
+            .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
@@ -1751,6 +1781,18 @@ mod tests {
         assert_eq!(values.get(result), FakeValue::Int(5));
     }
 
+    /// Verifies `__LINE__` inside eval uses the source line within the fragment.
+    #[test]
+    fn execute_program_magic_line_uses_fragment_line() {
+        let program = parse_fragment(b"\nreturn __LINE__;").expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(2));
+    }
+
     /// Verifies eval-declared functions can be called by the same fragment.
     #[test]
     fn execute_program_calls_declared_function() {
@@ -1762,6 +1804,24 @@ mod tests {
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(5));
+    }
+
+    /// Verifies `__FUNCTION__` inside an eval-declared function keeps the declaration spelling.
+    #[test]
+    fn execute_program_magic_function_uses_eval_declared_name() {
+        let program = parse_fragment(
+            br#"function DynMagicCase() { return __FUNCTION__; } return dynmagiccase();"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.get(result),
+            FakeValue::String("DynMagicCase".to_string())
+        );
     }
 
     /// Verifies eval-declared functions persist in a shared eval context.
@@ -1820,16 +1880,11 @@ return call_user_func("dyn", 4);"#,
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
         let expected = values.int(42).expect("allocate fake result");
-        let native = NativeFunction::new(
-            expected.as_ptr().cast(),
-            fake_native_return_descriptor,
-            0,
-        );
-        assert!(
-            context
-                .define_native_function("native_answer", native)
-                .is_ok()
-        );
+        let native =
+            NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 0);
+        assert!(context
+            .define_native_function("native_answer", native)
+            .is_ok());
 
         let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
             .expect("execute eval ir");
@@ -1869,23 +1924,17 @@ return call_user_func_array("dyn", [4, 5]);"#,
     /// Verifies `call_user_func_array` inside eval can dispatch a registered native function.
     #[test]
     fn execute_program_call_user_func_array_dispatches_registered_native_function() {
-        let program =
-            parse_fragment(br#"return call_user_func_array("native_answer", [4, 5]);"#)
-                .expect("parse eval fragment");
+        let program = parse_fragment(br#"return call_user_func_array("native_answer", [4, 5]);"#)
+            .expect("parse eval fragment");
         let mut context = ElephcEvalContext::new();
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
         let expected = values.int(42).expect("allocate fake result");
-        let native = NativeFunction::new(
-            expected.as_ptr().cast(),
-            fake_native_return_descriptor,
-            2,
-        );
-        assert!(
-            context
-                .define_native_function("native_answer", native)
-                .is_ok()
-        );
+        let native =
+            NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 2);
+        assert!(context
+            .define_native_function("native_answer", native)
+            .is_ok());
 
         let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
             .expect("execute eval ir");
@@ -1896,7 +1945,8 @@ return call_user_func_array("dyn", [4, 5]);"#,
     /// Verifies duplicate eval-declared function names fail in a shared context.
     #[test]
     fn execute_program_rejects_duplicate_declared_function() {
-        let define = parse_fragment(br#"function dyn() { return 1; }"#).expect("parse eval fragment");
+        let define =
+            parse_fragment(br#"function dyn() { return 1; }"#).expect("parse eval fragment");
         let mut context = ElephcEvalContext::new();
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
@@ -1912,9 +1962,8 @@ return call_user_func_array("dyn", [4, 5]);"#,
     /// Verifies dynamic builtin calls inside eval dispatch through runtime value hooks.
     #[test]
     fn execute_program_dispatches_simple_builtins() {
-        let program =
-            parse_fragment(br#"return strlen("abc") + count([1, 2, 3]);"#)
-                .expect("parse eval fragment");
+        let program = parse_fragment(br#"return strlen("abc") + count([1, 2, 3]);"#)
+            .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
@@ -1994,13 +2043,11 @@ echo function_exists("eval") . "x";
 echo function_exists("missing_probe") . "x";"#,
         )
         .expect("parse eval fragment");
-        let native = NativeFunction::new(
-            1usize as *mut c_void,
-            fake_native_return_descriptor,
-            0,
-        );
+        let native = NativeFunction::new(1usize as *mut c_void, fake_native_return_descriptor, 0);
         let mut context = ElephcEvalContext::new();
-        assert!(context.define_native_function("native_probe", native).is_ok());
+        assert!(context
+            .define_native_function("native_probe", native)
+            .is_ok());
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
@@ -2018,16 +2065,11 @@ echo function_exists("missing_probe") . "x";"#,
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
         let expected = values.int(42).expect("allocate fake result");
-        let native = NativeFunction::new(
-            expected.as_ptr().cast(),
-            fake_native_return_descriptor,
-            0,
-        );
-        assert!(
-            context
-                .define_native_function("native_answer", native)
-                .is_ok()
-        );
+        let native =
+            NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 0);
+        assert!(context
+            .define_native_function("native_answer", native)
+            .is_ok());
 
         let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
             .expect("execute eval ir");

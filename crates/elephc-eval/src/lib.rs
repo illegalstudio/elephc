@@ -217,10 +217,8 @@ pub unsafe extern "C" fn __elephc_eval_function_exists(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
-        eval_function_exists_inner(ctx, name_ptr, name_len)
-    })
-    .unwrap_or(0)
+    std::panic::catch_unwind(|| unsafe { eval_function_exists_inner(ctx, name_ptr, name_len) })
+        .unwrap_or(0)
 }
 
 /// Registers a generated native PHP function callback in an eval context.
@@ -607,7 +605,7 @@ mod tests {
         let mut ctx = ElephcEvalContext::new();
         ctx.define_function(
             "dyn_probe",
-            crate::eval_ir::EvalFunction::new(Vec::new(), Vec::new()),
+            crate::eval_ir::EvalFunction::new("dyn_probe", Vec::new(), Vec::new()),
         )
         .expect("first dynamic function declaration should succeed");
         let existing = b"DYN_PROBE";
@@ -616,9 +614,8 @@ mod tests {
         let existing_result = unsafe {
             __elephc_eval_function_exists(&ctx, existing.as_ptr(), existing.len() as u64)
         };
-        let missing_result = unsafe {
-            __elephc_eval_function_exists(&ctx, missing.as_ptr(), missing.len() as u64)
-        };
+        let missing_result =
+            unsafe { __elephc_eval_function_exists(&ctx, missing.as_ptr(), missing.len() as u64) };
 
         assert_eq!(existing_result, 1);
         assert_eq!(missing_result, 0);
@@ -641,9 +638,7 @@ mod tests {
                 0,
             )
         };
-        let exists = unsafe {
-            __elephc_eval_function_exists(&ctx, b"native_probe".as_ptr(), 12)
-        };
+        let exists = unsafe { __elephc_eval_function_exists(&ctx, b"native_probe".as_ptr(), 12) };
 
         assert_eq!(registered, 1);
         assert_eq!(exists, 1);
