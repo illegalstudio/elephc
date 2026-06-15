@@ -215,9 +215,9 @@ const EVAL_TAG_FLOAT: u64 = 2;
 const EVAL_TAG_BOOL: u64 = 3;
 const EVAL_TAG_ARRAY: u64 = 4;
 const EVAL_TAG_ASSOC: u64 = 5;
-#[cfg(test)]
 const EVAL_TAG_OBJECT: u64 = 6;
 const EVAL_TAG_NULL: u64 = 8;
+const EVAL_TAG_RESOURCE: u64 = 9;
 
 /// Executes an EvalIR program and returns the eval result cell.
 pub fn execute_program(
@@ -721,6 +721,7 @@ fn eval_call(
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
         }
+        "gettype" => eval_builtin_gettype(args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_real" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
@@ -837,6 +838,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "count"
             | "floatval"
             | "function_exists"
+            | "gettype"
             | "intval"
             | "is_callable"
             | "is_array"
@@ -987,6 +989,12 @@ fn eval_builtin_with_values(
             let name = name.trim_start_matches('\\').to_ascii_lowercase();
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
+        "gettype" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_gettype_result(*value, values)?
+        }
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_real" | "is_string" => {
             let [value] = evaluated_args else {
@@ -1034,6 +1042,44 @@ fn eval_cast_result(
         "strval" => values.cast_string(value),
         "boolval" => values.cast_bool(value),
         _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Evaluates PHP's `gettype(...)` over one eval expression.
+fn eval_builtin_gettype(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_gettype_result(value, values)
+}
+
+/// Converts one boxed runtime tag into PHP's `gettype()` spelling.
+fn eval_gettype_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    values.string(eval_gettype_name(tag))
+}
+
+/// Returns the PHP-visible type name for a concrete eval runtime tag.
+fn eval_gettype_name(tag: u64) -> &'static str {
+    match tag {
+        EVAL_TAG_INT => "integer",
+        EVAL_TAG_FLOAT => "double",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_BOOL => "boolean",
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+        EVAL_TAG_OBJECT => "object",
+        EVAL_TAG_RESOURCE => "resource",
+        EVAL_TAG_NULL => "NULL",
+        _ => "NULL",
     }
 }
 
@@ -2846,6 +2892,34 @@ return call_user_func_array("intval", ["9"]);"#,
 
         assert_eq!(values.output, "42:3.5:12:false:7");
         assert_eq!(values.get(result), FakeValue::Int(9));
+    }
+
+    /// Verifies eval `gettype()` maps runtime tags to PHP type names directly and by callable.
+    #[test]
+    fn execute_program_dispatches_gettype_builtin() {
+        let program = parse_fragment(
+            br#"echo gettype(1); echo ":";
+echo gettype(1.5); echo ":";
+echo gettype("x"); echo ":";
+echo gettype(false); echo ":";
+echo gettype(null); echo ":";
+echo gettype([1]); echo ":";
+echo gettype(["a" => 1]); echo ":";
+echo call_user_func("gettype", true); echo ":";
+echo call_user_func_array("gettype", [null]);
+return function_exists("gettype");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "integer:double:string:boolean:NULL:array:array:boolean:NULL"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
     /// Verifies `isset` distinguishes missing, null, and other falsey values.

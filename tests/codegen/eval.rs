@@ -664,6 +664,29 @@ echo ":"; echo function_exists("boolval");');
     assert_eq!(out, "42:3.5:12:false:7:9:1");
 }
 
+/// Verifies eval `gettype()` maps boxed Mixed runtime tags to PHP type names.
+#[test]
+fn test_eval_dispatches_gettype_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo gettype(1); echo ":";
+echo gettype(1.5); echo ":";
+echo gettype("x"); echo ":";
+echo gettype(false); echo ":";
+echo gettype(null); echo ":";
+echo gettype([1]); echo ":";
+echo gettype(["a" => 1]); echo ":";
+echo call_user_func("gettype", true); echo ":";
+echo call_user_func_array("gettype", [null]);
+echo ":"; echo function_exists("gettype");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "integer:double:string:boolean:NULL:array:array:boolean:NULL:1"
+    );
+}
+
 /// Verifies eval `isset()` distinguishes missing, null, and falsey non-null values.
 #[test]
 fn test_eval_isset_distinguishes_missing_null_and_falsey_values() {
