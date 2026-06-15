@@ -444,6 +444,23 @@ echo dyn_eval_native();
     assert_eq!(out, "42");
 }
 
+/// Verifies functions declared by eval from a namespace are registered globally.
+#[test]
+fn test_eval_declared_function_in_namespace_is_global() {
+    let out = compile_and_run(
+        r#"<?php
+namespace EvalNs;
+eval('function dyn_eval_ns_global() { return 42; }');
+echo function_exists('EvalNs\\dyn_eval_ns_global') ? '1' : '0';
+echo ":";
+echo function_exists('dyn_eval_ns_global') ? '1' : '0';
+echo ":";
+echo \dyn_eval_ns_global();
+"#,
+    );
+    assert_eq!(out, "0:1:42");
+}
+
 /// Verifies native calls can pass positional arguments to eval-declared functions.
 #[test]
 fn test_eval_declared_function_native_call_accepts_positional_args() {
