@@ -85,10 +85,12 @@ pub(super) fn lower_eval_function_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "eval-declared function call", 0)?;
     let function_name = ctx.function_name_data(expect_data(inst)?)?.to_string();
-    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    let args_offset = EVAL_STACK_BYTES;
+    let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
+    abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
     ensure_eval_context(ctx)?;
+    store_eval_function_call_args(ctx, inst, args_offset)?;
     load_eval_context_to_arg(ctx, 0);
     let (name_label, name_len) = ctx.data.add_string(function_name.as_bytes());
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -98,18 +100,49 @@ pub(super) fn lower_eval_function_call(
         abi::int_arg_reg_name(ctx.emitter.target, 2),
         name_len as i64,
     );
-    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    let args_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    if inst.operands.is_empty() {
+        abi::emit_load_int_immediate(ctx.emitter, args_arg, 0);
+    } else {
+        abi::emit_temporary_stack_address(ctx.emitter, args_arg, args_offset);
+    }
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        inst.operands.len() as i64,
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
-    let symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_call_function_zero_args");
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_call_function");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
-    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     store_if_result(ctx, inst)
+}
+
+/// Returns the aligned scratch size for an eval-declared function call.
+fn eval_function_call_stack_bytes(arg_count: usize) -> usize {
+    let bytes = EVAL_STACK_BYTES + arg_count * 8;
+    (bytes + 15) & !15
+}
+
+/// Stores positional operands as boxed Mixed cells for the eval function-call ABI.
+fn store_eval_function_call_args(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    args_offset: usize,
+) -> Result<()> {
+    for (index, operand) in inst.operands.iter().enumerate() {
+        let ty = ctx.load_value_to_result(*operand)?.codegen_repr();
+        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+            emit_box_current_value_as_mixed(ctx.emitter, &ty);
+        }
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset + index * 8);
+    }
+    Ok(())
 }
 
 /// Saves the loaded eval source string while scope setup calls use argument registers.

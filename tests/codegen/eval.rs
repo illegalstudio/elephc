@@ -411,6 +411,18 @@ echo dyn_eval_native();
     assert_eq!(out, "42");
 }
 
+/// Verifies native calls can pass positional arguments to eval-declared functions.
+#[test]
+fn test_eval_declared_function_native_call_accepts_positional_args() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_native_add($x, $y) { return $x + $y; }');
+echo dyn_eval_native_add(4, 5);
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {
