@@ -218,7 +218,29 @@ pub unsafe extern "C" fn __elephc_eval_call_function_zero_args(
     out: *mut ElephcEvalResult,
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe {
-        call_eval_function_zero_args_inner(ctx, name_ptr, name_len, out)
+        call_eval_function_inner(ctx, name_ptr, name_len, std::ptr::null(), 0, out)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Calls a function previously declared through `eval()` with positional cells.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `name_ptr` must be readable for
+/// `name_len` bytes when `name_len > 0`. `args` must be readable for
+/// `arg_count` runtime-cell pointers when `arg_count > 0`, and `out` may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_call_function(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    args: *const *mut RuntimeCell,
+    arg_count: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        call_eval_function_inner(ctx, name_ptr, name_len, args, arg_count, out)
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -226,13 +248,15 @@ pub unsafe extern "C" fn __elephc_eval_call_function_zero_args(
 /// Runs the dynamic function-call ABI body after installing a panic boundary.
 ///
 /// # Safety
-/// Mirrors `__elephc_eval_call_function_zero_args`; callers must provide a valid
-/// context and readable function-name bytes.
+/// Mirrors `__elephc_eval_call_function`; callers must provide a valid context,
+/// readable function-name bytes, and readable argument pointer storage.
 #[cfg(not(test))]
-unsafe fn call_eval_function_zero_args_inner(
+unsafe fn call_eval_function_inner(
     ctx: *mut ElephcEvalContext,
     name_ptr: *const u8,
     name_len: u64,
+    args: *const *mut RuntimeCell,
+    arg_count: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
     let Some(context) = ctx.as_mut() else {
@@ -244,13 +268,28 @@ unsafe fn call_eval_function_zero_args_inner(
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return EvalStatus::RuntimeFatal.code();
     };
+    let Ok(arg_count) = usize::try_from(arg_count) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if arg_count > 0 && args.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let args = if arg_count == 0 {
+        Vec::new()
+    } else {
+        slice::from_raw_parts(args, arg_count)
+            .iter()
+            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .collect()
+    };
     if !out.is_null() {
         (*out).clear();
     }
     let mut values = ElephcRuntimeOps::new();
-    match interpreter::execute_context_function_zero_args(
+    match interpreter::execute_context_function(
         context,
         &name.to_ascii_lowercase(),
+        args,
         &mut values,
     ) {
         Ok(result) => {

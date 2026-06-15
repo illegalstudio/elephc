@@ -1832,14 +1832,14 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         return call;
     }
     if ctx.has_eval_barrier()
-        && args.is_empty()
+        && plain_positional_call_args(args)
         && canonical_builtin_function_name(canonical).is_none()
     {
         let dynamic_name = php_symbol_key(canonical.trim_start_matches('\\'));
         let data = ctx.intern_function_name(&dynamic_name);
         return ctx.emit_value(
             Op::EvalFunctionCall,
-            Vec::new(),
+            operands,
             Some(Immediate::Data(data)),
             PhpType::Mixed,
             Op::EvalFunctionCall.default_effects(),
@@ -1871,6 +1871,12 @@ fn emit_builtin_call_value(
         ctx.apply_eval_barrier();
     }
     call
+}
+
+/// Returns true when a dynamic eval fallback can preserve simple positional call semantics.
+fn plain_positional_call_args(args: &[Expr]) -> bool {
+    !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
 }
 
 /// Lowers `isset()` as a lazy language construct instead of an eager builtin call.

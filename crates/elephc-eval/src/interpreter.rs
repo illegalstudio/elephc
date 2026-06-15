@@ -151,12 +151,21 @@ pub fn execute_context_function_zero_args(
     name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    execute_context_function(context, name, Vec::new(), values)
+}
+
+/// Executes a function declared in the shared eval context with prepared argument cells.
+pub fn execute_context_function(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    args: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     context
         .function(name)
         .cloned()
         .map_or(Err(EvalStatus::UnsupportedConstruct), |function| {
-            let mut caller_scope = ElephcEvalScope::new();
-            eval_dynamic_function(&function, &[], context, &mut caller_scope, values)
+            eval_dynamic_function_with_values(&function, args, context, values)
         })
 }
 
@@ -477,6 +486,16 @@ fn eval_dynamic_function(
     for arg in args {
         evaluated_args.push(eval_expr(arg, context, caller_scope, values)?);
     }
+    eval_dynamic_function_with_values(function, evaluated_args, context, values)
+}
+
+/// Evaluates an eval-declared function after its positional arguments are prepared.
+fn eval_dynamic_function_with_values(
+    function: &EvalFunction,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut function_scope = ElephcEvalScope::new();
     for (name, value) in function.params().iter().zip(evaluated_args) {
         function_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);
