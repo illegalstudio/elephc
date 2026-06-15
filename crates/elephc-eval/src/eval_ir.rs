@@ -152,14 +152,14 @@ pub enum EvalExpr {
     },
     Call {
         name: String,
-        args: Vec<EvalExpr>,
+        args: Vec<EvalCallArg>,
     },
     Const(EvalConst),
     LoadVar(String),
     MethodCall {
         object: Box<EvalExpr>,
         method: String,
-        args: Vec<EvalExpr>,
+        args: Vec<EvalCallArg>,
     },
     Magic(EvalMagicConst),
     NullCoalesce {
@@ -185,6 +185,38 @@ pub enum EvalExpr {
         left: Box<EvalExpr>,
         right: Box<EvalExpr>,
     },
+}
+
+/// One source-order function or method call argument parsed from eval code.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalCallArg {
+    name: Option<String>,
+    value: EvalExpr,
+}
+
+impl EvalCallArg {
+    /// Creates a positional call argument from a value expression.
+    pub fn positional(value: EvalExpr) -> Self {
+        Self { name: None, value }
+    }
+
+    /// Creates a named call argument from a parameter name and value expression.
+    pub fn named(name: impl Into<String>, value: EvalExpr) -> Self {
+        Self {
+            name: Some(name.into()),
+            value,
+        }
+    }
+
+    /// Returns the source argument name without `$`, if the argument was named.
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// Returns the expression that computes this argument's runtime value.
+    pub const fn value(&self) -> &EvalExpr {
+        &self.value
+    }
 }
 
 /// One element in a PHP array literal parsed from an eval fragment.
