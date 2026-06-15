@@ -207,6 +207,26 @@ echo $items["name"];
     assert_eq!(out, "Ada");
 }
 
+/// Verifies nested eval calls reuse the materialized caller scope.
+#[test]
+fn test_eval_nested_eval_uses_same_scope() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+eval('eval("$x = $x + 4;");');
+echo $x;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies a nested eval return is the value of the inner eval expression.
+#[test]
+fn test_eval_nested_eval_return_value_is_expression_result() {
+    let out = compile_and_run(r#"<?php echo eval('return eval("return 9;");');"#);
+    assert_eq!(out, "9");
+}
+
 /// Verifies `return` inside eval becomes the expression result of `eval(...)`.
 #[test]
 fn test_eval_return_value_is_available_to_native_code() {

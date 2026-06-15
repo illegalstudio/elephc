@@ -48,6 +48,11 @@ unsafe extern "C" {
         right: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
     fn __elephc_eval_value_echo(value: *mut RuntimeCell);
+    fn __elephc_eval_value_string_bytes(
+        value: *mut RuntimeCell,
+        out_ptr: *mut *const u8,
+        out_len: *mut u64,
+    ) -> u64;
     fn __elephc_eval_value_truthy(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_release(value: *mut RuntimeCell);
 }
@@ -186,6 +191,23 @@ impl RuntimeValueOps for ElephcRuntimeOps {
             __elephc_eval_value_echo(value.as_ptr());
         }
         Ok(())
+    }
+
+    /// Casts one boxed Mixed cell to a PHP string and copies the bytes into Rust memory.
+    fn string_bytes(&mut self, value: RuntimeCellHandle) -> Result<Vec<u8>, EvalStatus> {
+        let mut ptr = std::ptr::null();
+        let mut len = 0;
+        let ok = unsafe { __elephc_eval_value_string_bytes(value.as_ptr(), &mut ptr, &mut len) };
+        if ok == 0 || (len > 0 && ptr.is_null()) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let len = usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let bytes = if len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(ptr, len) }
+        };
+        Ok(bytes.to_vec())
     }
 
     /// Converts one boxed Mixed cell to PHP truthiness through the generated runtime wrapper.

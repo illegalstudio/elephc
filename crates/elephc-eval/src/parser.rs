@@ -520,6 +520,9 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 Ok(EvalExpr::Print(Box::new(expr)))
             }
+            TokenKind::Ident(name) if matches!(self.peek(), TokenKind::LParen) => {
+                self.parse_call_expr(name.clone())
+            }
             TokenKind::LBracket => self.parse_array_literal(),
             TokenKind::LParen => {
                 self.advance();
@@ -530,6 +533,27 @@ impl Parser {
             TokenKind::Eof => Err(EvalParseError::UnexpectedEof),
             _ => Err(EvalParseError::UnexpectedToken),
         }
+    }
+
+    /// Parses a function-like call expression and its source-order arguments.
+    fn parse_call_expr(&mut self, name: String) -> Result<EvalExpr, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let mut args = Vec::new();
+        if self.consume(TokenKind::RParen) {
+            return Ok(EvalExpr::Call { name, args });
+        }
+        loop {
+            args.push(self.parse_expr()?);
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            if self.consume(TokenKind::RParen) {
+                return Ok(EvalExpr::Call { name, args });
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(EvalExpr::Call { name, args })
     }
 
     /// Parses an array literal with source-order optional key/value element expressions.
@@ -681,6 +705,20 @@ mod tests {
             &[EvalStmt::Expr(EvalExpr::Print(Box::new(EvalExpr::Const(
                 EvalConst::String("hi".to_string())
             ))))]
+        );
+    }
+
+    /// Verifies call expressions preserve their callee name and source-order arguments.
+    #[test]
+    fn parse_fragment_accepts_call_expression_source() {
+        let program =
+            parse_fragment(br#"return eval("return 1;");"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Call {
+                name: "eval".to_string(),
+                args: vec![EvalExpr::Const(EvalConst::String("return 1;".to_string()))],
+            }))]
         );
     }
 

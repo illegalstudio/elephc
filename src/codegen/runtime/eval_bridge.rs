@@ -218,6 +218,26 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_echo");
     emitter.instruction("b __rt_mixed_write_stdout");                           // echo one boxed mixed value and return to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_string_bytes");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for output pointers
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across string casting
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the caller's out_ptr storage address
+    emitter.instruction("str x2, [sp, #8]");                                    // save the caller's out_len storage address
+    emitter.instruction("bl __rt_mixed_cast_string");                           // cast the boxed eval value to a PHP string pair
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the optional out_ptr storage address
+    emitter.instruction("cbz x9, __elephc_eval_value_string_bytes_len");        // skip pointer storage when the caller passed null
+    emitter.instruction("str x1, [x9]");                                        // store the string pointer for Rust to copy immediately
+    emitter.label("__elephc_eval_value_string_bytes_len");
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the optional out_len storage address
+    emitter.instruction("cbz x10, __elephc_eval_value_string_bytes_done");      // skip length storage when the caller passed null
+    emitter.instruction("str x2, [x10]");                                       // store the string byte length for Rust
+    emitter.label("__elephc_eval_value_string_bytes_done");
+    emitter.instruction("mov x0, #1");                                          // report successful string conversion to Rust
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the string-bytes wrapper frame
+    emitter.instruction("ret");                                                 // return the success flag to Rust
+
     label_c_global(emitter, "__elephc_eval_value_truthy");
     emitter.instruction("b __rt_mixed_cast_bool");                              // cast one boxed mixed value to PHP truthiness for eval
 
@@ -261,7 +281,10 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned array pointer while allocating the Mixed box
     emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate a boxed Mixed cell without retaining the new array
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the mixed-cell heap kind with the x86_64 heap marker
+    emitter.instruction(&format!(
+        "mov r10, 0x{:x}",
+        (X86_64_HEAP_MAGIC_HI32 << 32) | 5
+    )); // materialize the mixed-cell heap kind with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
     emitter.instruction("mov QWORD PTR [rax], 4");                              // runtime tag 4 = indexed array
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned indexed-array pointer
@@ -283,7 +306,10 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned hash pointer while allocating the Mixed box
     emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate a boxed Mixed cell without retaining the new hash
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the mixed-cell heap kind with the x86_64 heap marker
+    emitter.instruction(&format!(
+        "mov r10, 0x{:x}",
+        (X86_64_HEAP_MAGIC_HI32 << 32) | 5
+    )); // materialize the mixed-cell heap kind with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
     emitter.instruction("mov QWORD PTR [rax], 5");                              // runtime tag 5 = associative array
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned hash pointer
@@ -431,6 +457,29 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_echo");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed value argument into mixed echo input
     emitter.instruction("jmp __rt_mixed_write_stdout");                         // echo one boxed mixed value and return to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_string_bytes");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across string casting
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve slots for the caller's output pointers
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the caller's out_ptr storage address
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the caller's out_len storage address
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_string input
+    emitter.instruction("call __rt_mixed_cast_string");                         // cast the boxed eval value to a PHP string pair
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the optional out_ptr storage address
+    emitter.instruction("test r10, r10");                                       // did the caller request the string pointer?
+    emitter.instruction("jz __elephc_eval_value_string_bytes_len");             // skip pointer storage when the caller passed null
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // store the string pointer for Rust to copy immediately
+    emitter.label("__elephc_eval_value_string_bytes_len");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the optional out_len storage address
+    emitter.instruction("test r10, r10");                                       // did the caller request the string length?
+    emitter.instruction("jz __elephc_eval_value_string_bytes_done");            // skip length storage when the caller passed null
+    emitter.instruction("mov QWORD PTR [r10], rdx");                            // store the string byte length for Rust
+    emitter.label("__elephc_eval_value_string_bytes_done");
+    emitter.instruction("mov rax, 1");                                          // report successful string conversion to Rust
+    emitter.instruction("add rsp, 16");                                         // release the string-bytes wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the success flag to Rust
 
     label_c_global(emitter, "__elephc_eval_value_truthy");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed value argument into mixed truthiness input

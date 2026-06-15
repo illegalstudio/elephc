@@ -13,6 +13,7 @@
 
 use crate::errors::EvalStatus;
 use crate::eval_ir::{EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalProgram, EvalStmt};
+use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership};
 use crate::value::RuntimeCellHandle;
 
@@ -98,6 +99,9 @@ pub trait RuntimeValueOps {
 
     /// Emits one runtime cell to stdout using PHP echo semantics.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
+
+    /// Casts one runtime cell to a PHP string and copies its bytes for parsing.
+    fn string_bytes(&mut self, value: RuntimeCellHandle) -> Result<Vec<u8>, EvalStatus>;
 
     /// Converts one runtime cell to PHP boolean truthiness.
     fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
@@ -236,6 +240,7 @@ fn eval_expr(
             let index = eval_expr(index, scope, values)?;
             values.array_get(array, index)
         }
+        EvalExpr::Call { name, args } => eval_call(name, args, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::LoadVar(name) => scope.visible_cell(name).map_or_else(|| values.null(), Ok),
         EvalExpr::Print(inner) => {
@@ -254,6 +259,25 @@ fn eval_expr(
             }
         }
     }
+}
+
+/// Evaluates supported function-like calls from a runtime eval fragment.
+fn eval_call(
+    name: &str,
+    args: &[EvalExpr],
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if name != "eval" {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    let [code] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let code = eval_expr(code, scope, values)?;
+    let code = values.string_bytes(code)?;
+    let program = parse_fragment(&code).map_err(|_| EvalStatus::ParseError)?;
+    execute_program(&program, scope, values)
 }
 
 /// Evaluates an indexed array literal into a boxed runtime Mixed array.
@@ -543,6 +567,11 @@ mod tests {
             Ok(())
         }
 
+        /// Casts one fake runtime cell to bytes for nested eval parsing.
+        fn string_bytes(&mut self, value: RuntimeCellHandle) -> Result<Vec<u8>, EvalStatus> {
+            Ok(self.stringify(value).into_bytes())
+        }
+
         /// Returns PHP-like truthiness for fake runtime cells.
         fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
             Ok(match self.get(value) {
@@ -675,6 +704,21 @@ mod tests {
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::String("Ada".to_string()));
+    }
+
+    /// Verifies nested eval calls parse and execute against the same dynamic scope.
+    #[test]
+    fn execute_program_nested_eval_uses_same_scope() {
+        let program =
+            parse_fragment(br#"eval("$x = $x + 4;"); return $x;"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let x = values.int(1).expect("create fake int");
+        scope.set("x", x, ScopeCellOwnership::Owned);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(5));
     }
 
     /// Verifies indexed array writes mutate an existing scope array.

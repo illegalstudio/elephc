@@ -82,6 +82,10 @@ pub enum EvalExpr {
         array: Box<EvalExpr>,
         index: Box<EvalExpr>,
     },
+    Call {
+        name: String,
+        args: Vec<EvalExpr>,
+    },
     Const(EvalConst),
     LoadVar(String),
     Print(Box<EvalExpr>),
