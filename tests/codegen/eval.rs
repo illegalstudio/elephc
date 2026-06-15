@@ -127,6 +127,19 @@ eval('$x = 20; $x /= 2; $x %= 6; echo $x;');
     assert_eq!(out, "4.5:2:4");
 }
 
+/// Verifies eval integer bitwise and shift operators execute through bridge wrappers.
+#[test]
+fn test_eval_bitwise_shift_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo (5 & 3) . ":" . (5 | 3) . ":" . (5 ^ 3) . ":" . (~0) . ":" . (1 << 4) . ":" . (-16 >> 2);');
+echo ":";
+eval('$x = 6; $x &= 3; echo $x; echo ","; $x = 4; $x |= 1; echo $x; echo ","; $x = 7; $x ^= 3; echo $x; echo ","; $x = 1; $x <<= 5; echo $x; echo ","; $x = 64; $x >>= 3; echo $x;');
+"#,
+    );
+    assert_eq!(out, "1:7:6:-1:16:-4:2,5,4,32,8");
+}
+
 /// Verifies the eval bridge routes concatenation through runtime string helpers.
 #[test]
 fn test_eval_scalar_concat_executes_through_bridge() {

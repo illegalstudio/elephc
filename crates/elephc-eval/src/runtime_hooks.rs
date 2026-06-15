@@ -72,6 +72,12 @@ unsafe extern "C" {
         -> *mut RuntimeCell;
     fn __elephc_eval_value_mod(left: *mut RuntimeCell, right: *mut RuntimeCell)
         -> *mut RuntimeCell;
+    fn __elephc_eval_value_bitwise(
+        left: *mut RuntimeCell,
+        right: *mut RuntimeCell,
+        op: u64,
+    ) -> *mut RuntimeCell;
+    fn __elephc_eval_value_bit_not(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_concat(
         left: *mut RuntimeCell,
         right: *mut RuntimeCell,
@@ -314,6 +320,23 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_mod(left.as_ptr(), right.as_ptr()) })
     }
 
+    /// Applies an integer bitwise or shift operation through the generated runtime wrapper.
+    fn bitwise(
+        &mut self,
+        op: EvalBinOp,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_value_bitwise(left.as_ptr(), right.as_ptr(), bitwise_op_tag(op))
+        })
+    }
+
+    /// Applies integer bitwise NOT through the generated runtime wrapper.
+    fn bit_not(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_bit_not(value.as_ptr()) })
+    }
+
     /// Concatenates two boxed Mixed cells using elephc runtime string semantics.
     fn concat(
         &mut self,
@@ -383,9 +406,43 @@ fn compare_op_tag(op: EvalBinOp) -> u64 {
         | EvalBinOp::Mul
         | EvalBinOp::Div
         | EvalBinOp::Mod
+        | EvalBinOp::BitAnd
+        | EvalBinOp::BitOr
+        | EvalBinOp::BitXor
+        | EvalBinOp::ShiftLeft
+        | EvalBinOp::ShiftRight
         | EvalBinOp::Concat
         | EvalBinOp::LogicalAnd
         | EvalBinOp::LogicalOr
         | EvalBinOp::LogicalXor => 0,
+    }
+}
+
+/// Maps bitwise EvalIR operators onto the generated runtime wrapper opcode table.
+#[cfg(not(test))]
+fn bitwise_op_tag(op: EvalBinOp) -> u64 {
+    match op {
+        EvalBinOp::BitAnd => 0,
+        EvalBinOp::BitOr => 1,
+        EvalBinOp::BitXor => 2,
+        EvalBinOp::ShiftLeft => 3,
+        EvalBinOp::ShiftRight => 4,
+        EvalBinOp::Add
+        | EvalBinOp::Sub
+        | EvalBinOp::Mul
+        | EvalBinOp::Div
+        | EvalBinOp::Mod
+        | EvalBinOp::Concat
+        | EvalBinOp::LogicalAnd
+        | EvalBinOp::LogicalOr
+        | EvalBinOp::LogicalXor
+        | EvalBinOp::LooseEq
+        | EvalBinOp::LooseNotEq
+        | EvalBinOp::StrictEq
+        | EvalBinOp::StrictNotEq
+        | EvalBinOp::Lt
+        | EvalBinOp::LtEq
+        | EvalBinOp::Gt
+        | EvalBinOp::GtEq => 0,
     }
 }

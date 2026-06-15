@@ -144,6 +144,17 @@ pub trait RuntimeValueOps {
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Applies an integer bitwise or shift operation to two runtime cells.
+    fn bitwise(
+        &mut self,
+        op: EvalBinOp,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Applies integer bitwise NOT to one runtime cell.
+    fn bit_not(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Concatenates two runtime cells using PHP string conversion semantics.
     fn concat(
         &mut self,
@@ -592,6 +603,7 @@ fn eval_expr(
                     let truthy = values.truthy(value)?;
                     values.bool_value(!truthy)
                 }
+                EvalUnaryOp::BitNot => values.bit_not(value),
             }
         }
         EvalExpr::Binary { op, left, right } => {
@@ -621,6 +633,11 @@ fn eval_expr(
                 EvalBinOp::Mul => values.mul(left, right),
                 EvalBinOp::Div => values.div(left, right),
                 EvalBinOp::Mod => values.modulo(left, right),
+                EvalBinOp::BitAnd
+                | EvalBinOp::BitOr
+                | EvalBinOp::BitXor
+                | EvalBinOp::ShiftLeft
+                | EvalBinOp::ShiftRight => values.bitwise(*op, left, right),
                 EvalBinOp::Concat => values.concat(left, right),
                 EvalBinOp::LogicalXor => {
                     let left_truthy = values.truthy(left)?;
@@ -1495,6 +1512,42 @@ mod tests {
             self.int(left % right)
         }
 
+        /// Applies fake integer bitwise and shift operations for interpreter tests.
+        fn bitwise(
+            &mut self,
+            op: EvalBinOp,
+            left: RuntimeCellHandle,
+            right: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let left = self.fake_int(&self.get(left));
+            let right = self.fake_int(&self.get(right));
+            let value = match op {
+                EvalBinOp::BitAnd => left & right,
+                EvalBinOp::BitOr => left | right,
+                EvalBinOp::BitXor => left ^ right,
+                EvalBinOp::ShiftLeft => {
+                    if right < 0 {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                    left.wrapping_shl(right as u32)
+                }
+                EvalBinOp::ShiftRight => {
+                    if right < 0 {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                    left.wrapping_shr(right as u32)
+                }
+                _ => return Err(EvalStatus::UnsupportedConstruct),
+            };
+            self.int(value)
+        }
+
+        /// Applies fake integer bitwise NOT for interpreter tests.
+        fn bit_not(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+            let value = self.fake_int(&self.get(value));
+            self.int(!value)
+        }
+
         /// Concatenates fake cells with simple string conversion for interpreter tests.
         fn concat(
             &mut self,
@@ -1527,6 +1580,11 @@ mod tests {
                 | EvalBinOp::Mul
                 | EvalBinOp::Div
                 | EvalBinOp::Mod
+                | EvalBinOp::BitAnd
+                | EvalBinOp::BitOr
+                | EvalBinOp::BitXor
+                | EvalBinOp::ShiftLeft
+                | EvalBinOp::ShiftRight
                 | EvalBinOp::Concat
                 | EvalBinOp::LogicalAnd
                 | EvalBinOp::LogicalOr
@@ -1708,6 +1766,28 @@ mod tests {
         assert_eq!(values.output, "4");
         assert_eq!(values.get(x), FakeValue::Int(4));
         assert_eq!(values.get(result), FakeValue::Float(4.5));
+    }
+
+    /// Verifies bitwise and shift operators evaluate through fake runtime hooks.
+    #[test]
+    fn execute_program_evaluates_bitwise_and_shift_ops() {
+        let program = parse_fragment(
+            br#"$x = 6; $x &= 3; echo $x; echo ":";
+$x = 4; $x |= 1; echo $x; echo ":";
+$x = 7; $x ^= 3; echo $x; echo ":";
+$x = 1; $x <<= 5; echo $x; echo ":";
+$x = 64; $x >>= 3; echo $x; echo ":";
+echo ~0; echo ":"; echo -16 >> 2;
+return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "2:5:4:32:8:-1:-4");
+        assert_eq!(values.get(result), FakeValue::Int(21));
     }
 
     /// Verifies simple variable increment and decrement statements update the scope value.

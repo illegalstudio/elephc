@@ -56,6 +56,13 @@ enum TokenKind {
     SlashEqual,
     Percent,
     PercentEqual,
+    Ampersand,
+    AmpEqual,
+    Pipe,
+    PipeEqual,
+    Caret,
+    CaretEqual,
+    Tilde,
     Dot,
     DotEqual,
     Equal,
@@ -68,8 +75,12 @@ enum TokenKind {
     OrOr,
     Less,
     LessEqual,
+    LessLess,
+    LessLessEqual,
     Greater,
     GreaterEqual,
+    GreaterGreater,
+    GreaterGreaterEqual,
     FatArrow,
     Question,
     QuestionQuestion,
@@ -226,8 +237,11 @@ impl<'a> Lexer<'a> {
                 if self.peek_char() == Some('&') {
                     self.bump_char();
                     Ok(TokenKind::AndAnd)
+                } else if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::AmpEqual)
                 } else {
-                    Err(EvalParseError::UnexpectedToken)
+                    Ok(TokenKind::Ampersand)
                 }
             }
             '|' => {
@@ -235,13 +249,37 @@ impl<'a> Lexer<'a> {
                 if self.peek_char() == Some('|') {
                     self.bump_char();
                     Ok(TokenKind::OrOr)
+                } else if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::PipeEqual)
                 } else {
-                    Err(EvalParseError::UnexpectedToken)
+                    Ok(TokenKind::Pipe)
                 }
+            }
+            '^' => {
+                self.bump_char();
+                if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::CaretEqual)
+                } else {
+                    Ok(TokenKind::Caret)
+                }
+            }
+            '~' => {
+                self.bump_char();
+                Ok(TokenKind::Tilde)
             }
             '<' => {
                 self.bump_char();
-                if self.peek_char() == Some('=') {
+                if self.peek_char() == Some('<') {
+                    self.bump_char();
+                    if self.peek_char() == Some('=') {
+                        self.bump_char();
+                        Ok(TokenKind::LessLessEqual)
+                    } else {
+                        Ok(TokenKind::LessLess)
+                    }
+                } else if self.peek_char() == Some('=') {
                     self.bump_char();
                     Ok(TokenKind::LessEqual)
                 } else {
@@ -250,7 +288,15 @@ impl<'a> Lexer<'a> {
             }
             '>' => {
                 self.bump_char();
-                if self.peek_char() == Some('=') {
+                if self.peek_char() == Some('>') {
+                    self.bump_char();
+                    if self.peek_char() == Some('=') {
+                        self.bump_char();
+                        Ok(TokenKind::GreaterGreaterEqual)
+                    } else {
+                        Ok(TokenKind::GreaterGreater)
+                    }
+                } else if self.peek_char() == Some('=') {
                     self.bump_char();
                     Ok(TokenKind::GreaterEqual)
                 } else {
@@ -1036,11 +1082,53 @@ impl Parser {
 
     /// Parses left-associative logical AND with lower precedence than equality.
     fn parse_logical_and(&mut self) -> Result<EvalExpr, EvalParseError> {
-        let mut expr = self.parse_equality()?;
+        let mut expr = self.parse_bit_or()?;
         while self.consume(TokenKind::AndAnd) {
-            let right = self.parse_equality()?;
+            let right = self.parse_bit_or()?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::LogicalAnd,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative bitwise OR with lower precedence than bitwise XOR.
+    fn parse_bit_or(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_bit_xor()?;
+        while self.consume(TokenKind::Pipe) {
+            let right = self.parse_bit_xor()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::BitOr,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative bitwise XOR with lower precedence than bitwise AND.
+    fn parse_bit_xor(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_bit_and()?;
+        while self.consume(TokenKind::Caret) {
+            let right = self.parse_bit_and()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::BitXor,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative bitwise AND with lower precedence than equality.
+    fn parse_bit_and(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_equality()?;
+        while self.consume(TokenKind::Ampersand) {
+            let right = self.parse_equality()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::BitAnd,
                 left: Box::new(expr),
                 right: Box::new(right),
             };
@@ -1075,7 +1163,7 @@ impl Parser {
 
     /// Parses left-associative ordered comparisons.
     fn parse_ordering(&mut self) -> Result<EvalExpr, EvalParseError> {
-        let mut expr = self.parse_concat()?;
+        let mut expr = self.parse_shift()?;
         loop {
             let op = if self.consume(TokenKind::Less) {
                 EvalBinOp::Lt
@@ -1085,6 +1173,27 @@ impl Parser {
                 EvalBinOp::Gt
             } else if self.consume(TokenKind::GreaterEqual) {
                 EvalBinOp::GtEq
+            } else {
+                break;
+            };
+            let right = self.parse_shift()?;
+            expr = EvalExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative integer shift operators.
+    fn parse_shift(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_concat()?;
+        loop {
+            let op = if self.consume(TokenKind::LessLess) {
+                EvalBinOp::ShiftLeft
+            } else if self.consume(TokenKind::GreaterGreater) {
+                EvalBinOp::ShiftRight
             } else {
                 break;
             };
@@ -1176,6 +1285,13 @@ impl Parser {
             let expr = self.parse_unary()?;
             return Ok(EvalExpr::Unary {
                 op: EvalUnaryOp::LogicalNot,
+                expr: Box::new(expr),
+            });
+        }
+        if self.consume(TokenKind::Tilde) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::BitNot,
                 expr: Box::new(expr),
             });
         }
@@ -1437,6 +1553,11 @@ fn assignment_op(token: &TokenKind) -> Option<Option<EvalBinOp>> {
         TokenKind::StarEqual => Some(Some(EvalBinOp::Mul)),
         TokenKind::SlashEqual => Some(Some(EvalBinOp::Div)),
         TokenKind::PercentEqual => Some(Some(EvalBinOp::Mod)),
+        TokenKind::AmpEqual => Some(Some(EvalBinOp::BitAnd)),
+        TokenKind::PipeEqual => Some(Some(EvalBinOp::BitOr)),
+        TokenKind::CaretEqual => Some(Some(EvalBinOp::BitXor)),
+        TokenKind::LessLessEqual => Some(Some(EvalBinOp::ShiftLeft)),
+        TokenKind::GreaterGreaterEqual => Some(Some(EvalBinOp::ShiftRight)),
         TokenKind::DotEqual => Some(Some(EvalBinOp::Concat)),
         _ => None,
     }
@@ -1511,6 +1632,49 @@ mod tests {
         );
     }
 
+    /// Verifies bitwise operators preserve PHP precedence.
+    #[test]
+    fn parse_fragment_accepts_bitwise_source() {
+        let program = parse_fragment(b"return ~0 | 2 ^ 3 & 4;").expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::BitOr,
+                left: Box::new(EvalExpr::Unary {
+                    op: EvalUnaryOp::BitNot,
+                    expr: Box::new(EvalExpr::Const(EvalConst::Int(0))),
+                }),
+                right: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::BitXor,
+                    left: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+                    right: Box::new(EvalExpr::Binary {
+                        op: EvalBinOp::BitAnd,
+                        left: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(4))),
+                    }),
+                }),
+            }))]
+        );
+    }
+
+    /// Verifies shift operators bind lower than additive expressions.
+    #[test]
+    fn parse_fragment_accepts_shift_source() {
+        let program = parse_fragment(b"return 1 + 2 << 3;").expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::ShiftLeft,
+                left: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::Add,
+                    left: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+                }),
+                right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+            }))]
+        );
+    }
+
     /// Verifies simple variable compound assignments lower to StoreVar with binary expressions.
     #[test]
     fn parse_fragment_accepts_compound_assignment_source() {
@@ -1566,6 +1730,58 @@ mod tests {
                         op: EvalBinOp::Concat,
                         left: Box::new(EvalExpr::LoadVar("s".to_string())),
                         right: Box::new(EvalExpr::Const(EvalConst::String("ok".to_string()))),
+                    },
+                },
+            ]
+        );
+    }
+
+    /// Verifies bitwise compound assignments lower to StoreVar with binary expressions.
+    #[test]
+    fn parse_fragment_accepts_bitwise_compound_assignment_source() {
+        let program = parse_fragment(br#"$x &= 3; $x |= 1; $x ^= 2; $x <<= 4; $x >>= 1;"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[
+                EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::BitAnd,
+                        left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+                    },
+                },
+                EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::BitOr,
+                        left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                    },
+                },
+                EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::BitXor,
+                        left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+                    },
+                },
+                EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::ShiftLeft,
+                        left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(4))),
+                    },
+                },
+                EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::ShiftRight,
+                        left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
                     },
                 },
             ]
