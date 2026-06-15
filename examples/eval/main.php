@@ -91,6 +91,7 @@ $contains = eval('return str_contains("dynamic eval", "eval") ? "contains" : "mi
 $boundaries = eval('return (str_starts_with("dynamic eval", "dynamic") ? "starts" : "missing") . ":" . (str_ends_with("dynamic eval", "eval") ? "ends" : "missing");');
 $trimmed = eval('return trim("  boxed  ") . ":" . ltrim("0007", "0") . ":" . chop("tail...", ".");');
 $aggregates = eval('return array_sum([1, 2, 3]) . ":" . array_product([2, 3, 4]);');
+$array_projection = eval('$vals = array_values(["a" => 10, "b" => 20]); $keys = array_keys(["a" => 10, "b" => 20]); return $keys[0] . ":" . $vals[1];');
 $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" . (strcasecmp("Hello", "hello") === 0 ? "ci" : "bad") . ":" . (hash_equals("abc", "abc") ? "hash" : "bad");');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
@@ -136,6 +137,7 @@ echo "contains=" . $contains . "\n";
 echo "boundaries=" . $boundaries . "\n";
 echo "trimmed=" . $trimmed . "\n";
 echo "aggregates=" . $aggregates . "\n";
+echo "array-projection=" . $array_projection . "\n";
 echo "string-compare=" . $string_compare . "\n";
 $counter = new EvalCounter();
 $counter->bump();

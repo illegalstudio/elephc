@@ -730,6 +730,9 @@ fn eval_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "abs" => eval_builtin_abs(args, context, scope, values),
+        "array_keys" | "array_values" => {
+            eval_builtin_array_projection(name, args, context, scope, values)
+        }
         "array_product" | "array_sum" => {
             eval_builtin_array_aggregate(name, args, context, scope, values)
         }
@@ -870,8 +873,10 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
     matches!(
         name,
         "abs"
+            | "array_keys"
             | "array_product"
             | "array_sum"
+            | "array_values"
             | "ceil"
             | "call_user_func"
             | "call_user_func_array"
@@ -1024,6 +1029,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_aggregate_result(name, *array, values)?
+        }
+        "array_keys" | "array_values" => {
+            let [array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_projection_result(name, *array, values)?
         }
         "ceil" => {
             let [value] = evaluated_args else {
@@ -1192,6 +1203,42 @@ fn eval_array_aggregate_result(
             "array_product" => values.mul(result, value)?,
             _ => return Err(EvalStatus::UnsupportedConstruct),
         };
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP array projection builtins over one eval array expression.
+fn eval_builtin_array_projection(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = eval_expr(array, context, scope, values)?;
+    eval_array_projection_result(name, array, values)
+}
+
+/// Builds the indexed result array for `array_keys()` or `array_values()`.
+fn eval_array_projection_result(
+    name: &str,
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut result = values.array_new(len)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = match name {
+            "array_keys" => key,
+            "array_values" => values.array_get(array, key)?,
+            _ => return Err(EvalStatus::UnsupportedConstruct),
+        };
+        let index = values.int(position as i64)?;
+        result = values.array_set(result, index, value)?;
     }
     Ok(result)
 }
@@ -3430,6 +3477,32 @@ return function_exists("array_product");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "6:24:0:1:7:7:10:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval array projection builtins produce indexed key/value arrays.
+    #[test]
+    fn execute_program_dispatches_array_projection_builtins() {
+        let program = parse_fragment(
+            br#"$values = array_values(["a" => 10, "b" => 20]);
+echo $values[0] . ":" . $values[1];
+$keys = array_keys(["a" => 10, "b" => 20]);
+echo ":" . $keys[0] . ":" . $keys[1];
+echo ":" . count(array_values([]));
+$call_keys = call_user_func("array_keys", ["z" => 7]);
+echo ":" . $call_keys[0];
+$call_values = call_user_func_array("array_values", [["q" => 8]]);
+echo ":" . $call_values[0];
+echo ":"; echo function_exists("array_keys");
+return function_exists("array_values");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "10:20:a:b:0:z:8:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

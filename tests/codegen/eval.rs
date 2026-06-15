@@ -646,6 +646,26 @@ echo ":"; echo function_exists("array_sum"); echo function_exists("array_product
     assert_eq!(out, "6:24:0:1:7:7:10:11");
 }
 
+/// Verifies eval array projection builtins return indexed key/value arrays.
+#[test]
+fn test_eval_dispatches_array_projection_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$values = array_values(["a" => 10, "b" => 20]);
+echo $values[0] . ":" . $values[1];
+$keys = array_keys(["a" => 10, "b" => 20]);
+echo ":" . $keys[0] . ":" . $keys[1];
+echo ":" . count(array_values([]));
+$call_keys = call_user_func("array_keys", ["z" => 7]);
+echo ":" . $call_keys[0];
+$call_values = call_user_func_array("array_values", [["q" => 8]]);
+echo ":" . $call_values[0];
+echo ":"; echo function_exists("array_keys"); echo function_exists("array_values");');
+"#,
+    );
+    assert_eq!(out, "10:20:a:b:0:z:8:11");
+}
+
 /// Verifies eval ASCII case-conversion builtins work directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_string_case_builtin_calls() {
