@@ -492,6 +492,30 @@ $box->run();
     assert_eq!(out, "42");
 }
 
+/// Verifies eval fragments pass one scalar argument to public AOT methods through `$this`.
+#[test]
+fn test_eval_fragment_can_call_this_public_one_arg_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodArgBox {
+    public int $x = 41;
+
+    public function add(int $amount): int {
+        return $this->x + $amount;
+    }
+
+    public function run(): void {
+        echo eval('return $this->add(9);');
+    }
+}
+
+$box = new EvalMethodArgBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "50");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {
