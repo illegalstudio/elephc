@@ -849,13 +849,26 @@ mod tests {
             method: &str,
             args: Vec<RuntimeCellHandle>,
         ) -> Result<RuntimeCellHandle, EvalStatus> {
-            if !args.is_empty() {
-                return Err(EvalStatus::UnsupportedConstruct);
-            }
             match (self.get(object), method) {
-                (FakeValue::Object(_), "answer") => self.int(42),
+                (FakeValue::Object(_), "answer") if args.is_empty() => self.int(42),
                 (FakeValue::Object(properties), "read_x") => {
+                    if !args.is_empty() {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    }
                     properties.get("x").copied().map_or_else(|| self.null(), Ok)
+                }
+                (FakeValue::Object(properties), "add_x") => {
+                    let [arg] = args.as_slice() else {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    };
+                    let x = properties.get("x").copied().ok_or(EvalStatus::RuntimeFatal)?;
+                    let FakeValue::Int(x) = self.get(x) else {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    };
+                    let FakeValue::Int(arg) = self.get(*arg) else {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    };
+                    self.int(x + arg)
                 }
                 _ => Err(EvalStatus::UnsupportedConstruct),
             }
@@ -1169,6 +1182,23 @@ mod tests {
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(42));
+    }
+
+    /// Verifies eval method calls forward evaluated arguments to the runtime hook.
+    #[test]
+    fn execute_program_calls_object_method_with_argument() {
+        let program = parse_fragment(br#"return $this->add_x(5);"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let x = values.int(7).expect("create fake int");
+        let mut properties = HashMap::new();
+        properties.insert("x".to_string(), x);
+        let object = values.alloc(FakeValue::Object(properties));
+        scope.set("this", object, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(12));
     }
 
     /// Verifies if/else executes only the PHP-truthy branch.

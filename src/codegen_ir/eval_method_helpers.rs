@@ -8,8 +8,8 @@
 //! Key details:
 //! - The cacheable runtime object cannot know user class ids, method symbols,
 //!   or return types, so this bridge is emitted into the user assembly.
-//! - This first method-call slice supports public zero-argument AOT methods and
-//!   reports unsupported calls as runtime failure to the eval bridge.
+//! - This method-call slice supports public AOT methods with zero or one
+//!   non-by-ref scalar argument and reports unsupported calls as runtime failure.
 
 use std::collections::BTreeMap;
 
@@ -30,6 +30,7 @@ struct EvalMethodSlot {
     class_name: String,
     method: String,
     impl_class: String,
+    params: Vec<PhpType>,
     return_ty: PhpType,
 }
 
@@ -72,7 +73,7 @@ fn function_uses_eval(function: &Function) -> bool {
         .any(|local| matches!(local.kind, LocalKind::EvalContext | LocalKind::EvalScope))
 }
 
-/// Collects public zero-argument instance methods backed by emitted EIR symbols.
+/// Collects public bridge-supported instance methods backed by emitted EIR symbols.
 fn collect_eval_method_slots(module: &Module) -> Vec<EvalMethodSlot> {
     let emitted_methods = super::eir_class_method_keys(module);
     let mut slots = Vec::new();
@@ -113,6 +114,11 @@ fn collect_class_method_slots(
             class_name: class_name.to_string(),
             method: method.clone(),
             impl_class: impl_class.to_string(),
+            params: sig
+                .params
+                .iter()
+                .map(|(_, ty)| ty.codegen_repr())
+                .collect(),
             return_ty: sig.return_type.codegen_repr(),
         });
     }
@@ -128,7 +134,21 @@ fn method_is_public(class_info: &ClassInfo, method: &str) -> bool {
 
 /// Returns true for method signatures supported by this first eval bridge slice.
 fn method_signature_supported(sig: &crate::types::FunctionSig) -> bool {
-    sig.params.is_empty() && sig.variadic.is_none()
+    sig.params.len() <= 1
+        && sig.variadic.is_none()
+        && sig.ref_params.iter().all(|is_ref| !*is_ref)
+        && sig
+            .params
+            .iter()
+            .all(|(_, ty)| method_param_supported(ty))
+}
+
+/// Returns true for one eval-supplied method argument type supported by this bridge.
+fn method_param_supported(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+    )
 }
 
 /// Returns true for return storage shapes the bridge can box for eval.
@@ -184,13 +204,9 @@ fn emit_method_call_aarch64(
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("b.ne {}", fail_label));                       // non-object receivers cannot dispatch instance methods
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for method calls
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
-    abi::emit_call_label(emitter, &array_len_symbol);
-    emitter.instruction(&format!("cbnz x0, {}", fail_label));                   // this bridge slice only supports zero-argument methods
     emit_aarch64_method_dispatch(module, emitter, data, slots);
-    emitter.instruction(&format!("b {}", fail_label));                          // no public zero-argument method matched the request
-    emit_aarch64_method_bodies(module, emitter, slots, done_label);
+    emitter.instruction(&format!("b {}", fail_label));                          // no supported public method matched the request
+    emit_aarch64_method_bodies(module, emitter, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
@@ -210,7 +226,7 @@ fn emit_method_call_x86_64(
     let done_label = "__elephc_eval_value_method_call_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for name, length, object, and args
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for name, length, object, args, and first argument
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested method-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested method-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed eval argument array
@@ -221,14 +237,9 @@ fn emit_method_call_x86_64(
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("jne {}", fail_label));                        // non-object receivers cannot dispatch instance methods
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for method calls
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the eval argument array for arity validation
-    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
-    abi::emit_call_label(emitter, &array_len_symbol);
-    emitter.instruction("test rax, rax");                                       // check whether eval supplied any method arguments
-    emitter.instruction(&format!("jnz {}", fail_label));                        // this bridge slice only supports zero-argument methods
     emit_x86_64_method_dispatch(module, emitter, data, slots);
-    emitter.instruction(&format!("jmp {}", fail_label));                        // no public zero-argument method matched the request
-    emit_x86_64_method_bodies(module, emitter, slots, done_label);
+    emitter.instruction(&format!("jmp {}", fail_label));                        // no supported public method matched the request
+    emit_x86_64_method_bodies(module, emitter, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
@@ -318,10 +329,12 @@ fn emit_aarch64_method_bodies(
     emitter: &mut Emitter,
     slots: &[EvalMethodSlot],
     done_label: &str,
+    fail_label: &str,
 ) {
     for slot in slots {
         emitter.label(&method_body_label(module, slot));
-        emitter.instruction("ldr x0, [sp, #16]");                               // pass the unboxed receiver as the method's `$this` argument
+        emit_aarch64_validate_method_arg_count(module, emitter, slot, fail_label);
+        emit_aarch64_prepare_method_args(module, emitter, slot);
         abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, &slot.method));
         emit_box_method_result(module, emitter, slot);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native method result
@@ -334,13 +347,148 @@ fn emit_x86_64_method_bodies(
     emitter: &mut Emitter,
     slots: &[EvalMethodSlot],
     done_label: &str,
+    fail_label: &str,
 ) {
     for slot in slots {
         emitter.label(&method_body_label(module, slot));
-        emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                   // pass the unboxed receiver as the method's `$this` argument
+        emit_x86_64_validate_method_arg_count(module, emitter, slot, fail_label);
+        emit_x86_64_prepare_method_args(module, emitter, slot);
         abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, &slot.method));
         emit_box_method_result(module, emitter, slot);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native method result
+    }
+}
+
+/// Emits ARM64 arity validation for one method body.
+fn emit_aarch64_validate_method_arg_count(
+    module: &Module,
+    emitter: &mut Emitter,
+    slot: &EvalMethodSlot,
+    fail_label: &str,
+) {
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for arity validation
+    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    abi::emit_call_label(emitter, &array_len_symbol);
+    abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
+    emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the method signature
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject method dispatch when arity differs
+}
+
+/// Emits x86_64 arity validation for one method body.
+fn emit_x86_64_validate_method_arg_count(
+    module: &Module,
+    emitter: &mut Emitter,
+    slot: &EvalMethodSlot,
+    fail_label: &str,
+) {
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the eval argument array for arity validation
+    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    abi::emit_call_label(emitter, &array_len_symbol);
+    abi::emit_load_int_immediate(emitter, "r10", slot.params.len() as i64);
+    emitter.instruction("cmp rax, r10");                                        // compare supplied eval argument count with the method signature
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject method dispatch when arity differs
+}
+
+/// Prepares ARM64 method ABI registers for the supported argument shapes.
+fn emit_aarch64_prepare_method_args(
+    module: &Module,
+    emitter: &mut Emitter,
+    slot: &EvalMethodSlot,
+) {
+    if let Some(param_ty) = slot.params.first() {
+        emit_aarch64_load_first_eval_arg(module, emitter);
+        emit_aarch64_cast_first_eval_arg(emitter, param_ty);
+    }
+    emitter.instruction("ldr x0, [sp, #16]");                                   // pass the unboxed receiver as the method's `$this` argument
+}
+
+/// Prepares x86_64 method ABI registers for the supported argument shapes.
+fn emit_x86_64_prepare_method_args(
+    module: &Module,
+    emitter: &mut Emitter,
+    slot: &EvalMethodSlot,
+) {
+    if let Some(param_ty) = slot.params.first() {
+        emit_x86_64_load_first_eval_arg(module, emitter);
+        emit_x86_64_cast_first_eval_arg(emitter, param_ty);
+    }
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the unboxed receiver as the method's `$this` argument
+}
+
+/// Loads the first eval argument into an ARM64 spill slot as a boxed Mixed cell.
+fn emit_aarch64_load_first_eval_arg(module: &Module, emitter: &mut Emitter) {
+    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
+    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
+    emitter.instruction("mov x0, xzr");                                         // materialize eval argument index 0
+    abi::emit_call_label(emitter, &value_int_symbol);
+    emitter.instruction("str x0, [sp, #32]");                                   // save the boxed index while loading from the argument array
+    emitter.instruction("ldr x1, [sp, #32]");                                   // pass the boxed index to the eval array reader
+    emitter.instruction("ldr x0, [sp, #24]");                                   // pass the eval argument array to the reader
+    abi::emit_call_label(emitter, &array_get_symbol);
+    emitter.instruction("str x0, [sp, #32]");                                   // save the boxed first argument for coercion
+}
+
+/// Loads the first eval argument into an x86_64 spill slot as a boxed Mixed cell.
+fn emit_x86_64_load_first_eval_arg(module: &Module, emitter: &mut Emitter) {
+    let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
+    let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
+    emitter.instruction("xor edi, edi");                                        // materialize eval argument index 0
+    abi::emit_call_label(emitter, &value_int_symbol);
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed index while loading from the argument array
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the boxed index to the eval array reader
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the eval argument array to the reader
+    abi::emit_call_label(emitter, &array_get_symbol);
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed first argument for coercion
+}
+
+/// Casts the first boxed eval argument into ARM64 method argument registers.
+fn emit_aarch64_cast_first_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
+    match param_ty.codegen_repr() {
+        PhpType::Int => {
+            emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval argument for integer coercion
+            emitter.instruction("bl __rt_mixed_cast_int");                      // coerce the eval argument to a PHP int
+            emitter.instruction("mov x1, x0");                                  // pass the coerced integer as the first visible method argument
+        }
+        PhpType::Bool => {
+            emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval argument for boolean coercion
+            emitter.instruction("bl __rt_mixed_cast_bool");                     // coerce the eval argument to a PHP bool
+            emitter.instruction("mov x1, x0");                                  // pass the coerced boolean as the first visible method argument
+        }
+        PhpType::Float => {
+            emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval argument for float coercion
+            emitter.instruction("bl __rt_mixed_cast_float");                    // coerce the eval argument to a PHP float in d0
+        }
+        PhpType::Str => {
+            emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval argument for string coercion
+            emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval argument to a PHP string pair in x1/x2
+        }
+        _ => {}
+    }
+}
+
+/// Casts the first boxed eval argument into x86_64 method argument registers.
+fn emit_x86_64_cast_first_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
+    match param_ty.codegen_repr() {
+        PhpType::Int => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion
+            emitter.instruction("call __rt_mixed_cast_int");                    // coerce the eval argument to a PHP int
+            emitter.instruction("mov rsi, rax");                                // pass the coerced integer as the first visible method argument
+        }
+        PhpType::Bool => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for boolean coercion
+            emitter.instruction("call __rt_mixed_cast_bool");                   // coerce the eval argument to a PHP bool
+            emitter.instruction("mov rsi, rax");                                // pass the coerced boolean as the first visible method argument
+        }
+        PhpType::Float => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for float coercion
+            emitter.instruction("call __rt_mixed_cast_float");                  // coerce the eval argument to a PHP float in xmm0
+        }
+        PhpType::Str => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for string coercion
+            emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval argument to a PHP string pair
+            emitter.instruction("mov rsi, rax");                                // pass the coerced string pointer as the first visible method argument
+        }
+        _ => {}
     }
 }
 

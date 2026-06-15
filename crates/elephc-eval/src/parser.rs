@@ -1232,6 +1232,25 @@ mod tests {
         );
     }
 
+    /// Verifies object method calls preserve source-order argument expressions.
+    #[test]
+    fn parse_fragment_accepts_method_call_args_source() {
+        let program =
+            parse_fragment(br#"return $this->add($x + 1);"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::MethodCall {
+                object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                method: "add".to_string(),
+                args: vec![EvalExpr::Binary {
+                    op: EvalBinOp::Add,
+                    left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                }],
+            }))]
+        );
+    }
+
     /// Verifies object property writes parse as dedicated EvalIR statements.
     #[test]
     fn parse_fragment_accepts_property_write_source() {
