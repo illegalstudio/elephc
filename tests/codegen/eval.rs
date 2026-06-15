@@ -658,6 +658,20 @@ eval('echo STRLEN("abcd") . ":" . count([1, 2, 3]);');
     assert_eq!(out, "4:3");
 }
 
+/// Verifies eval direct builtin calls bind named arguments and spread arrays.
+#[test]
+fn test_eval_dispatches_named_and_spread_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strlen(string: "abcd");
+echo ":" . (array_key_exists(array: ["name" => 1], key: "name") ? "Y" : "N");
+echo ":" . round(precision: 1, num: 3.14);
+echo ":" . (str_contains(...["haystack" => "abc", "needle" => "b"]) ? "Y" : "N");');
+"#,
+    );
+    assert_eq!(out, "4:Y:3.1:Y");
+}
+
 /// Verifies eval `ord()` returns the first byte and dispatches dynamically.
 #[test]
 fn test_eval_dispatches_ord_builtin_call() {

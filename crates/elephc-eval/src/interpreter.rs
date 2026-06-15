@@ -839,9 +839,16 @@ fn eval_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if eval_positional_expr_call_name(name) {
+    if eval_expr_language_construct_name(name) {
         let args = positional_call_arg_exprs(args)?;
         return eval_positional_expr_call(name, &args, context, scope, values);
+    }
+    if eval_php_visible_builtin_exists(name) {
+        if eval_call_args_are_plain_positional(args) {
+            let args = positional_call_arg_exprs(args)?;
+            return eval_positional_expr_call(name, &args, context, scope, values);
+        }
+        return eval_builtin_call(name, args, context, scope, values);
     }
 
     if let Some(function) = context.function(name).cloned() {
@@ -853,9 +860,15 @@ fn eval_call(
     Err(EvalStatus::UnsupportedConstruct)
 }
 
-/// Returns true for eval calls that still accept only positional expressions.
-fn eval_positional_expr_call_name(name: &str) -> bool {
-    matches!(name, "empty" | "eval" | "isset") || eval_php_visible_builtin_exists(name)
+/// Returns true for language constructs that need unevaluated argument expressions.
+fn eval_expr_language_construct_name(name: &str) -> bool {
+    matches!(name, "empty" | "eval" | "isset")
+}
+
+/// Returns true when every source argument is plain positional.
+fn eval_call_args_are_plain_positional(args: &[EvalCallArg]) -> bool {
+    args.iter()
+        .all(|arg| arg.name().is_none() && !arg.is_spread())
 }
 
 /// Evaluates builtins and language constructs after positional-only argument validation.
@@ -1074,6 +1087,109 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "trim"
             | "ucfirst"
     )
+}
+
+/// Evaluates a direct PHP-visible builtin call with named or spread arguments.
+fn eval_builtin_call(
+    name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+    let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args)?;
+    let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
+        return Err(EvalStatus::UnsupportedConstruct);
+    };
+    Ok(result)
+}
+
+/// Binds evaluated builtin arguments to PHP parameter order when names are used.
+fn bind_evaluated_builtin_args(
+    name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    if evaluated_args.iter().all(|arg| arg.name.is_none()) {
+        return Ok(evaluated_args.into_iter().map(|arg| arg.value).collect());
+    }
+
+    let params = eval_builtin_param_names(name).ok_or(EvalStatus::RuntimeFatal)?;
+    let mut bound_args = vec![None; params.len()];
+    let mut next_positional = 0;
+
+    for arg in evaluated_args {
+        if let Some(name) = arg.name {
+            bind_builtin_named_arg(params, &mut bound_args, &name, arg.value)?;
+        } else {
+            bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, arg.value)?;
+        }
+    }
+
+    collect_contiguous_bound_args(bound_args)
+}
+
+/// Binds one named builtin-call value to the matching PHP parameter slot.
+fn bind_builtin_named_arg(
+    params: &[&str],
+    bound_args: &mut [Option<RuntimeCellHandle>],
+    name: &str,
+    value: RuntimeCellHandle,
+) -> Result<(), EvalStatus> {
+    let Some(param_index) = params.iter().position(|param| *param == name) else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if bound_args[param_index].is_some() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    bound_args[param_index] = Some(value);
+    Ok(())
+}
+
+/// Collects ordered bound arguments, rejecting gaps where defaults would be needed.
+fn collect_contiguous_bound_args(
+    bound_args: Vec<Option<RuntimeCellHandle>>,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let Some(last_index) = bound_args.iter().rposition(Option::is_some) else {
+        return Ok(Vec::new());
+    };
+    bound_args
+        .into_iter()
+        .take(last_index + 1)
+        .collect::<Option<Vec<_>>>()
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Returns PHP parameter names for builtin calls implemented by eval.
+fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
+    match name {
+        "abs" | "ceil" | "floor" | "sqrt" => Some(&["num"]),
+        "array_keys" | "array_product" | "array_sum" | "array_values" => Some(&["array"]),
+        "array_key_exists" => Some(&["key", "array"]),
+        "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
+        "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
+        | "is_float" | "is_int" | "is_integer" | "is_long" | "is_null" | "is_numeric"
+        | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
+        "call_user_func" => Some(&["callback"]),
+        "call_user_func_array" => Some(&["callback", "args"]),
+        "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
+        "count" => Some(&["value", "mode"]),
+        "fdiv" | "fmod" => Some(&["num1", "num2"]),
+        "function_exists" => Some(&["function"]),
+        "hash_equals" => Some(&["known_string", "user_string"]),
+        "max" | "min" => Some(&["value"]),
+        "ord" => Some(&["character"]),
+        "pi" => Some(&[]),
+        "pow" => Some(&["num", "exponent"]),
+        "round" => Some(&["num", "precision"]),
+        "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
+        "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
+        "strpos" | "strrpos" => Some(&["haystack", "needle", "offset"]),
+        "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
+            Some(&["string"])
+        }
+        _ => None,
+    }
 }
 
 /// Evaluates `call_user_func($name, ...$args)` inside a runtime eval fragment.
@@ -4247,6 +4363,25 @@ return call_user_func_array("dyn", ["y" => 2, 1]);"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(6));
+    }
+
+    /// Verifies direct eval builtin calls bind named and unpacked arguments.
+    #[test]
+    fn execute_program_dispatches_named_and_spread_builtins() {
+        let program = parse_fragment(
+            br#"echo strlen(string: "abcd");
+echo ":" . (array_key_exists(array: ["name" => 1], key: "name") ? "Y" : "N");
+echo ":" . (str_contains(...["haystack" => "abc", "needle" => "b"]) ? "Y" : "N");
+return round(precision: 1, num: 3.14);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "4:Y:Y");
+        assert_eq!(values.get(result), FakeValue::Float(3.1));
     }
 
     /// Verifies eval `ord()` returns the first byte and supports callable dispatch.
