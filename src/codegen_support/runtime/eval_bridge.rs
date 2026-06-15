@@ -339,6 +339,76 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #32");                                     // release the modulo wrapper frame
     emitter.instruction("ret");                                                 // return the boxed modulo result to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_bit_not");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame for the cast helper call
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across the cast
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_cast_int");                              // cast the boxed operand to a PHP integer
+    emitter.instruction("mvn x1, x0");                                          // compute bitwise complement of the integer payload
+    emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the bitwise NOT result into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the bitwise NOT wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed bitwise NOT result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_bitwise");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate wrapper slots for right operand, opcode, and left integer
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while casting the left operand
+    emitter.instruction("str x2, [sp, #8]");                                    // save the eval bitwise opcode across helper calls
+    emitter.instruction("bl __rt_mixed_cast_int");                              // cast the left boxed operand to a PHP integer
+    emitter.instruction("str x0, [sp, #16]");                                   // save the left integer across the right cast
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for integer casting
+    emitter.instruction("bl __rt_mixed_cast_int");                              // cast the right boxed operand to a PHP integer
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload the left integer into the payload register
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the eval bitwise opcode for dispatch
+    emitter.instruction("cmp x2, #0");                                          // is this integer bitwise AND?
+    emitter.instruction("b.eq __elephc_eval_value_bitwise_and");                // route opcode 0 to integer AND
+    emitter.instruction("cmp x2, #1");                                          // is this integer bitwise OR?
+    emitter.instruction("b.eq __elephc_eval_value_bitwise_or");                 // route opcode 1 to integer OR
+    emitter.instruction("cmp x2, #2");                                          // is this integer bitwise XOR?
+    emitter.instruction("b.eq __elephc_eval_value_bitwise_xor");                // route opcode 2 to integer XOR
+    emitter.instruction("cmp x2, #3");                                          // is this integer left shift?
+    emitter.instruction("b.eq __elephc_eval_value_bitwise_shl");                // route opcode 3 to integer left shift
+    emitter.instruction("cmp x2, #4");                                          // is this integer right shift?
+    emitter.instruction("b.eq __elephc_eval_value_bitwise_shr");                // route opcode 4 to integer right shift
+    emitter.instruction("b __elephc_eval_value_bitwise_null");                  // fail closed for unknown bitwise opcodes
+    emitter.label("__elephc_eval_value_bitwise_and");
+    emitter.instruction("and x1, x1, x0");                                      // compute integer bitwise AND
+    emitter.instruction("b __elephc_eval_value_bitwise_box");                   // box the integer bitwise result
+    emitter.label("__elephc_eval_value_bitwise_or");
+    emitter.instruction("orr x1, x1, x0");                                      // compute integer bitwise OR
+    emitter.instruction("b __elephc_eval_value_bitwise_box");                   // box the integer bitwise result
+    emitter.label("__elephc_eval_value_bitwise_xor");
+    emitter.instruction("eor x1, x1, x0");                                      // compute integer bitwise XOR
+    emitter.instruction("b __elephc_eval_value_bitwise_box");                   // box the integer bitwise result
+    emitter.label("__elephc_eval_value_bitwise_shl");
+    emitter.instruction("cmp x0, #0");                                          // negative shift counts are runtime errors in PHP
+    emitter.instruction("b.lt __elephc_eval_value_bitwise_null");               // return null until eval has throwable propagation
+    emitter.instruction("lsl x1, x1, x0");                                      // shift the integer payload left
+    emitter.instruction("b __elephc_eval_value_bitwise_box");                   // box the integer shift result
+    emitter.label("__elephc_eval_value_bitwise_shr");
+    emitter.instruction("cmp x0, #0");                                          // negative shift counts are runtime errors in PHP
+    emitter.instruction("b.lt __elephc_eval_value_bitwise_null");               // return null until eval has throwable propagation
+    emitter.instruction("asr x1, x1, x0");                                      // shift the integer payload right arithmetically
+    emitter.instruction("b __elephc_eval_value_bitwise_box");                   // box the integer shift result
+    emitter.label("__elephc_eval_value_bitwise_box");
+    emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the bitwise result into a Mixed cell
+    emitter.instruction("b __elephc_eval_value_bitwise_done");                  // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_bitwise_null");
+    emitter.instruction("mov x0, #8");                                          // runtime tag 8 = null fallback for unsupported bitwise errors
+    emitter.instruction("mov x1, xzr");                                         // null has no low payload word
+    emitter.instruction("mov x2, xzr");                                         // null has no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box null for unsupported bitwise error propagation
+    emitter.label("__elephc_eval_value_bitwise_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the bitwise wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed bitwise result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_concat");
     emitter.instruction("sub sp, sp, #64");                                     // allocate wrapper frame for the right operand and string pairs
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address across helper calls
@@ -936,6 +1006,81 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the modulo wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed modulo result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_bit_not");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // keep stack alignment for the cast and boxing calls
+    emitter.instruction("mov rax, rdi");                                        // move the boxed operand into mixed_cast_int input
+    emitter.instruction("call __rt_mixed_cast_int");                            // cast the boxed operand to a PHP integer
+    emitter.instruction("not rax");                                             // compute bitwise complement of the integer payload
+    emitter.instruction("mov rdi, rax");                                        // move the complement into mixed value_lo
+    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
+    emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer
+    emitter.instruction("call __rt_mixed_from_value");                          // box the bitwise NOT result into a Mixed cell
+    emitter.instruction("add rsp, 16");                                         // release the bitwise NOT wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed bitwise NOT result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_bitwise");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for right operand, opcode, and left integer
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the eval bitwise opcode across helper calls
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_int input
+    emitter.instruction("call __rt_mixed_cast_int");                            // cast the left boxed operand to a PHP integer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the left integer across the right cast
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for integer casting
+    emitter.instruction("call __rt_mixed_cast_int");                            // cast the right boxed operand to a PHP integer
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the left integer into the payload register
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the eval bitwise opcode for dispatch
+    emitter.instruction("cmp r10, 0");                                          // is this integer bitwise AND?
+    emitter.instruction("je __elephc_eval_value_bitwise_and_x86");              // route opcode 0 to integer AND
+    emitter.instruction("cmp r10, 1");                                          // is this integer bitwise OR?
+    emitter.instruction("je __elephc_eval_value_bitwise_or_x86");               // route opcode 1 to integer OR
+    emitter.instruction("cmp r10, 2");                                          // is this integer bitwise XOR?
+    emitter.instruction("je __elephc_eval_value_bitwise_xor_x86");              // route opcode 2 to integer XOR
+    emitter.instruction("cmp r10, 3");                                          // is this integer left shift?
+    emitter.instruction("je __elephc_eval_value_bitwise_shl_x86");              // route opcode 3 to integer left shift
+    emitter.instruction("cmp r10, 4");                                          // is this integer right shift?
+    emitter.instruction("je __elephc_eval_value_bitwise_shr_x86");              // route opcode 4 to integer right shift
+    emitter.instruction("jmp __elephc_eval_value_bitwise_null_x86");            // fail closed for unknown bitwise opcodes
+    emitter.label("__elephc_eval_value_bitwise_and_x86");
+    emitter.instruction("and rdi, rax");                                        // compute integer bitwise AND
+    emitter.instruction("jmp __elephc_eval_value_bitwise_box_x86");             // box the integer bitwise result
+    emitter.label("__elephc_eval_value_bitwise_or_x86");
+    emitter.instruction("or rdi, rax");                                         // compute integer bitwise OR
+    emitter.instruction("jmp __elephc_eval_value_bitwise_box_x86");             // box the integer bitwise result
+    emitter.label("__elephc_eval_value_bitwise_xor_x86");
+    emitter.instruction("xor rdi, rax");                                        // compute integer bitwise XOR
+    emitter.instruction("jmp __elephc_eval_value_bitwise_box_x86");             // box the integer bitwise result
+    emitter.label("__elephc_eval_value_bitwise_shl_x86");
+    emitter.instruction("test rax, rax");                                       // negative shift counts are runtime errors in PHP
+    emitter.instruction("js __elephc_eval_value_bitwise_null_x86");             // return null until eval has throwable propagation
+    emitter.instruction("mov rcx, rax");                                        // move the shift count into the x86 shift-count register
+    emitter.instruction("shl rdi, cl");                                         // shift the integer payload left
+    emitter.instruction("jmp __elephc_eval_value_bitwise_box_x86");             // box the integer shift result
+    emitter.label("__elephc_eval_value_bitwise_shr_x86");
+    emitter.instruction("test rax, rax");                                       // negative shift counts are runtime errors in PHP
+    emitter.instruction("js __elephc_eval_value_bitwise_null_x86");             // return null until eval has throwable propagation
+    emitter.instruction("mov rcx, rax");                                        // move the shift count into the x86 shift-count register
+    emitter.instruction("sar rdi, cl");                                         // shift the integer payload right arithmetically
+    emitter.instruction("jmp __elephc_eval_value_bitwise_box_x86");             // box the integer shift result
+    emitter.label("__elephc_eval_value_bitwise_box_x86");
+    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
+    emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer
+    emitter.instruction("call __rt_mixed_from_value");                          // box the bitwise result into a Mixed cell
+    emitter.instruction("jmp __elephc_eval_value_bitwise_done_x86");            // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_bitwise_null_x86");
+    emitter.instruction("mov eax, 8");                                          // runtime tag 8 = null fallback for unsupported bitwise errors
+    emitter.instruction("xor edi, edi");                                        // null has no low payload word
+    emitter.instruction("xor esi, esi");                                        // null has no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box null for unsupported bitwise error propagation
+    emitter.label("__elephc_eval_value_bitwise_done_x86");
+    emitter.instruction("add rsp, 32");                                         // release the bitwise wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed bitwise result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_concat");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls

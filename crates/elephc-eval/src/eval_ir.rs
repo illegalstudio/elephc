@@ -228,6 +228,11 @@ pub enum EvalBinOp {
     Mul,
     Div,
     Mod,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
     Concat,
     LogicalAnd,
     LogicalOr,
@@ -248,4 +253,5 @@ pub enum EvalUnaryOp {
     Plus,
     Negate,
     LogicalNot,
+    BitNot,
 }

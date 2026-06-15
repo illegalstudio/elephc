@@ -65,6 +65,7 @@ $incdec = eval('$i = 0; $i++; ++$i; return $i;');
 $negative = eval('return -5 + +2;');
 $quotient = eval('return 9 / 2;');
 $modulo = eval('$n = 20; $n /= 2; return $n % 6;');
+$bitwise = eval('return (5 & 3) | (1 << 2);');
 $magic_line = eval("
 return __LINE__;
 ");
@@ -96,6 +97,7 @@ echo "incdec=" . $incdec . "\n";
 echo "negative=" . $negative . "\n";
 echo "quotient=" . $quotient . "\n";
 echo "modulo=" . $modulo . "\n";
+echo "bitwise=" . $bitwise . "\n";
 echo "magic-line=" . $magic_line . "\n";
 echo "magic-function=" . $magic_function . "\n";
 echo "magic-method=" . $magic_method . "\n";
