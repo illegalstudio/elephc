@@ -81,6 +81,7 @@ $magic_scope = eval('return "[" . __CLASS__ . "|" . __NAMESPACE__ . "|" . __TRAI
 $type_checks = eval('return (is_int(1) ? "i" : "?") . (is_string("x") ? "s" : "?") . (is_array([1]) ? "a" : "?");');
 $casts = eval('return strval(intval("42")) . ":" . strval(floatval("3.5")) . ":" . (boolval("0") ? "true" : "false");');
 $type_name = eval('return gettype(["ok"]);');
+$absolute = eval('return abs(-7) . ":" . gettype(abs(-2.5));');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -115,6 +116,7 @@ echo "magic-scope=" . $magic_scope . "\n";
 echo "type-checks=" . $type_checks . "\n";
 echo "casts=" . $casts . "\n";
 echo "type-name=" . $type_name . "\n";
+echo "absolute=" . $absolute . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";

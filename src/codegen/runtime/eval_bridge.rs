@@ -367,6 +367,9 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("b __rt_mixed_from_value");                             // persist and box the string payload for eval
 
+    label_c_global(emitter, "__elephc_eval_value_abs");
+    emitter.instruction("b __rt_abs_mixed");                                    // compute PHP abs() for one boxed eval value
+
     label_c_global(emitter, "__elephc_eval_value_add");
     emitter.instruction("b __rt_mixed_numeric_add");                            // add two boxed mixed values and return the boxed result
 
@@ -1165,6 +1168,10 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_string");
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string, with C ptr/len already in rdi/rsi
     emitter.instruction("jmp __rt_mixed_from_value");                           // persist and box the string payload for eval
+
+    label_c_global(emitter, "__elephc_eval_value_abs");
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into abs_mixed input
+    emitter.instruction("jmp __rt_abs_mixed");                                  // compute PHP abs() for one boxed eval value
 
     label_c_global(emitter, "__elephc_eval_value_add");
     emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into the internal result register

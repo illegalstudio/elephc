@@ -687,6 +687,22 @@ echo ":"; echo function_exists("gettype");');
     );
 }
 
+/// Verifies eval `abs()` preserves integer/float result typing through direct and callable calls.
+#[test]
+fn test_eval_dispatches_abs_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo abs(-5); echo ":";
+echo abs(-2.5); echo ":";
+echo gettype(abs(-2.5)); echo ":";
+echo call_user_func("abs", -7); echo ":";
+echo call_user_func_array("abs", [-9]);
+echo ":"; echo function_exists("abs");');
+"#,
+    );
+    assert_eq!(out, "5:2.5:double:7:9:1");
+}
+
 /// Verifies eval `isset()` distinguishes missing, null, and falsey non-null values.
 #[test]
 fn test_eval_isset_distinguishes_missing_null_and_falsey_values() {

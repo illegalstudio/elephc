@@ -124,6 +124,9 @@ pub trait RuntimeValueOps {
     /// Casts one runtime cell to a boxed PHP boolean cell.
     fn cast_bool(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Computes PHP `abs()` for one runtime cell while preserving integer/float result typing.
+    fn abs(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Adds two runtime cells using PHP addition semantics.
     fn add(
         &mut self,
@@ -710,6 +713,7 @@ fn eval_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
+        "abs" => eval_builtin_abs(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "boolval" | "floatval" | "intval" | "strval" => {
@@ -832,7 +836,8 @@ fn eval_function_probe_exists(context: &ElephcEvalContext, name: &str) -> bool {
 fn eval_php_visible_builtin_exists(name: &str) -> bool {
     matches!(
         name,
-        "call_user_func"
+        "abs"
+            | "call_user_func"
             | "call_user_func_array"
             | "boolval"
             | "count"
@@ -955,6 +960,12 @@ fn eval_builtin_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
+        "abs" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            values.abs(*value)?
+        }
         "call_user_func" => {
             return eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)
                 .map(Some);
@@ -1013,6 +1024,20 @@ fn eval_builtin_with_values(
         _ => return Ok(None),
     };
     Ok(Some(result))
+}
+
+/// Evaluates PHP's `abs(...)` over one eval expression.
+fn eval_builtin_abs(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    values.abs(value)
 }
 
 /// Evaluates PHP scalar cast builtins over one eval expression.
@@ -1678,6 +1703,14 @@ mod tests {
             let value = self.get(value);
             let value = self.fake_truthy(&value);
             self.bool_value(value)
+        }
+
+        /// Computes fake PHP absolute value while preserving float payloads.
+        fn abs(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+            match self.get(value) {
+                FakeValue::Float(value) => self.float(value.abs()),
+                value => self.int(self.fake_int(&value).wrapping_abs()),
+            }
         }
 
         /// Adds fake numeric cells for interpreter tests.
@@ -2919,6 +2952,27 @@ return function_exists("gettype");"#,
             values.output,
             "integer:double:string:boolean:NULL:array:array:boolean:NULL"
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `abs()` dispatches through runtime numeric hooks directly and by callable.
+    #[test]
+    fn execute_program_dispatches_abs_builtin() {
+        let program = parse_fragment(
+            br#"echo abs(-5); echo ":";
+echo abs(-2.5); echo ":";
+echo gettype(abs(-2.5)); echo ":";
+echo call_user_func("abs", -7); echo ":";
+echo call_user_func_array("abs", [-9]);
+return function_exists("abs");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "5:2.5:double:7:9");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
