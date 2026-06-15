@@ -762,6 +762,7 @@ fn eval_call(
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
         "max" | "min" => eval_builtin_min_max(name, args, context, scope, values),
         "ord" => eval_builtin_ord(args, context, scope, values),
+        "pi" => eval_builtin_pi(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
         "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
@@ -917,6 +918,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "max"
             | "min"
             | "ord"
+            | "pi"
             | "pow"
             | "rtrim"
             | "round"
@@ -1071,6 +1073,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.floor(*value)?
+        }
+        "pi" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            values.float(std::f64::consts::PI)?
         }
         "pow" => {
             let [left, right] = evaluated_args else {
@@ -1349,6 +1357,17 @@ fn eval_builtin_floor(
     };
     let value = eval_expr(value, context, scope, values)?;
     values.floor(value)
+}
+
+/// Evaluates PHP's zero-argument `pi()` builtin.
+fn eval_builtin_pi(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    values.float(std::f64::consts::PI)
 }
 
 /// Evaluates PHP's `pow(...)` over two eval expressions.
@@ -4114,6 +4133,26 @@ return function_exists("max");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "1:3:1.5:2.5:4:8:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `pi()` returns a double constant directly and through callable paths.
+    #[test]
+    fn execute_program_dispatches_pi_builtin() {
+        let program = parse_fragment(
+            br#"echo round(pi(), 2); echo ":";
+echo gettype(pi()); echo ":";
+echo round(call_user_func("pi"), 3); echo ":";
+echo round(call_user_func_array("pi", []), 4); echo ":";
+return function_exists("pi");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "3.14:double:3.142:3.1416:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
