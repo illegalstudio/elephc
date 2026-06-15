@@ -227,6 +227,19 @@ fn test_eval_unary_numeric_operators_execute_through_bridge() {
     assert_eq!(out, "-3");
 }
 
+/// Verifies eval simple variable compound assignments execute through existing value hooks.
+#[test]
+fn test_eval_compound_assignment_executes_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$x = 2; $x += 3; $x *= 4; $x -= 5; $s = "v"; $s .= $x; echo $s;');
+echo ":";
+eval('for ($i = 0; $i < 3; $i += 1) { echo $i; }');
+"#,
+    );
+    assert_eq!(out, "v15:012");
+}
+
 /// Verifies eval if/else branches use PHP truthiness and update the caller scope.
 #[test]
 fn test_eval_if_else_updates_scope() {

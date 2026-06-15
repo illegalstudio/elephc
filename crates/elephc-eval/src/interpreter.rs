@@ -1627,6 +1627,22 @@ mod tests {
         assert_eq!(values.get(result), FakeValue::Int(7));
     }
 
+    /// Verifies simple variable compound assignments read, compute, and write the scope value.
+    #[test]
+    fn execute_program_evaluates_compound_assignments() {
+        let program =
+            parse_fragment(br#"$x = 2; $x += 3; $x *= 4; $x -= 5; $s = "v"; $s .= $x; echo $s;"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let x = scope.visible_cell("x").expect("scope should contain x");
+
+        assert_eq!(values.output, "v15");
+        assert_eq!(values.get(x), FakeValue::Int(15));
+    }
+
     /// Verifies echo and unset operate through runtime hooks and scope metadata.
     #[test]
     fn execute_program_echoes_and_unsets_scope_value() {

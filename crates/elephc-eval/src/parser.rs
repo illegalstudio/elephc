@@ -44,10 +44,14 @@ enum TokenKind {
     Float(f64),
     String(String),
     Plus,
+    PlusEqual,
     Minus,
+    MinusEqual,
     Arrow,
     Star,
+    StarEqual,
     Dot,
+    DotEqual,
     Equal,
     EqualEqual,
     EqualEqualEqual,
@@ -119,24 +123,42 @@ impl<'a> Lexer<'a> {
             '0'..='9' => self.lex_number(),
             '+' => {
                 self.bump_char();
-                Ok(TokenKind::Plus)
+                if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::PlusEqual)
+                } else {
+                    Ok(TokenKind::Plus)
+                }
             }
             '-' => {
                 self.bump_char();
                 if self.peek_char() == Some('>') {
                     self.bump_char();
                     Ok(TokenKind::Arrow)
+                } else if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::MinusEqual)
                 } else {
                     Ok(TokenKind::Minus)
                 }
             }
             '*' => {
                 self.bump_char();
-                Ok(TokenKind::Star)
+                if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::StarEqual)
+                } else {
+                    Ok(TokenKind::Star)
+                }
             }
             '.' => {
                 self.bump_char();
-                Ok(TokenKind::Dot)
+                if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::DotEqual)
+                } else {
+                    Ok(TokenKind::Dot)
+                }
             }
             '=' => {
                 self.bump_char();
@@ -468,13 +490,9 @@ impl Parser {
             TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::LBracket) => {
                 self.parse_array_set_stmt(name.clone())
             }
-            TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::Equal) => {
+            TokenKind::DollarIdent(name) if assignment_op(self.peek()).is_some() => {
                 let name = name.clone();
-                self.advance();
-                self.advance();
-                let value = self.parse_expr()?;
-                self.expect_semicolon()?;
-                Ok(vec![EvalStmt::StoreVar { name, value }])
+                self.parse_var_store_stmt(name, true)
             }
             TokenKind::Eof => Err(EvalParseError::UnexpectedEof),
             _ => {
@@ -634,12 +652,9 @@ impl Parser {
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(false)
             }
-            TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::Equal) => {
+            TokenKind::DollarIdent(name) if assignment_op(self.peek()).is_some() => {
                 let name = name.clone();
-                self.advance();
-                self.advance();
-                let value = self.parse_expr()?;
-                Ok(vec![EvalStmt::StoreVar { name, value }])
+                self.parse_var_store_stmt(name, false)
             }
             _ => {
                 let expr = self.parse_expr()?;
@@ -657,6 +672,25 @@ impl Parser {
         self.expect(TokenKind::Equal)?;
         let value = self.parse_expr()?;
         Ok(vec![EvalStmt::ArraySetVar { name, index, value }])
+    }
+
+    /// Parses `$name = expr` and simple variable compound assignments.
+    fn parse_var_store_stmt(
+        &mut self,
+        name: String,
+        require_semicolon: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let Some(op) = assignment_op(self.current()) else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        self.advance();
+        let value = self.parse_expr()?;
+        if require_semicolon {
+            self.expect_semicolon()?;
+        }
+        let value = assignment_value(&name, op, value);
+        Ok(vec![EvalStmt::StoreVar { name, value }])
     }
 
     /// Parses `$object->property` as either an expression statement or property write.
@@ -1307,6 +1341,30 @@ fn is_switch_case_boundary(token: &TokenKind) -> bool {
         || matches!(token, TokenKind::Ident(name) if ident_eq(name, "case") || ident_eq(name, "default"))
 }
 
+/// Maps simple variable assignment tokens to an optional compound EvalIR operator.
+fn assignment_op(token: &TokenKind) -> Option<Option<EvalBinOp>> {
+    match token {
+        TokenKind::Equal => Some(None),
+        TokenKind::PlusEqual => Some(Some(EvalBinOp::Add)),
+        TokenKind::MinusEqual => Some(Some(EvalBinOp::Sub)),
+        TokenKind::StarEqual => Some(Some(EvalBinOp::Mul)),
+        TokenKind::DotEqual => Some(Some(EvalBinOp::Concat)),
+        _ => None,
+    }
+}
+
+/// Builds the assigned value expression for plain and compound variable assignment.
+fn assignment_value(name: &str, op: Option<EvalBinOp>, value: EvalExpr) -> EvalExpr {
+    match op {
+        Some(op) => EvalExpr::Binary {
+            op,
+            left: Box::new(EvalExpr::LoadVar(name.to_string())),
+            right: Box::new(value),
+        },
+        None => value,
+    }
+}
+
 /// Compares a source identifier to a PHP keyword using ASCII case-insensitive rules.
 fn ident_eq(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected)
@@ -1327,6 +1385,50 @@ mod tests {
                 name: "x".to_string(),
                 value: EvalExpr::Const(EvalConst::Int(1)),
             }]
+        );
+    }
+
+    /// Verifies simple variable compound assignments lower to StoreVar with binary expressions.
+    #[test]
+    fn parse_fragment_accepts_compound_assignment_source() {
+        let program = parse_fragment(br#"$x += 2; $x -= 1; $x *= 3; $s .= "ok";"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[
+                EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::Add,
+                        left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+                    },
+                },
+                EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::Sub,
+                        left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                    },
+                },
+                EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::Mul,
+                        left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+                    },
+                },
+                EvalStmt::StoreVar {
+                    name: "s".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::Concat,
+                        left: Box::new(EvalExpr::LoadVar("s".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::String("ok".to_string()))),
+                    },
+                },
+            ]
         );
     }
 
