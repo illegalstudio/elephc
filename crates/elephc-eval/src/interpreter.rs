@@ -730,6 +730,9 @@ fn eval_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "abs" => eval_builtin_abs(args, context, scope, values),
+        "array_product" | "array_sum" => {
+            eval_builtin_array_aggregate(name, args, context, scope, values)
+        }
         "ceil" => eval_builtin_ceil(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
@@ -865,6 +868,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
     matches!(
         name,
         "abs"
+            | "array_product"
+            | "array_sum"
             | "ceil"
             | "call_user_func"
             | "call_user_func_array"
@@ -1008,6 +1013,12 @@ fn eval_builtin_with_values(
             };
             values.abs(*value)?
         }
+        "array_product" | "array_sum" => {
+            let [array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_aggregate_result(name, *array, values)?
+        }
         "ceil" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -1126,6 +1137,45 @@ fn eval_builtin_abs(
     };
     let value = eval_expr(value, context, scope, values)?;
     values.abs(value)
+}
+
+/// Evaluates PHP array aggregate builtins over one eval array expression.
+fn eval_builtin_array_aggregate(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = eval_expr(array, context, scope, values)?;
+    eval_array_aggregate_result(name, array, values)
+}
+
+/// Computes `array_sum()` or `array_product()` through eval's numeric value hooks.
+fn eval_array_aggregate_result(
+    name: &str,
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut result = match name {
+        "array_sum" => values.int(0)?,
+        "array_product" => values.int(1)?,
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        result = match name {
+            "array_sum" => values.add(result, value)?,
+            "array_product" => values.mul(result, value)?,
+            _ => return Err(EvalStatus::UnsupportedConstruct),
+        };
+    }
+    Ok(result)
 }
 
 /// Evaluates PHP's `ceil(...)` over one eval expression.
@@ -3222,6 +3272,30 @@ return call_user_func_array("dyn", [4, 5]);"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(6));
+    }
+
+    /// Verifies eval array aggregate builtins iterate array values and support callable dispatch.
+    #[test]
+    fn execute_program_dispatches_array_aggregate_builtins() {
+        let program = parse_fragment(
+            br#"echo array_sum([1, 2, 3]);
+echo ":" . array_product([2, 3, 4]);
+echo ":" . array_sum([]);
+echo ":" . array_product([]);
+echo ":" . array_sum(["a" => 2, "b" => 5]);
+echo ":" . call_user_func("array_sum", [3, 4]);
+echo ":" . call_user_func_array("array_product", [[2, 5]]);
+echo ":"; echo function_exists("array_sum");
+return function_exists("array_product");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "6:24:0:1:7:7:10:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
     /// Verifies eval ASCII string case builtins work directly and through callable dispatch.
