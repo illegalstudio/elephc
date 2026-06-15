@@ -1304,6 +1304,26 @@ mod tests {
         );
     }
 
+    /// Verifies `isset` parses as a case-insensitive function-like expression.
+    #[test]
+    fn parse_fragment_accepts_isset_source() {
+        let program = parse_fragment(br#"return ISSET($x, $items["k"]);"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Call {
+                name: "isset".to_string(),
+                args: vec![
+                    EvalExpr::LoadVar("x".to_string()),
+                    EvalExpr::ArrayGet {
+                        array: Box::new(EvalExpr::LoadVar("items".to_string())),
+                        index: Box::new(EvalExpr::Const(EvalConst::String("k".to_string()))),
+                    },
+                ],
+            }))]
+        );
+    }
+
     /// Verifies indexed array literals and reads parse as runtime array expressions.
     #[test]
     fn parse_fragment_accepts_indexed_array_read_source() {

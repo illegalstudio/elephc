@@ -81,6 +81,9 @@ pub trait RuntimeValueOps {
     /// Returns whether a runtime cell can be indexed like an array by eval writes.
     fn is_array_like(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
 
+    /// Returns whether a runtime cell holds PHP null.
+    fn is_null(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
+
     /// Releases one owned runtime cell that is no longer held by the eval scope.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
@@ -508,6 +511,7 @@ fn eval_call(
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
         }
+        "isset" => eval_builtin_isset(args, context, scope, values),
         "strlen" => eval_builtin_strlen(args, context, scope, values),
         _ => {
             if let Some(function) = context.function(name).cloned() {
@@ -536,6 +540,41 @@ fn eval_builtin_function_probe(
     let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
     let name = name.trim_start_matches('\\').to_ascii_lowercase();
     values.bool_value(eval_function_probe_exists(context, &name))
+}
+
+/// Evaluates PHP's `isset(...)` language construct over eval-visible values.
+fn eval_builtin_isset(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.is_empty() {
+        return values.bool_value(false);
+    }
+    for arg in args {
+        if !eval_isset_arg(arg, context, scope, values)? {
+            return values.bool_value(false);
+        }
+    }
+    values.bool_value(true)
+}
+
+/// Evaluates one `isset` operand without allocating a null cell for missing variables.
+fn eval_isset_arg(
+    arg: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if let EvalExpr::LoadVar(name) = arg {
+        let Some(value) = scope.visible_cell(name) else {
+            return Ok(false);
+        };
+        return Ok(!values.is_null(value)?);
+    }
+    let value = eval_expr(arg, context, scope, values)?;
+    Ok(!values.is_null(value)?)
 }
 
 /// Returns true when a PHP function name is visible to eval builtin probes.
@@ -1111,6 +1150,11 @@ mod tests {
                 self.get(value),
                 FakeValue::Array(_) | FakeValue::Assoc(_)
             ))
+        }
+
+        /// Returns whether a fake runtime cell is null.
+        fn is_null(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+            Ok(matches!(self.get(value), FakeValue::Null))
         }
 
         /// Records fake releases without freeing handles needed for assertions.
@@ -1845,6 +1889,33 @@ return call_user_func_array("dyn", [4, 5]);"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(6));
+    }
+
+    /// Verifies `isset` distinguishes missing, null, and other falsey values.
+    #[test]
+    fn execute_program_isset_distinguishes_missing_null_and_falsey_values() {
+        let program = parse_fragment(
+            br#"if (isset($missing)) { echo "1"; } else { echo "0"; }
+if (isset($nullish)) { echo "1"; } else { echo "0"; }
+if (isset($zero)) { echo "1"; } else { echo "0"; }
+if (isset($empty)) { echo "1"; } else { echo "0"; }
+if (isset($zero, $empty)) { echo "1"; } else { echo "0"; }
+if (isset($zero, $nullish)) { echo "1"; } else { echo "0"; }"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let nullish = values.null().expect("create fake null");
+        let zero = values.int(0).expect("create fake int");
+        let empty = values.string("").expect("create fake string");
+        scope.set("nullish", nullish, ScopeCellOwnership::Owned);
+        scope.set("zero", zero, ScopeCellOwnership::Owned);
+        scope.set("empty", empty, ScopeCellOwnership::Owned);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "001110");
+        assert_eq!(values.get(result), FakeValue::Null);
     }
 
     /// Verifies eval builtin probes see dynamic functions and supported PHP-visible builtins.

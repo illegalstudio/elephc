@@ -185,6 +185,17 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // report true for array-like values
     emitter.instruction("ret");                                                 // return the boolean result to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_is_null");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while unboxing the Mixed cell
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across mixed_unbox
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unwrap nested Mixed cells to a concrete runtime tag
+    emitter.instruction("cmp x0, #8");                                          // runtime tag 8 means PHP null
+    emitter.instruction("cset x0, eq");                                         // return true when the unboxed tag is null
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the null-check wrapper frame
+    emitter.instruction("ret");                                                 // return the boolean result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_int");
     emitter.instruction("mov x1, x0");                                          // move the C integer argument into the mixed payload slot
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
@@ -627,6 +638,17 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boolean result to Rust
     emitter.label("__elephc_eval_value_is_array_like_true");
     emitter.instruction("mov rax, 1");                                          // report true for array-like values
+    emitter.instruction("ret");                                                 // return the boolean result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_is_null");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // pass the boxed Mixed argument to mixed_unbox
+    emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells to a concrete runtime tag
+    emitter.instruction("cmp rax, 8");                                          // runtime tag 8 means PHP null
+    emitter.instruction("sete al");                                             // set the low byte when the tag is null
+    emitter.instruction("movzx eax, al");                                       // widen the C boolean result for Rust
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boolean result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_int");
