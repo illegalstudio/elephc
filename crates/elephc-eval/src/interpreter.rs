@@ -48,6 +48,9 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns the visible element count for an array-like runtime cell.
+    fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus>;
+
     /// Returns whether a runtime cell can be indexed like an array by eval writes.
     fn is_array_like(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
 
@@ -185,6 +188,11 @@ fn execute_stmt(
             update,
             body,
         } => execute_for_stmt(init, condition.as_ref(), update, body, scope, values),
+        EvalStmt::Foreach {
+            array,
+            value_name,
+            body,
+        } => execute_foreach_stmt(array, value_name, body, scope, values),
         EvalStmt::If {
             condition,
             then_branch,
@@ -259,6 +267,33 @@ fn execute_for_stmt(
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
         match execute_statements(update, scope, values)? {
+            EvalControl::None | EvalControl::Continue => {}
+            EvalControl::Break => break,
+            EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+        }
+    }
+    Ok(EvalControl::None)
+}
+
+/// Executes a value-only PHP `foreach` loop over indexed eval array values.
+fn execute_foreach_stmt(
+    array: &EvalExpr,
+    value_name: &str,
+    body: &[EvalStmt],
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    let array = eval_expr(array, scope, values)?;
+    let len = values.array_len(array)?;
+    for index in 0..len {
+        let index = values.int(index as i64)?;
+        let value = values.array_get(array, index)?;
+        if let Some(replaced) =
+            scope.set(value_name.to_string(), value, ScopeCellOwnership::Owned)
+        {
+            values.release(replaced)?;
+        }
+        match execute_statements(body, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
@@ -527,6 +562,15 @@ mod tests {
                 _ => return Err(EvalStatus::UnsupportedConstruct),
             }
             Ok(array)
+        }
+
+        /// Returns the visible element count for fake array values.
+        fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus> {
+            match self.get(array) {
+                FakeValue::Array(elements) => Ok(elements.len()),
+                FakeValue::Assoc(entries) => Ok(entries.len()),
+                _ => Err(EvalStatus::UnsupportedConstruct),
+            }
         }
 
         /// Returns whether a fake runtime cell is an indexed or associative array.
@@ -858,6 +902,39 @@ mod tests {
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "1111ns");
+    }
+
+    /// Verifies foreach assigns each indexed element to the value variable.
+    #[test]
+    fn execute_program_foreach_iterates_indexed_values() {
+        let program =
+            parse_fragment(br#"foreach (["a", "b"] as $item) { echo $item; }"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let item = scope
+            .visible_cell("item")
+            .expect("scope should contain last foreach item");
+
+        assert_eq!(values.output, "ab");
+        assert_eq!(values.get(item), FakeValue::String("b".to_string()));
+    }
+
+    /// Verifies break and continue control foreach execution inside eval.
+    #[test]
+    fn execute_program_foreach_honors_break_and_continue() {
+        let program = parse_fragment(
+            br#"foreach ([1, 2, 3] as $item) { if ($item == 1) { continue; } echo $item; break; }"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "2");
     }
 
     /// Verifies indexed array literals and reads execute through runtime hooks.

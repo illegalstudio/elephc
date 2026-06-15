@@ -128,6 +128,22 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the array-set wrapper frame
     emitter.instruction("ret");                                                 // return the boxed array Mixed cell to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_array_len");
+    emitter.instruction("cbz x0, __elephc_eval_value_array_len_zero");          // null handles have no iterable eval elements
+    emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
+    emitter.instruction("cmp x9, #4");                                          // tag 4 = indexed array
+    emitter.instruction("b.eq __elephc_eval_value_array_len_load");             // indexed arrays expose their header element count
+    emitter.instruction("cmp x9, #5");                                          // tag 5 = associative array
+    emitter.instruction("b.eq __elephc_eval_value_array_len_load");             // associative arrays expose their header entry count
+    emitter.label("__elephc_eval_value_array_len_zero");
+    emitter.instruction("mov x0, #0");                                          // scalar values have zero foreach-visible elements in this subset
+    emitter.instruction("ret");                                                 // return the empty length to Rust
+    emitter.label("__elephc_eval_value_array_len_load");
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load the array/hash payload pointer from the Mixed cell
+    emitter.instruction("cbz x9, __elephc_eval_value_array_len_zero");          // null payloads are treated as empty containers
+    emitter.instruction("ldr x0, [x9]");                                        // load the runtime container element count
+    emitter.instruction("ret");                                                 // return the element count to Rust
+
     emitter.label("__elephc_eval_key_normalize");
     emitter.instruction("sub sp, sp, #32");                                     // allocate a helper frame while classifying the boxed eval key
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across runtime calls
@@ -549,6 +565,24 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the array-set wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed array Mixed cell to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_array_len");
+    emitter.instruction("test rdi, rdi");                                       // null handles have no iterable eval elements
+    emitter.instruction("jz __elephc_eval_value_array_len_zero");               // report empty length for null runtime cells
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
+    emitter.instruction("cmp r10, 4");                                          // tag 4 = indexed array
+    emitter.instruction("je __elephc_eval_value_array_len_load");               // indexed arrays expose their header element count
+    emitter.instruction("cmp r10, 5");                                          // tag 5 = associative array
+    emitter.instruction("je __elephc_eval_value_array_len_load");               // associative arrays expose their header entry count
+    emitter.label("__elephc_eval_value_array_len_zero");
+    emitter.instruction("xor eax, eax");                                        // scalar values have zero foreach-visible elements in this subset
+    emitter.instruction("ret");                                                 // return the empty length to Rust
+    emitter.label("__elephc_eval_value_array_len_load");
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the array/hash payload pointer from the Mixed cell
+    emitter.instruction("test r10, r10");                                       // is the container payload null?
+    emitter.instruction("jz __elephc_eval_value_array_len_zero");               // null payloads are treated as empty containers
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the runtime container element count
+    emitter.instruction("ret");                                                 // return the element count to Rust
 
     emitter.label("__elephc_eval_key_normalize");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while classifying the eval key

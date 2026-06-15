@@ -60,6 +60,11 @@ pub enum EvalStmt {
         update: Vec<EvalStmt>,
         body: Vec<EvalStmt>,
     },
+    Foreach {
+        array: EvalExpr,
+        value_name: String,
+        body: Vec<EvalStmt>,
+    },
     If {
         condition: EvalExpr,
         then_branch: Vec<EvalStmt>,

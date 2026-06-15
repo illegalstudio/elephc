@@ -190,6 +190,42 @@ echo ":" . $i;
     assert_eq!(out, "012:3");
 }
 
+/// Verifies value-only foreach loops inside eval iterate indexed array values.
+#[test]
+fn test_eval_foreach_iterates_indexed_values() {
+    let out = compile_and_run(
+        r#"<?php
+eval('foreach ([1, 2, 3] as $item) { echo $item; }');
+echo ":" . $item;
+"#,
+    );
+    assert_eq!(out, "123:3");
+}
+
+/// Verifies eval foreach can iterate an indexed array from the caller scope.
+#[test]
+fn test_eval_foreach_reads_scope_array() {
+    let out = compile_and_run(
+        r#"<?php
+$items = eval('return ["a", "b"];');
+eval('foreach ($items as $item) { echo $item; }');
+"#,
+    );
+    assert_eq!(out, "ab");
+}
+
+/// Verifies break and continue control value-only foreach loops inside eval.
+#[test]
+fn test_eval_foreach_honors_break_and_continue() {
+    let out = compile_and_run(
+        r#"<?php
+eval('foreach ([1, 2, 3] as $item) { if ($item == 1) { continue; } echo $item; break; }');
+echo ":" . $item;
+"#,
+    );
+    assert_eq!(out, "2:2");
+}
+
 /// Verifies eval indexed-array literals and reads execute through Mixed array helpers.
 #[test]
 fn test_eval_indexed_array_literal_and_read() {
