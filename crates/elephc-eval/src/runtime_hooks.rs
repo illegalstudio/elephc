@@ -68,6 +68,10 @@ unsafe extern "C" {
         -> *mut RuntimeCell;
     fn __elephc_eval_value_mul(left: *mut RuntimeCell, right: *mut RuntimeCell)
         -> *mut RuntimeCell;
+    fn __elephc_eval_value_div(left: *mut RuntimeCell, right: *mut RuntimeCell)
+        -> *mut RuntimeCell;
+    fn __elephc_eval_value_mod(left: *mut RuntimeCell, right: *mut RuntimeCell)
+        -> *mut RuntimeCell;
     fn __elephc_eval_value_concat(
         left: *mut RuntimeCell,
         right: *mut RuntimeCell,
@@ -292,6 +296,24 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_mul(left.as_ptr(), right.as_ptr()) })
     }
 
+    /// Divides two boxed Mixed cells using elephc runtime numeric semantics.
+    fn div(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_div(left.as_ptr(), right.as_ptr()) })
+    }
+
+    /// Computes modulo for two boxed Mixed cells using elephc runtime integer semantics.
+    fn modulo(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_mod(left.as_ptr(), right.as_ptr()) })
+    }
+
     /// Concatenates two boxed Mixed cells using elephc runtime string semantics.
     fn concat(
         &mut self,
@@ -359,6 +381,8 @@ fn compare_op_tag(op: EvalBinOp) -> u64 {
         EvalBinOp::Add
         | EvalBinOp::Sub
         | EvalBinOp::Mul
+        | EvalBinOp::Div
+        | EvalBinOp::Mod
         | EvalBinOp::Concat
         | EvalBinOp::LogicalAnd
         | EvalBinOp::LogicalOr

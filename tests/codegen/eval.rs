@@ -112,6 +112,21 @@ fn test_eval_scalar_add_executes_through_bridge() {
     assert_eq!(out, "9");
 }
 
+/// Verifies eval division and modulo execute through target-specific bridge wrappers.
+#[test]
+fn test_eval_division_modulo_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return 9 / 2;');
+echo ":";
+echo eval('return 10 % 4;');
+echo ":";
+eval('$x = 20; $x /= 2; $x %= 6; echo $x;');
+"#,
+    );
+    assert_eq!(out, "4.5:2:4");
+}
+
 /// Verifies the eval bridge routes concatenation through runtime string helpers.
 #[test]
 fn test_eval_scalar_concat_executes_through_bridge() {

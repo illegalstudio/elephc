@@ -282,6 +282,63 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_mul");
     emitter.instruction("b __rt_mixed_numeric_mul");                            // multiply two boxed mixed values and return the boxed result
 
+    label_c_global(emitter, "__elephc_eval_value_div");
+    emitter.instruction("sub sp, sp, #32");                                     // allocate wrapper slots for the right operand and left double
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while casting the left operand
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("str d0, [sp, #8]");                                    // save the left double across the right cast
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for numeric casting
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("fcmp d0, #0.0");                                       // detect division by zero before the hardware divide
+    emitter.instruction("b.eq __elephc_eval_value_div_null");                   // return null until eval has throwable propagation
+    emitter.instruction("fmov d1, d0");                                         // keep the right divisor in d1
+    emitter.instruction("ldr d0, [sp, #8]");                                    // reload the left dividend into d0
+    emitter.instruction("fdiv d0, d0, d1");                                     // compute PHP division as a double result
+    emitter.instruction("fmov x1, d0");                                         // move the double bits into mixed value_lo
+    emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
+    emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the division result into a Mixed cell
+    emitter.instruction("b __elephc_eval_value_div_done");                      // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_div_null");
+    emitter.instruction("mov x0, #8");                                          // runtime tag 8 = null fallback for division by zero
+    emitter.instruction("mov x1, xzr");                                         // null has no low payload word
+    emitter.instruction("mov x2, xzr");                                         // null has no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box null for unsupported division-by-zero propagation
+    emitter.label("__elephc_eval_value_div_done");
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the division wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed division result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_mod");
+    emitter.instruction("sub sp, sp, #32");                                     // allocate wrapper slots for the right operand and left integer
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while casting the left operand
+    emitter.instruction("bl __rt_mixed_cast_int");                              // cast the left boxed operand to a PHP integer
+    emitter.instruction("str x0, [sp, #8]");                                    // save the left integer across the right cast
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for integer casting
+    emitter.instruction("bl __rt_mixed_cast_int");                              // cast the right boxed operand to a PHP integer
+    emitter.instruction("cbz x0, __elephc_eval_value_mod_null");                // return null until eval has throwable propagation
+    emitter.instruction("mov x2, x0");                                          // keep the integer divisor in x2
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the integer dividend into x1
+    emitter.instruction("sdiv x3, x1, x2");                                     // compute the signed integer quotient
+    emitter.instruction("msub x1, x3, x2, x1");                                 // compute dividend - quotient * divisor
+    emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the modulo result into a Mixed cell
+    emitter.instruction("b __elephc_eval_value_mod_done");                      // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_mod_null");
+    emitter.instruction("mov x0, #8");                                          // runtime tag 8 = null fallback for modulo by zero
+    emitter.instruction("mov x1, xzr");                                         // null has no low payload word
+    emitter.instruction("mov x2, xzr");                                         // null has no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box null for unsupported modulo-by-zero propagation
+    emitter.label("__elephc_eval_value_mod_done");
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the modulo wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed modulo result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_concat");
     emitter.instruction("sub sp, sp, #64");                                     // allocate wrapper frame for the right operand and string pairs
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address across helper calls
@@ -817,6 +874,68 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into the internal result register
     emitter.instruction("mov rdi, rsi");                                        // move the right boxed operand into the internal argument register
     emitter.instruction("jmp __rt_mixed_numeric_mul");                          // multiply two boxed mixed values and return the boxed result
+
+    label_c_global(emitter, "__elephc_eval_value_div");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for the right operand and left double
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("movsd QWORD PTR [rbp - 16], xmm0");                    // save the left double across the right cast
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for numeric casting
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("pxor xmm1, xmm1");                                     // materialize a zero double for divisor checking
+    emitter.instruction("ucomisd xmm0, xmm1");                                  // detect division by zero before the hardware divide
+    emitter.instruction("je __elephc_eval_value_div_null_x86");                 // return null until eval has throwable propagation
+    emitter.instruction("movapd xmm1, xmm0");                                   // keep the right divisor in xmm1
+    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 16]");                    // reload the left dividend into xmm0
+    emitter.instruction("divsd xmm0, xmm1");                                    // compute PHP division as a double result
+    emitter.instruction("movq rdi, xmm0");                                      // move the double bits into mixed value_lo
+    emitter.instruction("xor esi, esi");                                        // double payloads do not use a high word
+    emitter.instruction("mov eax, 2");                                          // runtime tag 2 = double
+    emitter.instruction("call __rt_mixed_from_value");                          // box the division result into a Mixed cell
+    emitter.instruction("jmp __elephc_eval_value_div_done_x86");                // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_div_null_x86");
+    emitter.instruction("mov eax, 8");                                          // runtime tag 8 = null fallback for division by zero
+    emitter.instruction("xor edi, edi");                                        // null has no low payload word
+    emitter.instruction("xor esi, esi");                                        // null has no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box null for unsupported division-by-zero propagation
+    emitter.label("__elephc_eval_value_div_done_x86");
+    emitter.instruction("add rsp, 32");                                         // release the division wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed division result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_mod");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for the right operand and left integer
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_int input
+    emitter.instruction("call __rt_mixed_cast_int");                            // cast the left boxed operand to a PHP integer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the left integer across the right cast
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for integer casting
+    emitter.instruction("call __rt_mixed_cast_int");                            // cast the right boxed operand to a PHP integer
+    emitter.instruction("test rax, rax");                                       // detect modulo by zero before the hardware divide
+    emitter.instruction("jz __elephc_eval_value_mod_null_x86");                 // return null until eval has throwable propagation
+    emitter.instruction("mov rdi, rax");                                        // keep the integer divisor in rdi
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the integer dividend into rax
+    emitter.instruction("cqo");                                                 // sign-extend the dividend for signed division
+    emitter.instruction("idiv rdi");                                            // compute quotient in rax and remainder in rdx
+    emitter.instruction("mov rdi, rdx");                                        // move the integer remainder into mixed value_lo
+    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
+    emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer
+    emitter.instruction("call __rt_mixed_from_value");                          // box the modulo result into a Mixed cell
+    emitter.instruction("jmp __elephc_eval_value_mod_done_x86");                // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_mod_null_x86");
+    emitter.instruction("mov eax, 8");                                          // runtime tag 8 = null fallback for modulo by zero
+    emitter.instruction("xor edi, edi");                                        // null has no low payload word
+    emitter.instruction("xor esi, esi");                                        // null has no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box null for unsupported modulo-by-zero propagation
+    emitter.label("__elephc_eval_value_mod_done_x86");
+    emitter.instruction("add rsp, 32");                                         // release the modulo wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed modulo result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_concat");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls

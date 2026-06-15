@@ -52,6 +52,10 @@ enum TokenKind {
     Arrow,
     Star,
     StarEqual,
+    Slash,
+    SlashEqual,
+    Percent,
+    PercentEqual,
     Dot,
     DotEqual,
     Equal,
@@ -157,6 +161,24 @@ impl<'a> Lexer<'a> {
                     Ok(TokenKind::StarEqual)
                 } else {
                     Ok(TokenKind::Star)
+                }
+            }
+            '/' => {
+                self.bump_char();
+                if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::SlashEqual)
+                } else {
+                    Ok(TokenKind::Slash)
+                }
+            }
+            '%' => {
+                self.bump_char();
+                if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::PercentEqual)
+                } else {
+                    Ok(TokenKind::Percent)
                 }
             }
             '.' => {
@@ -1111,13 +1133,22 @@ impl Parser {
         Ok(expr)
     }
 
-    /// Parses left-associative numeric multiplication.
+    /// Parses left-associative numeric multiplication, division, and modulo.
     fn parse_mul(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_unary()?;
-        while self.consume(TokenKind::Star) {
+        loop {
+            let op = if self.consume(TokenKind::Star) {
+                EvalBinOp::Mul
+            } else if self.consume(TokenKind::Slash) {
+                EvalBinOp::Div
+            } else if self.consume(TokenKind::Percent) {
+                EvalBinOp::Mod
+            } else {
+                break;
+            };
             let right = self.parse_unary()?;
             expr = EvalExpr::Binary {
-                op: EvalBinOp::Mul,
+                op,
                 left: Box::new(expr),
                 right: Box::new(right),
             };
@@ -1404,6 +1435,8 @@ fn assignment_op(token: &TokenKind) -> Option<Option<EvalBinOp>> {
         TokenKind::PlusEqual => Some(Some(EvalBinOp::Add)),
         TokenKind::MinusEqual => Some(Some(EvalBinOp::Sub)),
         TokenKind::StarEqual => Some(Some(EvalBinOp::Mul)),
+        TokenKind::SlashEqual => Some(Some(EvalBinOp::Div)),
+        TokenKind::PercentEqual => Some(Some(EvalBinOp::Mod)),
         TokenKind::DotEqual => Some(Some(EvalBinOp::Concat)),
         _ => None,
     }
@@ -1460,11 +1493,30 @@ mod tests {
         );
     }
 
+    /// Verifies multiplicative operators preserve PHP precedence and associativity.
+    #[test]
+    fn parse_fragment_accepts_division_and_modulo_source() {
+        let program = parse_fragment(b"return 10 / 4 % 3;").expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::Mod,
+                left: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::Div,
+                    left: Box::new(EvalExpr::Const(EvalConst::Int(10))),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(4))),
+                }),
+                right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+            }))]
+        );
+    }
+
     /// Verifies simple variable compound assignments lower to StoreVar with binary expressions.
     #[test]
     fn parse_fragment_accepts_compound_assignment_source() {
-        let program = parse_fragment(br#"$x += 2; $x -= 1; $x *= 3; $s .= "ok";"#)
-            .expect("fragment should parse");
+        let program =
+            parse_fragment(br#"$x += 2; $x -= 1; $x *= 3; $x /= 2; $x %= 5; $s .= "ok";"#)
+                .expect("fragment should parse");
         assert_eq!(
             program.statements(),
             &[
@@ -1490,6 +1542,22 @@ mod tests {
                         op: EvalBinOp::Mul,
                         left: Box::new(EvalExpr::LoadVar("x".to_string())),
                         right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+                    },
+                },
+                EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::Div,
+                        left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+                    },
+                },
+                EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Binary {
+                        op: EvalBinOp::Mod,
+                        left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(5))),
                     },
                 },
                 EvalStmt::StoreVar {

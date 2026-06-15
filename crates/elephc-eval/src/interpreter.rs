@@ -130,6 +130,20 @@ pub trait RuntimeValueOps {
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Divides two runtime cells using PHP numeric semantics.
+    fn div(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Computes modulo for two runtime cells using PHP integer modulo semantics.
+    fn modulo(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Concatenates two runtime cells using PHP string conversion semantics.
     fn concat(
         &mut self,
@@ -605,6 +619,8 @@ fn eval_expr(
                 EvalBinOp::Add => values.add(left, right),
                 EvalBinOp::Sub => values.sub(left, right),
                 EvalBinOp::Mul => values.mul(left, right),
+                EvalBinOp::Div => values.div(left, right),
+                EvalBinOp::Mod => values.modulo(left, right),
                 EvalBinOp::Concat => values.concat(left, right),
                 EvalBinOp::LogicalXor => {
                     let left_truthy = values.truthy(left)?;
@@ -1451,6 +1467,34 @@ mod tests {
             }
         }
 
+        /// Divides fake numeric cells for interpreter tests.
+        fn div(
+            &mut self,
+            left: RuntimeCellHandle,
+            right: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let right = self.fake_numeric(&self.get(right));
+            if right == 0.0 {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let left = self.fake_numeric(&self.get(left));
+            self.float(left / right)
+        }
+
+        /// Computes fake integer modulo for interpreter tests.
+        fn modulo(
+            &mut self,
+            left: RuntimeCellHandle,
+            right: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let right = self.fake_int(&self.get(right));
+            if right == 0 {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let left = self.fake_int(&self.get(left));
+            self.int(left % right)
+        }
+
         /// Concatenates fake cells with simple string conversion for interpreter tests.
         fn concat(
             &mut self,
@@ -1481,6 +1525,8 @@ mod tests {
                 EvalBinOp::Add
                 | EvalBinOp::Sub
                 | EvalBinOp::Mul
+                | EvalBinOp::Div
+                | EvalBinOp::Mod
                 | EvalBinOp::Concat
                 | EvalBinOp::LogicalAnd
                 | EvalBinOp::LogicalOr
@@ -1575,6 +1621,11 @@ mod tests {
             }
         }
 
+        /// Converts a fake value to the integer scalar used by modulo tests.
+        fn fake_int(&self, value: &FakeValue) -> i64 {
+            self.fake_numeric(value) as i64
+        }
+
         /// Returns fake PHP truthiness for already-loaded test values.
         fn fake_truthy(&self, value: &FakeValue) -> bool {
             match value {
@@ -1641,6 +1692,22 @@ mod tests {
 
         assert_eq!(values.output, "v15");
         assert_eq!(values.get(x), FakeValue::Int(15));
+    }
+
+    /// Verifies division and modulo evaluate through fake runtime numeric hooks.
+    #[test]
+    fn execute_program_evaluates_division_and_modulo() {
+        let program = parse_fragment(br#"$x = 20; $x /= 2; $x %= 6; echo $x; return 9 / 2;"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let x = scope.visible_cell("x").expect("scope should contain x");
+
+        assert_eq!(values.output, "4");
+        assert_eq!(values.get(x), FakeValue::Int(4));
+        assert_eq!(values.get(result), FakeValue::Float(4.5));
     }
 
     /// Verifies simple variable increment and decrement statements update the scope value.
