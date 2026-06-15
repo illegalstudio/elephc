@@ -143,6 +143,9 @@ pub trait RuntimeValueOps {
     /// Computes PHP `sqrt()` for one runtime cell after PHP numeric conversion.
     fn sqrt(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Reverses a string value using PHP `strrev()` byte-string semantics.
+    fn strrev(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Divides two runtime cells using PHP `fdiv()` semantics.
     fn fdiv(
         &mut self,
@@ -790,6 +793,7 @@ fn eval_call(
         "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
+        "strrev" => eval_builtin_strrev(args, context, scope, values),
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             eval_builtin_string_search(name, args, context, scope, values)
         }
@@ -957,6 +961,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strlen"
             | "strpos"
             | "strrpos"
+            | "strrev"
             | "strtolower"
             | "strtoupper"
             | "strval"
@@ -1134,6 +1139,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.sqrt(*value)?
+        }
+        "strrev" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            values.strrev(*value)?
         }
         "call_user_func" => {
             return eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)
@@ -1471,6 +1482,20 @@ fn eval_builtin_sqrt(
     };
     let value = eval_expr(value, context, scope, values)?;
     values.sqrt(value)
+}
+
+/// Evaluates PHP's `strrev(...)` over one eval expression.
+fn eval_builtin_strrev(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    values.strrev(value)
 }
 
 /// Evaluates PHP floating-point binary math builtins over two eval expressions.
@@ -2592,6 +2617,14 @@ mod tests {
         fn sqrt(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
             let value = self.get(value);
             self.float(self.fake_numeric(&value).sqrt())
+        }
+
+        /// Reverses a fake string byte-wise for interpreter tests.
+        fn strrev(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+            let mut bytes = self.stringify(value).into_bytes();
+            bytes.reverse();
+            let value = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+            self.string(&value)
         }
 
         /// Divides fake numeric cells with PHP `fdiv()` zero handling.
@@ -4338,6 +4371,24 @@ return function_exists("sqrt");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "4:double:5:6");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `strrev()` dispatches through direct and callable paths.
+    #[test]
+    fn execute_program_dispatches_strrev_builtin() {
+        let program = parse_fragment(
+            br#"echo strrev("Hello"); echo ":";
+echo strrev(123); echo ":";
+echo call_user_func("strrev", "ABC"); echo ":";
+echo call_user_func_array("strrev", ["def"]); echo ":";
+return function_exists("strrev");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        assert_eq!(values.output, "olleH:321:CBA:fed:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

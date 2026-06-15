@@ -75,6 +75,7 @@ unsafe extern "C" {
     fn __elephc_eval_value_ceil(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_floor(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_sqrt(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    fn __elephc_eval_value_strrev(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_fdiv(
         left: *mut RuntimeCell,
         right: *mut RuntimeCell,
@@ -359,6 +360,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Computes PHP `sqrt()` for a boxed Mixed cell through the generated runtime wrapper.
     fn sqrt(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_sqrt(value.as_ptr()) })
+    }
+
+    /// Computes PHP `strrev()` for a boxed Mixed cell through the generated runtime wrapper.
+    fn strrev(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_strrev(value.as_ptr()) })
     }
 
     /// Computes PHP `fdiv()` for boxed Mixed cells through the generated runtime wrapper.
