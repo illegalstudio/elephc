@@ -31,6 +31,10 @@ class EvalCounter {
     public function echoLabelThroughEval(): void {
         echo "eval-this-method-two-args=" . eval('return $this->label(5, "!");') . "\n";
     }
+
+    public function echoLabelSpreadThroughEval(): void {
+        echo "eval-this-method-spread=" . eval('return $this->label(...[5, "?"]);') . "\n";
+    }
 }
 
 $x = 1;
@@ -178,6 +182,7 @@ echo "eval-this-property=" . $counter->value . "\n";
 $counter->echoReadThroughEval();
 $counter->echoAddThroughEval();
 $counter->echoLabelThroughEval();
+$counter->echoLabelSpreadThroughEval();
 echo "native-dynamic-call=" . native_add(40, 2) . "\n";
 echo "call-user-func=" . call_user_func('native_double', 6) . "\n";
 echo "function-exists=" . (function_exists('native_double') ? "yes" : "no") . "\n";
