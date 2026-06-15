@@ -21,6 +21,8 @@ The bridge crate parses the fragment at runtime into a small EvalIR and interpre
 
 Argument unpacking (`...`) and `call_user_func_array()` argument arrays are supported for eval-declared and registered AOT function calls inside eval when the argument source is an array. Indexed elements bind positionally, string-keyed elements bind by parameter name, and a positional element after a named argument is rejected. Direct unpacking after a named argument is rejected before the unpacked expression is evaluated.
 
+Eval `$array[] = value` append writes operate on indexed arrays and associative hashes. Hash appends use PHP's next automatic integer key rule by scanning existing integer keys through the eval value hooks before delegating to the shared mixed-array setter.
+
 Eval builtin dispatch also covers `strrev()` through the shared byte-string reversal helper and `fdiv()` / `fmod()` through target-aware bridge wrappers that return boxed double cells.
 
 ## Why a runtime?

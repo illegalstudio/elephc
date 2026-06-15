@@ -556,6 +556,21 @@ echo ":" . $existing[1] . ":" . count($existing);
     assert_eq!(out, "a:b:2:y:2");
 }
 
+/// Verifies eval associative-array append uses PHP's next automatic integer key.
+#[test]
+fn test_eval_assoc_array_append_uses_php_next_key() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('$items = ["name" => "Ada"]; $items[] = "Grace"; return $items[0];');
+echo ":";
+echo eval('$items = [2 => "two", "name" => "Ada"]; $items[] = "tail"; return $items[3];');
+echo ":";
+echo eval('$items = [-2 => "minus"]; $items[] = "tail"; return $items[-1];');
+"#,
+    );
+    assert_eq!(out, "Grace:tail:tail");
+}
+
 /// Verifies eval can read a native Mixed array through runtime array helpers.
 #[test]
 fn test_eval_reads_native_mixed_array() {

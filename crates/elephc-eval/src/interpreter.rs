@@ -346,7 +346,8 @@ fn execute_stmt(
                 scope.entry(name).filter(|entry| entry.flags().is_visible())
             {
                 if values.is_array_like(existing.cell())? {
-                    if values.type_tag(existing.cell())? != EVAL_TAG_ARRAY {
+                    let tag = values.type_tag(existing.cell())?;
+                    if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
                         return Err(EvalStatus::UnsupportedConstruct);
                     }
                     ownership = existing.flags().ownership;
@@ -357,9 +358,7 @@ fn execute_stmt(
             } else {
                 values.array_new(1)?
             };
-            let index = values.array_len(array)?;
-            let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
-            let index = values.int(index)?;
+            let index = eval_array_append_key(array, values)?;
             let value = eval_expr(value, context, scope, values)?;
             let array = values.array_set(array, index, value)?;
             if let Some(replaced) = scope.set(name.clone(), array, ownership) {
@@ -629,6 +628,33 @@ fn execute_foreach_stmt(
         }
     }
     Ok(EvalControl::None)
+}
+
+/// Returns PHP's next automatic integer key for `$array[]` append writes.
+fn eval_array_append_key(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut next_key = None;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        if values.type_tag(key)? != EVAL_TAG_INT {
+            continue;
+        }
+        let one = values.int(1)?;
+        let candidate = values.add(key, one)?;
+        let replace = if let Some(current) = next_key {
+            let is_greater = values.compare(EvalBinOp::Gt, candidate, current)?;
+            values.truthy(is_greater)?
+        } else {
+            true
+        };
+        if replace {
+            next_key = Some(candidate);
+        }
+    }
+    next_key.map_or_else(|| values.int(0), Ok)
 }
 
 /// Evaluates one expression to an opaque runtime-cell handle.
@@ -4952,6 +4978,49 @@ echo function_exists("missing_probe") . "x";"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::String("b".to_string()));
+    }
+
+    /// Verifies associative append starts at key zero when only string keys exist.
+    #[test]
+    fn execute_program_appends_assoc_scope_array_with_string_keys() {
+        let program =
+            parse_fragment(br#"$items = ["name" => "Ada"]; $items[] = "Grace"; return $items[0];"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("Grace".to_string()));
+    }
+
+    /// Verifies associative append uses one plus the largest existing integer key.
+    #[test]
+    fn execute_program_appends_assoc_scope_array_after_positive_int_key() {
+        let program = parse_fragment(
+            br#"$items = [2 => "two", "name" => "Ada"]; $items[] = "tail"; return $items[3];"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
+    }
+
+    /// Verifies associative append preserves PHP's largest-negative-key behavior.
+    #[test]
+    fn execute_program_appends_assoc_scope_array_after_negative_int_key() {
+        let program =
+            parse_fragment(br#"$items = [-2 => "minus"]; $items[] = "tail"; return $items[-1];"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
     }
 
     /// Verifies mutating a borrowed scope array does not make the eval scope own it.
