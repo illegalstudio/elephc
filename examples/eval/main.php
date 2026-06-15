@@ -40,6 +40,7 @@ eval('$profile["name"] = "Grace";');
 eval('if ($x >= 3) { echo "x>=3\n"; }');
 eval('if ($x < 0) { echo "negative\n"; } elseif ($x == 3) { echo "x==3\n"; }');
 eval('do { echo "do-once\n"; } while (false);');
+eval('if (true) echo "single-if\n";');
 eval('foreach ([1, 2] as $n) { echo "n=" . $n . "\n"; }');
 eval('if (isset($profile["name"])) { echo "isset-name\n"; }');
 eval('if (empty($profile["missing"])) { echo "empty-missing\n"; }');

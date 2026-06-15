@@ -193,6 +193,18 @@ echo $result;
     assert_eq!(out, "b");
 }
 
+/// Verifies eval accepts braceless single-statement control-flow bodies.
+#[test]
+fn test_eval_braceless_control_flow_bodies() {
+    let out = compile_and_run(
+        r#"<?php
+$flag = false;
+eval('if ($flag) echo "a"; else echo "b"; while (false) echo "x"; do echo "d"; while (false);');
+"#,
+    );
+    assert_eq!(out, "bd");
+}
+
 /// Verifies eval while loops repeatedly execute against the materialized scope.
 #[test]
 fn test_eval_while_updates_scope() {

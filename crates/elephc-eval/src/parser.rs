@@ -426,7 +426,7 @@ impl Parser {
     /// Parses `do { ... } while (expr);`.
     fn parse_do_while_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
-        let body = self.parse_block()?;
+        let body = self.parse_statement_body()?;
         if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "while")) {
             return Err(EvalParseError::UnexpectedToken);
         }
@@ -463,7 +463,7 @@ impl Parser {
         };
         self.expect_semicolon()?;
         let update = self.parse_for_update_clause()?;
-        let body = self.parse_block()?;
+        let body = self.parse_statement_body()?;
         Ok(vec![EvalStmt::For {
             init,
             condition,
@@ -487,7 +487,7 @@ impl Parser {
         let value_name = value_name.clone();
         self.advance();
         self.expect(TokenKind::RParen)?;
-        let body = self.parse_block()?;
+        let body = self.parse_statement_body()?;
         Ok(vec![EvalStmt::Foreach {
             array,
             value_name,
@@ -621,7 +621,7 @@ impl Parser {
         self.expect(TokenKind::LParen)?;
         let condition = self.parse_expr()?;
         self.expect(TokenKind::RParen)?;
-        let then_branch = self.parse_block()?;
+        let then_branch = self.parse_statement_body()?;
         let else_branch = self.parse_optional_else_branch()?;
         Ok(EvalStmt::If {
             condition,
@@ -644,7 +644,7 @@ impl Parser {
             self.advance();
             Ok(vec![self.parse_if_after_keyword()?])
         } else {
-            self.parse_block()
+            self.parse_statement_body()
         }
     }
 
@@ -674,8 +674,17 @@ impl Parser {
         self.expect(TokenKind::LParen)?;
         let condition = self.parse_expr()?;
         self.expect(TokenKind::RParen)?;
-        let body = self.parse_block()?;
+        let body = self.parse_statement_body()?;
         Ok(vec![EvalStmt::While { condition, body }])
+    }
+
+    /// Parses either a brace-delimited block or one braceless statement body.
+    fn parse_statement_body(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        if matches!(self.current(), TokenKind::LBrace) {
+            self.parse_block()
+        } else {
+            self.parse_stmt()
+        }
     }
 
     /// Parses a brace-delimited statement block.
@@ -1140,6 +1149,25 @@ mod tests {
                     name: "x".to_string(),
                     value: EvalExpr::Const(EvalConst::String("no".to_string())),
                 }],
+            }]
+        );
+    }
+
+    /// Verifies braceless if/else bodies parse as single-statement branch bodies.
+    #[test]
+    fn parse_fragment_accepts_braceless_if_else_source() {
+        let program = parse_fragment(br#"if ($flag) echo "yes"; else echo "no";"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::If {
+                condition: EvalExpr::LoadVar("flag".to_string()),
+                then_branch: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
+                    "yes".to_string()
+                )))],
+                else_branch: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
+                    "no".to_string()
+                )))],
             }]
         );
     }
