@@ -643,6 +643,22 @@ echo ":"; echo function_exists("strtoupper"); echo function_exists("strtolower")
     assert_eq!(out, "HELLO WORLD:loud:XY:zz:11");
 }
 
+/// Verifies eval `str_contains()` supports direct and callable byte-string search.
+#[test]
+fn test_eval_dispatches_str_contains_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo str_contains("Hello World", "World") ? "Y" : "N";
+echo str_contains("Hello", "z") ? "bad" : ":N";
+echo str_contains("Hello", "") ? ":E" : "bad";
+echo call_user_func("str_contains", "abc", "b") ? ":C" : "bad";
+echo call_user_func_array("str_contains", ["abc", "x"]) ? "bad" : ":A";
+echo ":"; echo function_exists("str_contains");');
+"#,
+    );
+    assert_eq!(out, "Y:N:E:C:A:1");
+}
+
 /// Verifies eval scalar type-predicate builtins inspect boxed Mixed runtime tags.
 #[test]
 fn test_eval_dispatches_type_predicate_builtin_calls() {

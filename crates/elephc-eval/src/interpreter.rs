@@ -752,6 +752,7 @@ fn eval_call(
         "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
+        "str_contains" => eval_builtin_str_contains(args, context, scope, values),
         "strlen" => eval_builtin_strlen(args, context, scope, values),
         "strtolower" | "strtoupper" => eval_builtin_string_case(name, args, context, scope, values),
         _ => {
@@ -883,6 +884,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "pow"
             | "round"
             | "sqrt"
+            | "str_contains"
             | "strlen"
             | "strtolower"
             | "strtoupper"
@@ -1078,6 +1080,12 @@ fn eval_builtin_with_values(
             let bytes = values.string_bytes(*value)?;
             let len = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
             values.int(len)?
+        }
+        "str_contains" => {
+            let [haystack, needle] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_str_contains_result(*haystack, *needle, values)?
         }
         "strtolower" | "strtoupper" => {
             let [value] = evaluated_args else {
@@ -1282,6 +1290,36 @@ fn eval_type_predicate_result(
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     values.bool_value(result)
+}
+
+/// Evaluates PHP's `str_contains(...)` over two eval expressions.
+fn eval_builtin_str_contains(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [haystack, needle] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let haystack = eval_expr(haystack, context, scope, values)?;
+    let needle = eval_expr(needle, context, scope, values)?;
+    eval_str_contains_result(haystack, needle, values)
+}
+
+/// Checks one converted haystack for one converted needle using PHP byte-string semantics.
+fn eval_str_contains_result(
+    haystack: RuntimeCellHandle,
+    needle: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let haystack = values.string_bytes(haystack)?;
+    let needle = values.string_bytes(needle)?;
+    let contains = needle.is_empty()
+        || haystack
+            .windows(needle.len())
+            .any(|window| window == needle);
+    values.bool_value(contains)
 }
 
 /// Evaluates PHP ASCII case-conversion string builtins over one eval expression.
@@ -3118,6 +3156,27 @@ return function_exists("strtolower");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "HELLO WORLD:loud:XY:zz:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `str_contains()` uses byte-string search and supports callable dispatch.
+    #[test]
+    fn execute_program_dispatches_str_contains_builtin() {
+        let program = parse_fragment(
+            br#"echo str_contains("Hello World", "World") ? "Y" : "N";
+echo str_contains("Hello", "z") ? "bad" : ":N";
+echo str_contains("Hello", "") ? ":E" : "bad";
+echo call_user_func("str_contains", "abc", "b") ? ":C" : "bad";
+echo call_user_func_array("str_contains", ["abc", "x"]) ? "bad" : ":A";
+return function_exists("str_contains");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "Y:N:E:C:A");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
