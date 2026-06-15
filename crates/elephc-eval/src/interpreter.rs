@@ -559,6 +559,8 @@ fn eval_expr(
                 EvalBinOp::Concat => values.concat(left, right),
                 EvalBinOp::LooseEq
                 | EvalBinOp::LooseNotEq
+                | EvalBinOp::StrictEq
+                | EvalBinOp::StrictNotEq
                 | EvalBinOp::Lt
                 | EvalBinOp::LtEq
                 | EvalBinOp::Gt
@@ -1380,6 +1382,8 @@ mod tests {
             let result = match op {
                 EvalBinOp::LooseEq => self.loose_eq(left, right),
                 EvalBinOp::LooseNotEq => !self.loose_eq(left, right),
+                EvalBinOp::StrictEq => self.strict_eq(left, right),
+                EvalBinOp::StrictNotEq => !self.strict_eq(left, right),
                 EvalBinOp::Lt => self.numeric(left)? < self.numeric(right)?,
                 EvalBinOp::LtEq => self.numeric(left)? <= self.numeric(right)?,
                 EvalBinOp::Gt => self.numeric(left)? > self.numeric(right)?,
@@ -1445,6 +1449,18 @@ mod tests {
                     .parse::<f64>()
                     .is_ok_and(|right| self.fake_numeric(&left) == right),
                 (left, right) => self.fake_numeric(&left) == self.fake_numeric(&right),
+            }
+        }
+
+        /// Compares fake scalar values by PHP strict tag and payload equality.
+        fn strict_eq(&self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> bool {
+            match (self.get(left), self.get(right)) {
+                (FakeValue::Null, FakeValue::Null) => true,
+                (FakeValue::Bool(left), FakeValue::Bool(right)) => left == right,
+                (FakeValue::Int(left), FakeValue::Int(right)) => left == right,
+                (FakeValue::Float(left), FakeValue::Float(right)) => left == right,
+                (FakeValue::String(left), FakeValue::String(right)) => left == right,
+                _ => false,
             }
         }
 
@@ -1757,6 +1773,21 @@ mod tests {
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "1111ns");
+    }
+
+    /// Verifies strict equality keeps PHP type identity distinct from loose equality.
+    #[test]
+    fn execute_program_strict_equality_uses_type_identity() {
+        let program = parse_fragment(
+            br#"echo "10" == 10; echo "10" === 10; echo "10" === "10"; echo "10" !== 10;"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "111");
     }
 
     /// Verifies logical AND skips an unsupported right-hand expression after a false left side.

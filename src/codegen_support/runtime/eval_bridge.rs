@@ -253,6 +253,10 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b.eq __elephc_eval_value_compare_eq");                 // route == through the mixed loose-equality helper
     emitter.instruction("cmp x2, #1");                                          // is this loose inequality?
     emitter.instruction("b.eq __elephc_eval_value_compare_ne");                 // route != through the mixed loose-equality helper
+    emitter.instruction("cmp x2, #6");                                          // is this strict equality?
+    emitter.instruction("b.eq __elephc_eval_value_compare_strict_eq");          // route === through the mixed strict-equality helper
+    emitter.instruction("cmp x2, #7");                                          // is this strict inequality?
+    emitter.instruction("b.eq __elephc_eval_value_compare_strict_ne");          // route !== through the mixed strict-equality helper
     emitter.instruction("bl __rt_mixed_cast_float");                            // cast the left boxed operand to a numeric comparison double
     emitter.instruction("str d0, [sp, #24]");                                   // save the normalized left numeric operand
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for numeric casting
@@ -281,6 +285,18 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("bl __elephc_eval_mixed_loose_eq");                     // compute scalar PHP loose equality before inversion
     emitter.instruction("eor x1, x0, #1");                                      // invert equality for the != operator
     emitter.instruction("b __elephc_eval_value_compare_box");                   // box the inequality result
+    emitter.label("__elephc_eval_value_compare_strict_eq");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the left operand for strict equality
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the right operand for strict equality
+    emitter.instruction("bl __rt_mixed_strict_eq");                             // compute PHP strict equality
+    emitter.instruction("mov x1, x0");                                          // move strict equality into the bool payload register
+    emitter.instruction("b __elephc_eval_value_compare_box");                   // box the strict-equality result
+    emitter.label("__elephc_eval_value_compare_strict_ne");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the left operand for strict inequality
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the right operand for strict inequality
+    emitter.instruction("bl __rt_mixed_strict_eq");                             // compute PHP strict equality before inversion
+    emitter.instruction("eor x1, x0, #1");                                      // invert equality for the !== operator
+    emitter.instruction("b __elephc_eval_value_compare_box");                   // box the strict-inequality result
     emitter.label("__elephc_eval_value_compare_lt");
     emitter.instruction("fcmp d1, d0");                                         // compare numeric eval operands for <
     emitter.instruction("cset x1, mi");                                         // ordered less-than becomes boolean true
@@ -716,6 +732,10 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("je __elephc_eval_value_compare_eq");                   // route == through the mixed loose-equality helper
     emitter.instruction("cmp rdx, 1");                                          // is this loose inequality?
     emitter.instruction("je __elephc_eval_value_compare_ne");                   // route != through the mixed loose-equality helper
+    emitter.instruction("cmp rdx, 6");                                          // is this strict equality?
+    emitter.instruction("je __elephc_eval_value_compare_strict_eq");            // route === through the mixed strict-equality helper
+    emitter.instruction("cmp rdx, 7");                                          // is this strict inequality?
+    emitter.instruction("je __elephc_eval_value_compare_strict_ne");            // route !== through the mixed strict-equality helper
     emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_float input
     emitter.instruction("call __rt_mixed_cast_float");                          // cast the left boxed operand to a numeric comparison double
     emitter.instruction("movsd QWORD PTR [rbp - 32], xmm0");                    // save the normalized left numeric operand
@@ -745,6 +765,17 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __elephc_eval_mixed_loose_eq");                   // compute scalar PHP loose equality before inversion
     emitter.instruction("xor rax, 1");                                          // invert equality for the != operator
     emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the inequality result
+    emitter.label("__elephc_eval_value_compare_strict_eq");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left operand for strict equality
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the right operand for strict equality
+    emitter.instruction("call __rt_mixed_strict_eq");                           // compute PHP strict equality
+    emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the strict-equality result
+    emitter.label("__elephc_eval_value_compare_strict_ne");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left operand for strict inequality
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the right operand for strict inequality
+    emitter.instruction("call __rt_mixed_strict_eq");                           // compute PHP strict equality before inversion
+    emitter.instruction("xor rax, 1");                                          // invert equality for the !== operator
+    emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the strict-inequality result
     emitter.label("__elephc_eval_value_compare_lt");
     emitter.instruction("ucomisd xmm1, xmm0");                                  // compare numeric eval operands for <
     emitter.instruction("setb al");                                             // set true when left is below right
