@@ -35,7 +35,7 @@ The evaluated string must be a PHP fragment without an opening `<?php` tag. Vari
 
 Eval-declared function calls, registered AOT global user-function calls, and supported PHP-visible builtin calls inside eval also support PHP argument unpacking (`...`) and `call_user_func_array()` argument arrays; string keys bind as named parameters. Object method calls through eval support positional arguments and numeric array unpacking, while named method arguments remain unsupported. Eval language constructs such as `isset()`, `empty()`, and nested `eval()`, plus post-barrier native calls, still accept simple positional arguments.
 
-Eval associative array literals and `$array[] = value` append writes use PHP's next automatic integer key rule for unkeyed entries and append keys.
+Eval associative array literals and `$array[] = value` append writes use PHP's next automatic integer key rule for unkeyed entries and append keys, including integer-string keys such as `"2"`.
 
 Eval builtin dispatch also supports `strrev()` and floating-point math calls `fdiv()` and `fmod()`, including `fdiv()` zero handling through `INF` and `NAN` results.
 
