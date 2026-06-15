@@ -756,7 +756,7 @@ fn eval_call(
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
-        | "is_null" | "is_numeric" | "is_real" | "is_string" => {
+        | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
@@ -908,6 +908,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_null"
             | "is_numeric"
             | "is_real"
+            | "is_resource"
             | "is_string"
             | "ord"
             | "pow"
@@ -1139,7 +1140,7 @@ fn eval_builtin_with_values(
             eval_hash_equals_result(*known, *user, values)?
         }
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
-        | "is_null" | "is_numeric" | "is_real" | "is_string" => {
+        | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
@@ -1489,6 +1490,7 @@ fn eval_type_predicate_result(
         "is_bool" => tag == EVAL_TAG_BOOL,
         "is_null" => tag == EVAL_TAG_NULL,
         "is_array" => matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC),
+        "is_resource" => tag == EVAL_TAG_RESOURCE,
         "is_numeric" => {
             tag == EVAL_TAG_INT
                 || tag == EVAL_TAG_FLOAT
@@ -2060,6 +2062,7 @@ mod tests {
         Array(Vec<RuntimeCellHandle>),
         Assoc(Vec<(FakeKey, RuntimeCellHandle)>),
         Object(HashMap<String, RuntimeCellHandle>),
+        Resource(i64),
     }
 
     /// Test runtime hooks that allocate stable fake handles and record echo output.
@@ -2317,6 +2320,7 @@ mod tests {
                 FakeValue::Array(_) => EVAL_TAG_ARRAY,
                 FakeValue::Assoc(_) => EVAL_TAG_ASSOC,
                 FakeValue::Object(_) => EVAL_TAG_OBJECT,
+                FakeValue::Resource(_) => EVAL_TAG_RESOURCE,
                 FakeValue::Null => EVAL_TAG_NULL,
             })
         }
@@ -2626,6 +2630,7 @@ mod tests {
                 FakeValue::Array(value) => !value.is_empty(),
                 FakeValue::Assoc(value) => !value.is_empty(),
                 FakeValue::Object(_) => true,
+                FakeValue::Resource(_) => true,
             })
         }
     }
@@ -2663,6 +2668,7 @@ mod tests {
                 (FakeValue::Int(left), FakeValue::Int(right)) => left == right,
                 (FakeValue::Float(left), FakeValue::Float(right)) => left == right,
                 (FakeValue::String(left), FakeValue::String(right)) => left == right,
+                (FakeValue::Resource(left), FakeValue::Resource(right)) => left == right,
                 _ => false,
             }
         }
@@ -2684,6 +2690,7 @@ mod tests {
                 FakeValue::Array(value) => value.len() as f64,
                 FakeValue::Assoc(value) => value.len() as f64,
                 FakeValue::Object(_) => 1.0,
+                FakeValue::Resource(value) => (*value + 1) as f64,
             }
         }
 
@@ -2703,6 +2710,7 @@ mod tests {
                 FakeValue::Array(value) => !value.is_empty(),
                 FakeValue::Assoc(value) => !value.is_empty(),
                 FakeValue::Object(_) => true,
+                FakeValue::Resource(_) => true,
             }
         }
 
@@ -2718,6 +2726,7 @@ mod tests {
                 FakeValue::Array(_) => "Array".to_string(),
                 FakeValue::Assoc(_) => "Array".to_string(),
                 FakeValue::Object(_) => "Object".to_string(),
+                FakeValue::Resource(value) => format!("Resource id #{}", value + 1),
             }
         }
     }
@@ -3847,10 +3856,11 @@ echo is_numeric(42); echo is_numeric(3.14); echo is_numeric("42");
 echo is_numeric("-5"); echo is_numeric("3.14");
 echo is_numeric("abc") ? "bad" : "N";
 echo is_numeric(true) ? "bad" : "B";
+echo is_resource(1) ? "bad" : "R";
 echo ":"; echo call_user_func("is_string", "x");
 echo call_user_func_array("is_array", [[1]]);
 echo call_user_func("is_numeric", "12");
-echo function_exists("is_numeric");
+echo function_exists("is_numeric"); echo function_exists("is_resource");
 return function_exists("is_double");"#,
         )
         .expect("parse eval fragment");
@@ -3859,7 +3869,27 @@ return function_exists("is_double");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "11111111111ok11111NB:1111");
+        assert_eq!(values.output, "11111111111ok11111NBR:11111");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `is_resource()` recognizes resource-tagged runtime cells from scope.
+    #[test]
+    fn execute_program_dispatches_is_resource_true() {
+        let program = parse_fragment(
+            br#"echo is_resource($handle) ? "R" : "bad";
+echo ":" . gettype($handle);
+return call_user_func("is_resource", $handle);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let handle = values.alloc(FakeValue::Resource(6));
+        scope.set("handle".to_string(), handle, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "R:resource");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
