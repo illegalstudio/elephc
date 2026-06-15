@@ -23,16 +23,17 @@ pub type NativeFunctionInvoker =
     unsafe extern "C" fn(*mut c_void, *mut RuntimeCell) -> *mut RuntimeCell;
 
 /// Native AOT function callback metadata visible to runtime eval fragments.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct NativeFunction {
     descriptor: *mut c_void,
     invoker: NativeFunctionInvoker,
     param_count: usize,
+    param_names: Vec<String>,
 }
 
 impl NativeFunction {
     /// Creates callback metadata for a descriptor-compatible AOT function.
-    pub const fn new(
+    pub fn new(
         descriptor: *mut c_void,
         invoker: NativeFunctionInvoker,
         param_count: usize,
@@ -41,12 +42,30 @@ impl NativeFunction {
             descriptor,
             invoker,
             param_count,
+            param_names: Vec::new(),
         }
     }
 
     /// Returns the visible positional parameter count accepted by this callback.
-    pub const fn param_count(self) -> usize {
+    pub const fn param_count(&self) -> usize {
         self.param_count
+    }
+
+    /// Records the PHP parameter name for one positional callback slot.
+    pub fn set_param_name(&mut self, index: usize, name: impl Into<String>) -> bool {
+        if index >= self.param_count {
+            return false;
+        }
+        if self.param_names.len() < self.param_count {
+            self.param_names.resize(self.param_count, String::new());
+        }
+        self.param_names[index] = name.into();
+        true
+    }
+
+    /// Returns the PHP-visible parameter names registered for this callback.
+    pub fn param_names(&self) -> &[String] {
+        &self.param_names
     }
 
     /// Invokes the descriptor-compatible callback with a boxed Mixed arg array.
@@ -54,7 +73,7 @@ impl NativeFunction {
     /// # Safety
     /// `arg_array` must be a boxed Mixed indexed array whose elements are boxed
     /// Mixed cells following the descriptor-invoker ABI.
-    pub unsafe fn call(self, arg_array: RuntimeCellHandle) -> RuntimeCellHandle {
+    pub unsafe fn call(&self, arg_array: RuntimeCellHandle) -> RuntimeCellHandle {
         RuntimeCellHandle::from_raw((self.invoker)(self.descriptor, arg_array.as_ptr()))
     }
 }
@@ -142,7 +161,19 @@ impl ElephcEvalContext {
 
     /// Returns a native AOT function callback by its lowercase PHP function name.
     pub fn native_function(&self, name: &str) -> Option<NativeFunction> {
-        self.native_functions.get(name).copied()
+        self.native_functions.get(name).cloned()
+    }
+
+    /// Records one parameter name for an already registered native AOT callback.
+    pub fn define_native_function_param(
+        &mut self,
+        function_name: &str,
+        index: usize,
+        param_name: impl Into<String>,
+    ) -> bool {
+        self.native_functions
+            .get_mut(function_name)
+            .is_some_and(|function| function.set_param_name(index, param_name))
     }
 
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.

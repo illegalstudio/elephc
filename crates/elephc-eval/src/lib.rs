@@ -262,6 +262,33 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function(
     .unwrap_or(0)
 }
 
+/// Registers one generated native PHP function parameter name in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Function and parameter name
+/// pointers must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_param(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    param_name_ptr: *const u8,
+    param_name_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_param_inner(
+            ctx,
+            function_name_ptr,
+            function_name_len,
+            param_index,
+            param_name_ptr,
+            param_name_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
 /// Calls a zero-argument function previously declared through `eval()`.
 ///
 /// # Safety
@@ -359,6 +386,41 @@ unsafe fn register_native_function_inner(
             .define_native_function(name.to_ascii_lowercase(), function)
             .is_ok(),
     )
+}
+
+/// Runs the native parameter-name registration ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function_param`; invalid handles,
+/// names, or indexes fail closed as `false`.
+unsafe fn register_native_function_param_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    param_name_ptr: *const u8,
+    param_name_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(function_name) = abi_name_to_string(function_name_ptr, function_name_len) else {
+        return 0;
+    };
+    let Ok(param_name) = abi_name_to_string(param_name_ptr, param_name_len) else {
+        return 0;
+    };
+    let Ok(param_index) = usize::try_from(param_index) else {
+        return 0;
+    };
+    i32::from(context.define_native_function_param(
+        &function_name.to_ascii_lowercase(),
+        param_index,
+        param_name,
+    ))
 }
 
 /// Runs the call-site metadata setter ABI body after installing a panic boundary.
@@ -696,11 +758,12 @@ mod tests {
         assert_eq!(missing_result, 0);
     }
 
-    /// Verifies native AOT registration makes functions visible through the ABI probe.
+    /// Verifies native AOT registration records function and parameter metadata.
     #[test]
     fn register_native_function_reports_function_exists() {
         let mut ctx = ElephcEvalContext::new();
         let name = b"NATIVE_PROBE";
+        let param = b"value";
         let descriptor = 1usize as *mut c_void;
 
         let registered = unsafe {
@@ -710,13 +773,29 @@ mod tests {
                 name.len() as u64,
                 descriptor,
                 Some(fake_native_invoker),
+                1,
+            )
+        };
+        let param_registered = unsafe {
+            __elephc_eval_register_native_function_param(
+                &mut ctx,
+                name.as_ptr(),
+                name.len() as u64,
                 0,
+                param.as_ptr(),
+                param.len() as u64,
             )
         };
         let exists = unsafe { __elephc_eval_function_exists(&ctx, b"native_probe".as_ptr(), 12) };
 
         assert_eq!(registered, 1);
+        let native = ctx
+            .native_function("native_probe")
+            .expect("native function should be registered");
+
+        assert_eq!(param_registered, 1);
         assert_eq!(exists, 1);
+        assert_eq!(native.param_names(), &["value".to_string()]);
     }
 
     /// Verifies scope allocation returns an empty opaque activation scope handle.

@@ -1337,6 +1337,30 @@ eval('echo native_eval_add(4, 6); echo ":"; echo function_exists("native_eval_ad
     assert_eq!(out, "10:1");
 }
 
+/// Verifies eval fragments bind AOT user function parameters by name.
+#[test]
+fn test_eval_fragment_can_call_native_user_function_with_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+function native_eval_named($left, $right) { return $left . ":" . $right; }
+eval('echo native_eval_named(right: "R", left: "L");');
+"#,
+    );
+    assert_eq!(out, "L:R");
+}
+
+/// Verifies eval fragments can unpack arrays into AOT user function calls.
+#[test]
+fn test_eval_fragment_can_call_native_user_function_with_spread_args() {
+    let out = compile_and_run(
+        r#"<?php
+function native_eval_spread($left, $right) { return $left . ":" . $right; }
+eval('echo native_eval_spread(...["L", "R"]);');
+"#,
+    );
+    assert_eq!(out, "L:R");
+}
+
 /// Verifies eval fragments called from methods can mutate public properties through `$this`.
 #[test]
 fn test_eval_fragment_can_mutate_this_public_property() {
