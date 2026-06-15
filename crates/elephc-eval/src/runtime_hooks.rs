@@ -28,6 +28,10 @@ unsafe extern "C" {
         array: *mut RuntimeCell,
         index: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    fn __elephc_eval_value_array_key_exists(
+        key: *mut RuntimeCell,
+        array: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     fn __elephc_eval_value_array_iter_key(
         array: *mut RuntimeCell,
         position: u64,
@@ -157,6 +161,15 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_array_get(array.as_ptr(), index.as_ptr()) })
+    }
+
+    /// Checks whether a boxed Mixed array contains a normalized PHP key.
+    fn array_key_exists(
+        &mut self,
+        key: RuntimeCellHandle,
+        array: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_array_key_exists(key.as_ptr(), array.as_ptr()) })
     }
 
     /// Returns one foreach-visible key from a boxed Mixed array by iteration position.
