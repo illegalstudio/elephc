@@ -143,6 +143,20 @@ pub trait RuntimeValueOps {
     /// Computes PHP `sqrt()` for one runtime cell after PHP numeric conversion.
     fn sqrt(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Divides two runtime cells using PHP `fdiv()` semantics.
+    fn fdiv(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Computes the floating-point remainder using PHP `fmod()` semantics.
+    fn fmod(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Adds two runtime cells using PHP addition semantics.
     fn add(
         &mut self,
@@ -757,6 +771,7 @@ fn eval_call(
         "count" => eval_builtin_count(args, context, scope, values),
         "empty" => eval_builtin_empty(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
+        "fdiv" | "fmod" => eval_builtin_float_binary(name, args, context, scope, values),
         "floor" => eval_builtin_floor(args, context, scope, values),
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
@@ -902,8 +917,10 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "boolval"
             | "chop"
             | "count"
+            | "fdiv"
             | "floor"
             | "floatval"
+            | "fmod"
             | "function_exists"
             | "gettype"
             | "hash_equals"
@@ -1088,6 +1105,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.floor(*value)?
+        }
+        "fdiv" | "fmod" => {
+            let [left, right] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_float_binary_result(name, *left, *right, values)?
         }
         "pi" => {
             if !evaluated_args.is_empty() {
@@ -1448,6 +1471,36 @@ fn eval_builtin_sqrt(
     };
     let value = eval_expr(value, context, scope, values)?;
     values.sqrt(value)
+}
+
+/// Evaluates PHP floating-point binary math builtins over two eval expressions.
+fn eval_builtin_float_binary(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [left, right] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let left = eval_expr(left, context, scope, values)?;
+    let right = eval_expr(right, context, scope, values)?;
+    eval_float_binary_result(name, left, right, values)
+}
+
+/// Dispatches an evaluated pair through the matching PHP float math hook.
+fn eval_float_binary_result(
+    name: &str,
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match name {
+        "fdiv" => values.fdiv(left, right),
+        "fmod" => values.fmod(left, right),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
 }
 
 /// Evaluates PHP numeric `min(...)` and `max(...)` over eval expressions.
@@ -2539,6 +2592,28 @@ mod tests {
         fn sqrt(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
             let value = self.get(value);
             self.float(self.fake_numeric(&value).sqrt())
+        }
+
+        /// Divides fake numeric cells with PHP `fdiv()` zero handling.
+        fn fdiv(
+            &mut self,
+            left: RuntimeCellHandle,
+            right: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let left = self.fake_numeric(&self.get(left));
+            let right = self.fake_numeric(&self.get(right));
+            self.float(left / right)
+        }
+
+        /// Computes fake floating-point modulo for interpreter tests.
+        fn fmod(
+            &mut self,
+            left: RuntimeCellHandle,
+            right: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let left = self.fake_numeric(&self.get(left));
+            let right = self.fake_numeric(&self.get(right));
+            self.float(left % right)
         }
 
         /// Adds fake numeric cells for interpreter tests.
@@ -4139,6 +4214,26 @@ return function_exists("ceil");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "3:double:4:double:4:5:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `fdiv()` and `fmod()` dispatch as floating-point binary builtins.
+    #[test]
+    fn execute_program_dispatches_float_binary_builtins() {
+        let program = parse_fragment(
+            br#"echo round(fdiv(10, 4), 2); echo ":";
+echo gettype(fdiv(10, 4)); echo ":";
+echo round(fmod(10.5, 3.2), 1); echo ":";
+echo round(call_user_func("fdiv", 9, 2), 1); echo ":";
+echo round(call_user_func_array("fmod", [10.5, 3.2]), 1); echo ":";
+echo function_exists("fdiv");
+return function_exists("fmod");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        assert_eq!(values.output, "2.5:double:0.9:4.5:0.9:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

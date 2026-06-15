@@ -929,6 +929,24 @@ echo ":"; echo function_exists("floor"); echo function_exists("ceil");');
     assert_eq!(out, "3:double:4:double:4:5:11");
 }
 
+/// Verifies eval `fdiv()` and `fmod()` return boxed double cells through direct and callable calls.
+#[test]
+fn test_eval_dispatches_float_binary_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo fdiv(10, 4); echo ":";
+echo gettype(fdiv(10, 4)); echo ":";
+echo fdiv(1, 0); echo ":";
+echo fdiv(0, 0); echo ":";
+echo round(fmod(10.5, 3.2), 1); echo ":";
+echo round(call_user_func("fdiv", 9, 2), 1); echo ":";
+echo round(call_user_func_array("fmod", [10.5, 3.2]), 1);
+echo ":"; echo function_exists("fdiv"); echo function_exists("fmod");');
+"#,
+    );
+    assert_eq!(out, "2.5:double:INF:NAN:0.9:4.5:0.9:11");
+}
+
 /// Verifies eval `pow()` reuses exponentiation runtime hooks through direct and callable calls.
 #[test]
 fn test_eval_dispatches_pow_builtin_call() {
