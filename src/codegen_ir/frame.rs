@@ -104,6 +104,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     store_argv_local_if_present(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
 }
 
@@ -143,6 +144,7 @@ pub(super) fn emit_function_prologue_with_label(
     }
     zero_initialize_function_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
+    zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
     Ok(())
 }
@@ -202,6 +204,7 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
         }
     }
     emit_eval_scope_epilogue_cleanup(ctx);
+    emit_eval_context_epilogue_cleanup(ctx);
 }
 
 /// Returns main local slots that receive owned refcounted values through `StoreLocal`.
@@ -316,11 +319,26 @@ fn zero_initialize_eval_scope_locals(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Zero-initializes persistent eval context handles before the first eval call can allocate one.
+fn zero_initialize_eval_context_locals(ctx: &mut FunctionContext<'_>) {
+    for (_, offset) in eval_context_locals(ctx) {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
+}
+
 /// Releases persistent eval scopes allocated for this frame.
 fn emit_eval_scope_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     for (name, offset) in eval_scope_locals(ctx) {
         ctx.emitter.comment(&format!("epilogue cleanup {}", name));
         emit_eval_scope_cleanup(ctx, offset);
+    }
+}
+
+/// Releases persistent eval contexts allocated for this frame.
+fn emit_eval_context_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    for (name, offset) in eval_context_locals(ctx) {
+        ctx.emitter.comment(&format!("epilogue cleanup {}", name));
+        emit_eval_context_cleanup(ctx, offset);
     }
 }
 
@@ -340,6 +358,22 @@ fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     ctx.emitter.label(&done);
 }
 
+/// Frees one persistent eval context handle when it was allocated.
+fn emit_eval_context_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let done = ctx.next_label("eval_context_cleanup_done");
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if arg_reg != result_reg {
+        ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));   // pass the persistent eval context handle to the free helper
+    }
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_free");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    ctx.emitter.label(&done);
+}
+
 /// Returns hidden eval scope slots and their frame offsets.
 fn eval_scope_locals(ctx: &FunctionContext<'_>) -> Vec<(String, usize)> {
     let mut locals = ctx
@@ -347,6 +381,26 @@ fn eval_scope_locals(ctx: &FunctionContext<'_>) -> Vec<(String, usize)> {
         .locals
         .iter()
         .filter(|local| local.kind == LocalKind::EvalScope)
+        .filter_map(|local| {
+            let offset = ctx.local_offset(local.id).ok()?;
+            let name = local
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("slot{}", local.id.as_raw()));
+            Some((name, offset))
+        })
+        .collect::<Vec<_>>();
+    locals.sort_by_key(|(_, offset)| *offset);
+    locals
+}
+
+/// Returns hidden eval context slots and their frame offsets.
+fn eval_context_locals(ctx: &FunctionContext<'_>) -> Vec<(String, usize)> {
+    let mut locals = ctx
+        .function
+        .locals
+        .iter()
+        .filter(|local| local.kind == LocalKind::EvalContext)
         .filter_map(|local| {
             let offset = ctx.local_offset(local.id).ok()?;
             let name = local
@@ -473,6 +527,7 @@ fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
         }
     }
     emit_eval_scope_epilogue_cleanup(ctx);
+    emit_eval_context_epilogue_cleanup(ctx);
     if preserves_return {
         pop_return_value(ctx, &return_ty);
     }

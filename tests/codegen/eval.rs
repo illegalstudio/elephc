@@ -35,6 +35,14 @@ fn test_eval_codegen_requires_eval_bridge() {
         "user assembly should call the eval bridge:\n{user_asm}"
     );
     assert!(
+        user_asm.contains("__elephc_eval_context_new"),
+        "user assembly should create a persistent eval context:\n{user_asm}"
+    );
+    assert!(
+        user_asm.contains("__elephc_eval_context_free"),
+        "user assembly should free the persistent eval context:\n{user_asm}"
+    );
+    assert!(
         required_libraries.iter().any(|lib| lib == "elephc_eval"),
         "required libraries should include elephc_eval: {required_libraries:?}"
     );

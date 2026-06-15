@@ -29,6 +29,7 @@ const EVAL_UNSUPPORTED_MESSAGE: &str =
 const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";
 const EVAL_STACK_BYTES: usize = 64;
 const EVAL_RESULT_VALUE_CELL_OFFSET: usize = 8;
+const EVAL_CONTEXT_HANDLE_OFFSET: usize = 24;
 const EVAL_SCOPE_HANDLE_OFFSET: usize = 32;
 const EVAL_TEMP_CELL_OFFSET: usize = 40;
 const EVAL_CODE_PTR_OFFSET: usize = 48;
@@ -58,10 +59,11 @@ pub(super) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     save_eval_code_string(ctx);
+    ensure_eval_context(ctx)?;
     ensure_eval_scope(ctx)?;
     let sync_locals = eval_sync_locals(ctx);
     flush_eval_scope_locals(ctx, &sync_locals)?;
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    load_eval_context_to_arg(ctx, 0);
     load_eval_scope_to_arg(ctx, 1);
     move_saved_eval_code_to_eval_args(ctx);
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
@@ -83,6 +85,39 @@ fn save_eval_code_string(ctx: &mut FunctionContext<'_>) {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, ptr_reg, EVAL_CODE_PTR_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, len_reg, EVAL_CODE_LEN_OFFSET);
+}
+
+/// Ensures a persistent eval context exists and stores its handle in the scratch frame.
+fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let slot = eval_context_slot(ctx)?;
+    let offset = ctx.local_offset(slot)?;
+    let ready = ctx.next_label("eval_context_ready");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_new");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::store_at_offset(ctx.emitter, result_reg, offset);
+    ctx.emitter.label(&ready);
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
+    Ok(())
+}
+
+/// Returns the hidden frame slot that owns this function's persistent eval context.
+fn eval_context_slot(ctx: &FunctionContext<'_>) -> Result<LocalSlotId> {
+    ctx.function
+        .locals
+        .iter()
+        .find(|local| local.kind == LocalKind::EvalContext)
+        .map(|local| local.id)
+        .ok_or_else(|| CodegenIrError::invalid_module("eval call missing eval context local"))
+}
+
+/// Loads the current eval context handle into the selected integer argument register.
+fn load_eval_context_to_arg(ctx: &mut FunctionContext<'_>, arg_index: usize) {
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, EVAL_CONTEXT_HANDLE_OFFSET);
 }
 
 /// Reloads the saved eval source string into the bridge code pointer/length arguments.
