@@ -1675,6 +1675,20 @@ mod tests {
         assert!(scope.entry("name").expect("unset marker").flags().unset);
     }
 
+    /// Verifies comma-separated echo expressions are executed in source order.
+    #[test]
+    fn execute_program_echoes_comma_list() {
+        let program = parse_fragment(br#"echo "a", $b, "c";"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let b = values.string("b").expect("create fake string");
+        scope.set("b", b, ScopeCellOwnership::Owned);
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "abc");
+    }
+
     /// Verifies print writes output and returns integer 1.
     #[test]
     fn execute_program_print_returns_one() {

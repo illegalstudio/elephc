@@ -472,9 +472,12 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "do") => self.parse_do_while_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "echo") => {
                 self.advance();
-                let expr = self.parse_expr()?;
+                let mut statements = vec![EvalStmt::Echo(self.parse_expr()?)];
+                while self.consume(TokenKind::Comma) {
+                    statements.push(EvalStmt::Echo(self.parse_expr()?));
+                }
                 self.expect_semicolon()?;
-                Ok(vec![EvalStmt::Echo(expr)])
+                Ok(statements)
             }
             TokenKind::Ident(name) if ident_eq(name, "for") => self.parse_for_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "foreach") => self.parse_foreach_stmt(),
@@ -1527,6 +1530,20 @@ mod tests {
                 left: Box::new(EvalExpr::Const(EvalConst::String("hi".to_string()))),
                 right: Box::new(EvalExpr::LoadVar("name".to_string())),
             })]
+        );
+    }
+
+    /// Verifies PHP echo comma lists lower to one EvalIR echo statement per expression.
+    #[test]
+    fn parse_fragment_accepts_echo_comma_list_source() {
+        let program = parse_fragment(br#"echo "a", $b, "c";"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[
+                EvalStmt::Echo(EvalExpr::Const(EvalConst::String("a".to_string()))),
+                EvalStmt::Echo(EvalExpr::LoadVar("b".to_string())),
+                EvalStmt::Echo(EvalExpr::Const(EvalConst::String("c".to_string()))),
+            ]
         );
     }
 

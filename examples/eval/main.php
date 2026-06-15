@@ -46,6 +46,7 @@ eval('if (true) echo "single-if\n";');
 eval('foreach ([1, 2] as $n) { echo "n=" . $n . "\n"; }');
 eval('foreach (["a" => 1, "b" => 2] as $key => $value) { echo "pair=" . $key . ":" . $value . "\n"; }');
 eval('switch (2) { case 1: echo "switch-one\n"; break; case 2: echo "switch-two\n"; break; }');
+eval('echo "echo-list=", "ok\n";');
 eval('if (isset($profile["name"])) { echo "isset-name\n"; }');
 eval('if (empty($profile["missing"])) { echo "empty-missing\n"; }');
 $meta = eval('return ["source" => "eval"];');

@@ -56,6 +56,13 @@ fn test_eval_scalar_echo_executes_through_bridge() {
     assert_eq!(out, "x");
 }
 
+/// Verifies comma-separated echo expressions inside eval emit in source order.
+#[test]
+fn test_eval_echo_comma_list_executes_through_bridge() {
+    let out = compile_and_run("<?php eval('echo \"a\", \"b\", \"c\";');");
+    assert_eq!(out, "abc");
+}
+
 /// Verifies print inside eval emits output through the bridge.
 #[test]
 fn test_eval_print_executes_through_bridge() {
