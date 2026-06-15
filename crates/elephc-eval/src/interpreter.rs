@@ -753,6 +753,7 @@ fn eval_call(
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "strlen" => eval_builtin_strlen(args, context, scope, values),
+        "strtolower" | "strtoupper" => eval_builtin_string_case(name, args, context, scope, values),
         _ => {
             if let Some(function) = context.function(name).cloned() {
                 return eval_dynamic_function(&function, args, context, scope, values);
@@ -883,6 +884,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "round"
             | "sqrt"
             | "strlen"
+            | "strtolower"
+            | "strtoupper"
             | "strval"
     )
 }
@@ -1075,6 +1078,12 @@ fn eval_builtin_with_values(
             let bytes = values.string_bytes(*value)?;
             let len = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
             values.int(len)?
+        }
+        "strtolower" | "strtoupper" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_string_case_result(name, *value, values)?
         }
         _ => return Ok(None),
     };
@@ -1273,6 +1282,49 @@ fn eval_type_predicate_result(
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     values.bool_value(result)
+}
+
+/// Evaluates PHP ASCII case-conversion string builtins over one eval expression.
+fn eval_builtin_string_case(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_string_case_result(name, value, values)
+}
+
+/// Converts one eval value through PHP string conversion and ASCII case mapping.
+fn eval_string_case_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut bytes = values.string_bytes(value)?;
+    match name {
+        "strtolower" => {
+            for byte in &mut bytes {
+                if byte.is_ascii_uppercase() {
+                    *byte += b'a' - b'A';
+                }
+            }
+        }
+        "strtoupper" => {
+            for byte in &mut bytes {
+                if byte.is_ascii_lowercase() {
+                    *byte -= b'a' - b'A';
+                }
+            }
+        }
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    }
+    let value = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.string(&value)
 }
 
 /// Evaluates nested `eval(...)` calls against the current materialized scope.
@@ -3046,6 +3098,27 @@ return call_user_func_array("dyn", [4, 5]);"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(6));
+    }
+
+    /// Verifies eval ASCII string case builtins work directly and through callable dispatch.
+    #[test]
+    fn execute_program_dispatches_string_case_builtins() {
+        let program = parse_fragment(
+            br#"echo strtoupper("Hello World"); echo ":";
+echo strtolower("LOUD"); echo ":";
+echo call_user_func("strtoupper", "xy"); echo ":";
+echo call_user_func_array("strtolower", ["ZZ"]);
+echo ":"; echo function_exists("strtoupper");
+return function_exists("strtolower");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "HELLO WORLD:loud:XY:zz:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
     /// Verifies eval type-predicate builtins inspect boxed runtime tags directly and by callable.

@@ -628,6 +628,21 @@ eval('echo STRLEN("abcd") . ":" . count([1, 2, 3]);');
     assert_eq!(out, "4:3");
 }
 
+/// Verifies eval ASCII case-conversion builtins work directly and by callable dispatch.
+#[test]
+fn test_eval_dispatches_string_case_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strtoupper("Hello World"); echo ":";
+echo strtolower("LOUD"); echo ":";
+echo call_user_func("strtoupper", "xy"); echo ":";
+echo call_user_func_array("strtolower", ["ZZ"]);
+echo ":"; echo function_exists("strtoupper"); echo function_exists("strtolower");');
+"#,
+    );
+    assert_eq!(out, "HELLO WORLD:loud:XY:zz:11");
+}
+
 /// Verifies eval scalar type-predicate builtins inspect boxed Mixed runtime tags.
 #[test]
 fn test_eval_dispatches_type_predicate_builtin_calls() {
