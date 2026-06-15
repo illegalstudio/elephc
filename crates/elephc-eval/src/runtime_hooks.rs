@@ -33,6 +33,7 @@ unsafe extern "C" {
         index: *mut RuntimeCell,
         value: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_null() -> *mut RuntimeCell;
     fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
@@ -116,6 +117,12 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe {
             __elephc_eval_value_array_set(array.as_ptr(), index.as_ptr(), value.as_ptr())
         })
+    }
+
+    /// Returns the visible element count for a boxed Mixed array through the generated runtime wrapper.
+    fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus> {
+        let len = unsafe { __elephc_eval_value_array_len(array.as_ptr()) };
+        usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)
     }
 
     /// Returns whether a boxed Mixed cell has an array-like runtime tag.

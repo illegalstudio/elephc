@@ -341,6 +341,7 @@ impl Parser {
                 Ok(vec![EvalStmt::Echo(expr)])
             }
             TokenKind::Ident(name) if name == "for" => self.parse_for_stmt(),
+            TokenKind::Ident(name) if name == "foreach" => self.parse_foreach_stmt(),
             TokenKind::Ident(name) if name == "if" => self.parse_if_stmt(),
             TokenKind::Ident(name) if name == "return" => {
                 self.advance();
@@ -403,6 +404,29 @@ impl Parser {
             init,
             condition,
             update,
+            body,
+        }])
+    }
+
+    /// Parses `foreach (expr as $value) { ... }`.
+    fn parse_foreach_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let array = self.parse_expr()?;
+        if !matches!(self.current(), TokenKind::Ident(name) if name == "as") {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        self.advance();
+        let TokenKind::DollarIdent(value_name) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let value_name = value_name.clone();
+        self.advance();
+        self.expect(TokenKind::RParen)?;
+        let body = self.parse_block()?;
+        Ok(vec![EvalStmt::Foreach {
+            array,
+            value_name,
             body,
         }])
     }
@@ -872,6 +896,21 @@ mod tests {
                     },
                 }],
                 body: vec![EvalStmt::Echo(EvalExpr::LoadVar("i".to_string()))],
+            }]
+        );
+    }
+
+    /// Verifies value-only foreach loops lower to an array expression, value target, and body.
+    #[test]
+    fn parse_fragment_accepts_foreach_source() {
+        let program =
+            parse_fragment(br#"foreach ($items as $item) { echo $item; }"#).expect("parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Foreach {
+                array: EvalExpr::LoadVar("items".to_string()),
+                value_name: "item".to_string(),
+                body: vec![EvalStmt::Echo(EvalExpr::LoadVar("item".to_string()))],
             }]
         );
     }
