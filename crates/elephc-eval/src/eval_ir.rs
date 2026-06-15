@@ -66,6 +66,7 @@ pub enum EvalStmt {
     },
     Foreach {
         array: EvalExpr,
+        key_name: Option<String>,
         value_name: String,
         body: Vec<EvalStmt>,
     },

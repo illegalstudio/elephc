@@ -28,6 +28,10 @@ unsafe extern "C" {
         array: *mut RuntimeCell,
         index: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    fn __elephc_eval_value_array_iter_key(
+        array: *mut RuntimeCell,
+        position: u64,
+    ) -> *mut RuntimeCell;
     fn __elephc_eval_value_array_set(
         array: *mut RuntimeCell,
         index: *mut RuntimeCell,
@@ -123,6 +127,15 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_array_get(array.as_ptr(), index.as_ptr()) })
+    }
+
+    /// Returns one foreach-visible key from a boxed Mixed array by iteration position.
+    fn array_iter_key(
+        &mut self,
+        array: RuntimeCellHandle,
+        position: usize,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_array_iter_key(array.as_ptr(), position as u64) })
     }
 
     /// Writes one element to a boxed Mixed array through the generated runtime wrapper.

@@ -44,6 +44,13 @@ pub trait RuntimeValueOps {
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns the foreach-visible key at a zero-based iteration position.
+    fn array_iter_key(
+        &mut self,
+        array: RuntimeCellHandle,
+        position: usize,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Writes one element to a runtime array-like Mixed cell and returns the target cell.
     fn array_set(
         &mut self,
@@ -268,9 +275,18 @@ fn execute_stmt(
         ),
         EvalStmt::Foreach {
             array,
+            key_name,
             value_name,
             body,
-        } => execute_foreach_stmt(array, value_name, body, context, scope, values),
+        } => execute_foreach_stmt(
+            array,
+            key_name.as_deref(),
+            value_name,
+            body,
+            context,
+            scope,
+            values,
+        ),
         EvalStmt::FunctionDecl { name, params, body } => {
             let key = name.to_ascii_lowercase();
             context
@@ -439,9 +455,10 @@ fn execute_for_stmt(
     Ok(EvalControl::None)
 }
 
-/// Executes a value-only PHP `foreach` loop over indexed eval array values.
+/// Executes a PHP `foreach` loop over eval array values.
 fn execute_foreach_stmt(
     array: &EvalExpr,
+    key_name: Option<&str>,
     value_name: &str,
     body: &[EvalStmt],
     context: &mut ElephcEvalContext,
@@ -451,8 +468,16 @@ fn execute_foreach_stmt(
     let array = eval_expr(array, context, scope, values)?;
     let len = values.array_len(array)?;
     for index in 0..len {
-        let index = values.int(index as i64)?;
-        let value = values.array_get(array, index)?;
+        let key = values.array_iter_key(array, index)?;
+        let value = values.array_get(array, key)?;
+        if let Some(key_name) = key_name {
+            if let Some(replaced) = scope.set(key_name.to_string(), key, ScopeCellOwnership::Owned)
+            {
+                values.release(replaced)?;
+            }
+        } else {
+            values.release(key)?;
+        }
         if let Some(replaced) = scope.set(value_name.to_string(), value, ScopeCellOwnership::Owned)
         {
             values.release(replaced)?;
@@ -1081,7 +1106,7 @@ mod tests {
         Float(f64),
         String(String),
         Array(Vec<RuntimeCellHandle>),
-        Assoc(HashMap<FakeKey, RuntimeCellHandle>),
+        Assoc(Vec<(FakeKey, RuntimeCellHandle)>),
         Object(HashMap<String, RuntimeCellHandle>),
     }
 
@@ -1117,6 +1142,14 @@ mod tests {
                 _ => Err(EvalStatus::UnsupportedConstruct),
             }
         }
+
+        /// Allocates a fake runtime cell for an existing PHP array key.
+        fn alloc_key(&mut self, key: &FakeKey) -> Result<RuntimeCellHandle, EvalStatus> {
+            match key {
+                FakeKey::Int(value) => self.int(*value),
+                FakeKey::String(value) => self.string(value),
+            }
+        }
     }
 
     impl RuntimeValueOps for FakeOps {
@@ -1126,8 +1159,8 @@ mod tests {
         }
 
         /// Creates a fake associative array cell.
-        fn assoc_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
-            Ok(self.alloc(FakeValue::Assoc(HashMap::with_capacity(capacity))))
+        fn assoc_new(&mut self, _capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+            Ok(self.alloc(FakeValue::Assoc(Vec::new())))
         }
 
         /// Reads one fake indexed array element.
@@ -1150,9 +1183,31 @@ mod tests {
                         .copied()
                         .map_or_else(|| self.null(), Ok)
                 }
-                FakeValue::Assoc(entries) => {
-                    entries.get(&key).copied().map_or_else(|| self.null(), Ok)
+                FakeValue::Assoc(entries) => entries
+                    .iter()
+                    .find_map(|(entry_key, value)| (entry_key == &key).then_some(*value))
+                    .map_or_else(|| self.null(), Ok),
+                _ => Err(EvalStatus::UnsupportedConstruct),
+            }
+        }
+
+        /// Returns one fake foreach key by insertion-order position.
+        fn array_iter_key(
+            &mut self,
+            array: RuntimeCellHandle,
+            position: usize,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            match self.get(array) {
+                FakeValue::Array(elements) if position < elements.len() => {
+                    self.int(position as i64)
                 }
+                FakeValue::Assoc(entries) => {
+                    let Some((key, _)) = entries.get(position) else {
+                        return self.null();
+                    };
+                    self.alloc_key(key)
+                }
+                FakeValue::Array(_) => self.null(),
                 _ => Err(EvalStatus::UnsupportedConstruct),
             }
         }
@@ -1181,7 +1236,13 @@ mod tests {
                     elements[index] = value;
                 }
                 Some(FakeValue::Assoc(entries)) => {
-                    entries.insert(key, value);
+                    if let Some((_, existing_value)) =
+                        entries.iter_mut().find(|(entry_key, _)| entry_key == &key)
+                    {
+                        *existing_value = value;
+                    } else {
+                        entries.push((key, value));
+                    }
                 }
                 _ => return Err(EvalStatus::UnsupportedConstruct),
             }
@@ -1856,6 +1917,54 @@ mod tests {
 
         assert_eq!(values.output, "ab");
         assert_eq!(values.get(item), FakeValue::String("b".to_string()));
+    }
+
+    /// Verifies foreach key-value targets receive indexed integer keys and values.
+    #[test]
+    fn execute_program_foreach_assigns_indexed_keys() {
+        let program =
+            parse_fragment(br#"foreach (["a", "b"] as $key => $item) { echo $key . $item; }"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let key = scope.visible_cell("key").expect("scope should contain key");
+        let item = scope
+            .visible_cell("item")
+            .expect("scope should contain last foreach item");
+
+        assert_eq!(values.output, "0a1b");
+        assert_eq!(values.get(key), FakeValue::Int(1));
+        assert_eq!(values.get(item), FakeValue::String("b".to_string()));
+    }
+
+    /// Verifies foreach over associative arrays preserves insertion-order keys and values.
+    #[test]
+    fn execute_program_foreach_iterates_assoc_keys_and_values() {
+        let program = parse_fragment(
+            br#"foreach (["a" => 1, "b" => 2] as $key => $item) { echo $key . ":" . $item . ";"; }"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "a:1;b:2;");
+    }
+
+    /// Verifies value-only foreach over associative arrays still yields values in insertion order.
+    #[test]
+    fn execute_program_foreach_iterates_assoc_values_only() {
+        let program = parse_fragment(br#"foreach (["a" => 1, "b" => 2] as $item) { echo $item; }"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "12");
     }
 
     /// Verifies break and continue control foreach execution inside eval.
