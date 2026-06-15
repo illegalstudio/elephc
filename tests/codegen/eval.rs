@@ -1300,6 +1300,18 @@ echo call_user_func_array("dyn_eval_inner_cufa", [4, 5]);');
     assert_eq!(out, "9");
 }
 
+/// Verifies `call_user_func_array()` inside eval binds eval-declared named arguments.
+#[test]
+fn test_eval_fragment_call_user_func_array_binds_eval_declared_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_inner_cufa_named($x, $y) { return ($x * 10) + $y; }
+echo call_user_func_array("dyn_eval_inner_cufa_named", ["y" => 2, "x" => 1]);');
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
 /// Verifies `call_user_func_array()` inside eval dispatches to supported builtins.
 #[test]
 fn test_eval_fragment_call_user_func_array_dispatches_builtin() {
@@ -1323,6 +1335,18 @@ eval('echo call_user_func_array("native_eval_cufa_add", [4, 6]);');
 "#,
     );
     assert_eq!(out, "10");
+}
+
+/// Verifies `call_user_func_array()` inside eval binds registered AOT named arguments.
+#[test]
+fn test_eval_fragment_call_user_func_array_binds_native_user_function_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+function native_eval_cufa_named($left, $right) { return $left . ":" . $right; }
+eval('echo call_user_func_array("native_eval_cufa_named", ["right" => "R", "left" => "L"]);');
+"#,
+    );
+    assert_eq!(out, "L:R");
 }
 
 /// Verifies eval fragments can call AOT user functions registered in the eval context.
