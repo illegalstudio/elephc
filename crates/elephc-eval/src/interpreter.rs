@@ -144,6 +144,13 @@ pub trait RuntimeValueOps {
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Raises one runtime cell to another using PHP exponentiation semantics.
+    fn pow(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Applies an integer bitwise or shift operation to two runtime cells.
     fn bitwise(
         &mut self,
@@ -640,6 +647,7 @@ fn eval_expr(
                 EvalBinOp::Mul => values.mul(left, right),
                 EvalBinOp::Div => values.div(left, right),
                 EvalBinOp::Mod => values.modulo(left, right),
+                EvalBinOp::Pow => values.pow(left, right),
                 EvalBinOp::BitAnd
                 | EvalBinOp::BitOr
                 | EvalBinOp::BitXor
@@ -1464,7 +1472,7 @@ mod tests {
         ) -> Result<RuntimeCellHandle, EvalStatus> {
             match (self.get(left), self.get(right)) {
                 (FakeValue::Int(left), FakeValue::Int(right)) => self.int(left + right),
-                _ => Err(EvalStatus::UnsupportedConstruct),
+                (left, right) => self.float(self.fake_numeric(&left) + self.fake_numeric(&right)),
             }
         }
 
@@ -1476,7 +1484,7 @@ mod tests {
         ) -> Result<RuntimeCellHandle, EvalStatus> {
             match (self.get(left), self.get(right)) {
                 (FakeValue::Int(left), FakeValue::Int(right)) => self.int(left - right),
-                _ => Err(EvalStatus::UnsupportedConstruct),
+                (left, right) => self.float(self.fake_numeric(&left) - self.fake_numeric(&right)),
             }
         }
 
@@ -1488,7 +1496,7 @@ mod tests {
         ) -> Result<RuntimeCellHandle, EvalStatus> {
             match (self.get(left), self.get(right)) {
                 (FakeValue::Int(left), FakeValue::Int(right)) => self.int(left * right),
-                _ => Err(EvalStatus::UnsupportedConstruct),
+                (left, right) => self.float(self.fake_numeric(&left) * self.fake_numeric(&right)),
             }
         }
 
@@ -1518,6 +1526,17 @@ mod tests {
             }
             let left = self.fake_int(&self.get(left));
             self.int(left % right)
+        }
+
+        /// Raises fake numeric cells for interpreter tests.
+        fn pow(
+            &mut self,
+            left: RuntimeCellHandle,
+            right: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let left = self.fake_numeric(&self.get(left));
+            let right = self.fake_numeric(&self.get(right));
+            self.float(left.powf(right))
         }
 
         /// Applies fake integer bitwise and shift operations for interpreter tests.
@@ -1588,6 +1607,7 @@ mod tests {
                 | EvalBinOp::Mul
                 | EvalBinOp::Div
                 | EvalBinOp::Mod
+                | EvalBinOp::Pow
                 | EvalBinOp::BitAnd
                 | EvalBinOp::BitOr
                 | EvalBinOp::BitXor
@@ -1793,6 +1813,24 @@ mod tests {
         assert_eq!(values.output, "4");
         assert_eq!(values.get(x), FakeValue::Int(4));
         assert_eq!(values.get(result), FakeValue::Float(4.5));
+    }
+
+    /// Verifies exponentiation evaluates through fake runtime numeric hooks.
+    #[test]
+    fn execute_program_evaluates_exponentiation() {
+        let program = parse_fragment(
+            br#"$x = 2; $x **= 3; echo $x; echo ":"; echo -2 ** 2; return 2 ** 3 ** 2;"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let x = scope.visible_cell("x").expect("scope should contain x");
+
+        assert_eq!(values.output, "8:-4");
+        assert_eq!(values.get(x), FakeValue::Float(8.0));
+        assert_eq!(values.get(result), FakeValue::Float(512.0));
     }
 
     /// Verifies bitwise and shift operators evaluate through fake runtime hooks.

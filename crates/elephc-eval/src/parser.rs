@@ -51,6 +51,8 @@ enum TokenKind {
     MinusEqual,
     Arrow,
     Star,
+    StarStar,
+    StarStarEqual,
     StarEqual,
     Slash,
     SlashEqual,
@@ -168,7 +170,15 @@ impl<'a> Lexer<'a> {
             }
             '*' => {
                 self.bump_char();
-                if self.peek_char() == Some('=') {
+                if self.peek_char() == Some('*') {
+                    self.bump_char();
+                    if self.peek_char() == Some('=') {
+                        self.bump_char();
+                        Ok(TokenKind::StarStarEqual)
+                    } else {
+                        Ok(TokenKind::StarStar)
+                    }
+                } else if self.peek_char() == Some('=') {
                     self.bump_char();
                     Ok(TokenKind::StarEqual)
                 } else {
@@ -1303,7 +1313,21 @@ impl Parser {
                 expr: Box::new(expr),
             });
         }
-        self.parse_postfix()
+        self.parse_power()
+    }
+
+    /// Parses right-associative exponentiation with higher precedence than unary prefix operators.
+    fn parse_power(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_postfix()?;
+        if self.consume(TokenKind::StarStar) {
+            let right = self.parse_unary()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::Pow,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
     }
 
     /// Parses postfix array reads, property reads, and method calls after a primary expression.
@@ -1559,6 +1583,7 @@ fn assignment_op(token: &TokenKind) -> Option<Option<EvalBinOp>> {
         TokenKind::PlusEqual => Some(Some(EvalBinOp::Add)),
         TokenKind::MinusEqual => Some(Some(EvalBinOp::Sub)),
         TokenKind::StarEqual => Some(Some(EvalBinOp::Mul)),
+        TokenKind::StarStarEqual => Some(Some(EvalBinOp::Pow)),
         TokenKind::SlashEqual => Some(Some(EvalBinOp::Div)),
         TokenKind::PercentEqual => Some(Some(EvalBinOp::Mod)),
         TokenKind::AmpEqual => Some(Some(EvalBinOp::BitAnd)),
@@ -1637,6 +1662,35 @@ mod tests {
                 }),
                 right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
             }))]
+        );
+    }
+
+    /// Verifies exponentiation is right-associative and binds tighter than unary negation.
+    #[test]
+    fn parse_fragment_accepts_power_source() {
+        let program =
+            parse_fragment(b"return -2 ** 2; return 2 ** 3 ** 2;").expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[
+                EvalStmt::Return(Some(EvalExpr::Unary {
+                    op: EvalUnaryOp::Negate,
+                    expr: Box::new(EvalExpr::Binary {
+                        op: EvalBinOp::Pow,
+                        left: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+                    }),
+                })),
+                EvalStmt::Return(Some(EvalExpr::Binary {
+                    op: EvalBinOp::Pow,
+                    left: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+                    right: Box::new(EvalExpr::Binary {
+                        op: EvalBinOp::Pow,
+                        left: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+                        right: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+                    }),
+                })),
+            ]
         );
     }
 
@@ -1741,6 +1795,23 @@ mod tests {
                     },
                 },
             ]
+        );
+    }
+
+    /// Verifies exponentiation compound assignment lowers through the binary power operator.
+    #[test]
+    fn parse_fragment_accepts_power_compound_assignment_source() {
+        let program = parse_fragment(br#"$x **= 3;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::StoreVar {
+                name: "x".to_string(),
+                value: EvalExpr::Binary {
+                    op: EvalBinOp::Pow,
+                    left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+                },
+            }]
         );
     }
 

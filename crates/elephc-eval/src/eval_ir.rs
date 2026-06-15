@@ -228,6 +228,7 @@ pub enum EvalBinOp {
     Mul,
     Div,
     Mod,
+    Pow,
     BitAnd,
     BitOr,
     BitXor,

@@ -65,6 +65,7 @@ $incdec = eval('$i = 0; $i++; ++$i; return $i;');
 $negative = eval('return -5 + +2;');
 $quotient = eval('return 9 / 2;');
 $modulo = eval('$n = 20; $n /= 2; return $n % 6;');
+$power = eval('return 2 ** 3;');
 $bitwise = eval('return (5 & 3) | (1 << 2);');
 $spaceship = eval('return 3 <=> 2;');
 $magic_line = eval("
@@ -98,6 +99,7 @@ echo "incdec=" . $incdec . "\n";
 echo "negative=" . $negative . "\n";
 echo "quotient=" . $quotient . "\n";
 echo "modulo=" . $modulo . "\n";
+echo "power=" . $power . "\n";
 echo "bitwise=" . $bitwise . "\n";
 echo "spaceship=" . $spaceship . "\n";
 echo "magic-line=" . $magic_line . "\n";

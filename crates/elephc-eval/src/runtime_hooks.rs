@@ -72,6 +72,8 @@ unsafe extern "C" {
         -> *mut RuntimeCell;
     fn __elephc_eval_value_mod(left: *mut RuntimeCell, right: *mut RuntimeCell)
         -> *mut RuntimeCell;
+    fn __elephc_eval_value_pow(left: *mut RuntimeCell, right: *mut RuntimeCell)
+        -> *mut RuntimeCell;
     fn __elephc_eval_value_bitwise(
         left: *mut RuntimeCell,
         right: *mut RuntimeCell,
@@ -324,6 +326,15 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_mod(left.as_ptr(), right.as_ptr()) })
     }
 
+    /// Raises two boxed Mixed cells using elephc runtime numeric exponentiation semantics.
+    fn pow(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_pow(left.as_ptr(), right.as_ptr()) })
+    }
+
     /// Applies an integer bitwise or shift operation through the generated runtime wrapper.
     fn bitwise(
         &mut self,
@@ -419,6 +430,7 @@ fn compare_op_tag(op: EvalBinOp) -> u64 {
         | EvalBinOp::Mul
         | EvalBinOp::Div
         | EvalBinOp::Mod
+        | EvalBinOp::Pow
         | EvalBinOp::BitAnd
         | EvalBinOp::BitOr
         | EvalBinOp::BitXor
@@ -446,6 +458,7 @@ fn bitwise_op_tag(op: EvalBinOp) -> u64 {
         | EvalBinOp::Mul
         | EvalBinOp::Div
         | EvalBinOp::Mod
+        | EvalBinOp::Pow
         | EvalBinOp::Concat
         | EvalBinOp::LogicalAnd
         | EvalBinOp::LogicalOr

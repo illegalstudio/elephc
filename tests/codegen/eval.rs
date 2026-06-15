@@ -127,6 +127,21 @@ eval('$x = 20; $x /= 2; $x %= 6; echo $x;');
     assert_eq!(out, "4.5:2:4");
 }
 
+/// Verifies eval exponentiation executes through the target-specific bridge wrapper.
+#[test]
+fn test_eval_exponentiation_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return 2 ** 3 ** 2;');
+echo ":";
+echo eval('return -2 ** 2;');
+echo ":";
+eval('$x = 2; $x **= 3; echo $x;');
+"#,
+    );
+    assert_eq!(out, "512:-4:8");
+}
+
 /// Verifies eval integer bitwise and shift operators execute through bridge wrappers.
 #[test]
 fn test_eval_bitwise_shift_execute_through_bridge() {

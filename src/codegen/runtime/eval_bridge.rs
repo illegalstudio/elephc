@@ -339,6 +339,26 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #32");                                     // release the modulo wrapper frame
     emitter.instruction("ret");                                                 // return the boxed modulo result to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_pow");
+    emitter.instruction("sub sp, sp, #32");                                     // allocate wrapper slots for the right operand and left double
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while casting the left operand
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("str d0, [sp, #8]");                                    // save the exponentiation base across the right cast
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for numeric casting
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("fmov d1, d0");                                         // move the exponent into libc pow's second argument
+    emitter.instruction("ldr d0, [sp, #8]");                                    // reload the base into libc pow's first argument
+    emitter.bl_c("pow");
+    emitter.instruction("fmov x1, d0");                                         // move the pow result bits into mixed value_lo
+    emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
+    emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the exponentiation result into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the exponentiation wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed exponentiation result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_bit_not");
     emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame for the cast helper call
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across the cast
@@ -1031,6 +1051,27 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the modulo wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed modulo result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_pow");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for the right operand and left double
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("movsd QWORD PTR [rbp - 16], xmm0");                    // save the exponentiation base across the right cast
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for numeric casting
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("movapd xmm1, xmm0");                                   // move the exponent into libc pow's second argument
+    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 16]");                    // reload the base into libc pow's first argument
+    emitter.bl_c("pow");
+    emitter.instruction("movq rdi, xmm0");                                      // move the pow result bits into mixed value_lo
+    emitter.instruction("xor esi, esi");                                        // double payloads do not use a high word
+    emitter.instruction("mov eax, 2");                                          // runtime tag 2 = double
+    emitter.instruction("call __rt_mixed_from_value");                          // box the exponentiation result into a Mixed cell
+    emitter.instruction("add rsp, 32");                                         // release the exponentiation wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed exponentiation result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_bit_not");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
