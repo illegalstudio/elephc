@@ -139,6 +139,9 @@ pub enum TraitAdaptation {
 pub struct ClassProperty {
     pub name: String,
     pub visibility: Visibility,
+    /// PHP 8.4 asymmetric visibility: the write (`set`) visibility when it differs from the
+    /// read visibility above. `None` means writes use the same visibility as reads.
+    pub set_visibility: Option<Visibility>,
     pub type_expr: Option<TypeExpr>,
     pub hooks: PropertyHooks,
     pub readonly: bool,
@@ -157,6 +160,7 @@ impl PartialEq for ClassProperty {
     /// by-ref flag, default value, and attributes; span is not compared.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.visibility == other.visibility
+            && self.set_visibility == other.set_visibility
             && self.type_expr == other.type_expr
             && self.hooks == other.hooks
             && self.readonly == other.readonly
@@ -208,6 +212,9 @@ pub struct ClassMethod {
     pub has_body: bool,
     pub params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
     pub variadic: Option<String>,
+    /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each argument
+    /// collected into the variadic is checked against this type.
+    pub variadic_type: Option<TypeExpr>,
     #[allow(dead_code)] // Will be used for return type checking in future phases
     pub return_type: Option<TypeExpr>,
     pub body: Vec<Stmt>,

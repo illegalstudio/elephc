@@ -73,9 +73,12 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let class_name = self.resolve_static_receiver_class(receiver, expr.span)?;
         // First: enum case access (`Color::Red`). Enums shadow classes for
-        // this syntax in PHP since 8.1.
-        if self.enums.contains_key(&class_name) {
-            return self.infer_enum_case_type(&class_name, name, expr);
+        // this syntax in PHP since 8.1. A name that is not a declared case is an enum *constant*
+        // (`Scale::FACTOR`), which is resolved through the class-constant table below.
+        if let Some(enum_info) = self.enums.get(&class_name) {
+            if enum_info.cases.iter().any(|case| case.name == name) {
+                return self.infer_enum_case_type(&class_name, name, expr);
+            }
         }
         // Walk parent chain to find a class constant.
         let mut current_class = Some(class_name.clone());
@@ -98,6 +101,14 @@ impl Checker {
         // Direct interface receiver (`Limits::MAX`).
         if let Some(value) = self.lookup_interface_constant(&class_name, name) {
             return self.infer_type(&value, &TypeEnv::default());
+        }
+        // On an enum, a `::name` that is neither a declared case nor a constant is an undefined
+        // case — report that rather than the generic class-constant message.
+        if self.enums.contains_key(&class_name) {
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Undefined enum case: {}::{}", class_name, name),
+            ));
         }
         Err(CompileError::new(
             expr.span,

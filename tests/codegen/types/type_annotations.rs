@@ -9,11 +9,12 @@
 
 use super::*;
 
-/// Compiles and runs the checked-in `examples/union-types/main.php` fixture and asserts stdout is "41:string:ready".
+/// Compiles and runs the checked-in `examples/union-types/main.php` fixture, covering typed
+/// locals, an `int|false` return, and a `string|null` return. Asserts the full stdout.
 #[test]
 fn test_example_union_types_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/union-types/main.php"));
-    assert_eq!(out, "41:string:ready");
+    assert_eq!(out, "41:string:ready:3:hi:none\n");
 }
 
 /// Verifies a function with a typed `array` parameter accepts an array literal and `count()` works at runtime.
@@ -563,4 +564,86 @@ fn test_nullable_by_ref_parameter_accepts_boxed_typed_local() {
         ",
     );
     assert_eq!(out, "null");
+}
+
+/// Verifies that a `T|null` return type accepts both a real value and `null` at runtime,
+/// behaving exactly like the `?T` nullable shorthand it folds into.
+#[test]
+fn test_union_t_or_null_return() {
+    let out = compile_and_run(
+        "<?php
+        function pick(bool $b): string|null { return $b ? \"x\" : null; }
+        echo pick(true);
+        var_dump(pick(false));
+        ",
+    );
+    assert_eq!(out, "xNULL\n");
+}
+
+/// Verifies that an `int|false` return type (PHP's classic `strpos` shape) carries both a
+/// real integer and a literal `false` through to the caller unchanged.
+#[test]
+fn test_union_int_or_false_return() {
+    let out = compile_and_run(
+        "<?php
+        function at(string $h, string $n): int|false { return strpos($h, $n); }
+        var_dump(at(\"abc\", \"b\"));
+        var_dump(at(\"abc\", \"z\"));
+        ",
+    );
+    assert_eq!(out, "int(1)\nbool(false)\n");
+}
+
+/// Verifies that a `string|false` parameter accepts both a string and the literal `false`
+/// and that the callee can discriminate the two with a strict comparison.
+#[test]
+fn test_union_string_or_false_param() {
+    let out = compile_and_run(
+        "<?php
+        function label(string|false $x): string { return $x === false ? \"F\" : $x; }
+        echo label(\"hi\"), label(false);
+        ",
+    );
+    assert_eq!(out, "hiF");
+}
+
+/// Verifies that a `bool|true` return type widens to bool and returns a real boolean.
+#[test]
+fn test_union_bool_or_true_return() {
+    let out = compile_and_run(
+        "<?php
+        function yes(): bool|true { return true; }
+        var_dump(yes());
+        ",
+    );
+    assert_eq!(out, "bool(true)\n");
+}
+
+/// Verifies that a `T|null` typed property accepts both a value and null and round-trips
+/// the stored value, matching the `?T` property representation.
+#[test]
+fn test_union_t_or_null_property() {
+    let out = compile_and_run(
+        "<?php
+        class Box { public string|null $v = null; }
+        $b = new Box();
+        echo $b->v === null ? \"n\" : \"?\";
+        $b->v = \"set\";
+        echo $b->v;
+        ",
+    );
+    assert_eq!(out, "nset");
+}
+
+/// Verifies that a wider multi-member union containing `null` (`int|string|null`) still
+/// carries a concrete value through without collapsing to a single non-null member.
+#[test]
+fn test_union_multi_member_with_null() {
+    let out = compile_and_run(
+        "<?php
+        function pass(int $x): int|string|null { return $x; }
+        var_dump(pass(7));
+        ",
+    );
+    assert_eq!(out, "int(7)\n");
 }

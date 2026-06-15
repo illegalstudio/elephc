@@ -310,6 +310,22 @@ impl Checker {
                 param_types.push((decl.params[arg_idx].clone(), ty));
                 arg_idx += 1;
             } else {
+                // Argument collected into the variadic parameter: enforce its declared element
+                // type (`int ...$xs`) against every passed argument, matching PHP.
+                if let Some(declared) = &decl.variadic_type {
+                    let vname = decl.variadic.as_deref().unwrap_or_default();
+                    let elem_ty = self.resolve_declared_param_type_hint(
+                        declared,
+                        decl.span,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                    )?;
+                    self.require_compatible_arg_type(
+                        &elem_ty,
+                        &ty,
+                        arg.span,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                    )?;
+                }
                 arg_idx += 1;
             }
         }
@@ -338,7 +354,16 @@ impl Checker {
         }
 
         if let Some(ref vp) = decl.variadic {
-            if Self::has_unknown_named_variadic_arg(args, &decl.params) {
+            if let Some(declared) = &decl.variadic_type {
+                // A declared element type (`int ...$xs`) constrains every collected argument;
+                // it takes precedence over inference so call validation enforces the hint.
+                let elem_ty = self.resolve_declared_param_type_hint(
+                    declared,
+                    decl.span,
+                    &format!("Variadic parameter ${}", vp),
+                )?;
+                param_types.push((vp.clone(), PhpType::Array(Box::new(elem_ty))));
+            } else if Self::has_unknown_named_variadic_arg(args, &decl.params) {
                 param_types.push((vp.clone(), PhpType::Iterable));
             } else {
                 let variadic_elem_ty = if args.len() > decl.params.len() {

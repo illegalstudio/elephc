@@ -15,7 +15,9 @@ use crate::lexer::Token;
 use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
 };
-use crate::parser::stmt::{looks_like_typed_param, parse_block, parse_name, parse_type_expr};
+use crate::parser::stmt::{
+    looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_expr,
+};
 use crate::span::Span;
 
 use super::calls::parse_first_class_callable_parens;
@@ -146,7 +148,7 @@ pub(super) fn parse_closure(
         return Err(CompileError::new(span, "Unexpected token: Function"));
     }
     *pos += 2;
-    let (params, variadic) = parse_closure_params(tokens, pos, span)?;
+    let (params, variadic, variadic_type) = parse_closure_params(tokens, pos, span)?;
     let mut captures = Vec::new();
     let mut capture_refs = Vec::new();
     if *pos < tokens.len() && tokens[*pos].0 == Token::Use {
@@ -201,6 +203,7 @@ pub(super) fn parse_closure(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
             is_arrow: false,
@@ -226,7 +229,7 @@ pub(super) fn parse_arrow_closure(
         return Err(CompileError::new(span, "Expected '(' after 'fn'"));
     }
     *pos += 1;
-    let (params, variadic) = parse_closure_params(tokens, pos, span)?;
+    let (params, variadic, variadic_type) = parse_closure_params(tokens, pos, span)?;
     let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
         return Err(CompileError::new(
@@ -242,6 +245,7 @@ pub(super) fn parse_arrow_closure(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
             is_arrow: true,
@@ -301,6 +305,9 @@ fn collect_arrow_expr_captures(
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)
         | ExprKind::PostDecrement(name) => push_arrow_capture(name, bound, seen, captures),
+        ExprKind::IncludeValue { path, .. } => {
+            collect_arrow_expr_captures(path, bound, seen, captures);
+        }
         ExprKind::BinaryOp { left, right, .. } => {
             collect_arrow_expr_captures(left, bound, seen, captures);
             collect_arrow_expr_captures(right, bound, seen, captures);
@@ -488,11 +495,13 @@ fn parse_closure_params(
     (
         Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
         Option<String>,
+        Option<crate::parser::ast::TypeExpr>,
     ),
     CompileError,
 > {
     let mut params = Vec::new();
     let mut variadic = None;
+    let mut variadic_type = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() || variadic.is_some() {
             if tokens[*pos].0 != Token::Comma {
@@ -527,16 +536,13 @@ fn parse_closure_params(
             false
         };
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-            if type_ann.is_some() {
-                return Err(CompileError::new(
-                    span,
-                    "Typed variadic parameters are not supported yet",
-                ));
-            }
+            // A typed variadic (`int ...$xs`) is accepted on closures/arrow functions too; the
+            // declared element type is preserved so call validation can check collected args.
             *pos += 1;
             match tokens.get(*pos).map(|(token, _)| token) {
                 Some(Token::Variable(name)) => {
                     variadic = Some(name.clone());
+                    variadic_type = type_ann;
                     *pos += 1;
                 }
                 _ => return Err(CompileError::new(span, "Expected variable after '...'")),
@@ -562,7 +568,7 @@ fn parse_closure_params(
         return Err(CompileError::new(span, "Expected ')' after parameters"));
     }
     *pos += 1;
-    Ok((params, variadic))
+    Ok((params, variadic, variadic_type))
 }
 
 /// Parses a named expression that could be a constant reference, function call, buffer_new<T>, ptr_cast<T>, or static/class method access.
@@ -654,6 +660,34 @@ pub(super) fn parse_named_expr(
             Some(Token::Variable(property)) => {
                 let property = property.clone();
                 *pos += 1;
+                if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                    // `C::$method(args)` is a dynamic static method call. Desugar to
+                    // `call_user_func([C::class, $method], ...args)` so it reuses the runtime
+                    // dynamic-dispatch path, exactly like the variable-receiver form `$c::$m()`.
+                    *pos += 1; // consume '('
+                    let dynamic_args = parse_args(tokens, pos, span)?;
+                    crate::parser::expr::pratt::reject_named_args_in_dynamic_call(
+                        &dynamic_args,
+                        span,
+                    )?;
+                    let receiver = Expr::new(
+                        ExprKind::ClassConstant {
+                            receiver: StaticReceiver::Named(name),
+                        },
+                        span,
+                    );
+                    let method_expr = Expr::new(ExprKind::Variable(property), span);
+                    let mut call_args =
+                        vec![Expr::new(ExprKind::ArrayLiteral(vec![receiver, method_expr]), span)];
+                    call_args.extend(dynamic_args);
+                    return Ok(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: crate::names::Name::unqualified("call_user_func"),
+                            args: call_args,
+                        },
+                        span,
+                    ));
+                }
                 return Ok(Expr::new(
                     ExprKind::StaticPropertyAccess {
                         receiver: StaticReceiver::Named(name),
@@ -736,6 +770,17 @@ pub(super) fn parse_new_object(
     span: Span,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
+
+    // `new class { ... }` / `new readonly class { ... }` — anonymous class. The body is hoisted
+    // to a synthetic top-level class and this becomes `new <synthetic name>(args)`.
+    let anonymous_readonly = matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::ReadOnly))
+        && matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::Class));
+    if anonymous_readonly {
+        *pos += 1; // consume `readonly`; `parse_anonymous_class` consumes `class`
+    }
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Class)) {
+        return parse_anonymous_class(tokens, pos, span, anonymous_readonly);
+    }
 
     // `new self()`, `new static()`, `new parent()` — late-static-binding
     // factory pattern. Parsed as a NewScopedObject so codegen can apply LSB

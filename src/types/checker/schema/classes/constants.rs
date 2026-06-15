@@ -39,6 +39,11 @@ fn rewrite_expr(
     parent_name: Option<&str>,
 ) -> Result<Expr, CompileError> {
     let kind = match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(rewrite_expr(left, class_name, parent_name)?),
             op: op.clone(),
@@ -154,6 +159,7 @@ fn rewrite_expr(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
             is_arrow,
@@ -176,6 +182,7 @@ fn rewrite_expr(
                 })
                 .collect::<Result<Vec<_>, CompileError>>()?,
             variadic: variadic.clone(),
+            variadic_type: variadic_type.clone(),
             return_type: return_type.clone(),
             body: body.clone(),
             is_arrow: *is_arrow,

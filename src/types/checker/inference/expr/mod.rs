@@ -31,6 +31,11 @@ impl Checker {
     /// validation, and optimizer-visible type metadata.
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
         match &expr.kind {
+            // `IncludeValue` is a transient parser node fully expanded by the resolver;
+            // it can never reach this pass.
+            ExprKind::IncludeValue { .. } => unreachable!(
+                "ExprKind::IncludeValue must be expanded by the resolver"
+            ),
             ExprKind::BoolLiteral(_) => Ok(PhpType::Bool),
             ExprKind::Null => Ok(PhpType::Void),
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
@@ -424,6 +429,7 @@ impl Checker {
             ExprKind::Closure {
                 params,
                 variadic,
+                variadic_type: _,
                 return_type,
                 body,
                 is_arrow: _,

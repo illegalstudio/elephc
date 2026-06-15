@@ -304,3 +304,147 @@ include_once 'piece.php';
     );
     assert_eq!(out, "piece");
 }
+
+/// Verifies `return require X;` includes the file (its declarations become available) and the
+/// expression yields `1`, the value PHP returns for an include with no explicit `return`.
+#[test]
+fn test_require_as_return_value() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function boot(): int { return require 'helper.php'; } echo boot(); echo ':'; echo greet();",
+            ),
+            ("helper.php", "<?php function greet() { return \"hi\"; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1:hi");
+}
+
+/// Verifies `$x = require X;` includes the file and assigns the include's value `1`.
+#[test]
+fn test_require_as_assignment_value() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $loaded = require 'math.php'; echo $loaded; echo ':'; echo add(2, 5);",
+            ),
+            ("math.php", "<?php function add($a, $b) { return $a + $b; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1:7");
+}
+
+/// Verifies `$x = require_once X;` works as a value-position include with the once semantics.
+#[test]
+fn test_require_once_as_assignment_value() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $a = require_once 'lib.php'; echo $a; echo ':'; echo val();",
+            ),
+            ("lib.php", "<?php function val() { return 9; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1:9");
+}
+
+/// Verifies that `$x = require X;` captures the included file's top-level `return` value (an
+/// integer here), matching PHP's "include returns a value" semantics.
+#[test]
+fn test_require_value_captures_returned_int() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php $n = require 'num.php'; echo $n + 1;"),
+            ("num.php", "<?php return 41;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies that `return require X;` returns the included file's returned array, readable by key.
+#[test]
+fn test_require_value_captures_returned_array() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function cfg(): array { return require 'config.php'; } $c = cfg(); echo $c['port'];",
+            ),
+            ("config.php", "<?php return ['host' => 'localhost', 'port' => 5432];"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "5432");
+}
+
+/// Verifies that an expression-position `require` shares the caller's scope: the included file
+/// can READ a variable defined in the caller (PHP runs includes in the calling scope).
+#[test]
+fn test_require_value_reads_caller_scope() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $base = 10; $v = require 'inc.php'; echo $v;",
+            ),
+            ("inc.php", "<?php return $base * 2;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "20");
+}
+
+/// Verifies that an expression-position `require` shares the caller's scope for WRITES: a value
+/// assigned to an existing caller variable inside the included file is visible after the include.
+#[test]
+fn test_require_value_writes_caller_scope() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $acc = 1; $r = require 'inc.php'; echo $acc; echo ':'; echo $r;",
+            ),
+            ("inc.php", "<?php $acc = $acc + 41; return 7;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "42:7");
+}
+
+/// Verifies that a variable first assigned inside an expression-position `require` leaks into the
+/// caller's scope afterward, matching PHP's shared-scope include semantics.
+#[test]
+fn test_require_value_new_var_leaks_to_caller() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $r = require 'inc.php'; echo $created; echo ':'; echo $r;",
+            ),
+            ("inc.php", "<?php $created = 99; return 1;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "99:1");
+}
+
+/// Verifies that an included file with no top-level `return` yields `1` while still hoisting its
+/// declarations globally.
+#[test]
+fn test_require_value_without_return_yields_one() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php $r = require 'lib.php'; echo $r; echo ':'; echo helper();"),
+            ("lib.php", "<?php function helper() { return 'H'; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1:H");
+}

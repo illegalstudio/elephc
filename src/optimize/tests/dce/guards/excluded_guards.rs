@@ -20,6 +20,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_zero_guard() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -67,6 +68,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_null_guard() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -119,6 +121,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_empty_string_g
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -174,6 +177,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_string_zero_gu
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -229,6 +233,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_float_guard() 
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {

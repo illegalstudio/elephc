@@ -136,6 +136,11 @@ fn stmt_has_dynamic_instanceof(stmt: &Stmt) -> bool {
 /// Scans an expression tree for an instanceof with a dynamic target or nested dynamic instanceof.
 fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::InstanceOf { value, target } => {
             matches!(target, InstanceOfTarget::Expr(_))
                 || expr_has_dynamic_instanceof(value)

@@ -73,7 +73,7 @@ pub(in crate::parser::stmt) fn parse_variable_stmt(
     if *pos + 1 < tokens.len()
         && matches!(
             tokens[*pos + 1].0,
-            Token::Arrow | Token::QuestionArrow | Token::LBracket
+            Token::Arrow | Token::QuestionArrow | Token::LBracket | Token::DoubleColon
         )
     {
         let expr = parse_expr(tokens, pos)?;

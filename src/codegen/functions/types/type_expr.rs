@@ -38,9 +38,11 @@ pub(super) fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -
         TypeExpr::Buffer(inner) => {
             PhpType::Buffer(Box::new(resolve_buffer_element_type(inner, ctx)))
         }
-        TypeExpr::Array(_) | TypeExpr::Iterable | TypeExpr::Nullable(_) | TypeExpr::Union(_) => {
-            PhpType::Int
-        }
+        TypeExpr::Array(_)
+        | TypeExpr::Iterable
+        | TypeExpr::Nullable(_)
+        | TypeExpr::Union(_)
+        | TypeExpr::Intersection(_) => PhpType::Int,
     }
 }
 
@@ -82,6 +84,11 @@ pub(crate) fn codegen_declared_type(type_expr: &TypeExpr, ctx: &Context) -> PhpT
             }
             _ => PhpType::Int,
         },
+        // An intersection value is an object pointer; type it as its first member.
+        TypeExpr::Intersection(members) => members
+            .first()
+            .map(|member| codegen_declared_type(member, ctx))
+            .unwrap_or(PhpType::Int),
         TypeExpr::Nullable(_) | TypeExpr::Union(_) => PhpType::Mixed,
     }
 }

@@ -34,6 +34,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_switch_bool_guard_case(
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::Switch {
@@ -84,6 +85,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_exact_guard
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -133,6 +135,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_excluded_gu
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -205,6 +208,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_true_cases_from_outer_guard(
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -260,6 +264,7 @@ fn test_eliminate_dead_code_invalidates_switch_bool_guard_after_local_write() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::Switch {

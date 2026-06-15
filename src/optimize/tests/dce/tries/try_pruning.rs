@@ -19,6 +19,7 @@ fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
             name: "answer".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -81,6 +82,7 @@ fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::Try {
@@ -116,6 +118,7 @@ fn test_eliminate_dead_code_keeps_unknown_truthy_switch_entry_before_matching_ca
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -180,6 +183,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -260,6 +264,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body_from_switc
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -345,6 +350,7 @@ fn test_eliminate_dead_code_ignores_unreachable_switch_throw_path_writes_before_
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -434,6 +440,7 @@ fn test_eliminate_dead_code_preserves_outer_guard_for_catch_when_only_non_throw_
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {

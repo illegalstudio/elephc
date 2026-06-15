@@ -234,6 +234,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         } => (
@@ -242,6 +243,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                     name,
                     params: propagate_params(params),
                     variadic,
+                    variadic_type,
                     return_type,
                     body: propagate_block(body, HashMap::new()).0,
                 },
@@ -314,11 +316,17 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             name,
             backing_type,
             cases,
+            implements,
+            methods,
+            constants,
         } => (
             Stmt::new(
                 StmtKind::EnumDecl {
                     name,
                     backing_type,
+                    implements,
+                    methods: methods.into_iter().map(propagate_method).collect(),
+                    constants,
                     cases: cases.into_iter().map(propagate_enum_case).collect(),
                 },
                 span,

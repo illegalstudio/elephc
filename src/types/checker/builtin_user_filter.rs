@@ -59,6 +59,7 @@ fn params_property() -> ClassProperty {
     ClassProperty {
         name: "params".to_string(),
         visibility: Visibility::Public,
+        set_visibility: None,
         type_expr: Some(TypeExpr::Named(Name::unqualified("mixed"))),
         hooks: PropertyHooks::none(),
         readonly: false,

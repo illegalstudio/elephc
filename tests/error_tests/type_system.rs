@@ -615,3 +615,64 @@ fn test_error_static_closure_uses_this_through_short_ternary() {
         "Cannot use $this inside a static closure",
     );
 }
+
+/// Verifies that combining the nullable shorthand `?T` with a pipe union is rejected, and
+/// that the diagnostic points the user at the now-supported `T|null` spelling.
+#[test]
+fn test_error_nullable_shorthand_with_union() {
+    expect_error(
+        "<?php function f(): ?int|string { return 1; }",
+        "Nullable shorthand cannot be combined directly with union types; write T|null",
+    );
+}
+
+/// Verifies that a union type with a trailing pipe and no following member is rejected with
+/// the type-expression diagnostic, confirming `null`/`false`/`true` did not loosen the
+/// requirement that every pipe be followed by a real type.
+#[test]
+fn test_error_union_trailing_pipe() {
+    expect_error(
+        "<?php function f(): int| { return 1; }",
+        "Expected type expression",
+    );
+}
+
+/// Verifies that the relative class type `self` is rejected when used as a type outside of any
+/// class body (a free function), where it has no enclosing class to resolve to.
+#[test]
+fn test_error_self_type_outside_class() {
+    expect_error(
+        "<?php function f(): self { return 1; }",
+        "Cannot use 'self' as a type outside of a class",
+    );
+}
+
+/// Verifies that `static` is likewise rejected as a free-function parameter type.
+#[test]
+fn test_error_static_type_outside_class() {
+    expect_error(
+        "<?php function f(static $x): int { return 1; }",
+        "Cannot use 'static' as a type outside of a class",
+    );
+}
+
+/// Verifies that variable variables (`$$name`) are rejected with an explanatory message, since
+/// elephc allocates locals to fixed compile-time slots with no runtime variable-name table.
+#[test]
+fn test_error_variable_variables_unsupported() {
+    expect_error(
+        "<?php $x = \"y\"; $$x = 1;",
+        "Variable variables (`$$name`) are not supported",
+    );
+}
+
+/// Verifies that the nullable shorthand cannot be combined with an intersection type (`?A&B`),
+/// which is a syntax error in PHP. Previously this silently parsed and dropped a member.
+#[test]
+fn test_error_nullable_intersection_type_rejected() {
+    assert!(
+        check_source("<?php interface A {} interface B {} function f(?A&B $x): int { return 1; }")
+            .is_err(),
+        "?A&B should be rejected, not silently accepted",
+    );
+}

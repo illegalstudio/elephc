@@ -372,6 +372,7 @@ pub(super) fn resolve_stmt_exprs(
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         } => StmtKind::FunctionDecl {
@@ -385,6 +386,7 @@ pub(super) fn resolve_stmt_exprs(
                 function_variants,
             )?,
             variadic,
+            variadic_type,
             return_type,
             body,
         },
@@ -483,9 +485,22 @@ pub(super) fn resolve_stmt_exprs(
             name,
             backing_type,
             cases,
+            implements,
+            methods,
+            constants,
         } => StmtKind::EnumDecl {
             name,
             backing_type,
+            implements,
+            methods: resolve_method_exprs(
+                methods,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?,
+            constants,
             cases: cases
                 .into_iter()
                 .map(|mut case| {

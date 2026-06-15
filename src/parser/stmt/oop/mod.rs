@@ -14,5 +14,6 @@ mod method_params;
 mod traits;
 
 pub(super) use declarations::*;
+pub(crate) use declarations::parse_anonymous_class;
 pub(super) use body::*;
 // traits is used directly by body.rs via super::traits::parse_trait_use

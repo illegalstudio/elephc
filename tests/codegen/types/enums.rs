@@ -320,3 +320,114 @@ fn test_builtin_sort_direction_case_constant() {
     );
     assert_eq!(out, "ok");
 }
+
+/// Verifies that a pure enum can declare an instance method that uses `$this` for identity.
+#[test]
+fn test_enum_instance_method() {
+    let out = compile_and_run(
+        "<?php
+        enum Suit {
+            case Hearts;
+            case Spades;
+            public function label(): string {
+                return $this === Suit::Hearts ? \"H\" : \"S\";
+            }
+        }
+        echo Suit::Hearts->label() . Suit::Spades->label();
+        ",
+    );
+    assert_eq!(out, "HS");
+}
+
+/// Verifies that an enum instance method can `match` on `$this` (the canonical enum-method form).
+#[test]
+fn test_enum_method_match_on_this() {
+    let out = compile_and_run(
+        "<?php
+        enum Suit {
+            case Hearts; case Diamonds; case Clubs; case Spades;
+            public function color(): string {
+                return match($this) {
+                    Suit::Hearts, Suit::Diamonds => \"red\",
+                    Suit::Clubs, Suit::Spades => \"black\",
+                };
+            }
+        }
+        echo Suit::Hearts->color() . \"-\" . Suit::Spades->color();
+        ",
+    );
+    assert_eq!(out, "red-black");
+}
+
+/// Verifies that a backed enum method can read `$this->value`.
+#[test]
+fn test_enum_method_reads_backing_value() {
+    let out = compile_and_run(
+        "<?php
+        enum Power: int {
+            case Low = 1;
+            case High = 10;
+            public function doubled(): int { return $this->value * 2; }
+        }
+        echo Power::High->doubled();
+        ",
+    );
+    assert_eq!(out, "20");
+}
+
+/// Verifies that a static enum method (a factory) dispatches and returns a case.
+#[test]
+fn test_enum_static_method() {
+    let out = compile_and_run(
+        "<?php
+        enum Color {
+            case Red;
+            case Green;
+            public static function fallback(): self { return Color::Red; }
+        }
+        echo Color::fallback() === Color::Red ? \"ok\" : \"no\";
+        ",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies that an enum can implement an interface and be used through it.
+#[test]
+fn test_enum_implements_interface() {
+    let out = compile_and_run(
+        "<?php
+        interface HasLabel { public function label(): string; }
+        enum Suit implements HasLabel {
+            case Hearts;
+            public function label(): string { return \"hearts\"; }
+        }
+        function describe(HasLabel $h): string { return $h->label(); }
+        echo describe(Suit::Hearts);
+        ",
+    );
+    assert_eq!(out, "hearts");
+}
+
+/// Verifies that an enum method can reference a class constant via `self::`.
+#[test]
+fn test_enum_method_uses_self_constant() {
+    let out = compile_and_run(
+        "<?php
+        enum Scale {
+            case One;
+            const FACTOR = 5;
+            public function compute(): int { return self::FACTOR * 3; }
+        }
+        echo Scale::One->compute();
+        ",
+    );
+    assert_eq!(out, "15");
+}
+
+/// Compiles and runs the checked-in `examples/enum-methods/main.php` fixture, covering instance
+/// methods (`match($this)`, `$this->value`, `self::CONST`), a static factory, and `implements`.
+#[test]
+fn test_example_enum_methods_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../../../examples/enum-methods/main.php"));
+    assert_eq!(out, "red/black\ndiamonds\nblack\n52\nclubs\n");
+}

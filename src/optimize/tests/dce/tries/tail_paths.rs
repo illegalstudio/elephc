@@ -20,6 +20,7 @@ fn test_eliminate_dead_code_keeps_statements_after_fallthrough_try() {
             name: "answer".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -70,6 +71,7 @@ fn test_eliminate_dead_code_sinks_tail_into_try_fallthrough_paths() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(

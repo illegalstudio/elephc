@@ -20,7 +20,13 @@ use super::super::params::{looks_like_typed_param, parse_type_expr};
 use super::super::expect_token;
 
 type MethodParam = (String, Option<TypeExpr>, Option<Expr>, bool);
-type ParsedMethodParams = (Vec<MethodParam>, Option<String>, Vec<ClassProperty>, Vec<Stmt>);
+type ParsedMethodParams = (
+    Vec<MethodParam>,
+    Option<String>,
+    Option<TypeExpr>,
+    Vec<ClassProperty>,
+    Vec<Stmt>,
+);
 
 /// Parses method or constructor parameters from `(` to `)`, including PHP 8.0 promoted
 /// properties. Returns the parameter list, optional variadic name, promoted property
@@ -39,6 +45,7 @@ pub(super) fn parse_method_params(
 ) -> Result<ParsedMethodParams, CompileError> {
     let mut params = Vec::new();
     let mut variadic = None;
+    let mut variadic_type = None;
     let mut promoted_properties = Vec::new();
     let mut promoted_assignments = Vec::new();
 
@@ -92,16 +99,13 @@ pub(super) fn parse_method_params(
                     "Cannot declare variadic promoted property",
                 ));
             }
-            if type_ann.is_some() {
-                return Err(CompileError::new(
-                    span,
-                    "Typed variadic parameters are not supported yet",
-                ));
-            }
+            // A typed variadic (`int ...$xs`) is accepted; the declared element type is preserved
+            // so call validation can check each argument collected into the variadic.
             *pos += 1;
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(n)) => {
                     variadic = Some(n.clone());
+                    variadic_type = type_ann;
                     *pos += 1;
                 }
                 _ => return Err(CompileError::new(span, "Expected variable after '...'")),
@@ -129,6 +133,9 @@ pub(super) fn parse_method_params(
                     promoted_properties.push(ClassProperty {
                         name: n.clone(),
                         visibility,
+                        // Asymmetric visibility on promoted constructor parameters is not parsed
+                        // yet; only declared properties carry a `set` visibility.
+                        set_visibility: None,
                         type_expr: type_ann.clone(),
                         hooks: PropertyHooks::none(),
                         readonly,
@@ -150,7 +157,7 @@ pub(super) fn parse_method_params(
         }
     }
 
-    Ok((params, variadic, promoted_properties, promoted_assignments))
+    Ok((params, variadic, variadic_type, promoted_properties, promoted_assignments))
 }
 
 /// Scans the token stream for visibility modifiers (`public`/`protected`/`private`)

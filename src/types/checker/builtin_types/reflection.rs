@@ -114,6 +114,7 @@ fn builtin_property(
     ClassProperty {
         name: name.to_string(),
         visibility,
+        set_visibility: None,
         type_expr,
         hooks: crate::parser::ast::PropertyHooks::none(),
         readonly: false,
@@ -173,6 +174,7 @@ fn builtin_reflection_attribute_constructor_method() -> ClassMethod {
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: None,
         body: Vec::new(),
         span: dummy_span,
@@ -193,6 +195,7 @@ fn builtin_reflection_attribute_get_name_method() -> ClassMethod {
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: Some(TypeExpr::Str),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
@@ -222,6 +225,7 @@ fn builtin_reflection_attribute_get_arguments_method() -> ClassMethod {
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: Some(TypeExpr::Named(crate::names::Name::unqualified("array"))),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
@@ -251,6 +255,7 @@ fn builtin_reflection_attribute_new_instance_method() -> ClassMethod {
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: Some(mixed_type()),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
@@ -310,6 +315,7 @@ fn builtin_reflection_class_get_name_method() -> ClassMethod {
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: Some(TypeExpr::Str),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
@@ -375,6 +381,7 @@ fn builtin_reflection_owner_constructor_method(
             .map(|(name, ty, default, by_ref)| (name.to_string(), ty, default, by_ref))
             .collect(),
         variadic: None,
+        variadic_type: None,
         return_type: None,
         body: Vec::new(),
         span: dummy_span,
@@ -395,6 +402,7 @@ fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: Some(array_type()),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(

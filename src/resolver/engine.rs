@@ -16,7 +16,7 @@ use crate::names::canonical_name_for_decl;
 use crate::parser::ast::{CatchClause, ClassMethod, ExprKind, Stmt, StmtKind};
 
 use super::discovery::FunctionVariantRegistry;
-use super::engine_includes::resolve_include_stmt;
+use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
 use super::include_path::fold_include_path;
 use super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
@@ -32,6 +32,49 @@ use super::stmt_exprs::resolve_stmt_exprs;
 /// interface method bodies are likewise resolved in isolation. Include statements
 /// are expanded inline; const declarations and `define()` calls populate `state.constants`.
 /// Namespace and use declarations update `state` for subsequent statements.
+/// If `stmt` is an expression-position include (`$x = require X;` or `return require X;`),
+/// expands it into a sequence of caller-scope statements and returns them; otherwise returns
+/// `Ok(None)` so the statement is resolved normally.
+fn try_expand_value_include(
+    stmt: &Stmt,
+    base_dir: &Path,
+    declared_once: &mut HashSet<PathBuf>,
+    include_chain: &mut Vec<PathBuf>,
+    state: &mut ResolveState,
+    function_variants: &FunctionVariantRegistry,
+) -> Result<Option<Vec<Stmt>>, CompileError> {
+    let value = match &stmt.kind {
+        StmtKind::Assign { value, .. } => value,
+        StmtKind::Return(Some(value)) => value,
+        _ => return Ok(None),
+    };
+    let ExprKind::IncludeValue {
+        path,
+        once,
+        required,
+    } = &value.kind
+    else {
+        return Ok(None);
+    };
+    let capture = match &stmt.kind {
+        StmtKind::Assign { name, .. } => IncludeValueCapture::Assign(name.clone()),
+        _ => IncludeValueCapture::Return,
+    };
+    let expanded = expand_value_include(
+        stmt.span,
+        path,
+        *once,
+        *required,
+        capture,
+        base_dir,
+        declared_once,
+        include_chain,
+        state,
+        function_variants,
+    )?;
+    Ok(Some(expanded))
+}
+
 pub(super) fn resolve_stmts(
     stmts: Vec<Stmt>,
     base_dir: &Path,
@@ -43,6 +86,21 @@ pub(super) fn resolve_stmts(
     let mut result = Vec::new();
 
     for stmt in stmts {
+        // Expression-position includes (`$x = require X;` / `return require X;`) are expanded
+        // before generic expression resolution so the included file's statements are inlined into
+        // the caller's scope rather than resolved as an opaque sub-expression.
+        if let Some(expanded) = try_expand_value_include(
+            &stmt,
+            base_dir,
+            declared_once,
+            include_chain,
+            state,
+            function_variants,
+        )? {
+            result.extend(expanded);
+            continue;
+        }
+
         let stmt = resolve_stmt_exprs(
             stmt,
             base_dir,
@@ -338,7 +396,7 @@ pub(super) fn resolve_stmts(
                     stmt.span,
                 ));
             }
-            StmtKind::FunctionDecl { name, params, variadic, return_type, body } => {
+            StmtKind::FunctionDecl { name, params, variadic, variadic_type, return_type, body } => {
                 let body = resolve_isolated(
                     body.clone(),
                     base_dir,
@@ -352,6 +410,7 @@ pub(super) fn resolve_stmts(
                         name: name.clone(),
                         params: params.clone(),
                         variadic: variadic.clone(),
+                        variadic_type: variadic_type.clone(),
                         return_type: return_type.clone(),
                         body,
                     },

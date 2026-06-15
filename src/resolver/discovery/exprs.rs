@@ -15,6 +15,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget};
 
 use super::branches::discover_isolated;
+use super::includes::discover_include;
 use super::members::discover_params;
 use super::output::DiscoveryOutput;
 use super::super::state::ResolveState;
@@ -41,6 +42,21 @@ pub(super) fn discover_expr(
     output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     match &expr.kind {
+        // A value-position include hoists the included file's declarations just like a
+        // statement-position include does.
+        ExprKind::IncludeValue { path, once, required } => {
+            discover_include(
+                path,
+                *once,
+                *required,
+                expr.span,
+                base_dir,
+                loaded_paths,
+                include_chain,
+                state,
+                output,
+            )?;
+        }
         ExprKind::BinaryOp { left, right, .. } => {
             discover_expr(left, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(right, base_dir, loaded_paths, include_chain, state, output)?;

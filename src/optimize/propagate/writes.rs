@@ -290,6 +290,11 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
 /// Returns `None` if the expression has unknown side effects (e.g., function calls, `unset` on non-variables).
 pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
