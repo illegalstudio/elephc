@@ -86,6 +86,7 @@ $root = eval('return sqrt(81) . ":" . gettype(sqrt(16));');
 $rounding = eval('return floor(3.7) . ":" . ceil(3.2);');
 $builtin_power = eval('return pow(2, 5) . ":" . gettype(pow(2, 3));');
 $rounded = eval('return round(3.14159, 2) . ":" . round(2.5);');
+$case = eval('return strtoupper("eval") . ":" . strtolower("LOUD");');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -125,6 +126,7 @@ echo "root=" . $root . "\n";
 echo "rounding=" . $rounding . "\n";
 echo "builtin-power=" . $builtin_power . "\n";
 echo "rounded=" . $rounded . "\n";
+echo "case=" . $case . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";
