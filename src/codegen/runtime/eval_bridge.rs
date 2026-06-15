@@ -457,6 +457,62 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the sqrt wrapper frame
     emitter.instruction("ret");                                                 // return the boxed sqrt result to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_fdiv");
+    emitter.instruction("sub sp, sp, #32");                                     // allocate wrapper slots for the right operand and left double
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while casting the left operand
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("str d0, [sp, #8]");                                    // save the left double across the right cast
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for numeric casting
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("fmov d1, d0");                                         // keep the right divisor in d1
+    emitter.instruction("ldr d0, [sp, #8]");                                    // reload the left dividend into d0
+    emitter.instruction("fdiv d0, d0, d1");                                     // compute fdiv() with IEEE zero handling
+    emitter.instruction("fcmp d0, d0");                                         // detect NaN so PHP echo prints NAN without a sign
+    emitter.instruction("b.vs __elephc_eval_value_fdiv_nan");                   // normalize unordered fdiv results before boxing
+    emitter.instruction("fmov x1, d0");                                         // move the fdiv result bits into mixed value_lo
+    emitter.instruction("b __elephc_eval_value_fdiv_box");                      // skip the canonical NaN payload path
+    emitter.label("__elephc_eval_value_fdiv_nan");
+    emitter.instruction("mov x1, xzr");                                         // start the canonical quiet NaN payload from zero bits
+    emitter.instruction("movk x1, #0x7ff8, lsl #48");                           // install the positive quiet NaN exponent/significand
+    emitter.label("__elephc_eval_value_fdiv_box");
+    emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
+    emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the fdiv result into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the fdiv wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed fdiv result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_fmod");
+    emitter.instruction("sub sp, sp, #32");                                     // allocate wrapper slots for the right operand and left double
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while casting the left operand
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("str d0, [sp, #8]");                                    // save the left double across the right cast
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for numeric casting
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("fmov d1, d0");                                         // keep the right divisor in d1
+    emitter.instruction("ldr d0, [sp, #8]");                                    // reload the left dividend into d0
+    emitter.instruction("fdiv d2, d0, d1");                                     // compute the fmod quotient before truncation
+    emitter.instruction("frintz d2, d2");                                       // truncate the quotient toward zero
+    emitter.instruction("fmsub d0, d2, d1, d0");                                // compute dividend minus truncated quotient times divisor
+    emitter.instruction("fcmp d0, d0");                                         // detect NaN so PHP echo prints NAN without a sign
+    emitter.instruction("b.vs __elephc_eval_value_fmod_nan");                   // normalize unordered fmod results before boxing
+    emitter.instruction("fmov x1, d0");                                         // move the fmod result bits into mixed value_lo
+    emitter.instruction("b __elephc_eval_value_fmod_box");                      // skip the canonical NaN payload path
+    emitter.label("__elephc_eval_value_fmod_nan");
+    emitter.instruction("mov x1, xzr");                                         // start the canonical quiet NaN payload from zero bits
+    emitter.instruction("movk x1, #0x7ff8, lsl #48");                           // install the positive quiet NaN exponent/significand
+    emitter.label("__elephc_eval_value_fmod_box");
+    emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
+    emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the fmod result into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the fmod wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed fmod result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_add");
     emitter.instruction("b __rt_mixed_numeric_add");                            // add two boxed mixed values and return the boxed result
 
@@ -1379,6 +1435,60 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box the sqrt result into a Mixed cell
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed sqrt result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_fdiv");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for the right operand and left double
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("movsd QWORD PTR [rbp - 16], xmm0");                    // save the left double across the right cast
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for numeric casting
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("movapd xmm1, xmm0");                                   // keep the right divisor in xmm1
+    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 16]");                    // reload the left dividend into xmm0
+    emitter.instruction("divsd xmm0, xmm1");                                    // compute fdiv() with IEEE zero handling
+    emitter.instruction("ucomisd xmm0, xmm0");                                  // detect NaN so PHP echo prints NAN without a sign
+    emitter.instruction("jp __elephc_eval_value_fdiv_nan_x86");                 // normalize unordered fdiv results before boxing
+    emitter.instruction("movq rdi, xmm0");                                      // move the fdiv result bits into mixed value_lo
+    emitter.instruction("jmp __elephc_eval_value_fdiv_box_x86");                // skip the canonical NaN payload path
+    emitter.label("__elephc_eval_value_fdiv_nan_x86");
+    emitter.instruction("movabs rdi, 0x7ff8000000000000");                      // use a positive quiet NaN payload for PHP output
+    emitter.label("__elephc_eval_value_fdiv_box_x86");
+    emitter.instruction("xor esi, esi");                                        // double payloads do not use a high word
+    emitter.instruction("mov eax, 2");                                          // runtime tag 2 = double
+    emitter.instruction("call __rt_mixed_from_value");                          // box the fdiv result into a Mixed cell
+    emitter.instruction("add rsp, 32");                                         // release the fdiv wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed fdiv result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_fmod");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for the right operand and left double
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("movsd QWORD PTR [rbp - 16], xmm0");                    // save the left double across the right cast
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for numeric casting
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("movapd xmm1, xmm0");                                   // move the right divisor into the second fmod argument
+    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 16]");                    // move the left dividend into the first fmod argument
+    emitter.bl_c("fmod");
+    emitter.instruction("ucomisd xmm0, xmm0");                                  // detect NaN so PHP echo prints NAN without a sign
+    emitter.instruction("jp __elephc_eval_value_fmod_nan_x86");                 // normalize unordered fmod results before boxing
+    emitter.instruction("movq rdi, xmm0");                                      // move the fmod result bits into mixed value_lo
+    emitter.instruction("jmp __elephc_eval_value_fmod_box_x86");                // skip the canonical NaN payload path
+    emitter.label("__elephc_eval_value_fmod_nan_x86");
+    emitter.instruction("movabs rdi, 0x7ff8000000000000");                      // use a positive quiet NaN payload for PHP output
+    emitter.label("__elephc_eval_value_fmod_box_x86");
+    emitter.instruction("xor esi, esi");                                        // double payloads do not use a high word
+    emitter.instruction("mov eax, 2");                                          // runtime tag 2 = double
+    emitter.instruction("call __rt_mixed_from_value");                          // box the fmod result into a Mixed cell
+    emitter.instruction("add rsp, 32");                                         // release the fmod wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed fmod result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_add");
     emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into the internal result register

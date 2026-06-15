@@ -75,6 +75,14 @@ unsafe extern "C" {
     fn __elephc_eval_value_ceil(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_floor(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_sqrt(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    fn __elephc_eval_value_fdiv(
+        left: *mut RuntimeCell,
+        right: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
+    fn __elephc_eval_value_fmod(
+        left: *mut RuntimeCell,
+        right: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     fn __elephc_eval_value_add(left: *mut RuntimeCell, right: *mut RuntimeCell)
         -> *mut RuntimeCell;
     fn __elephc_eval_value_sub(left: *mut RuntimeCell, right: *mut RuntimeCell)
@@ -351,6 +359,24 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Computes PHP `sqrt()` for a boxed Mixed cell through the generated runtime wrapper.
     fn sqrt(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_sqrt(value.as_ptr()) })
+    }
+
+    /// Computes PHP `fdiv()` for boxed Mixed cells through the generated runtime wrapper.
+    fn fdiv(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_fdiv(left.as_ptr(), right.as_ptr()) })
+    }
+
+    /// Computes PHP `fmod()` for boxed Mixed cells through the generated runtime wrapper.
+    fn fmod(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_fmod(left.as_ptr(), right.as_ptr()) })
     }
 
     /// Adds two boxed Mixed cells using elephc runtime numeric semantics.
