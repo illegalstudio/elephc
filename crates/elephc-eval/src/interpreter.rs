@@ -112,6 +112,18 @@ pub trait RuntimeValueOps {
     /// Creates a runtime string cell.
     fn string(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Casts one runtime cell to a boxed PHP integer cell.
+    fn cast_int(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Casts one runtime cell to a boxed PHP float cell.
+    fn cast_float(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Casts one runtime cell to a boxed PHP string cell.
+    fn cast_string(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Casts one runtime cell to a boxed PHP boolean cell.
+    fn cast_bool(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Adds two runtime cells using PHP addition semantics.
     fn add(
         &mut self,
@@ -700,6 +712,9 @@ fn eval_call(
     match name {
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
+        "boolval" | "floatval" | "intval" | "strval" => {
+            eval_builtin_cast(name, args, context, scope, values)
+        }
         "count" => eval_builtin_count(args, context, scope, values),
         "empty" => eval_builtin_empty(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
@@ -818,8 +833,11 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
         name,
         "call_user_func"
             | "call_user_func_array"
+            | "boolval"
             | "count"
+            | "floatval"
             | "function_exists"
+            | "intval"
             | "is_callable"
             | "is_array"
             | "is_bool"
@@ -832,6 +850,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_real"
             | "is_string"
             | "strlen"
+            | "strval"
     )
 }
 
@@ -945,6 +964,12 @@ fn eval_builtin_with_values(
             return eval_call_user_func_array_with_values(*callback, *arg_array, context, values)
                 .map(Some);
         }
+        "boolval" | "floatval" | "intval" | "strval" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_cast_result(name, *value, values)?
+        }
         "count" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -980,6 +1005,36 @@ fn eval_builtin_with_values(
         _ => return Ok(None),
     };
     Ok(Some(result))
+}
+
+/// Evaluates PHP scalar cast builtins over one eval expression.
+fn eval_builtin_cast(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_cast_result(name, value, values)
+}
+
+/// Dispatches an already evaluated value through the matching PHP cast hook.
+fn eval_cast_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match name {
+        "intval" => values.cast_int(value),
+        "floatval" => values.cast_float(value),
+        "strval" => values.cast_string(value),
+        "boolval" => values.cast_bool(value),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
 }
 
 /// Evaluates PHP scalar/container type predicate builtins over one eval expression.
@@ -1544,6 +1599,39 @@ mod tests {
         /// Creates a fake string cell.
         fn string(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus> {
             Ok(self.alloc(FakeValue::String(value.to_string())))
+        }
+
+        /// Casts a fake runtime cell to a fake integer cell.
+        fn cast_int(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+            let value = self.get(value);
+            let value = self.fake_int(&value);
+            self.int(value)
+        }
+
+        /// Casts a fake runtime cell to a fake float cell.
+        fn cast_float(
+            &mut self,
+            value: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let value = self.get(value);
+            let value = self.fake_numeric(&value);
+            self.float(value)
+        }
+
+        /// Casts a fake runtime cell to a fake string cell.
+        fn cast_string(
+            &mut self,
+            value: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let value = self.stringify(value);
+            self.string(&value)
+        }
+
+        /// Casts a fake runtime cell to a fake boolean cell.
+        fn cast_bool(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+            let value = self.get(value);
+            let value = self.fake_truthy(&value);
+            self.bool_value(value)
         }
 
         /// Adds fake numeric cells for interpreter tests.
@@ -2737,6 +2825,27 @@ return function_exists("is_double");"#,
 
         assert_eq!(values.output, "11111111111ok:11");
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval cast builtins return boxed scalar cells directly and by callable.
+    #[test]
+    fn execute_program_dispatches_cast_builtins() {
+        let program = parse_fragment(
+            br#"echo intval("42"); echo ":";
+echo floatval("3.5"); echo ":";
+echo strval(12); echo ":";
+echo boolval("0") ? "bad" : "false";
+echo ":"; echo call_user_func("strval", 7);
+return call_user_func_array("intval", ["9"]);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "42:3.5:12:false:7");
+        assert_eq!(values.get(result), FakeValue::Int(9));
     }
 
     /// Verifies `isset` distinguishes missing, null, and other falsey values.

@@ -79,6 +79,7 @@ $magic_file_has_path = eval('return strlen(__FILE__) > strlen(__DIR__);');
 $magic_dir_has_path = eval('return strlen(__DIR__) > 0;');
 $magic_scope = eval('return "[" . __CLASS__ . "|" . __NAMESPACE__ . "|" . __TRAIT__ . "]";');
 $type_checks = eval('return (is_int(1) ? "i" : "?") . (is_string("x") ? "s" : "?") . (is_array([1]) ? "a" : "?");');
+$casts = eval('return strval(intval("42")) . ":" . strval(floatval("3.5")) . ":" . (boolval("0") ? "true" : "false");');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -111,6 +112,7 @@ echo "magic-file=" . $magic_file_has_path . "\n";
 echo "magic-dir=" . $magic_dir_has_path . "\n";
 echo "magic-scope=" . $magic_scope . "\n";
 echo "type-checks=" . $type_checks . "\n";
+echo "casts=" . $casts . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";
