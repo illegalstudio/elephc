@@ -1643,6 +1643,21 @@ mod tests {
         assert_eq!(values.get(x), FakeValue::Int(15));
     }
 
+    /// Verifies simple variable increment and decrement statements update the scope value.
+    #[test]
+    fn execute_program_evaluates_inc_dec_statements() {
+        let program = parse_fragment(br#"$i = 1; $i++; ++$i; $i--; --$i; echo $i;"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let i = scope.visible_cell("i").expect("scope should contain i");
+
+        assert_eq!(values.output, "1");
+        assert_eq!(values.get(i), FakeValue::Int(1));
+    }
+
     /// Verifies echo and unset operate through runtime hooks and scope metadata.
     #[test]
     fn execute_program_echoes_and_unsets_scope_value() {

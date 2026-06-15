@@ -60,6 +60,7 @@ $keyword_logic = eval('return true xor false;');
 $not_false = eval('return !false;');
 $coalesced = eval('return $missing ?? "coalesced";');
 $compound = eval('$n = 2; $n += 3; $label = "n="; $label .= $n; return $label;');
+$incdec = eval('$i = 0; $i++; ++$i; return $i;');
 $negative = eval('return -5 + +2;');
 $magic_line = eval("
 return __LINE__;
@@ -88,6 +89,7 @@ echo "not-false=" . $not_false . "\n";
 echo "coalesce=" . $coalesced . "\n";
 echo "ternary=" . $ternary . "\n";
 echo "compound=" . $compound . "\n";
+echo "incdec=" . $incdec . "\n";
 echo "negative=" . $negative . "\n";
 echo "magic-line=" . $magic_line . "\n";
 echo "magic-function=" . $magic_function . "\n";
