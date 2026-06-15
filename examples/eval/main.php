@@ -11,6 +11,7 @@ $meta_count = eval('return count($meta);');
 eval('function plus_one($value) { return $value + 1; }');
 $dynamic_call = eval('return plus_one(4);');
 eval('function native_add($left, $right) { return $left + $right; }');
+eval('function native_double($value) { return $value * 2; }');
 
 echo "x=" . $x . "\n";
 echo "created=" . $created . "\n";
@@ -19,4 +20,5 @@ echo "source=" . $meta["source"] . "\n";
 echo "meta-count=" . $meta_count . "\n";
 echo "dynamic-call=" . $dynamic_call . "\n";
 echo "native-dynamic-call=" . native_add(40, 2) . "\n";
+echo "call-user-func=" . call_user_func('native_double', 6) . "\n";
 echo "result=" . $result . "\n";

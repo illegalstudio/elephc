@@ -423,6 +423,18 @@ echo dyn_eval_native_add(4, 5);
     assert_eq!(out, "9");
 }
 
+/// Verifies `call_user_func()` can dispatch to an eval-declared function after the barrier.
+#[test]
+fn test_eval_declared_function_can_be_called_with_call_user_func() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_cuf($x) { return $x + 1; }');
+echo call_user_func('dyn_eval_cuf', 4);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {

@@ -1746,8 +1746,10 @@ fn lower_static_call_user_func(
                     expr,
                 );
             }
-            let callback = static_call_user_func_callback(ctx, callback_expr)?;
-            lower_static_callable_call(ctx, callback, callback_args, expr)
+            if let Some(callback) = static_call_user_func_callback(ctx, callback_expr) {
+                return lower_static_callable_call(ctx, callback, callback_args, expr);
+            }
+            lower_eval_call_user_func_fallback(ctx, callback_expr, callback_args, expr)
         }
         "call_user_func_array" => {
             let [callback_arg, arg_array] = args else {
@@ -1774,6 +1776,37 @@ fn lower_static_call_user_func(
         }
         _ => None,
     }
+}
+
+/// Lowers unresolved string callbacks after an eval barrier through the eval function table.
+fn lower_eval_call_user_func_fallback(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback_expr: &Expr,
+    callback_args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !ctx.has_eval_barrier() || !plain_positional_call_args(callback_args) {
+        return None;
+    }
+    let ExprKind::StringLiteral(callback_name) = &callback_expr.kind else {
+        return None;
+    };
+    if callback_name.contains("::")
+        || resolve_static_string_callable(ctx, callback_name).is_some()
+    {
+        return None;
+    }
+    let dynamic_name = php_symbol_key(callback_name.trim_start_matches('\\'));
+    let data = ctx.intern_function_name(&dynamic_name);
+    let operands = lower_args(ctx, callback_args);
+    Some(ctx.emit_value(
+        Op::EvalFunctionCall,
+        operands,
+        Some(Immediate::Data(data)),
+        PhpType::Mixed,
+        Op::EvalFunctionCall.default_effects(),
+        Some(expr.span),
+    ))
 }
 
 /// Lowers `call_user_func*` for receiver-bound first-class callables through `expr_call`.
