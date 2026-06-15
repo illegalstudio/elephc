@@ -770,7 +770,10 @@ fn eval_expr(
 
 /// Returns cloned positional argument expressions, rejecting named arguments.
 fn positional_call_arg_exprs(args: &[EvalCallArg]) -> Result<Vec<EvalExpr>, EvalStatus> {
-    if args.iter().any(|arg| arg.name().is_some()) {
+    if args
+        .iter()
+        .any(|arg| arg.name().is_some() || arg.is_spread())
+    {
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(args.iter().map(|arg| arg.value().clone()).collect())
@@ -783,7 +786,10 @@ fn eval_positional_call_arg_values(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    if args.iter().any(|arg| arg.name().is_some()) {
+    if args
+        .iter()
+        .any(|arg| arg.name().is_some() || arg.is_spread())
+    {
         return Err(EvalStatus::RuntimeFatal);
     }
     let mut evaluated_args = Vec::with_capacity(args.len());
@@ -2154,16 +2160,41 @@ fn eval_dynamic_function_call_args(
     let mut saw_named = false;
 
     for arg in args {
+        if arg.is_spread() {
+            if saw_named {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let spread = eval_expr(arg.value(), context, caller_scope, values)?;
+            if !values.is_array_like(spread)? {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let len = values.array_len(spread)?;
+            for position in 0..len {
+                let key = values.array_iter_key(spread, position)?;
+                let value = values.array_get(spread, key)?;
+                match values.type_tag(key)? {
+                    EVAL_TAG_INT => {
+                        if saw_named {
+                            return Err(EvalStatus::RuntimeFatal);
+                        }
+                        bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, value)?;
+                    }
+                    EVAL_TAG_STRING => {
+                        saw_named = true;
+                        let name = values.string_bytes(key)?;
+                        let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
+                        bind_dynamic_named_arg(params, &mut bound_args, &name, value)?;
+                    }
+                    _ => return Err(EvalStatus::RuntimeFatal),
+                }
+            }
+            continue;
+        }
+
         if let Some(name) = arg.name() {
             saw_named = true;
             let value = eval_expr(arg.value(), context, caller_scope, values)?;
-            let Some(param_index) = params.iter().position(|param| param == name) else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            if bound_args[param_index].is_some() {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            bound_args[param_index] = Some(value);
+            bind_dynamic_named_arg(params, &mut bound_args, name, value)?;
             continue;
         }
 
@@ -2171,17 +2202,44 @@ fn eval_dynamic_function_call_args(
             return Err(EvalStatus::RuntimeFatal);
         }
         let value = eval_expr(arg.value(), context, caller_scope, values)?;
-        if next_positional >= params.len() || bound_args[next_positional].is_some() {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        bound_args[next_positional] = Some(value);
-        next_positional += 1;
+        bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, value)?;
     }
 
     bound_args
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Binds one positional dynamic-call value to the next declared parameter slot.
+fn bind_dynamic_positional_arg(
+    bound_args: &mut [Option<RuntimeCellHandle>],
+    next_positional: &mut usize,
+    value: RuntimeCellHandle,
+) -> Result<(), EvalStatus> {
+    if *next_positional >= bound_args.len() || bound_args[*next_positional].is_some() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    bound_args[*next_positional] = Some(value);
+    *next_positional += 1;
+    Ok(())
+}
+
+/// Binds one named dynamic-call value to the matching declared parameter slot.
+fn bind_dynamic_named_arg(
+    params: &[String],
+    bound_args: &mut [Option<RuntimeCellHandle>],
+    name: &str,
+    value: RuntimeCellHandle,
+) -> Result<(), EvalStatus> {
+    let Some(param_index) = params.iter().position(|param| param == name) else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if bound_args[param_index].is_some() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    bound_args[param_index] = Some(value);
+    Ok(())
 }
 
 /// Evaluates an eval-declared function after its positional arguments are prepared.
@@ -3788,6 +3846,36 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
         assert_eq!(values.get(result), FakeValue::Int(12));
     }
 
+    /// Verifies eval-declared functions unpack indexed arrays as positional arguments.
+    #[test]
+    fn execute_program_calls_declared_function_with_spread_args() {
+        let program = parse_fragment(
+            br#"function dyn($x, $y) { return ($x * 10) + $y; } return dyn(...[1, 2]);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(12));
+    }
+
+    /// Verifies string keys unpack as named arguments for eval-declared functions.
+    #[test]
+    fn execute_program_calls_declared_function_with_named_spread_args() {
+        let program = parse_fragment(
+            br#"function dyn($x, $y) { return ($x * 10) + $y; } return dyn(...["y" => 2], x: 1);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(12));
+    }
+
     /// Verifies named calls reject positional arguments that follow named arguments.
     #[test]
     fn execute_program_rejects_positional_after_named_arg() {
@@ -3802,6 +3890,21 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
 
         assert_eq!(result, Err(EvalStatus::RuntimeFatal));
         assert_eq!(values.output, "");
+    }
+
+    /// Verifies named calls reject argument unpacking after named arguments.
+    #[test]
+    fn execute_program_rejects_spread_after_named_arg() {
+        let program = parse_fragment(
+            br#"function dyn($x, $y) { return $x + $y; } return dyn(x: 1, ...[2]);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values);
+
+        assert_eq!(result, Err(EvalStatus::RuntimeFatal));
     }
 
     /// Verifies function-scope magic constants keep the eval declaration spelling.

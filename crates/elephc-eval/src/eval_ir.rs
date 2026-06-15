@@ -191,19 +191,34 @@ pub enum EvalExpr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalCallArg {
     name: Option<String>,
+    spread: bool,
     value: EvalExpr,
 }
 
 impl EvalCallArg {
     /// Creates a positional call argument from a value expression.
     pub fn positional(value: EvalExpr) -> Self {
-        Self { name: None, value }
+        Self {
+            name: None,
+            spread: false,
+            value,
+        }
     }
 
     /// Creates a named call argument from a parameter name and value expression.
     pub fn named(name: impl Into<String>, value: EvalExpr) -> Self {
         Self {
             name: Some(name.into()),
+            spread: false,
+            value,
+        }
+    }
+
+    /// Creates an unpacking call argument from an array expression.
+    pub fn spread(value: EvalExpr) -> Self {
+        Self {
+            name: None,
+            spread: true,
             value,
         }
     }
@@ -211,6 +226,11 @@ impl EvalCallArg {
     /// Returns the source argument name without `$`, if the argument was named.
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    /// Returns true when this argument came from `...expr` unpacking syntax.
+    pub const fn is_spread(&self) -> bool {
+        self.spread
     }
 
     /// Returns the expression that computes this argument's runtime value.

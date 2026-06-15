@@ -67,6 +67,7 @@ enum TokenKind {
     Tilde,
     Dot,
     DotEqual,
+    Ellipsis,
     Equal,
     EqualEqual,
     EqualEqualEqual,
@@ -205,7 +206,11 @@ impl<'a> Lexer<'a> {
             }
             '.' => {
                 self.bump_char();
-                if self.peek_char() == Some('=') {
+                if self.peek_char() == Some('.') && self.peek_next_char() == Some('.') {
+                    self.bump_char();
+                    self.bump_char();
+                    Ok(TokenKind::Ellipsis)
+                } else if self.peek_char() == Some('=') {
                     self.bump_char();
                     Ok(TokenKind::DotEqual)
                 } else {
@@ -1472,6 +1477,9 @@ impl Parser {
 
     /// Parses one positional or named argument within a call argument list.
     fn parse_call_arg(&mut self) -> Result<EvalCallArg, EvalParseError> {
+        if self.consume(TokenKind::Ellipsis) {
+            return self.parse_expr().map(EvalCallArg::spread);
+        }
         if matches!(self.peek(), TokenKind::Colon) {
             if let TokenKind::Ident(name) = self.current() {
                 let name = name.clone();
@@ -2480,6 +2488,19 @@ mod tests {
                     EvalCallArg::named("y", EvalExpr::Const(EvalConst::Int(2))),
                     EvalCallArg::named("x", EvalExpr::Const(EvalConst::Int(1))),
                 ],
+            }))]
+        );
+    }
+
+    /// Verifies function calls preserve spread arguments in source order.
+    #[test]
+    fn parse_fragment_accepts_spread_call_argument_source() {
+        let program = parse_fragment(br#"return add(...$args);"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Call {
+                name: "add".to_string(),
+                args: vec![EvalCallArg::spread(EvalExpr::LoadVar("args".to_string()))],
             }))]
         );
     }
