@@ -505,6 +505,43 @@ eval('echo call_user_func("native_eval_cuf_add", 4, 6);');
     assert_eq!(out, "10");
 }
 
+/// Verifies `call_user_func_array()` inside eval dispatches to eval-declared functions.
+#[test]
+fn test_eval_fragment_call_user_func_array_dispatches_eval_declared_function() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_inner_cufa($x, $y) { return $x + $y; }
+echo call_user_func_array("dyn_eval_inner_cufa", [4, 5]);');
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+/// Verifies `call_user_func_array()` inside eval dispatches to supported builtins.
+#[test]
+fn test_eval_fragment_call_user_func_array_dispatches_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo call_user_func_array("strlen", ["abcd"]);
+echo ":";
+echo function_exists("call_user_func_array");');
+"#,
+    );
+    assert_eq!(out, "4:1");
+}
+
+/// Verifies `call_user_func_array()` inside eval dispatches to registered AOT functions.
+#[test]
+fn test_eval_fragment_call_user_func_array_dispatches_native_user_function() {
+    let out = compile_and_run(
+        r#"<?php
+function native_eval_cufa_add($x, $y) { return $x + $y; }
+eval('echo call_user_func_array("native_eval_cufa_add", [4, 6]);');
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
 /// Verifies eval fragments can call AOT user functions registered in the eval context.
 #[test]
 fn test_eval_fragment_can_call_native_user_function() {

@@ -500,6 +500,9 @@ fn eval_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
+        "call_user_func_array" => {
+            eval_builtin_call_user_func_array(args, context, scope, values)
+        }
         "count" => eval_builtin_count(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
         "function_exists" | "is_callable" => {
@@ -545,7 +548,12 @@ fn eval_function_probe_exists(context: &ElephcEvalContext, name: &str) -> bool {
 fn eval_php_visible_builtin_exists(name: &str) -> bool {
     matches!(
         name,
-        "call_user_func" | "count" | "function_exists" | "is_callable" | "strlen"
+        "call_user_func"
+            | "call_user_func_array"
+            | "count"
+            | "function_exists"
+            | "is_callable"
+            | "strlen"
     )
 }
 
@@ -564,6 +572,43 @@ fn eval_builtin_call_user_func(
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
     eval_call_user_func_with_values(evaluated_args, context, values)
+}
+
+/// Evaluates `call_user_func_array($name, $args)` inside a runtime eval fragment.
+fn eval_builtin_call_user_func_array(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [callback, arg_array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let callback = eval_expr(callback, context, scope, values)?;
+    let arg_array = eval_expr(arg_array, context, scope, values)?;
+    eval_call_user_func_array_with_values(callback, arg_array, context, values)
+}
+
+/// Dispatches `call_user_func_array` after callback and array arguments are evaluated.
+fn eval_call_user_func_array_with_values(
+    callback: RuntimeCellHandle,
+    arg_array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = values.string_bytes(callback)?;
+    let callback = String::from_utf8(callback).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let callback = callback.trim_start_matches('\\').to_ascii_lowercase();
+    if callback.contains("::") {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    let len = values.array_len(arg_array)?;
+    let mut evaluated_args = Vec::with_capacity(len);
+    for index in 0..len {
+        let index = values.int(index as i64)?;
+        evaluated_args.push(values.array_get(arg_array, index)?);
+    }
+    eval_callable_with_values(&callback, evaluated_args, context, values)
 }
 
 /// Dispatches `call_user_func` after its callback and arguments are already evaluated.
@@ -613,6 +658,13 @@ fn eval_builtin_with_values(
     let result = match name {
         "call_user_func" => {
             return eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)
+                .map(Some);
+        }
+        "call_user_func_array" => {
+            let [callback, arg_array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            return eval_call_user_func_array_with_values(*callback, *arg_array, context, values)
                 .map(Some);
         }
         "count" => {
@@ -1696,6 +1748,62 @@ return call_user_func("dyn", 4);"#,
             expected.as_ptr().cast(),
             fake_native_return_descriptor,
             0,
+        );
+        assert!(
+            context
+                .define_native_function("native_answer", native)
+                .is_ok()
+        );
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(result, expected);
+    }
+
+    /// Verifies `call_user_func_array` inside eval can dispatch an eval-declared function.
+    #[test]
+    fn execute_program_call_user_func_array_dispatches_declared_function() {
+        let program = parse_fragment(
+            br#"function dyn($x, $y) { return $x + $y; }
+return call_user_func_array("dyn", [4, 5]);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(9));
+    }
+
+    /// Verifies `call_user_func_array` inside eval can dispatch a supported builtin.
+    #[test]
+    fn execute_program_call_user_func_array_dispatches_builtin() {
+        let program = parse_fragment(br#"return call_user_func_array("strlen", ["abcd"]);"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(4));
+    }
+
+    /// Verifies `call_user_func_array` inside eval can dispatch a registered native function.
+    #[test]
+    fn execute_program_call_user_func_array_dispatches_registered_native_function() {
+        let program =
+            parse_fragment(br#"return call_user_func_array("native_answer", [4, 5]);"#)
+                .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let expected = values.int(42).expect("allocate fake result");
+        let native = NativeFunction::new(
+            expected.as_ptr().cast(),
+            fake_native_return_descriptor,
+            2,
         );
         assert!(
             context
