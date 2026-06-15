@@ -127,6 +127,12 @@ pub trait RuntimeValueOps {
     /// Computes PHP `abs()` for one runtime cell while preserving integer/float result typing.
     fn abs(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Computes PHP `ceil()` for one runtime cell after PHP numeric conversion.
+    fn ceil(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Computes PHP `floor()` for one runtime cell after PHP numeric conversion.
+    fn floor(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Computes PHP `sqrt()` for one runtime cell after PHP numeric conversion.
     fn sqrt(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -717,6 +723,7 @@ fn eval_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "abs" => eval_builtin_abs(args, context, scope, values),
+        "ceil" => eval_builtin_ceil(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "boolval" | "floatval" | "intval" | "strval" => {
@@ -725,6 +732,7 @@ fn eval_call(
         "count" => eval_builtin_count(args, context, scope, values),
         "empty" => eval_builtin_empty(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
+        "floor" => eval_builtin_floor(args, context, scope, values),
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
         }
@@ -841,10 +849,12 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
     matches!(
         name,
         "abs"
+            | "ceil"
             | "call_user_func"
             | "call_user_func_array"
             | "boolval"
             | "count"
+            | "floor"
             | "floatval"
             | "function_exists"
             | "gettype"
@@ -971,6 +981,18 @@ fn eval_builtin_with_values(
             };
             values.abs(*value)?
         }
+        "ceil" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            values.ceil(*value)?
+        }
+        "floor" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            values.floor(*value)?
+        }
         "sqrt" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -1049,6 +1071,34 @@ fn eval_builtin_abs(
     };
     let value = eval_expr(value, context, scope, values)?;
     values.abs(value)
+}
+
+/// Evaluates PHP's `ceil(...)` over one eval expression.
+fn eval_builtin_ceil(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    values.ceil(value)
+}
+
+/// Evaluates PHP's `floor(...)` over one eval expression.
+fn eval_builtin_floor(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    values.floor(value)
 }
 
 /// Evaluates PHP's `sqrt(...)` over one eval expression.
@@ -1736,6 +1786,18 @@ mod tests {
                 FakeValue::Float(value) => self.float(value.abs()),
                 value => self.int(self.fake_int(&value).wrapping_abs()),
             }
+        }
+
+        /// Computes fake PHP ceiling through numeric conversion as a float result.
+        fn ceil(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+            let value = self.get(value);
+            self.float(self.fake_numeric(&value).ceil())
+        }
+
+        /// Computes fake PHP floor through numeric conversion as a float result.
+        fn floor(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+            let value = self.get(value);
+            self.float(self.fake_numeric(&value).floor())
         }
 
         /// Computes fake PHP square root through numeric conversion as a float result.
@@ -3004,6 +3066,29 @@ return function_exists("abs");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "5:2.5:double:7:9");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `floor()` and `ceil()` dispatch as double-returning math builtins.
+    #[test]
+    fn execute_program_dispatches_floor_and_ceil_builtins() {
+        let program = parse_fragment(
+            br#"echo floor(3.7); echo ":";
+echo gettype(floor(3)); echo ":";
+echo ceil(3.2); echo ":";
+echo gettype(ceil(3)); echo ":";
+echo call_user_func("floor", 4.9); echo ":";
+echo call_user_func_array("ceil", [4.1]);
+echo ":"; echo function_exists("floor");
+return function_exists("ceil");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "3:double:4:double:4:5:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

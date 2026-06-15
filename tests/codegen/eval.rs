@@ -703,6 +703,23 @@ echo ":"; echo function_exists("abs");');
     assert_eq!(out, "5:2.5:double:7:9:1");
 }
 
+/// Verifies eval `floor()` and `ceil()` return boxed double cells through direct and callable calls.
+#[test]
+fn test_eval_dispatches_floor_and_ceil_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo floor(3.7); echo ":";
+echo gettype(floor(3)); echo ":";
+echo ceil(3.2); echo ":";
+echo gettype(ceil(3)); echo ":";
+echo call_user_func("floor", 4.9); echo ":";
+echo call_user_func_array("ceil", [4.1]);
+echo ":"; echo function_exists("floor"); echo function_exists("ceil");');
+"#,
+    );
+    assert_eq!(out, "3:double:4:double:4:5:11");
+}
+
 /// Verifies eval `sqrt()` returns boxed double cells through direct and callable calls.
 #[test]
 fn test_eval_dispatches_sqrt_builtin_call() {

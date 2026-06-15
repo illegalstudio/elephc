@@ -68,6 +68,8 @@ unsafe extern "C" {
     fn __elephc_eval_value_cast_string(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_cast_bool(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_abs(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    fn __elephc_eval_value_ceil(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    fn __elephc_eval_value_floor(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_sqrt(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_add(left: *mut RuntimeCell, right: *mut RuntimeCell)
         -> *mut RuntimeCell;
@@ -316,6 +318,16 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Computes PHP `abs()` for a boxed Mixed cell through the generated runtime wrapper.
     fn abs(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_abs(value.as_ptr()) })
+    }
+
+    /// Computes PHP `ceil()` for a boxed Mixed cell through the generated runtime wrapper.
+    fn ceil(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_ceil(value.as_ptr()) })
+    }
+
+    /// Computes PHP `floor()` for a boxed Mixed cell through the generated runtime wrapper.
+    fn floor(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_floor(value.as_ptr()) })
     }
 
     /// Computes PHP `sqrt()` for a boxed Mixed cell through the generated runtime wrapper.

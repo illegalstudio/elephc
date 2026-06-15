@@ -83,6 +83,7 @@ $casts = eval('return strval(intval("42")) . ":" . strval(floatval("3.5")) . ":"
 $type_name = eval('return gettype(["ok"]);');
 $absolute = eval('return abs(-7) . ":" . gettype(abs(-2.5));');
 $root = eval('return sqrt(81) . ":" . gettype(sqrt(16));');
+$rounding = eval('return floor(3.7) . ":" . ceil(3.2);');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -119,6 +120,7 @@ echo "casts=" . $casts . "\n";
 echo "type-name=" . $type_name . "\n";
 echo "absolute=" . $absolute . "\n";
 echo "root=" . $root . "\n";
+echo "rounding=" . $rounding . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";
