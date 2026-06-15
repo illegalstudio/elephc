@@ -445,7 +445,9 @@ fn resolve_object_array_property(
             &format!("Undefined property: {}::{}", class_name, property),
         ));
     }
-    validate_object_property_access(checker, class_name, property, false, span)?;
+    // Indirect array modification (`$obj->prop[] = x` / `$obj->prop[$k] = x`) is a write, so it
+    // must honor PHP 8.4 asymmetric `set` visibility — not the read visibility.
+    validate_object_property_access(checker, class_name, property, true, span)?;
     let property_has_declared_type = class_info.declared_properties.contains(property);
     let prop_ty = class_info
         .properties

@@ -935,6 +935,26 @@ fn test_error_asymmetric_visibility_external_write() {
     );
 }
 
+/// Verifies that pushing onto a `private(set)` array property from outside the class is rejected.
+/// Indirect array modification is a write and must honor the `set` visibility (PHP 8.4).
+#[test]
+fn test_error_asymmetric_visibility_external_array_push() {
+    expect_error(
+        "<?php class C { public private(set) array $items = []; } $c = new C(); $c->items[] = 1;",
+        "Cannot access private property: C::items",
+    );
+}
+
+/// Verifies that an indexed write to a `private(set)` array property from outside the class is
+/// rejected, honoring the `set` visibility (PHP 8.4).
+#[test]
+fn test_error_asymmetric_visibility_external_array_index_write() {
+    expect_error(
+        "<?php class C { public private(set) array $items = []; } $c = new C(); $c->items['k'] = 1;",
+        "Cannot access private property: C::items",
+    );
+}
+
 /// Verifies that a `set` visibility weaker than the `get` visibility is rejected.
 #[test]
 fn test_error_asymmetric_visibility_set_weaker_than_get() {
