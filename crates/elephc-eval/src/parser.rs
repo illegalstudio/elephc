@@ -43,6 +43,12 @@ enum TokenKind {
     Star,
     Dot,
     Equal,
+    EqualEqual,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
     FatArrow,
     Semicolon,
     LParen,
@@ -109,11 +115,41 @@ impl<'a> Lexer<'a> {
             }
             '=' => {
                 self.bump_char();
-                if self.peek_char() == Some('>') {
+                if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::EqualEqual)
+                } else if self.peek_char() == Some('>') {
                     self.bump_char();
                     Ok(TokenKind::FatArrow)
                 } else {
                     Ok(TokenKind::Equal)
+                }
+            }
+            '!' => {
+                self.bump_char();
+                if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::NotEqual)
+                } else {
+                    Err(EvalParseError::UnexpectedToken)
+                }
+            }
+            '<' => {
+                self.bump_char();
+                if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::LessEqual)
+                } else {
+                    Ok(TokenKind::Less)
+                }
+            }
+            '>' => {
+                self.bump_char();
+                if self.peek_char() == Some('=') {
+                    self.bump_char();
+                    Ok(TokenKind::GreaterEqual)
+                } else {
+                    Ok(TokenKind::Greater)
                 }
             }
             ';' => {
@@ -484,9 +520,55 @@ impl Parser {
         Ok(statements)
     }
 
-    /// Parses an expression using PHP-like precedence for `+` over `.`.
+    /// Parses an expression using PHP-like comparison, concatenation, and arithmetic precedence.
     fn parse_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
-        self.parse_concat()
+        self.parse_equality()
+    }
+
+    /// Parses left-associative loose equality and inequality comparisons.
+    fn parse_equality(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_ordering()?;
+        loop {
+            let op = if self.consume(TokenKind::EqualEqual) {
+                EvalBinOp::LooseEq
+            } else if self.consume(TokenKind::NotEqual) {
+                EvalBinOp::LooseNotEq
+            } else {
+                break;
+            };
+            let right = self.parse_ordering()?;
+            expr = EvalExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative ordered comparisons.
+    fn parse_ordering(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_concat()?;
+        loop {
+            let op = if self.consume(TokenKind::Less) {
+                EvalBinOp::Lt
+            } else if self.consume(TokenKind::LessEqual) {
+                EvalBinOp::LtEq
+            } else if self.consume(TokenKind::Greater) {
+                EvalBinOp::Gt
+            } else if self.consume(TokenKind::GreaterEqual) {
+                EvalBinOp::GtEq
+            } else {
+                break;
+            };
+            let right = self.parse_concat()?;
+            expr = EvalExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
     }
 
     /// Parses left-associative string concatenation.
@@ -791,6 +873,38 @@ mod tests {
                 }],
                 body: vec![EvalStmt::Echo(EvalExpr::LoadVar("i".to_string()))],
             }]
+        );
+    }
+
+    /// Verifies comparison operators parse with lower precedence than arithmetic.
+    #[test]
+    fn parse_fragment_accepts_comparison_source() {
+        let program = parse_fragment(br#"return $i + 1 < 3;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::Lt,
+                left: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::Add,
+                    left: Box::new(EvalExpr::LoadVar("i".to_string())),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                }),
+                right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+            }))]
+        );
+    }
+
+    /// Verifies loose equality operators parse as binary EvalIR expressions.
+    #[test]
+    fn parse_fragment_accepts_loose_equality_source() {
+        let program = parse_fragment(br#"return "a" != "b";"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::LooseNotEq,
+                left: Box::new(EvalExpr::Const(EvalConst::String("a".to_string()))),
+                right: Box::new(EvalExpr::Const(EvalConst::String("b".to_string()))),
+            }))]
         );
     }
 
