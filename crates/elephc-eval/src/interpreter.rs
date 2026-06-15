@@ -2597,7 +2597,7 @@ fn eval_assoc_array(
     Ok(array)
 }
 
-/// Advances an array literal's automatic key after an explicit PHP integer key.
+/// Advances an array literal's automatic key after an integer-normalized explicit key.
 fn eval_array_next_key_after_explicit_key(
     key: RuntimeCellHandle,
     current_next_key: Option<RuntimeCellHandle>,
@@ -2612,7 +2612,7 @@ fn eval_array_next_key_after_explicit_key(
             };
             values.int(key)?
         }
-        _ => return Ok(current_next_key),
+        _ => values.cast_int(key)?,
     };
     let one = values.int(1)?;
     let candidate = values.add(key, one)?;
@@ -2771,12 +2771,15 @@ mod tests {
             self.values.get(&id).cloned().expect("fake cell missing")
         }
 
-        /// Converts a fake runtime cell into a fake PHP array key.
+        /// Converts a fake runtime cell into a normalized fake PHP array key.
         fn key(&self, handle: RuntimeCellHandle) -> Result<FakeKey, EvalStatus> {
-            match self.get(handle) {
+            let value = self.get(handle);
+            match value {
                 FakeValue::Int(value) => Ok(FakeKey::Int(value)),
-                FakeValue::String(value) => Ok(FakeKey::String(value)),
-                _ => Err(EvalStatus::UnsupportedConstruct),
+                FakeValue::String(value) => eval_numeric_string_array_key(value.as_bytes())
+                    .map(FakeKey::Int)
+                    .map_or_else(|| Ok(FakeKey::String(value)), Ok),
+                value => Ok(FakeKey::Int(self.fake_int(&value))),
             }
         }
 
@@ -4168,6 +4171,45 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
     fn execute_program_assoc_array_literal_unkeyed_after_leading_zero_string_key() {
         let program =
             parse_fragment(br#"return ["02" => "two", "tail"][0];"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
+    }
+
+    /// Verifies boolean literal keys update the next automatic key after integer normalization.
+    #[test]
+    fn execute_program_assoc_array_literal_unkeyed_after_bool_key() {
+        let program =
+            parse_fragment(br#"return [true => "yes", "tail"][2];"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
+    }
+
+    /// Verifies false literal keys update the next automatic key from zero.
+    #[test]
+    fn execute_program_assoc_array_literal_unkeyed_after_false_key() {
+        let program =
+            parse_fragment(br#"return [false => "no", "tail"][1];"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("tail".to_string()));
+    }
+
+    /// Verifies float literal keys update the next automatic key after truncation.
+    #[test]
+    fn execute_program_assoc_array_literal_unkeyed_after_float_key() {
+        let program =
+            parse_fragment(br#"return [2.7 => "two", "tail"][3];"#).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
