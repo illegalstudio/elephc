@@ -681,6 +681,24 @@ echo ":"; echo function_exists("array_keys"); echo function_exists("array_values
     assert_eq!(out, "10:20:a:b:0:z:8:11");
 }
 
+/// Verifies eval `array_key_exists()` distinguishes present null values from missing keys.
+#[test]
+fn test_eval_dispatches_array_key_exists_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$map = ["name" => null, "age" => 30];
+echo array_key_exists("name", $map) ? "Y" : "N"; echo ":";
+echo array_key_exists("missing", $map) ? "bad" : "N"; echo ":";
+echo array_key_exists(1, [10, null]) ? "Y" : "N"; echo ":";
+echo array_key_exists(2, [10, null]) ? "bad" : "N"; echo ":";
+echo call_user_func("array_key_exists", "age", $map) ? "Y" : "N"; echo ":";
+echo call_user_func_array("array_key_exists", ["age", $map]) ? "Y" : "N";
+echo ":"; echo function_exists("array_key_exists");');
+"#,
+    );
+    assert_eq!(out, "Y:N:Y:N:Y:Y:1");
+}
+
 /// Verifies eval array search builtins return booleans or matching keys.
 #[test]
 fn test_eval_dispatches_array_search_builtin_calls() {

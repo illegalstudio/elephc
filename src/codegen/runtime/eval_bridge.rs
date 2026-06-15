@@ -106,6 +106,51 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #32");                                     // release the array-get wrapper frame
     emitter.instruction("ret");                                                 // return the boxed element to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_array_key_exists");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for key existence probing
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the boxed array receiver while normalizing the key
+    emitter.instruction("bl __elephc_eval_key_normalize");                      // normalize eval array key to key_lo/key_hi
+    emitter.instruction("str x1, [sp, #8]");                                    // save the normalized key low word
+    emitter.instruction("str x2, [sp, #16]");                                   // save the normalized key high word
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed array receiver for tag dispatch
+    emitter.instruction("cbz x0, __elephc_eval_value_array_key_exists_false");  // null handles do not contain array keys
+    emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
+    emitter.instruction("cmp x9, #4");                                          // tag 4 = indexed array
+    emitter.instruction("b.eq __elephc_eval_value_array_key_exists_indexed");   // indexed arrays use bounds-based key existence
+    emitter.instruction("cmp x9, #5");                                          // tag 5 = associative array
+    emitter.instruction("b.eq __elephc_eval_value_array_key_exists_assoc");     // associative arrays use hash existence
+    emitter.instruction("b __elephc_eval_value_array_key_exists_false");        // scalar values do not contain array keys
+    emitter.label("__elephc_eval_value_array_key_exists_indexed");
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload normalized key_hi for integer-key checking
+    emitter.instruction("cmn x2, #1");                                          // integer keys carry key_hi = -1
+    emitter.instruction("b.ne __elephc_eval_value_array_key_exists_false");     // non-integer keys never exist in indexed arrays
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed indexed-array receiver
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the indexed-array payload pointer
+    emitter.instruction("cbz x0, __elephc_eval_value_array_key_exists_false");  // missing payload cannot contain a key
+    emitter.instruction("ldr x1, [sp, #8]");                                    // pass normalized integer key to the bounds helper
+    emitter.instruction("bl __rt_array_key_exists");                            // return whether the integer key is in bounds
+    emitter.instruction("b __elephc_eval_value_array_key_exists_box");          // box the existence flag for Rust
+    emitter.label("__elephc_eval_value_array_key_exists_assoc");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed associative-array receiver
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the hash payload pointer
+    emitter.instruction("cbz x0, __elephc_eval_value_array_key_exists_false");  // missing hash payload cannot contain a key
+    emitter.instruction("ldr x1, [sp, #8]");                                    // pass normalized key_lo to the hash lookup
+    emitter.instruction("ldr x2, [sp, #16]");                                   // pass normalized key_hi to the hash lookup
+    emitter.instruction("bl __rt_hash_get");                                    // return hash found flag in x0
+    emitter.instruction("b __elephc_eval_value_array_key_exists_box");          // box the hash existence flag for Rust
+    emitter.label("__elephc_eval_value_array_key_exists_false");
+    emitter.instruction("mov x0, #0");                                          // report false for misses and unsupported receivers
+    emitter.label("__elephc_eval_value_array_key_exists_box");
+    emitter.instruction("mov x1, x0");                                          // move the C bool result into mixed value_lo
+    emitter.instruction("mov x0, #3");                                          // runtime tag 3 = boolean
+    emitter.instruction("mov x2, xzr");                                         // boolean payloads do not use a high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the bool result for Rust
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the key-exists wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed bool result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_array_iter_key");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for insertion-order key iteration
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls
@@ -974,6 +1019,53 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the array-get wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed element to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_array_key_exists");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for receiver and normalized key words
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the boxed array receiver while normalizing the key
+    emitter.instruction("call __elephc_eval_key_normalize");                    // normalize eval array key to key_lo/key_hi
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the normalized key low word
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the normalized key high word
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed array receiver for tag dispatch
+    emitter.instruction("test rdi, rdi");                                       // null handles do not contain array keys
+    emitter.instruction("jz __elephc_eval_value_array_key_exists_false");       // report false for null runtime cells
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
+    emitter.instruction("cmp r10, 4");                                          // tag 4 = indexed array
+    emitter.instruction("je __elephc_eval_value_array_key_exists_indexed");     // indexed arrays use bounds-based key existence
+    emitter.instruction("cmp r10, 5");                                          // tag 5 = associative array
+    emitter.instruction("je __elephc_eval_value_array_key_exists_assoc");       // associative arrays use hash existence
+    emitter.instruction("jmp __elephc_eval_value_array_key_exists_false");      // scalar values do not contain array keys
+    emitter.label("__elephc_eval_value_array_key_exists_indexed");
+    emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // integer keys carry key_hi = -1
+    emitter.instruction("jne __elephc_eval_value_array_key_exists_false");      // non-integer keys never exist in indexed arrays
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed indexed-array receiver
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the indexed-array payload pointer
+    emitter.instruction("test rdi, rdi");                                       // missing payload cannot contain a key
+    emitter.instruction("jz __elephc_eval_value_array_key_exists_false");       // report false for missing indexed-array payloads
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass normalized integer key to the bounds helper
+    emitter.instruction("call __rt_array_key_exists");                          // return whether the integer key is in bounds
+    emitter.instruction("jmp __elephc_eval_value_array_key_exists_box");        // box the existence flag for Rust
+    emitter.label("__elephc_eval_value_array_key_exists_assoc");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed associative-array receiver
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the hash payload pointer
+    emitter.instruction("test rdi, rdi");                                       // missing hash payload cannot contain a key
+    emitter.instruction("jz __elephc_eval_value_array_key_exists_false");       // report false for missing associative-array payloads
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass normalized key_lo to the hash lookup
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // pass normalized key_hi to the hash lookup
+    emitter.instruction("call __rt_hash_get");                                  // return hash found flag in rax
+    emitter.instruction("jmp __elephc_eval_value_array_key_exists_box");        // box the hash existence flag for Rust
+    emitter.label("__elephc_eval_value_array_key_exists_false");
+    emitter.instruction("xor eax, eax");                                        // report false for misses and unsupported receivers
+    emitter.label("__elephc_eval_value_array_key_exists_box");
+    emitter.instruction("mov rdi, rax");                                        // move the C bool result into mixed value_lo
+    emitter.instruction("mov eax, 3");                                          // runtime tag 3 = boolean
+    emitter.instruction("xor esi, esi");                                        // boolean payloads do not use a high word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the bool result for Rust
+    emitter.instruction("add rsp, 32");                                         // release the key-exists wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed bool result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_array_iter_key");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls

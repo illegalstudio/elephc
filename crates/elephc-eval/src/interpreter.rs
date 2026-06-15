@@ -44,6 +44,13 @@ pub trait RuntimeValueOps {
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Checks whether a normalized PHP array key exists without conflating null values with misses.
+    fn array_key_exists(
+        &mut self,
+        key: RuntimeCellHandle,
+        array: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Returns the foreach-visible key at a zero-based iteration position.
     fn array_iter_key(
         &mut self,
@@ -733,6 +740,7 @@ fn eval_call(
         "array_keys" | "array_values" => {
             eval_builtin_array_projection(name, args, context, scope, values)
         }
+        "array_key_exists" => eval_builtin_array_key_exists(args, context, scope, values),
         "array_product" | "array_sum" => {
             eval_builtin_array_aggregate(name, args, context, scope, values)
         }
@@ -882,6 +890,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
     matches!(
         name,
         "abs"
+            | "array_key_exists"
             | "array_keys"
             | "array_product"
             | "array_search"
@@ -1055,6 +1064,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_projection_result(name, *array, values)?
+        }
+        "array_key_exists" => {
+            let [key, array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            values.array_key_exists(*key, *array)?
         }
         "array_search" | "in_array" => {
             let [needle, array] = evaluated_args else {
@@ -1286,6 +1301,21 @@ fn eval_array_projection_result(
         result = values.array_set(result, index, value)?;
     }
     Ok(result)
+}
+
+/// Evaluates PHP `array_key_exists()` over a key and array expression.
+fn eval_builtin_array_key_exists(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [key, array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let key = eval_expr(key, context, scope, values)?;
+    let array = eval_expr(array, context, scope, values)?;
+    values.array_key_exists(key, array)
 }
 
 /// Evaluates PHP array search builtins over a needle and haystack expression.
@@ -2223,6 +2253,23 @@ mod tests {
                     .map_or_else(|| self.null(), Ok),
                 _ => Err(EvalStatus::UnsupportedConstruct),
             }
+        }
+
+        /// Checks whether a fake array has the requested key without reading its value.
+        fn array_key_exists(
+            &mut self,
+            key: RuntimeCellHandle,
+            array: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let key = self.key(key)?;
+            let exists = match self.get(array) {
+                FakeValue::Array(elements) => {
+                    matches!(key, FakeKey::Int(index) if index >= 0 && (index as usize) < elements.len())
+                }
+                FakeValue::Assoc(entries) => entries.iter().any(|(entry_key, _)| entry_key == &key),
+                _ => return Err(EvalStatus::UnsupportedConstruct),
+            };
+            self.bool_value(exists)
         }
 
         /// Returns one fake foreach key by insertion-order position.
@@ -3751,6 +3798,29 @@ return function_exists("array_values");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "10:20:a:b:0:z:8:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_key_exists()` distinguishes present null values from missing keys.
+    #[test]
+    fn execute_program_dispatches_array_key_exists_builtin() {
+        let program = parse_fragment(
+            br#"$map = ["name" => null, "age" => 30];
+echo array_key_exists("name", $map) ? "Y" : "N"; echo ":";
+echo array_key_exists("missing", $map) ? "bad" : "N"; echo ":";
+echo array_key_exists(1, [10, null]) ? "Y" : "N"; echo ":";
+echo array_key_exists(2, [10, null]) ? "bad" : "N"; echo ":";
+echo call_user_func("array_key_exists", "age", $map) ? "Y" : "N"; echo ":";
+echo call_user_func_array("array_key_exists", ["age", $map]) ? "Y" : "N"; echo ":";
+return function_exists("array_key_exists");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "Y:N:Y:N:Y:Y:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
