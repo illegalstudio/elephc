@@ -733,6 +733,7 @@ fn eval_call(
         "ceil" => eval_builtin_ceil(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
+        "chop" => eval_builtin_trim_like(name, args, context, scope, values),
         "boolval" | "floatval" | "intval" | "strval" => {
             eval_builtin_cast(name, args, context, scope, values)
         }
@@ -748,6 +749,7 @@ fn eval_call(
         | "is_null" | "is_real" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
+        "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
         "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
@@ -757,6 +759,7 @@ fn eval_call(
         }
         "strlen" => eval_builtin_strlen(args, context, scope, values),
         "strtolower" | "strtoupper" => eval_builtin_string_case(name, args, context, scope, values),
+        "trim" => eval_builtin_trim_like(name, args, context, scope, values),
         _ => {
             if let Some(function) = context.function(name).cloned() {
                 return eval_dynamic_function(&function, args, context, scope, values);
@@ -866,12 +869,14 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "call_user_func"
             | "call_user_func_array"
             | "boolval"
+            | "chop"
             | "count"
             | "floor"
             | "floatval"
             | "function_exists"
             | "gettype"
             | "intval"
+            | "ltrim"
             | "is_callable"
             | "is_array"
             | "is_bool"
@@ -884,6 +889,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_real"
             | "is_string"
             | "pow"
+            | "rtrim"
             | "round"
             | "sqrt"
             | "str_contains"
@@ -893,6 +899,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strtolower"
             | "strtoupper"
             | "strval"
+            | "trim"
     )
 }
 
@@ -1055,6 +1062,11 @@ fn eval_builtin_with_values(
             let len = i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
             values.int(len)?
         }
+        "trim" | "ltrim" | "rtrim" | "chop" => match evaluated_args {
+            [value] => eval_trim_like_result(name, *value, None, values)?,
+            [value, mask] => eval_trim_like_result(name, *value, Some(*mask), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "function_exists" | "is_callable" => {
             let [name] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -1333,6 +1345,67 @@ fn eval_string_search_result(
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     values.bool_value(matched)
+}
+
+const PHP_DEFAULT_TRIM_MASK: &[u8] = b" \n\r\t\x0B\x0C\0";
+
+/// Evaluates PHP trim-like string builtins over one eval expression and optional mask.
+fn eval_builtin_trim_like(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [value] => {
+            let value = eval_expr(value, context, scope, values)?;
+            eval_trim_like_result(name, value, None, values)
+        }
+        [value, mask] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let mask = eval_expr(mask, context, scope, values)?;
+            eval_trim_like_result(name, value, Some(mask), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Trims one converted string using PHP's default mask or a caller-provided byte mask.
+fn eval_trim_like_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    mask: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let explicit_mask;
+    let trim_mask = if let Some(mask) = mask {
+        explicit_mask = values.string_bytes(mask)?;
+        explicit_mask.as_slice()
+    } else {
+        PHP_DEFAULT_TRIM_MASK
+    };
+
+    let mut start = 0;
+    let mut end = bytes.len();
+    if matches!(name, "trim" | "ltrim") {
+        while start < end && trim_mask.contains(&bytes[start]) {
+            start += 1;
+        }
+    }
+    if matches!(name, "trim" | "rtrim" | "chop") {
+        while end > start && trim_mask.contains(&bytes[end - 1]) {
+            end -= 1;
+        }
+    }
+    if !matches!(name, "trim" | "ltrim" | "rtrim" | "chop") {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+
+    let value =
+        String::from_utf8(bytes[start..end].to_vec()).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.string(&value)
 }
 
 /// Evaluates PHP ASCII case-conversion string builtins over one eval expression.
@@ -3215,6 +3288,33 @@ return function_exists("str_ends_with");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "S:s:se:E:e:ee:CS:CE:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval trim-like builtins strip default and explicit byte masks.
+    #[test]
+    fn execute_program_dispatches_trim_like_builtins() {
+        let program = parse_fragment(
+            br#"echo "[" . trim("  hello  ") . "]";
+echo ":[" . ltrim("  left") . "]";
+echo ":[" . rtrim("right  ") . "]";
+echo ":[" . chop("tail... ", " .") . "]";
+echo ":[" . trim("**boxed**", "*") . "]";
+echo ":[" . call_user_func("trim", "  cuf  ") . "]";
+echo ":[" . call_user_func_array("ltrim", ["0007", "0"]) . "]";
+echo ":"; echo function_exists("trim"); echo function_exists("ltrim"); echo function_exists("rtrim");
+return function_exists("chop");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "[hello]:[left]:[right]:[tail]:[boxed]:[cuf]:[7]:111"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

@@ -89,6 +89,7 @@ $rounded = eval('return round(3.14159, 2) . ":" . round(2.5);');
 $case = eval('return strtoupper("eval") . ":" . strtolower("LOUD");');
 $contains = eval('return str_contains("dynamic eval", "eval") ? "contains" : "missing";');
 $boundaries = eval('return (str_starts_with("dynamic eval", "dynamic") ? "starts" : "missing") . ":" . (str_ends_with("dynamic eval", "eval") ? "ends" : "missing");');
+$trimmed = eval('return trim("  boxed  ") . ":" . ltrim("0007", "0") . ":" . chop("tail...", ".");');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -131,6 +132,7 @@ echo "rounded=" . $rounded . "\n";
 echo "case=" . $case . "\n";
 echo "contains=" . $contains . "\n";
 echo "boundaries=" . $boundaries . "\n";
+echo "trimmed=" . $trimmed . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";

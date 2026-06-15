@@ -678,6 +678,24 @@ echo ":"; echo function_exists("str_starts_with"); echo function_exists("str_end
     assert_eq!(out, "S:s:se:E:e:ee:CS:CE:11");
 }
 
+/// Verifies eval trim-like builtins strip default and explicit masks.
+#[test]
+fn test_eval_dispatches_trim_like_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo "[" . trim("  hello  ") . "]";
+echo ":[" . ltrim("  left") . "]";
+echo ":[" . rtrim("right  ") . "]";
+echo ":[" . chop("tail... ", " .") . "]";
+echo ":[" . trim("**boxed**", "*") . "]";
+echo ":[" . call_user_func("trim", "  cuf  ") . "]";
+echo ":[" . call_user_func_array("ltrim", ["0007", "0"]) . "]";
+echo ":"; echo function_exists("trim"); echo function_exists("ltrim"); echo function_exists("rtrim"); echo function_exists("chop");');
+"#,
+    );
+    assert_eq!(out, "[hello]:[left]:[right]:[tail]:[boxed]:[cuf]:[7]:1111");
+}
+
 /// Verifies eval scalar type-predicate builtins inspect boxed Mixed runtime tags.
 #[test]
 fn test_eval_dispatches_type_predicate_builtin_calls() {
