@@ -539,6 +539,22 @@ fn eval_expr(
             values.echo(value)?;
             values.int(1)
         }
+        EvalExpr::Ternary {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            let condition = eval_expr(condition, context, scope, values)?;
+            if values.truthy(condition)? {
+                if let Some(then_branch) = then_branch {
+                    eval_expr(then_branch, context, scope, values)
+                } else {
+                    Ok(condition)
+                }
+            } else {
+                eval_expr(else_branch, context, scope, values)
+            }
+        }
         EvalExpr::Unary { op, expr } => {
             let value = eval_expr(expr, context, scope, values)?;
             match op {
@@ -1874,6 +1890,33 @@ mod tests {
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies ternary expressions evaluate only the selected branch.
+    #[test]
+    fn execute_program_ternary_short_circuits_unselected_branch() {
+        let program =
+            parse_fragment(br#"echo true ? "yes" : missing(); echo false ? missing() : "no";"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "yesno");
+    }
+
+    /// Verifies the short ternary form returns the condition value when it is truthy.
+    #[test]
+    fn execute_program_short_ternary_reuses_truthy_condition() {
+        let program = parse_fragment(br#"echo "x" ?: "fallback"; echo false ?: "fallback";"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "xfallback");
     }
 
     /// Verifies logical negation returns boolean cells using PHP truthiness.

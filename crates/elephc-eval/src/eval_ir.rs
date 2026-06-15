@@ -163,6 +163,11 @@ pub enum EvalExpr {
         property: String,
     },
     Print(Box<EvalExpr>),
+    Ternary {
+        condition: Box<EvalExpr>,
+        then_branch: Option<Box<EvalExpr>>,
+        else_branch: Box<EvalExpr>,
+    },
     Unary {
         op: EvalUnaryOp,
         expr: Box<EvalExpr>,
