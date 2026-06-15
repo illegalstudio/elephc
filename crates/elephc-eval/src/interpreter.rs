@@ -433,6 +433,24 @@ fn eval_expr(
             values.int(1)
         }
         EvalExpr::Binary { op, left, right } => {
+            if *op == EvalBinOp::LogicalAnd {
+                let left = eval_expr(left, context, scope, values)?;
+                if !values.truthy(left)? {
+                    return values.bool_value(false);
+                }
+                let right = eval_expr(right, context, scope, values)?;
+                let truthy = values.truthy(right)?;
+                return values.bool_value(truthy);
+            }
+            if *op == EvalBinOp::LogicalOr {
+                let left = eval_expr(left, context, scope, values)?;
+                if values.truthy(left)? {
+                    return values.bool_value(true);
+                }
+                let right = eval_expr(right, context, scope, values)?;
+                let truthy = values.truthy(right)?;
+                return values.bool_value(truthy);
+            }
             let left = eval_expr(left, context, scope, values)?;
             let right = eval_expr(right, context, scope, values)?;
             match op {
@@ -446,6 +464,9 @@ fn eval_expr(
                 | EvalBinOp::LtEq
                 | EvalBinOp::Gt
                 | EvalBinOp::GtEq => values.compare(*op, left, right),
+                EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr => {
+                    Err(EvalStatus::UnsupportedConstruct)
+                }
             }
         }
     }
@@ -999,7 +1020,12 @@ mod tests {
                 EvalBinOp::LtEq => self.numeric(left)? <= self.numeric(right)?,
                 EvalBinOp::Gt => self.numeric(left)? > self.numeric(right)?,
                 EvalBinOp::GtEq => self.numeric(left)? >= self.numeric(right)?,
-                EvalBinOp::Add | EvalBinOp::Sub | EvalBinOp::Mul | EvalBinOp::Concat => {
+                EvalBinOp::Add
+                | EvalBinOp::Sub
+                | EvalBinOp::Mul
+                | EvalBinOp::Concat
+                | EvalBinOp::LogicalAnd
+                | EvalBinOp::LogicalOr => {
                     return Err(EvalStatus::UnsupportedConstruct);
                 }
             };
@@ -1335,6 +1361,32 @@ mod tests {
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "1111ns");
+    }
+
+    /// Verifies logical AND skips an unsupported right-hand expression after a false left side.
+    #[test]
+    fn execute_program_short_circuits_logical_and() {
+        let program =
+            parse_fragment(br#"return false && missing();"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Bool(false));
+    }
+
+    /// Verifies logical OR skips an unsupported right-hand expression after a true left side.
+    #[test]
+    fn execute_program_short_circuits_logical_or() {
+        let program =
+            parse_fragment(br#"return true || missing();"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
     /// Verifies foreach assigns each indexed element to the value variable.

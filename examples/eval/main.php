@@ -45,6 +45,7 @@ $meta_count = eval('return count($meta);');
 eval('function plus_one($value) { return $value + 1; }');
 $dynamic_call = eval('return plus_one(4);');
 $eval_native_call = eval('return compiled_add(2, 8);');
+$logic = eval('return true || missing_eval_rhs();');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -55,6 +56,7 @@ echo "source=" . $meta["source"] . "\n";
 echo "meta-count=" . $meta_count . "\n";
 echo "dynamic-call=" . $dynamic_call . "\n";
 echo "eval-native-call=" . $eval_native_call . "\n";
+echo "logic=" . $logic . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";
