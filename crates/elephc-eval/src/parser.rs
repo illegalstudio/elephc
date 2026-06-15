@@ -40,6 +40,7 @@ enum TokenKind {
     String(String),
     Plus,
     Minus,
+    Arrow,
     Star,
     Dot,
     Equal,
@@ -103,7 +104,12 @@ impl<'a> Lexer<'a> {
             }
             '-' => {
                 self.bump_char();
-                Ok(TokenKind::Minus)
+                if self.peek_char() == Some('>') {
+                    self.bump_char();
+                    Ok(TokenKind::Arrow)
+                } else {
+                    Ok(TokenKind::Minus)
+                }
             }
             '*' => {
                 self.bump_char();
@@ -355,6 +361,9 @@ impl Parser {
             }
             TokenKind::Ident(name) if name == "unset" => self.parse_unset_stmt(),
             TokenKind::Ident(name) if name == "while" => self.parse_while_stmt(),
+            TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
+                self.parse_property_stmt(true)
+            }
             TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::LBracket) => {
                 self.parse_array_set_stmt(name.clone())
             }
@@ -493,6 +502,9 @@ impl Parser {
             TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::LBracket) => {
                 self.parse_array_set_clause(name.clone())
             }
+            TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
+                self.parse_property_stmt(false)
+            }
             TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::Equal) => {
                 let name = name.clone();
                 self.advance();
@@ -516,6 +528,32 @@ impl Parser {
         self.expect(TokenKind::Equal)?;
         let value = self.parse_expr()?;
         Ok(vec![EvalStmt::ArraySetVar { name, index, value }])
+    }
+
+    /// Parses `$object->property` as either an expression statement or property write.
+    fn parse_property_stmt(
+        &mut self,
+        require_semicolon: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let target = self.parse_expr()?;
+        if !self.consume(TokenKind::Equal) {
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return Ok(vec![EvalStmt::Expr(target)]);
+        }
+        let EvalExpr::PropertyGet { object, property } = target else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let value = self.parse_expr()?;
+        if require_semicolon {
+            self.expect_semicolon()?;
+        }
+        Ok(vec![EvalStmt::PropertySet {
+            object: *object,
+            property,
+            value,
+        }])
     }
 
     /// Parses a complete `if` statement after consuming the `if` keyword.
@@ -703,13 +741,29 @@ impl Parser {
     /// Parses postfix array reads after a primary expression.
     fn parse_postfix(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_primary()?;
-        while self.consume(TokenKind::LBracket) {
-            let index = self.parse_expr()?;
-            self.expect(TokenKind::RBracket)?;
-            expr = EvalExpr::ArrayGet {
-                array: Box::new(expr),
-                index: Box::new(index),
-            };
+        loop {
+            if self.consume(TokenKind::LBracket) {
+                let index = self.parse_expr()?;
+                self.expect(TokenKind::RBracket)?;
+                expr = EvalExpr::ArrayGet {
+                    array: Box::new(expr),
+                    index: Box::new(index),
+                };
+                continue;
+            }
+            if self.consume(TokenKind::Arrow) {
+                let TokenKind::Ident(property) = self.current() else {
+                    return Err(EvalParseError::UnexpectedToken);
+                };
+                let property = property.clone();
+                self.advance();
+                expr = EvalExpr::PropertyGet {
+                    object: Box::new(expr),
+                    property,
+                };
+                continue;
+            }
+            break;
         }
         Ok(expr)
     }
@@ -1132,6 +1186,41 @@ mod tests {
                 name: "items".to_string(),
                 index: EvalExpr::Const(EvalConst::Int(1)),
                 value: EvalExpr::Const(EvalConst::String("x".to_string())),
+            }]
+        );
+    }
+
+    /// Verifies object property reads parse as postfix EvalIR expressions.
+    #[test]
+    fn parse_fragment_accepts_property_read_source() {
+        let program = parse_fragment(br#"return $this->x;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::PropertyGet {
+                object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                property: "x".to_string(),
+            }))]
+        );
+    }
+
+    /// Verifies object property writes parse as dedicated EvalIR statements.
+    #[test]
+    fn parse_fragment_accepts_property_write_source() {
+        let program =
+            parse_fragment(br#"$this->x = $this->x + 1;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::PropertySet {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: "x".to_string(),
+                value: EvalExpr::Binary {
+                    op: EvalBinOp::Add,
+                    left: Box::new(EvalExpr::PropertyGet {
+                        object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                        property: "x".to_string(),
+                    }),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                },
             }]
         );
     }

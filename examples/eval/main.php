@@ -1,6 +1,14 @@
 <?php
 function compiled_add($left, $right) { return $left + $right; }
 
+class EvalCounter {
+    public int $value = 1;
+
+    public function bump(): void {
+        eval('$this->value = $this->value + 1;');
+    }
+}
+
 $x = 1;
 $profile = ["name" => "Ada"];
 $result = eval('$x = $x + 2; $created = "dynamic"; return $x + 4;');
@@ -23,6 +31,9 @@ echo "source=" . $meta["source"] . "\n";
 echo "meta-count=" . $meta_count . "\n";
 echo "dynamic-call=" . $dynamic_call . "\n";
 echo "eval-native-call=" . $eval_native_call . "\n";
+$counter = new EvalCounter();
+$counter->bump();
+echo "eval-this-property=" . $counter->value . "\n";
 echo "native-dynamic-call=" . native_add(40, 2) . "\n";
 echo "call-user-func=" . call_user_func('native_double', 6) . "\n";
 echo "function-exists=" . (function_exists('native_double') ? "yes" : "no") . "\n";

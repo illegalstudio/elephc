@@ -33,6 +33,17 @@ unsafe extern "C" {
         index: *mut RuntimeCell,
         value: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    fn __elephc_eval_value_property_get(
+        object: *mut RuntimeCell,
+        name_ptr: *const u8,
+        name_len: u64,
+    ) -> *mut RuntimeCell;
+    fn __elephc_eval_value_property_set(
+        object: *mut RuntimeCell,
+        name_ptr: *const u8,
+        name_len: u64,
+        value: *mut RuntimeCell,
+    ) -> u64;
     fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_null() -> *mut RuntimeCell;
@@ -117,6 +128,43 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe {
             __elephc_eval_value_array_set(array.as_ptr(), index.as_ptr(), value.as_ptr())
         })
+    }
+
+    /// Reads a boxed Mixed object property through the generated user helper.
+    fn property_get(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_value_property_get(
+                object.as_ptr(),
+                property.as_ptr(),
+                property.len() as u64,
+            )
+        })
+    }
+
+    /// Writes a boxed Mixed object property through the generated user helper.
+    fn property_set(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+        value: RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        let ok = unsafe {
+            __elephc_eval_value_property_set(
+                object.as_ptr(),
+                property.as_ptr(),
+                property.len() as u64,
+                value.as_ptr(),
+            )
+        };
+        if ok == 0 {
+            Err(EvalStatus::RuntimeFatal)
+        } else {
+            Ok(())
+        }
     }
 
     /// Returns the visible element count for a boxed Mixed array through the generated runtime wrapper.
