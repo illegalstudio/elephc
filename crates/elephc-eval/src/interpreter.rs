@@ -879,6 +879,26 @@ mod tests {
         assert_eq!(values.get(x), FakeValue::String("else".to_string()));
     }
 
+    /// Verifies elseif chains execute the first truthy branch and skip later branches.
+    #[test]
+    fn execute_program_elseif_uses_first_truthy_branch() {
+        let program = parse_fragment(
+            br#"if ($a) { $x = "a"; } elseif ($b) { $x = "b"; } else { $x = "c"; }"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let a = values.bool_value(false).expect("create fake bool");
+        let b = values.bool_value(true).expect("create fake bool");
+        scope.set("a", a, ScopeCellOwnership::Owned);
+        scope.set("b", b, ScopeCellOwnership::Owned);
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let x = scope.visible_cell("x").expect("scope should contain x");
+
+        assert_eq!(values.get(x), FakeValue::String("b".to_string()));
+    }
+
     /// Verifies while repeats while the condition remains truthy and propagates writes.
     #[test]
     fn execute_program_while_uses_php_truthiness() {

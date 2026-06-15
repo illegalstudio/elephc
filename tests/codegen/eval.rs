@@ -128,6 +128,30 @@ echo $result;
     assert_eq!(out, "else");
 }
 
+/// Verifies eval elseif chains execute the first truthy branch.
+#[test]
+fn test_eval_elseif_updates_scope() {
+    let out = compile_and_run(
+        r#"<?php
+eval('if (false) { $result = "a"; } elseif (true) { $result = "b"; } else { $result = "c"; }');
+echo $result;
+"#,
+    );
+    assert_eq!(out, "b");
+}
+
+/// Verifies eval accepts PHP's separate `else if` spelling.
+#[test]
+fn test_eval_else_if_updates_scope() {
+    let out = compile_and_run(
+        r#"<?php
+eval('if (false) { $result = "a"; } else if (true) { $result = "b"; } else { $result = "c"; }');
+echo $result;
+"#,
+    );
+    assert_eq!(out, "b");
+}
+
 /// Verifies eval while loops repeatedly execute against the materialized scope.
 #[test]
 fn test_eval_while_updates_scope() {

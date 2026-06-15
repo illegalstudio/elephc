@@ -480,24 +480,42 @@ impl Parser {
         Ok(vec![EvalStmt::ArraySetVar { name, index, value }])
     }
 
-    /// Parses `if (expr) { ... } [else { ... }]`.
+    /// Parses a complete `if` statement after consuming the `if` keyword.
     fn parse_if_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
+        Ok(vec![self.parse_if_after_keyword()?])
+    }
+
+    /// Parses the condition, then block, and optional else branch for an `if` chain.
+    fn parse_if_after_keyword(&mut self) -> Result<EvalStmt, EvalParseError> {
         self.expect(TokenKind::LParen)?;
         let condition = self.parse_expr()?;
         self.expect(TokenKind::RParen)?;
         let then_branch = self.parse_block()?;
-        let else_branch = if matches!(self.current(), TokenKind::Ident(name) if name == "else") {
-            self.advance();
-            self.parse_block()?
-        } else {
-            Vec::new()
-        };
-        Ok(vec![EvalStmt::If {
+        let else_branch = self.parse_optional_else_branch()?;
+        Ok(EvalStmt::If {
             condition,
             then_branch,
             else_branch,
-        }])
+        })
+    }
+
+    /// Parses `elseif`, `else if`, or `else` branches after an `if` body.
+    fn parse_optional_else_branch(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        if matches!(self.current(), TokenKind::Ident(name) if name == "elseif") {
+            self.advance();
+            return Ok(vec![self.parse_if_after_keyword()?]);
+        }
+        if !matches!(self.current(), TokenKind::Ident(name) if name == "else") {
+            return Ok(Vec::new());
+        }
+        self.advance();
+        if matches!(self.current(), TokenKind::Ident(name) if name == "if") {
+            self.advance();
+            Ok(vec![self.parse_if_after_keyword()?])
+        } else {
+            self.parse_block()
+        }
     }
 
     /// Parses `unset($name[, ...]);`.
@@ -872,6 +890,48 @@ mod tests {
                 }],
             }]
         );
+    }
+
+    /// Verifies elseif fragments lower to nested if statements in the else branch.
+    #[test]
+    fn parse_fragment_accepts_elseif_source() {
+        let program =
+            parse_fragment(br#"if ($a) { $x = "a"; } elseif ($b) { $x = "b"; }"#)
+                .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::If {
+                condition: EvalExpr::LoadVar("a".to_string()),
+                then_branch: vec![EvalStmt::StoreVar {
+                    name: "x".to_string(),
+                    value: EvalExpr::Const(EvalConst::String("a".to_string())),
+                }],
+                else_branch: vec![EvalStmt::If {
+                    condition: EvalExpr::LoadVar("b".to_string()),
+                    then_branch: vec![EvalStmt::StoreVar {
+                        name: "x".to_string(),
+                        value: EvalExpr::Const(EvalConst::String("b".to_string())),
+                    }],
+                    else_branch: Vec::new(),
+                }],
+            }]
+        );
+    }
+
+    /// Verifies PHP's `else if` spelling follows the same nested branch shape.
+    #[test]
+    fn parse_fragment_accepts_else_if_source() {
+        let program =
+            parse_fragment(br#"if ($a) { $x = "a"; } else if ($b) { $x = "b"; }"#)
+                .expect("fragment should parse");
+
+        assert!(matches!(
+            program.statements(),
+            [EvalStmt::If {
+                else_branch,
+                ..
+            }] if matches!(else_branch.as_slice(), [EvalStmt::If { .. }])
+        ));
     }
 
     /// Verifies for loops lower clauses and body statements separately.
