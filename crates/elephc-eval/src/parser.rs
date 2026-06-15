@@ -10,7 +10,8 @@
 //! Key details:
 //! - PHP eval fragments are statement fragments and must not include opening
 //!   `<?` / `<?php` tags.
-//! - Fragment spans must be based on call-site metadata when implemented.
+//! - Fragment line metadata is tracked by the lexer; file and directory metadata
+//!   is supplied by the eval context at execution time.
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
@@ -1047,7 +1048,11 @@ fn is_ident_continue(ch: char) -> bool {
 
 /// Converts a PHP magic-constant identifier into a parser token when recognized.
 fn magic_const_token(name: &str, line: i64) -> Option<TokenKind> {
-    let magic = if ident_eq(name, "__LINE__") {
+    let magic = if ident_eq(name, "__FILE__") {
+        EvalMagicConst::File
+    } else if ident_eq(name, "__DIR__") {
+        EvalMagicConst::Dir
+    } else if ident_eq(name, "__LINE__") {
         EvalMagicConst::Line(line)
     } else if ident_eq(name, "__FUNCTION__") {
         EvalMagicConst::Function
@@ -1234,6 +1239,20 @@ mod tests {
                 op: EvalBinOp::Concat,
                 left: Box::new(EvalExpr::Magic(EvalMagicConst::Line(2))),
                 right: Box::new(EvalExpr::Magic(EvalMagicConst::Function)),
+            }))]
+        );
+    }
+
+    /// Verifies file-dependent eval magic constants lower to EvalIR nodes.
+    #[test]
+    fn parse_fragment_accepts_file_magic_constants() {
+        let program = parse_fragment(b"return __FILE__ . __dir__;").expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::Concat,
+                left: Box::new(EvalExpr::Magic(EvalMagicConst::File)),
+                right: Box::new(EvalExpr::Magic(EvalMagicConst::Dir)),
             }))]
         );
     }

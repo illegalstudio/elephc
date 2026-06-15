@@ -23,6 +23,7 @@ mod stmt;
 mod tests;
 
 use std::fmt;
+use std::path::Path;
 
 use crate::codegen::platform::Target;
 use crate::ir::{Module, ValidationError};
@@ -35,7 +36,17 @@ pub fn lower_program(
     check_result: &CheckResult,
     target: Target,
 ) -> Result<Module, LoweringError> {
-    program::lower(program, check_result, target)
+    program::lower(program, check_result, target, None)
+}
+
+/// Lowers `program` into an EIR module and records the main PHP source path.
+pub fn lower_program_with_source_path(
+    program: &Program,
+    check_result: &CheckResult,
+    target: Target,
+    source_path: &Path,
+) -> Result<Module, LoweringError> {
+    program::lower(program, check_result, target, Some(source_path))
 }
 
 /// Error produced while building or validating EIR.

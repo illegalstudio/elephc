@@ -10,6 +10,7 @@
 //! - The module is validated before it is returned to CLI/test callers.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
@@ -27,8 +28,10 @@ pub(crate) fn lower(
     program: &Program,
     check_result: &CheckResult,
     target: Target,
+    source_path: Option<&Path>,
 ) -> Result<Module, LoweringError> {
     let mut module = Module::new(target);
+    module.source_path = source_path.map(canonical_source_path);
     let constants = crate::codegen::collect_constants(program, target.platform);
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);
     populate_metadata(&mut module, program, check_result);
@@ -41,6 +44,15 @@ pub(crate) fn lower(
     include_lowered_runtime_features(&mut module);
     validate_module(&module)?;
     Ok(module)
+}
+
+/// Converts a PHP source path into the canonical display string stored in EIR metadata.
+fn canonical_source_path(source_path: &Path) -> String {
+    source_path
+        .canonicalize()
+        .unwrap_or_else(|_| source_path.to_path_buf())
+        .display()
+        .to_string()
 }
 
 /// Copies declaration metadata into the EIR module placeholder tables.

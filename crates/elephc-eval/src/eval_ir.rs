@@ -185,6 +185,8 @@ pub enum EvalConst {
 /// PHP magic constants supported by runtime eval fragments.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalMagicConst {
+    File,
+    Dir,
     Line(i64),
     Function,
     Class,

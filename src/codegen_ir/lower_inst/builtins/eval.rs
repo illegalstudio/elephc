@@ -12,6 +12,8 @@
 //!   lowering; this module only materializes the bridge ABI call.
 //! - The bridge is target-mangled like other C staticlib symbols.
 
+use std::path::Path;
+
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed};
 use crate::codegen_ir::{CodegenIrError, Result};
@@ -70,6 +72,7 @@ pub(super) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     save_eval_code_string(ctx);
     ensure_eval_context(ctx)?;
+    set_eval_call_site(ctx, inst);
     ensure_eval_scope(ctx)?;
     let sync_locals = eval_sync_locals(ctx);
     flush_eval_scope_locals(ctx, &sync_locals)?;
@@ -88,6 +91,49 @@ pub(super) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
+}
+
+/// Updates eval context source metadata for file, directory, and call-site line magic constants.
+fn set_eval_call_site(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    let Some(source_path) = ctx.module.source_path.as_deref() else {
+        return;
+    };
+    load_eval_context_to_arg(ctx, 0);
+    let (file_label, file_len) = ctx.data.add_string(source_path.as_bytes());
+    let file_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, file_arg, &file_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        file_len as i64,
+    );
+    let dir = Path::new(source_path)
+        .parent()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let (dir_label, dir_len) = ctx.data.add_string(dir.as_bytes());
+    let dir_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_symbol_address(ctx.emitter, dir_arg, &dir_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        dir_len as i64,
+    );
+    let line = inst
+        .span
+        .and_then(|span| i64::try_from(span.line).ok())
+        .unwrap_or(0);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        line,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_context_set_call_site");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
 }
 
 /// Lowers a native call to a zero-argument function declared by a prior `eval()` call.
@@ -123,7 +169,10 @@ pub(super) fn lower_eval_function_call(
     );
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_call_function");
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_call_function");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -149,7 +198,10 @@ pub(super) fn lower_eval_function_exists(
         abi::int_arg_reg_name(ctx.emitter.target, 2),
         name_len as i64,
     );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_function_exists");
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_function_exists");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
@@ -193,7 +245,10 @@ fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_new");
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_context_new");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
     register_eval_native_functions(ctx, offset)?;
@@ -244,7 +299,10 @@ fn eval_native_function_registrations(
 fn function_can_register_with_eval(function: &Function) -> bool {
     !function.flags.is_main
         && !function.name.starts_with('_')
-        && function.params.iter().all(|param| !param.by_ref && !param.variadic)
+        && function
+            .params
+            .iter()
+            .all(|param| !param.by_ref && !param.variadic)
 }
 
 /// Emits one native-function registration call into the just-created eval context.
@@ -487,12 +545,12 @@ fn emit_branch_if_scope_entry_missing(ctx: &mut FunctionContext<'_>, label: &str
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("b.eq {}", label));                // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("b.eq {}", label)); // skip reload when eval unset or omitted the local
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("je {}", label));                  // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("je {}", label)); // skip reload when eval unset or omitted the local
         }
     }
 }
@@ -559,12 +617,12 @@ fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("b.eq {}", skip)); // borrowed scope entries can be copied back without retaining
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("je {}", skip));                   // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("je {}", skip)); // borrowed scope entries can be copied back without retaining
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -636,12 +694,12 @@ fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: i64, label:
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, #{}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("b.eq {}", label)); // branch to the matching eval status handler
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching eval status handler
         }
     }
 }
@@ -651,7 +709,7 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the eval runtime diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2"); // write the eval runtime diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
@@ -660,12 +718,12 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the eval runtime diagnostic to Linux stderr
+            ctx.emitter.instruction("mov edi, 2"); // write the eval runtime diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the eval runtime diagnostic byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the eval runtime diagnostic before exiting
+            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall"); // emit the eval runtime diagnostic before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }

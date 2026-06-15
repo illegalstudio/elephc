@@ -215,7 +215,12 @@ pub(crate) fn compile(config: CliConfig) {
 
     if emit_ir {
         let phase_started = Instant::now();
-        let module = match ir_lower::lower_program(&ast, &check_result, target) {
+        let module = match ir_lower::lower_program_with_source_path(
+            &ast,
+            &check_result,
+            target,
+            Path::new(filename),
+        ) {
             Ok(module) => module,
             Err(err) => {
                 eprintln!("EIR lowering error: {}", err);
@@ -234,7 +239,12 @@ pub(crate) fn compile(config: CliConfig) {
 
     let ir_module = if matches!(backend, CodegenBackend::Eir) {
         let phase_started = Instant::now();
-        let module = match ir_lower::lower_program(&ast, &check_result, target) {
+        let module = match ir_lower::lower_program_with_source_path(
+            &ast,
+            &check_result,
+            target,
+            Path::new(filename),
+        ) {
             Ok(module) => module,
             Err(err) => {
                 eprintln!("EIR lowering error: {}", err);

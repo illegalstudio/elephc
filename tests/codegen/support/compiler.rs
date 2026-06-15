@@ -133,7 +133,8 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let ir_module = lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result);
+    let ir_module =
+        lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
     let (user_asm, runtime_asm, runtime_features) = match selected_test_codegen_backend() {
         TestCodegenBackend::Legacy => {
             let (user_asm, runtime_asm) = elephc::codegen::generate(
@@ -197,8 +198,14 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
 fn lower_and_validate_ir_for_codegen_fixture(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
+    source_path: &Path,
 ) -> elephc::ir::Module {
-    let module = elephc::ir_lower::lower_program(program, check_result, target())
+    let module = elephc::ir_lower::lower_program_with_source_path(
+        program,
+        check_result,
+        target(),
+        source_path,
+    )
         .expect("AST-to-EIR lowering failed for codegen fixture");
     elephc::ir::validate_module(&module)
         .expect("EIR validation failed for codegen fixture");

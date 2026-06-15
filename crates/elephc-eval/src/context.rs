@@ -69,6 +69,9 @@ pub struct ElephcEvalContext {
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
     function_stack: Vec<String>,
+    call_file: String,
+    call_dir: String,
+    call_line: i64,
 }
 
 impl ElephcEvalContext {
@@ -79,6 +82,9 @@ impl ElephcEvalContext {
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             function_stack: Vec::new(),
+            call_file: String::new(),
+            call_dir: String::new(),
+            call_line: 0,
         }
     }
 
@@ -90,6 +96,9 @@ impl ElephcEvalContext {
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             function_stack: Vec::new(),
+            call_file: String::new(),
+            call_dir: String::new(),
+            call_line: 0,
         }
     }
 
@@ -154,6 +163,26 @@ impl ElephcEvalContext {
     /// Returns the current eval-executed function name, if execution is inside one.
     pub fn current_function(&self) -> Option<&str> {
         self.function_stack.last().map(String::as_str)
+    }
+
+    /// Updates the source file, directory, and line for the current eval call site.
+    pub fn set_call_site(&mut self, file: impl Into<String>, dir: impl Into<String>, line: i64) {
+        self.call_file = file.into();
+        self.call_dir = dir.into();
+        self.call_line = line;
+    }
+
+    /// Returns the source directory associated with the current eval call site.
+    pub fn call_dir(&self) -> &str {
+        &self.call_dir
+    }
+
+    /// Returns PHP's `__FILE__` string for code currently running inside eval.
+    pub fn eval_file_magic(&self) -> String {
+        if self.call_file.is_empty() {
+            return String::new();
+        }
+        format!("{}({}) : eval()'d code", self.call_file, self.call_line)
     }
 }
 
