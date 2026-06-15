@@ -703,6 +703,21 @@ echo ":"; echo function_exists("abs");');
     assert_eq!(out, "5:2.5:double:7:9:1");
 }
 
+/// Verifies eval `sqrt()` returns boxed double cells through direct and callable calls.
+#[test]
+fn test_eval_dispatches_sqrt_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo sqrt(16); echo ":";
+echo gettype(sqrt(9)); echo ":";
+echo call_user_func("sqrt", 25); echo ":";
+echo call_user_func_array("sqrt", [36]);
+echo ":"; echo function_exists("sqrt");');
+"#,
+    );
+    assert_eq!(out, "4:double:5:6:1");
+}
+
 /// Verifies eval `isset()` distinguishes missing, null, and falsey non-null values.
 #[test]
 fn test_eval_isset_distinguishes_missing_null_and_falsey_values() {

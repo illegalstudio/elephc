@@ -127,6 +127,9 @@ pub trait RuntimeValueOps {
     /// Computes PHP `abs()` for one runtime cell while preserving integer/float result typing.
     fn abs(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Computes PHP `sqrt()` for one runtime cell after PHP numeric conversion.
+    fn sqrt(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Adds two runtime cells using PHP addition semantics.
     fn add(
         &mut self,
@@ -731,6 +734,7 @@ fn eval_call(
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "isset" => eval_builtin_isset(args, context, scope, values),
+        "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "strlen" => eval_builtin_strlen(args, context, scope, values),
         _ => {
             if let Some(function) = context.function(name).cloned() {
@@ -856,6 +860,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_null"
             | "is_real"
             | "is_string"
+            | "sqrt"
             | "strlen"
             | "strval"
     )
@@ -966,6 +971,12 @@ fn eval_builtin_with_values(
             };
             values.abs(*value)?
         }
+        "sqrt" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            values.sqrt(*value)?
+        }
         "call_user_func" => {
             return eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)
                 .map(Some);
@@ -1038,6 +1049,20 @@ fn eval_builtin_abs(
     };
     let value = eval_expr(value, context, scope, values)?;
     values.abs(value)
+}
+
+/// Evaluates PHP's `sqrt(...)` over one eval expression.
+fn eval_builtin_sqrt(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    values.sqrt(value)
 }
 
 /// Evaluates PHP scalar cast builtins over one eval expression.
@@ -1711,6 +1736,12 @@ mod tests {
                 FakeValue::Float(value) => self.float(value.abs()),
                 value => self.int(self.fake_int(&value).wrapping_abs()),
             }
+        }
+
+        /// Computes fake PHP square root through numeric conversion as a float result.
+        fn sqrt(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+            let value = self.get(value);
+            self.float(self.fake_numeric(&value).sqrt())
         }
 
         /// Adds fake numeric cells for interpreter tests.
@@ -2973,6 +3004,26 @@ return function_exists("abs");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "5:2.5:double:7:9");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `sqrt()` dispatches through runtime float hooks directly and by callable.
+    #[test]
+    fn execute_program_dispatches_sqrt_builtin() {
+        let program = parse_fragment(
+            br#"echo sqrt(16); echo ":";
+echo gettype(sqrt(9)); echo ":";
+echo call_user_func("sqrt", 25); echo ":";
+echo call_user_func_array("sqrt", [36]);
+return function_exists("sqrt");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "4:double:5:6");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

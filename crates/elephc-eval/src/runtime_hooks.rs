@@ -68,6 +68,7 @@ unsafe extern "C" {
     fn __elephc_eval_value_cast_string(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_cast_bool(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_abs(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    fn __elephc_eval_value_sqrt(value: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_add(left: *mut RuntimeCell, right: *mut RuntimeCell)
         -> *mut RuntimeCell;
     fn __elephc_eval_value_sub(left: *mut RuntimeCell, right: *mut RuntimeCell)
@@ -315,6 +316,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Computes PHP `abs()` for a boxed Mixed cell through the generated runtime wrapper.
     fn abs(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_abs(value.as_ptr()) })
+    }
+
+    /// Computes PHP `sqrt()` for a boxed Mixed cell through the generated runtime wrapper.
+    fn sqrt(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_sqrt(value.as_ptr()) })
     }
 
     /// Adds two boxed Mixed cells using elephc runtime numeric semantics.

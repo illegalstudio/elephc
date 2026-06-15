@@ -370,6 +370,20 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_abs");
     emitter.instruction("b __rt_abs_mixed");                                    // compute PHP abs() for one boxed eval value
 
+    label_c_global(emitter, "__elephc_eval_value_sqrt");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while casting and boxing sqrt
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across helper calls
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the boxed eval argument to a PHP double for sqrt
+    emitter.bl_c("sqrt");
+    emitter.instruction("fmov x1, d0");                                         // move the sqrt result bits into mixed value_lo
+    emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
+    emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the sqrt result into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the sqrt wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed sqrt result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_add");
     emitter.instruction("b __rt_mixed_numeric_add");                            // add two boxed mixed values and return the boxed result
 
@@ -1172,6 +1186,19 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_abs");
     emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into abs_mixed input
     emitter.instruction("jmp __rt_abs_mixed");                                  // compute PHP abs() for one boxed eval value
+
+    label_c_global(emitter, "__elephc_eval_value_sqrt");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the boxed eval argument to a PHP double for sqrt
+    emitter.bl_c("sqrt");
+    emitter.instruction("movq rdi, xmm0");                                      // move the sqrt result bits into mixed value_lo
+    emitter.instruction("xor esi, esi");                                        // double payloads do not use a high word
+    emitter.instruction("mov eax, 2");                                          // runtime tag 2 = double
+    emitter.instruction("call __rt_mixed_from_value");                          // box the sqrt result into a Mixed cell
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed sqrt result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_add");
     emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into the internal result register

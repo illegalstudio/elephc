@@ -82,6 +82,7 @@ $type_checks = eval('return (is_int(1) ? "i" : "?") . (is_string("x") ? "s" : "?
 $casts = eval('return strval(intval("42")) . ":" . strval(floatval("3.5")) . ":" . (boolval("0") ? "true" : "false");');
 $type_name = eval('return gettype(["ok"]);');
 $absolute = eval('return abs(-7) . ":" . gettype(abs(-2.5));');
+$root = eval('return sqrt(81) . ":" . gettype(sqrt(16));');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -117,6 +118,7 @@ echo "type-checks=" . $type_checks . "\n";
 echo "casts=" . $casts . "\n";
 echo "type-name=" . $type_name . "\n";
 echo "absolute=" . $absolute . "\n";
+echo "root=" . $root . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";
