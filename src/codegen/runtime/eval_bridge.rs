@@ -498,6 +498,40 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #32");                                     // release the exponentiation wrapper frame
     emitter.instruction("ret");                                                 // return the boxed exponentiation result to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_round");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate wrapper slots for precision state and saved doubles
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the optional precision cell while casting the value
+    emitter.instruction("str x2, [sp, #8]");                                    // save whether the caller supplied a precision argument
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the boxed eval value to a PHP numeric double
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the precision-presence flag after the value cast
+    emitter.instruction("cbnz x2, __elephc_eval_value_round_precision");        // use the precision path when a second argument is present
+    emitter.bl_c("round");
+    emitter.instruction("b __elephc_eval_value_round_box");                     // box the default-precision round result
+    emitter.label("__elephc_eval_value_round_precision");
+    emitter.instruction("str d0, [sp, #16]");                                   // save the original value while casting the precision
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the precision cell for integer casting
+    emitter.instruction("bl __rt_mixed_cast_int");                              // cast the optional precision to a PHP integer
+    emitter.instruction("scvtf d1, x0");                                        // convert the precision to a floating exponent for pow
+    emitter.instruction("fmov d0, #10.0");                                      // materialize 10.0 as the precision multiplier base
+    emitter.bl_c("pow");
+    emitter.instruction("ldr d1, [sp, #16]");                                   // reload the original value after pow returns the multiplier
+    emitter.instruction("fmul d1, d1, d0");                                     // scale the value by the precision multiplier
+    emitter.instruction("str d0, [sp, #24]");                                   // save the multiplier for rescaling after round
+    emitter.instruction("fmov d0, d1");                                         // move the scaled value into the round argument
+    emitter.bl_c("round");
+    emitter.instruction("ldr d1, [sp, #24]");                                   // reload the precision multiplier for rescaling
+    emitter.instruction("fdiv d0, d0, d1");                                     // scale the rounded value back to requested precision
+    emitter.label("__elephc_eval_value_round_box");
+    emitter.instruction("fmov x1, d0");                                         // move the round result bits into mixed value_lo
+    emitter.instruction("mov x2, xzr");                                         // double payloads do not use a high word
+    emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the round result into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the round wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed round result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_bit_not");
     emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame for the cast helper call
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across the cast
@@ -1351,6 +1385,42 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the exponentiation wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed exponentiation result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_round");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for precision state and saved doubles
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the optional precision cell while casting the value
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save whether the caller supplied a precision argument
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the boxed eval value to a PHP numeric double
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // check whether a precision argument was supplied
+    emitter.instruction("jne __elephc_eval_value_round_precision_x86");         // use the precision path when a second argument is present
+    emitter.bl_c("round");
+    emitter.instruction("jmp __elephc_eval_value_round_box_x86");               // box the default-precision round result
+    emitter.label("__elephc_eval_value_round_precision_x86");
+    emitter.instruction("movsd QWORD PTR [rbp - 24], xmm0");                    // save the original value while casting the precision
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the precision cell for integer casting
+    emitter.instruction("call __rt_mixed_cast_int");                            // cast the optional precision to a PHP integer
+    emitter.instruction("cvtsi2sd xmm1, rax");                                  // convert the precision to a floating exponent for pow
+    emitter.instruction("mov rax, 0x4024000000000000");                         // materialize the IEEE-754 payload for 10.0
+    emitter.instruction("movq xmm0, rax");                                      // move 10.0 into the pow base argument
+    emitter.bl_c("pow");
+    emitter.instruction("movsd xmm1, QWORD PTR [rbp - 24]");                    // reload the original value after pow returns the multiplier
+    emitter.instruction("mulsd xmm1, xmm0");                                    // scale the value by the precision multiplier
+    emitter.instruction("movsd QWORD PTR [rbp - 32], xmm0");                    // save the multiplier for rescaling after round
+    emitter.instruction("movsd xmm0, xmm1");                                    // move the scaled value into the round argument
+    emitter.bl_c("round");
+    emitter.instruction("movsd xmm1, QWORD PTR [rbp - 32]");                    // reload the precision multiplier for rescaling
+    emitter.instruction("divsd xmm0, xmm1");                                    // scale the rounded value back to requested precision
+    emitter.label("__elephc_eval_value_round_box_x86");
+    emitter.instruction("movq rdi, xmm0");                                      // move the round result bits into mixed value_lo
+    emitter.instruction("xor esi, esi");                                        // double payloads do not use a high word
+    emitter.instruction("mov eax, 2");                                          // runtime tag 2 = double
+    emitter.instruction("call __rt_mixed_from_value");                          // box the round result into a Mixed cell
+    emitter.instruction("add rsp, 48");                                         // release the round wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed round result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_bit_not");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls

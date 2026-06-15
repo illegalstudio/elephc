@@ -735,6 +735,22 @@ echo ":"; echo function_exists("pow");');
     assert_eq!(out, "8:double:32:27:1");
 }
 
+/// Verifies eval `round()` supports default and explicit precision through callable paths.
+#[test]
+fn test_eval_dispatches_round_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo round(3.5); echo ":";
+echo round(3.14159, 2); echo ":";
+echo gettype(round(3)); echo ":";
+echo call_user_func("round", 2.5); echo ":";
+echo call_user_func_array("round", [1.55, 1]);
+echo ":"; echo function_exists("round");');
+"#,
+    );
+    assert_eq!(out, "4:3.14:double:3:1.6:1");
+}
+
 /// Verifies eval `sqrt()` returns boxed double cells through direct and callable calls.
 #[test]
 fn test_eval_dispatches_sqrt_builtin_call() {

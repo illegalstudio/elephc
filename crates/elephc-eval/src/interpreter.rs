@@ -178,6 +178,13 @@ pub trait RuntimeValueOps {
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Rounds one runtime cell using PHP `round()` semantics and optional precision.
+    fn round(
+        &mut self,
+        value: RuntimeCellHandle,
+        precision: Option<RuntimeCellHandle>,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Applies an integer bitwise or shift operation to two runtime cells.
     fn bitwise(
         &mut self,
@@ -742,6 +749,7 @@ fn eval_call(
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "pow" => eval_builtin_pow(args, context, scope, values),
+        "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "strlen" => eval_builtin_strlen(args, context, scope, values),
@@ -872,6 +880,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_real"
             | "is_string"
             | "pow"
+            | "round"
             | "sqrt"
             | "strlen"
             | "strval"
@@ -1001,6 +1010,11 @@ fn eval_builtin_with_values(
             };
             values.pow(*left, *right)?
         }
+        "round" => match evaluated_args {
+            [value] => values.round(*value, None)?,
+            [value, precision] => values.round(*value, Some(*precision))?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "sqrt" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -1122,6 +1136,27 @@ fn eval_builtin_pow(
     let left = eval_expr(left, context, scope, values)?;
     let right = eval_expr(right, context, scope, values)?;
     values.pow(left, right)
+}
+
+/// Evaluates PHP's `round(...)` over one value and an optional precision expression.
+fn eval_builtin_round(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [value] => {
+            let value = eval_expr(value, context, scope, values)?;
+            values.round(value, None)
+        }
+        [value, precision] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let precision = eval_expr(precision, context, scope, values)?;
+            values.round(value, Some(precision))
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Evaluates PHP's `sqrt(...)` over one eval expression.
@@ -1902,6 +1937,20 @@ mod tests {
             let left = self.fake_numeric(&self.get(left));
             let right = self.fake_numeric(&self.get(right));
             self.float(left.powf(right))
+        }
+
+        /// Rounds fake numeric cells with PHP's optional decimal precision.
+        fn round(
+            &mut self,
+            value: RuntimeCellHandle,
+            precision: Option<RuntimeCellHandle>,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let value = self.fake_numeric(&self.get(value));
+            let precision = precision
+                .map(|precision| self.fake_int(&self.get(precision)))
+                .unwrap_or(0);
+            let multiplier = 10_f64.powf(precision as f64);
+            self.float((value * multiplier).round() / multiplier)
         }
 
         /// Applies fake integer bitwise and shift operations for interpreter tests.
@@ -3132,6 +3181,27 @@ return function_exists("pow");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "8:double:32:27");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `round()` supports default and explicit precision through callable paths.
+    #[test]
+    fn execute_program_dispatches_round_builtin() {
+        let program = parse_fragment(
+            br#"echo round(3.5); echo ":";
+echo round(3.14159, 2); echo ":";
+echo gettype(round(3)); echo ":";
+echo call_user_func("round", 2.5); echo ":";
+echo call_user_func_array("round", [1.55, 1]);
+return function_exists("round");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "4:3.14:double:3:1.6");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

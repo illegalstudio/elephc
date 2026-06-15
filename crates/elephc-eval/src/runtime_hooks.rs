@@ -83,6 +83,11 @@ unsafe extern "C" {
         -> *mut RuntimeCell;
     fn __elephc_eval_value_pow(left: *mut RuntimeCell, right: *mut RuntimeCell)
         -> *mut RuntimeCell;
+    fn __elephc_eval_value_round(
+        value: *mut RuntimeCell,
+        precision: *mut RuntimeCell,
+        has_precision: u64,
+    ) -> *mut RuntimeCell;
     fn __elephc_eval_value_bitwise(
         left: *mut RuntimeCell,
         right: *mut RuntimeCell,
@@ -387,6 +392,20 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_pow(left.as_ptr(), right.as_ptr()) })
+    }
+
+    /// Rounds a boxed Mixed cell through the generated runtime wrapper.
+    fn round(
+        &mut self,
+        value: RuntimeCellHandle,
+        precision: Option<RuntimeCellHandle>,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let (precision, has_precision) = if let Some(precision) = precision {
+            (precision.as_ptr(), 1)
+        } else {
+            (core::ptr::null_mut(), 0)
+        };
+        Self::handle(unsafe { __elephc_eval_value_round(value.as_ptr(), precision, has_precision) })
     }
 
     /// Applies an integer bitwise or shift operation through the generated runtime wrapper.
