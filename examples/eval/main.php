@@ -3,6 +3,7 @@ $x = 1;
 $profile = ["name" => "Ada"];
 $result = eval('$x = $x + 2; $created = "dynamic"; return $x + 4;');
 eval('$profile["name"] = "Grace";');
+eval('if ($x >= 3) { echo "x>=3\n"; }');
 $meta = eval('return ["source" => "eval"];');
 
 echo "x=" . $x . "\n";

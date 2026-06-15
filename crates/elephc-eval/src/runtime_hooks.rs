@@ -14,6 +14,8 @@
 #[cfg(not(test))]
 use crate::errors::EvalStatus;
 #[cfg(not(test))]
+use crate::eval_ir::EvalBinOp;
+#[cfg(not(test))]
 use crate::interpreter::RuntimeValueOps;
 #[cfg(not(test))]
 use crate::value::{RuntimeCell, RuntimeCellHandle};
@@ -46,6 +48,11 @@ unsafe extern "C" {
     fn __elephc_eval_value_concat(
         left: *mut RuntimeCell,
         right: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
+    fn __elephc_eval_value_compare(
+        left: *mut RuntimeCell,
+        right: *mut RuntimeCell,
+        op: u64,
     ) -> *mut RuntimeCell;
     fn __elephc_eval_value_echo(value: *mut RuntimeCell);
     fn __elephc_eval_value_string_bytes(
@@ -185,6 +192,18 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_concat(left.as_ptr(), right.as_ptr()) })
     }
 
+    /// Compares two boxed Mixed cells through the generated runtime wrapper.
+    fn compare(
+        &mut self,
+        op: EvalBinOp,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_value_compare(left.as_ptr(), right.as_ptr(), compare_op_tag(op))
+        })
+    }
+
     /// Emits one boxed Mixed cell to stdout through the generated runtime wrapper.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         unsafe {
@@ -213,5 +232,19 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Converts one boxed Mixed cell to PHP truthiness through the generated runtime wrapper.
     fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_truthy(value.as_ptr()) != 0 })
+    }
+}
+
+/// Maps an EvalIR comparison operator to the bridge ABI opcode.
+#[cfg(not(test))]
+fn compare_op_tag(op: EvalBinOp) -> u64 {
+    match op {
+        EvalBinOp::LooseEq => 0,
+        EvalBinOp::LooseNotEq => 1,
+        EvalBinOp::Lt => 2,
+        EvalBinOp::LtEq => 3,
+        EvalBinOp::Gt => 4,
+        EvalBinOp::GtEq => 5,
+        EvalBinOp::Add | EvalBinOp::Sub | EvalBinOp::Mul | EvalBinOp::Concat => 0,
     }
 }

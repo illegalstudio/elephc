@@ -97,6 +97,14 @@ pub trait RuntimeValueOps {
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Compares two runtime cells and returns a boxed PHP boolean cell.
+    fn compare(
+        &mut self,
+        op: EvalBinOp,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Emits one runtime cell to stdout using PHP echo semantics.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
@@ -297,6 +305,12 @@ fn eval_expr(
                 EvalBinOp::Sub => values.sub(left, right),
                 EvalBinOp::Mul => values.mul(left, right),
                 EvalBinOp::Concat => values.concat(left, right),
+                EvalBinOp::LooseEq
+                | EvalBinOp::LooseNotEq
+                | EvalBinOp::Lt
+                | EvalBinOp::LtEq
+                | EvalBinOp::Gt
+                | EvalBinOp::GtEq => values.compare(*op, left, right),
             }
         }
     }
@@ -601,6 +615,27 @@ mod tests {
             self.string(&(left + &right))
         }
 
+        /// Compares fake scalar cells and returns a fake PHP boolean.
+        fn compare(
+            &mut self,
+            op: EvalBinOp,
+            left: RuntimeCellHandle,
+            right: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let result = match op {
+                EvalBinOp::LooseEq => self.loose_eq(left, right),
+                EvalBinOp::LooseNotEq => !self.loose_eq(left, right),
+                EvalBinOp::Lt => self.numeric(left)? < self.numeric(right)?,
+                EvalBinOp::LtEq => self.numeric(left)? <= self.numeric(right)?,
+                EvalBinOp::Gt => self.numeric(left)? > self.numeric(right)?,
+                EvalBinOp::GtEq => self.numeric(left)? >= self.numeric(right)?,
+                EvalBinOp::Add | EvalBinOp::Sub | EvalBinOp::Mul | EvalBinOp::Concat => {
+                    return Err(EvalStatus::UnsupportedConstruct);
+                }
+            };
+            self.bool_value(result)
+        }
+
         /// Appends fake echo output for interpreter tests.
         fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
             let value = self.stringify(value);
@@ -628,6 +663,62 @@ mod tests {
     }
 
     impl FakeOps {
+        /// Compares fake scalar values with the same loose rules covered by eval tests.
+        fn loose_eq(&self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> bool {
+            match (self.get(left), self.get(right)) {
+                (FakeValue::Bool(left), right) => left == self.fake_truthy(&right),
+                (left, FakeValue::Bool(right)) => self.fake_truthy(&left) == right,
+                (FakeValue::Null, FakeValue::Null) => true,
+                (FakeValue::Null, FakeValue::String(value))
+                | (FakeValue::String(value), FakeValue::Null) => value.is_empty(),
+                (FakeValue::String(left), FakeValue::String(right)) => {
+                    match (left.parse::<f64>(), right.parse::<f64>()) {
+                        (Ok(left), Ok(right)) => left == right,
+                        _ => left == right,
+                    }
+                }
+                (FakeValue::String(left), right) => left
+                    .parse::<f64>()
+                    .is_ok_and(|left| left == self.fake_numeric(&right)),
+                (left, FakeValue::String(right)) => right
+                    .parse::<f64>()
+                    .is_ok_and(|right| self.fake_numeric(&left) == right),
+                (left, right) => self.fake_numeric(&left) == self.fake_numeric(&right),
+            }
+        }
+
+        /// Converts one fake scalar cell to a numeric value for comparison tests.
+        fn numeric(&self, handle: RuntimeCellHandle) -> Result<f64, EvalStatus> {
+            Ok(self.fake_numeric(&self.get(handle)))
+        }
+
+        /// Converts a fake value to the numeric scalar used by comparison tests.
+        fn fake_numeric(&self, value: &FakeValue) -> f64 {
+            match value {
+                FakeValue::Null => 0.0,
+                FakeValue::Bool(false) => 0.0,
+                FakeValue::Bool(true) => 1.0,
+                FakeValue::Int(value) => *value as f64,
+                FakeValue::Float(value) => *value,
+                FakeValue::String(value) => value.parse::<f64>().unwrap_or(0.0),
+                FakeValue::Array(value) => value.len() as f64,
+                FakeValue::Assoc(value) => value.len() as f64,
+            }
+        }
+
+        /// Returns fake PHP truthiness for already-loaded test values.
+        fn fake_truthy(&self, value: &FakeValue) -> bool {
+            match value {
+                FakeValue::Null => false,
+                FakeValue::Bool(value) => *value,
+                FakeValue::Int(value) => *value != 0,
+                FakeValue::Float(value) => *value != 0.0,
+                FakeValue::String(value) => !value.is_empty() && value != "0",
+                FakeValue::Array(value) => !value.is_empty(),
+                FakeValue::Assoc(value) => !value.is_empty(),
+            }
+        }
+
         /// Converts a fake runtime cell to a PHP-like string for test echo/concat.
         fn stringify(&self, handle: RuntimeCellHandle) -> String {
             match self.get(handle) {
@@ -752,6 +843,21 @@ mod tests {
 
         assert_eq!(values.output, "done");
         assert_eq!(values.get(i), FakeValue::Int(0));
+    }
+
+    /// Verifies comparison operators return boolean cells usable by echo and branches.
+    #[test]
+    fn execute_program_comparisons_return_bool_cells() {
+        let program = parse_fragment(
+            br#"echo 2 < 3; echo 3 <= 3; echo 4 > 3; echo 4 >= 4; if ("10" == 10) { echo "n"; } if ("a" != "b") { echo "s"; }"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "1111ns");
     }
 
     /// Verifies indexed array literals and reads execute through runtime hooks.

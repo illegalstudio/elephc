@@ -93,6 +93,28 @@ fn test_eval_scalar_concat_executes_through_bridge() {
     assert_eq!(out, "ab");
 }
 
+/// Verifies eval comparison operators return boxed booleans through the bridge.
+#[test]
+fn test_eval_scalar_comparisons_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo 2 < 3; echo 3 <= 3; echo 4 > 3; echo 4 >= 4; echo 5 != 6; echo 7 == 7;');
+"#,
+    );
+    assert_eq!(out, "111111");
+}
+
+/// Verifies loose scalar equality in eval handles strings and null/empty-string rules.
+#[test]
+fn test_eval_scalar_loose_equality_executes_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo "a" == "a"; echo "a" != "b"; echo "" == null; echo "10" == 10; echo "foo" != 0; echo "10" == "1e1";');
+"#,
+    );
+    assert_eq!(out, "111111");
+}
+
 /// Verifies eval if/else branches use PHP truthiness and update the caller scope.
 #[test]
 fn test_eval_if_else_updates_scope() {
@@ -154,6 +176,18 @@ echo ":" . $i;
 "#,
     );
     assert_eq!(out, "done:0");
+}
+
+/// Verifies eval `for` conditions can use ordered comparisons.
+#[test]
+fn test_eval_for_loop_uses_less_than_condition() {
+    let out = compile_and_run(
+        r#"<?php
+eval('for ($i = 0; $i < 3; $i = $i + 1) { echo $i; }');
+echo ":" . $i;
+"#,
+    );
+    assert_eq!(out, "012:3");
 }
 
 /// Verifies eval indexed-array literals and reads execute through Mixed array helpers.

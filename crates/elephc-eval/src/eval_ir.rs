@@ -126,4 +126,10 @@ pub enum EvalBinOp {
     Sub,
     Mul,
     Concat,
+    LooseEq,
+    LooseNotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
 }
