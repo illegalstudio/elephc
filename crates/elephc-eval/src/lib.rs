@@ -236,7 +236,7 @@ unsafe fn execute_eval_inner(
     if !out.is_null() {
         (*out).clear();
     }
-    execute_parsed_eval(scope, &program, out)
+    execute_parsed_eval(ctx, scope, &program, out)
 }
 
 /// Executes a parsed eval program in production builds using elephc runtime hooks.
@@ -245,10 +245,18 @@ unsafe fn execute_eval_inner(
 /// `scope` and `out` must be null or valid pointers supplied by generated code.
 #[cfg(not(test))]
 unsafe fn execute_parsed_eval(
+    ctx: *mut ElephcEvalContext,
     scope: *mut ElephcEvalScope,
     program: &eval_ir::EvalProgram,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    let mut fallback_context;
+    let context = if let Some(ctx) = ctx.as_mut() {
+        ctx
+    } else {
+        fallback_context = ElephcEvalContext::new();
+        &mut fallback_context
+    };
     let mut fallback_scope;
     let scope = if let Some(scope) = scope.as_mut() {
         scope
@@ -257,7 +265,7 @@ unsafe fn execute_parsed_eval(
         &mut fallback_scope
     };
     let mut values = ElephcRuntimeOps::new();
-    match interpreter::execute_program(program, scope, &mut values) {
+    match interpreter::execute_program_with_context(context, program, scope, &mut values) {
         Ok(result) => {
             if !out.is_null() {
                 (*out).kind = 0;
@@ -276,6 +284,7 @@ unsafe fn execute_parsed_eval(
 /// `out` must be null or valid result storage supplied by the test caller.
 #[cfg(test)]
 unsafe fn execute_parsed_eval(
+    _ctx: *mut ElephcEvalContext,
     _scope: *mut ElephcEvalScope,
     _program: &eval_ir::EvalProgram,
     _out: *mut ElephcEvalResult,

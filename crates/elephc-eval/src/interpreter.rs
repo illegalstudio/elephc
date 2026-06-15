@@ -12,7 +12,10 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 use crate::errors::EvalStatus;
-use crate::eval_ir::{EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalProgram, EvalStmt};
+use crate::context::ElephcEvalContext;
+use crate::eval_ir::{
+    EvalArrayElement, EvalBinOp, EvalConst, EvalExpr, EvalFunction, EvalProgram, EvalStmt,
+};
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership};
 use crate::value::RuntimeCellHandle;
@@ -124,7 +127,18 @@ pub fn execute_program(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match execute_statements(program.statements(), scope, values)? {
+    let mut context = ElephcEvalContext::new();
+    execute_program_with_context(&mut context, program, scope, values)
+}
+
+/// Executes an EvalIR program with a persistent eval context for dynamic declarations.
+pub fn execute_program_with_context(
+    context: &mut ElephcEvalContext,
+    program: &EvalProgram,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match execute_statements(program.statements(), context, scope, values)? {
         EvalControl::None => values.null(),
         EvalControl::Return(result) => Ok(result),
         EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
@@ -134,11 +148,12 @@ pub fn execute_program(
 /// Executes statements in source order and propagates the first eval `return`.
 fn execute_statements(
     statements: &[EvalStmt],
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     for stmt in statements {
-        match execute_stmt(stmt, scope, values)? {
+        match execute_stmt(stmt, context, scope, values)? {
             EvalControl::None => {}
             control => return Ok(control),
         }
@@ -149,6 +164,7 @@ fn execute_statements(
 /// Executes one statement and returns `Some` only for eval `return`.
 fn execute_stmt(
     stmt: &EvalStmt,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
@@ -167,8 +183,8 @@ fn execute_stmt(
             } else {
                 values.array_new(1)?
             };
-            let index = eval_expr(index, scope, values)?;
-            let value = eval_expr(value, scope, values)?;
+            let index = eval_expr(index, context, scope, values)?;
+            let value = eval_expr(value, context, scope, values)?;
             let array = values.array_set(array, index, value)?;
             if let Some(replaced) = scope.set(name.clone(), array, ownership) {
                 values.release(replaced)?;
@@ -178,7 +194,7 @@ fn execute_stmt(
         EvalStmt::Break => Ok(EvalControl::Break),
         EvalStmt::Continue => Ok(EvalControl::Continue),
         EvalStmt::Echo(expr) => {
-            let value = eval_expr(expr, scope, values)?;
+            let value = eval_expr(expr, context, scope, values)?;
             values.echo(value)?;
             Ok(EvalControl::None)
         }
@@ -187,28 +203,36 @@ fn execute_stmt(
             condition,
             update,
             body,
-        } => execute_for_stmt(init, condition.as_ref(), update, body, scope, values),
+        } => execute_for_stmt(init, condition.as_ref(), update, body, context, scope, values),
         EvalStmt::Foreach {
             array,
             value_name,
             body,
-        } => execute_foreach_stmt(array, value_name, body, scope, values),
+        } => execute_foreach_stmt(array, value_name, body, context, scope, values),
+        EvalStmt::FunctionDecl { name, params, body } => {
+            context
+                .define_function(name.clone(), EvalFunction::new(params.clone(), body.clone()))
+                .map_err(|_| EvalStatus::RuntimeFatal)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            let condition = eval_expr(condition, scope, values)?;
+            let condition = eval_expr(condition, context, scope, values)?;
             if values.truthy(condition)? {
-                execute_statements(then_branch, scope, values)
+                execute_statements(then_branch, context, scope, values)
             } else {
-                execute_statements(else_branch, scope, values)
+                execute_statements(else_branch, context, scope, values)
             }
         }
-        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(eval_expr(expr, scope, values)?)),
+        EvalStmt::Return(Some(expr)) => {
+            Ok(EvalControl::Return(eval_expr(expr, context, scope, values)?))
+        }
         EvalStmt::Return(None) => Ok(EvalControl::Return(values.null()?)),
         EvalStmt::StoreVar { name, value } => {
-            let value = eval_expr(value, scope, values)?;
+            let value = eval_expr(value, context, scope, values)?;
             if let Some(replaced) = scope.set(name.clone(), value, ScopeCellOwnership::Owned) {
                 values.release(replaced)?;
             }
@@ -222,10 +246,10 @@ fn execute_stmt(
         }
         EvalStmt::While { condition, body } => {
             while {
-                let condition = eval_expr(condition, scope, values)?;
+                let condition = eval_expr(condition, context, scope, values)?;
                 values.truthy(condition)?
             } {
-                match execute_statements(body, scope, values)? {
+                match execute_statements(body, context, scope, values)? {
                     EvalControl::None | EvalControl::Continue => {}
                     EvalControl::Break => break,
                     EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
@@ -234,7 +258,7 @@ fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Expr(expr) => {
-            let _ = eval_expr(expr, scope, values)?;
+            let _ = eval_expr(expr, context, scope, values)?;
             Ok(EvalControl::None)
         }
     }
@@ -246,27 +270,28 @@ fn execute_for_stmt(
     condition: Option<&EvalExpr>,
     update: &[EvalStmt],
     body: &[EvalStmt],
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    match execute_statements(init, scope, values)? {
+    match execute_statements(init, context, scope, values)? {
         EvalControl::None | EvalControl::Continue => {}
         EvalControl::Break => return Ok(EvalControl::None),
         EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
     }
     loop {
         if let Some(condition) = condition {
-            let condition = eval_expr(condition, scope, values)?;
+            let condition = eval_expr(condition, context, scope, values)?;
             if !values.truthy(condition)? {
                 break;
             }
         }
-        match execute_statements(body, scope, values)? {
+        match execute_statements(body, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
-        match execute_statements(update, scope, values)? {
+        match execute_statements(update, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
@@ -280,10 +305,11 @@ fn execute_foreach_stmt(
     array: &EvalExpr,
     value_name: &str,
     body: &[EvalStmt],
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let array = eval_expr(array, scope, values)?;
+    let array = eval_expr(array, context, scope, values)?;
     let len = values.array_len(array)?;
     for index in 0..len {
         let index = values.int(index as i64)?;
@@ -293,7 +319,7 @@ fn execute_foreach_stmt(
         {
             values.release(replaced)?;
         }
-        match execute_statements(body, scope, values)? {
+        match execute_statements(body, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
@@ -305,6 +331,7 @@ fn execute_foreach_stmt(
 /// Evaluates one expression to an opaque runtime-cell handle.
 fn eval_expr(
     expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -314,27 +341,27 @@ fn eval_expr(
                 .iter()
                 .any(|element| matches!(element, EvalArrayElement::KeyValue { .. }))
             {
-                eval_assoc_array(elements, scope, values)
+                eval_assoc_array(elements, context, scope, values)
             } else {
-                eval_indexed_array(elements, scope, values)
+                eval_indexed_array(elements, context, scope, values)
             }
         }
         EvalExpr::ArrayGet { array, index } => {
-            let array = eval_expr(array, scope, values)?;
-            let index = eval_expr(index, scope, values)?;
+            let array = eval_expr(array, context, scope, values)?;
+            let index = eval_expr(index, context, scope, values)?;
             values.array_get(array, index)
         }
-        EvalExpr::Call { name, args } => eval_call(name, args, scope, values),
+        EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::LoadVar(name) => scope.visible_cell(name).map_or_else(|| values.null(), Ok),
         EvalExpr::Print(inner) => {
-            let value = eval_expr(inner, scope, values)?;
+            let value = eval_expr(inner, context, scope, values)?;
             values.echo(value)?;
             values.int(1)
         }
         EvalExpr::Binary { op, left, right } => {
-            let left = eval_expr(left, scope, values)?;
-            let right = eval_expr(right, scope, values)?;
+            let left = eval_expr(left, context, scope, values)?;
+            let right = eval_expr(right, context, scope, values)?;
             match op {
                 EvalBinOp::Add => values.add(left, right),
                 EvalBinOp::Sub => values.sub(left, right),
@@ -355,42 +382,50 @@ fn eval_expr(
 fn eval_call(
     name: &str,
     args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
-        "count" => eval_builtin_count(args, scope, values),
-        "eval" => eval_nested_eval(args, scope, values),
-        "strlen" => eval_builtin_strlen(args, scope, values),
-        _ => Err(EvalStatus::UnsupportedConstruct),
+        "count" => eval_builtin_count(args, context, scope, values),
+        "eval" => eval_nested_eval(args, context, scope, values),
+        "strlen" => eval_builtin_strlen(args, context, scope, values),
+        _ => context
+            .function(name)
+            .cloned()
+            .map_or(Err(EvalStatus::UnsupportedConstruct), |function| {
+                eval_dynamic_function(&function, args, context, scope, values)
+            }),
     }
 }
 
 /// Evaluates nested `eval(...)` calls against the current materialized scope.
 fn eval_nested_eval(
     args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [code] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let code = eval_expr(code, scope, values)?;
+    let code = eval_expr(code, context, scope, values)?;
     let code = values.string_bytes(code)?;
     let program = parse_fragment(&code).map_err(|_| EvalStatus::ParseError)?;
-    execute_program(&program, scope, values)
+    execute_program_with_context(context, &program, scope, values)
 }
 
 /// Evaluates the builtin `strlen(...)` for one PHP-coerced string argument.
 fn eval_builtin_strlen(
     args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [value] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let value = eval_expr(value, scope, values)?;
+    let value = eval_expr(value, context, scope, values)?;
     let bytes = values.string_bytes(value)?;
     let len = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.int(len)
@@ -399,21 +434,49 @@ fn eval_builtin_strlen(
 /// Evaluates the builtin `count(...)` for one runtime array-like argument.
 fn eval_builtin_count(
     args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [value] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let value = eval_expr(value, scope, values)?;
+    let value = eval_expr(value, context, scope, values)?;
     let len = values.array_len(value)?;
     let len = i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.int(len)
 }
 
+/// Evaluates an eval-declared user function with positional argument binding.
+fn eval_dynamic_function(
+    function: &EvalFunction,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.len() != function.params().len() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let mut evaluated_args = Vec::with_capacity(args.len());
+    for arg in args {
+        evaluated_args.push(eval_expr(arg, context, caller_scope, values)?);
+    }
+    let mut function_scope = ElephcEvalScope::new();
+    for (name, value) in function.params().iter().zip(evaluated_args) {
+        function_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);
+    }
+    match execute_statements(function.body(), context, &mut function_scope, values)? {
+        EvalControl::None => values.null(),
+        EvalControl::Return(result) => Ok(result),
+        EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
 /// Evaluates an indexed array literal into a boxed runtime Mixed array.
 fn eval_indexed_array(
     elements: &[EvalArrayElement],
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -423,7 +486,7 @@ fn eval_indexed_array(
             return Err(EvalStatus::UnsupportedConstruct);
         };
         let index = values.int(index as i64)?;
-        let value = eval_expr(element, scope, values)?;
+        let value = eval_expr(element, context, scope, values)?;
         let _ = values.array_set(array, index, value)?;
     }
     Ok(array)
@@ -432,6 +495,7 @@ fn eval_indexed_array(
 /// Evaluates an associative array literal into a boxed runtime Mixed hash.
 fn eval_assoc_array(
     elements: &[EvalArrayElement],
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -445,11 +509,11 @@ fn eval_assoc_array(
                 (key, value)
             }
             EvalArrayElement::KeyValue { key, value } => {
-                let key = eval_expr(key, scope, values)?;
+                let key = eval_expr(key, context, scope, values)?;
                 (key, value)
             }
         };
-        let value = eval_expr(value, scope, values)?;
+        let value = eval_expr(value, context, scope, values)?;
         let _ = values.array_set(array, key, value)?;
     }
     Ok(array)
@@ -1034,6 +1098,37 @@ mod tests {
         scope.set("x", x, ScopeCellOwnership::Owned);
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(5));
+    }
+
+    /// Verifies eval-declared functions can be called by the same fragment.
+    #[test]
+    fn execute_program_calls_declared_function() {
+        let program = parse_fragment(br#"function dyn($x) { return $x + 1; } return dyn(4);"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(5));
+    }
+
+    /// Verifies eval-declared functions persist in a shared eval context.
+    #[test]
+    fn execute_program_context_keeps_declared_function() {
+        let define =
+            parse_fragment(br#"function dyn($x) { return $x + 1; }"#).expect("parse eval fragment");
+        let call = parse_fragment(br#"return dyn(4);"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program_with_context(&mut context, &define, &mut scope, &mut values)
+            .expect("execute eval ir");
+        let result = execute_program_with_context(&mut context, &call, &mut scope, &mut values)
+            .expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(5));
     }

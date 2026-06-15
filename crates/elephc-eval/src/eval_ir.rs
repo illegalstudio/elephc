@@ -65,6 +65,11 @@ pub enum EvalStmt {
         value_name: String,
         body: Vec<EvalStmt>,
     },
+    FunctionDecl {
+        name: String,
+        params: Vec<String>,
+        body: Vec<EvalStmt>,
+    },
     If {
         condition: EvalExpr,
         then_branch: Vec<EvalStmt>,
@@ -83,6 +88,30 @@ pub enum EvalStmt {
         body: Vec<EvalStmt>,
     },
     Expr(EvalExpr),
+}
+
+/// Runtime user function declared by an eval fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalFunction {
+    params: Vec<String>,
+    body: Vec<EvalStmt>,
+}
+
+impl EvalFunction {
+    /// Creates a dynamic eval function with source-order parameters and body.
+    pub fn new(params: Vec<String>, body: Vec<EvalStmt>) -> Self {
+        Self { params, body }
+    }
+
+    /// Returns source-order parameter names without leading `$`.
+    pub fn params(&self) -> &[String] {
+        &self.params
+    }
+
+    /// Returns the dynamic EvalIR statements that form the function body.
+    pub fn body(&self) -> &[EvalStmt] {
+        &self.body
+    }
 }
 
 /// Dynamic eval expressions evaluated by the interpreter against runtime cells.

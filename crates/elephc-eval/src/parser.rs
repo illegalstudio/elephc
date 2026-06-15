@@ -342,6 +342,7 @@ impl Parser {
             }
             TokenKind::Ident(name) if name == "for" => self.parse_for_stmt(),
             TokenKind::Ident(name) if name == "foreach" => self.parse_foreach_stmt(),
+            TokenKind::Ident(name) if name == "function" => self.parse_function_decl_stmt(),
             TokenKind::Ident(name) if name == "if" => self.parse_if_stmt(),
             TokenKind::Ident(name) if name == "return" => {
                 self.advance();
@@ -429,6 +430,43 @@ impl Parser {
             value_name,
             body,
         }])
+    }
+
+    /// Parses `function name($param, ...) { ... }` declarations.
+    fn parse_function_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let name = name.clone();
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let params = self.parse_function_params()?;
+        let body = self.parse_block()?;
+        Ok(vec![EvalStmt::FunctionDecl { name, params, body }])
+    }
+
+    /// Parses a dynamic function declaration parameter list after `(`.
+    fn parse_function_params(&mut self) -> Result<Vec<String>, EvalParseError> {
+        let mut params = Vec::new();
+        if self.consume(TokenKind::RParen) {
+            return Ok(params);
+        }
+        loop {
+            let TokenKind::DollarIdent(name) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            params.push(name.clone());
+            self.advance();
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            if matches!(self.current(), TokenKind::RParen) {
+                return Err(EvalParseError::ExpectedVariable);
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(params)
     }
 
     /// Parses the optional first clause of a `for` loop.
@@ -971,6 +1009,25 @@ mod tests {
                 array: EvalExpr::LoadVar("items".to_string()),
                 value_name: "item".to_string(),
                 body: vec![EvalStmt::Echo(EvalExpr::LoadVar("item".to_string()))],
+            }]
+        );
+    }
+
+    /// Verifies dynamic function declarations preserve name, parameters, and body.
+    #[test]
+    fn parse_fragment_accepts_function_declaration_source() {
+        let program = parse_fragment(br#"function dyn($x) { return $x + 1; }"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::FunctionDecl {
+                name: "dyn".to_string(),
+                params: vec!["x".to_string()],
+                body: vec![EvalStmt::Return(Some(EvalExpr::Binary {
+                    op: EvalBinOp::Add,
+                    left: Box::new(EvalExpr::LoadVar("x".to_string())),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                }))],
             }]
         );
     }

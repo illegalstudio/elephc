@@ -376,6 +376,29 @@ eval('echo count($items);');
     assert_eq!(out, "2");
 }
 
+/// Verifies eval-declared functions can be called inside the same fragment.
+#[test]
+fn test_eval_declared_function_can_be_called_in_fragment() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('function dyn_eval_add($x) { return $x + 1; } return dyn_eval_add(4);');
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval-declared functions persist across eval calls in the same generated context.
+#[test]
+fn test_eval_declared_function_persists_across_eval_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_inc($x) { return $x + 1; }');
+eval('echo dyn_eval_inc(4);');
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
 /// Verifies `return` inside eval becomes the expression result of `eval(...)`.
 #[test]
 fn test_eval_return_value_is_available_to_native_code() {
