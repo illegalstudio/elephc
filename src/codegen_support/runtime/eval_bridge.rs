@@ -106,6 +106,65 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #32");                                     // release the array-get wrapper frame
     emitter.instruction("ret");                                                 // return the boxed element to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_array_iter_key");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for insertion-order key iteration
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable iterator-key frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the boxed array receiver while walking the container
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested zero-based foreach position
+    emitter.instruction("cbz x0, __elephc_eval_value_array_iter_key_null");     // null handles produce a null key
+    emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
+    emitter.instruction("cmp x9, #4");                                          // tag 4 = indexed array
+    emitter.instruction("b.eq __elephc_eval_value_array_iter_key_indexed");     // indexed arrays expose integer positions as foreach keys
+    emitter.instruction("cmp x9, #5");                                          // tag 5 = associative array
+    emitter.instruction("b.eq __elephc_eval_value_array_iter_key_assoc");       // associative arrays expose insertion-order hash keys
+    emitter.instruction("b __elephc_eval_value_array_iter_key_null");           // scalar values have no foreach-visible key
+    emitter.label("__elephc_eval_value_array_iter_key_indexed");
+    emitter.instruction("ldr x1, [sp, #8]");                                    // use the requested foreach position as the integer key payload
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer key
+    emitter.instruction("mov x2, xzr");                                         // integer keys do not use a high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the indexed foreach key as an owned Mixed cell
+    emitter.instruction("b __elephc_eval_value_array_iter_key_done");           // return the boxed key to Rust
+    emitter.label("__elephc_eval_value_array_iter_key_assoc");
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load the hash payload pointer from the Mixed cell
+    emitter.instruction("cbz x9, __elephc_eval_value_array_iter_key_null");     // null hash payloads produce a null key
+    emitter.instruction("str x9, [sp, #16]");                                   // save the hash pointer for repeated iterator helper calls
+    emitter.instruction("str xzr, [sp, #24]");                                  // start the insertion-order position counter at zero
+    emitter.instruction("mov x1, xzr");                                         // cursor 0 starts at the hash head entry
+    emitter.label("__elephc_eval_value_array_iter_key_assoc_loop");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the hash pointer before advancing the hash iterator
+    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next insertion-order hash key
+    emitter.instruction("cmn x0, #1");                                          // did the iterator report the done sentinel?
+    emitter.instruction("b.eq __elephc_eval_value_array_iter_key_null");        // out-of-range positions produce a null key
+    emitter.instruction("ldr x10, [sp, #24]");                                  // load the current insertion-order position
+    emitter.instruction("ldr x11, [sp, #8]");                                   // load the requested foreach position
+    emitter.instruction("cmp x10, x11");                                        // is this the requested hash entry?
+    emitter.instruction("b.eq __elephc_eval_value_array_iter_key_assoc_box");   // box the current hash key when the position matches
+    emitter.instruction("add x10, x10, #1");                                    // advance the insertion-order position counter
+    emitter.instruction("str x10, [sp, #24]");                                  // persist the updated position counter for the next probe
+    emitter.instruction("mov x1, x0");                                          // use the returned cursor for the next hash iterator call
+    emitter.instruction("b __elephc_eval_value_array_iter_key_assoc_loop");     // continue walking until the requested position is reached
+    emitter.label("__elephc_eval_value_array_iter_key_assoc_box");
+    emitter.instruction("cmn x2, #1");                                          // integer hash keys carry key_hi = -1
+    emitter.instruction("b.ne __elephc_eval_value_array_iter_key_assoc_string"); // string hash keys need string-tag boxing
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer key
+    emitter.instruction("mov x2, xzr");                                         // integer keys do not use a high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the associative integer key as Mixed
+    emitter.instruction("b __elephc_eval_value_array_iter_key_done");           // return the boxed key to Rust
+    emitter.label("__elephc_eval_value_array_iter_key_assoc_string");
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string key
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the associative string key as Mixed
+    emitter.instruction("b __elephc_eval_value_array_iter_key_done");           // return the boxed key to Rust
+    emitter.label("__elephc_eval_value_array_iter_key_null");
+    emitter.instruction("mov x0, #8");                                          // runtime tag 8 = null
+    emitter.instruction("mov x1, xzr");                                         // null keys do not use a low payload word
+    emitter.instruction("mov x2, xzr");                                         // null keys do not use a high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box null for invalid foreach-key requests
+    emitter.label("__elephc_eval_value_array_iter_key_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the iterator-key wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed foreach key to Rust
+
     label_c_global(emitter, "__elephc_eval_value_array_set");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for key coercion and value retention
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls
@@ -570,6 +629,68 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the array-get wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed element to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_array_iter_key");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable iterator-key wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for receiver, target position, hash pointer, and counter
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed array receiver while walking the container
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested zero-based foreach position
+    emitter.instruction("test rdi, rdi");                                       // null handles produce a null key
+    emitter.instruction("jz __elephc_eval_value_array_iter_key_null");          // branch to boxed null for null runtime cells
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
+    emitter.instruction("cmp r10, 4");                                          // tag 4 = indexed array
+    emitter.instruction("je __elephc_eval_value_array_iter_key_indexed");       // indexed arrays expose integer positions as foreach keys
+    emitter.instruction("cmp r10, 5");                                          // tag 5 = associative array
+    emitter.instruction("je __elephc_eval_value_array_iter_key_assoc");         // associative arrays expose insertion-order hash keys
+    emitter.instruction("jmp __elephc_eval_value_array_iter_key_null");         // scalar values have no foreach-visible key
+    emitter.label("__elephc_eval_value_array_iter_key_indexed");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // use the requested foreach position as the integer key payload
+    emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer key
+    emitter.instruction("xor esi, esi");                                        // integer keys do not use a high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the indexed foreach key as an owned Mixed cell
+    emitter.instruction("jmp __elephc_eval_value_array_iter_key_done");         // return the boxed key to Rust
+    emitter.label("__elephc_eval_value_array_iter_key_assoc");
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the hash payload pointer from the Mixed cell
+    emitter.instruction("test r10, r10");                                       // null hash payloads produce a null key
+    emitter.instruction("jz __elephc_eval_value_array_iter_key_null");          // branch to boxed null for missing hash payloads
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the hash pointer for repeated iterator helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // start the insertion-order position counter at zero
+    emitter.instruction("xor esi, esi");                                        // cursor 0 starts at the hash head entry
+    emitter.label("__elephc_eval_value_array_iter_key_assoc_loop");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the hash pointer before advancing the hash iterator
+    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next insertion-order hash key
+    emitter.instruction("cmp rax, -1");                                         // did the iterator report the done sentinel?
+    emitter.instruction("je __elephc_eval_value_array_iter_key_null");          // out-of-range positions produce a null key
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // load the current insertion-order position
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // load the requested foreach position
+    emitter.instruction("cmp r10, r11");                                        // is this the requested hash entry?
+    emitter.instruction("je __elephc_eval_value_array_iter_key_assoc_box");     // box the current hash key when the position matches
+    emitter.instruction("add r10, 1");                                          // advance the insertion-order position counter
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // persist the updated position counter for the next probe
+    emitter.instruction("mov rsi, rax");                                        // use the returned cursor for the next hash iterator call
+    emitter.instruction("jmp __elephc_eval_value_array_iter_key_assoc_loop");   // continue walking until the requested position is reached
+    emitter.label("__elephc_eval_value_array_iter_key_assoc_box");
+    emitter.instruction("cmp rdx, -1");                                         // integer hash keys carry key_hi = -1
+    emitter.instruction("jne __elephc_eval_value_array_iter_key_assoc_string"); // string hash keys need string-tag boxing
+    emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer key
+    emitter.instruction("xor esi, esi");                                        // integer keys do not use a high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the associative integer key as Mixed
+    emitter.instruction("jmp __elephc_eval_value_array_iter_key_done");         // return the boxed key to Rust
+    emitter.label("__elephc_eval_value_array_iter_key_assoc_string");
+    emitter.instruction("mov rsi, rdx");                                        // move the string key length into the boxing high word
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string key
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the associative string key as Mixed
+    emitter.instruction("jmp __elephc_eval_value_array_iter_key_done");         // return the boxed key to Rust
+    emitter.label("__elephc_eval_value_array_iter_key_null");
+    emitter.instruction("mov eax, 8");                                          // runtime tag 8 = null
+    emitter.instruction("xor edi, edi");                                        // null keys do not use a low payload word
+    emitter.instruction("xor esi, esi");                                        // null keys do not use a high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box null for invalid foreach-key requests
+    emitter.label("__elephc_eval_value_array_iter_key_done");
+    emitter.instruction("add rsp, 32");                                         // release the iterator-key wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed foreach key to Rust
 
     label_c_global(emitter, "__elephc_eval_value_array_set");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls

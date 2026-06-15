@@ -314,6 +314,18 @@ echo ":" . $item;
     assert_eq!(out, "123:3");
 }
 
+/// Verifies key-value foreach loops inside eval expose indexed array positions.
+#[test]
+fn test_eval_foreach_iterates_indexed_keys_and_values() {
+    let out = compile_and_run(
+        r#"<?php
+eval('foreach ([10, 20] as $key => $item) { echo $key . ":" . $item . ";"; }');
+echo "|" . $key . ":" . $item;
+"#,
+    );
+    assert_eq!(out, "0:10;1:20;|1:20");
+}
+
 /// Verifies eval foreach can iterate an indexed array from the caller scope.
 #[test]
 fn test_eval_foreach_reads_scope_array() {
@@ -336,6 +348,29 @@ echo ":" . $item;
 "#,
     );
     assert_eq!(out, "2:2");
+}
+
+/// Verifies value-only foreach loops inside eval iterate associative array values.
+#[test]
+fn test_eval_foreach_iterates_assoc_values() {
+    let out = compile_and_run(
+        r#"<?php
+eval('foreach (["a" => 1, "b" => 2] as $item) { echo $item; }');
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+/// Verifies key-value foreach loops inside eval expose associative keys in insertion order.
+#[test]
+fn test_eval_foreach_iterates_assoc_keys_and_values() {
+    let out = compile_and_run(
+        r#"<?php
+eval('foreach (["a" => 1, "b" => 2] as $key => $item) { echo $key . ":" . $item . ";"; }');
+echo "|" . $key . ":" . $item;
+"#,
+    );
+    assert_eq!(out, "a:1;b:2;|b:2");
 }
 
 /// Verifies eval indexed-array literals and reads execute through Mixed array helpers.

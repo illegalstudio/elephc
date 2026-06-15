@@ -490,7 +490,7 @@ impl Parser {
         }])
     }
 
-    /// Parses `foreach (expr as $value) { ... }`.
+    /// Parses `foreach (expr as $value) { ... }` or `foreach (expr as $key => $value) { ... }`.
     fn parse_foreach_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LParen)?;
@@ -504,10 +504,23 @@ impl Parser {
         };
         let value_name = value_name.clone();
         self.advance();
+        let (key_name, value_name) = if matches!(self.current(), TokenKind::FatArrow) {
+            self.advance();
+            let TokenKind::DollarIdent(next_value_name) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            let key_name = value_name;
+            let value_name = next_value_name.clone();
+            self.advance();
+            (Some(key_name), value_name)
+        } else {
+            (None, value_name)
+        };
         self.expect(TokenKind::RParen)?;
         let body = self.parse_statement_body()?;
         Ok(vec![EvalStmt::Foreach {
             array,
+            key_name,
             value_name,
             body,
         }])
@@ -1352,8 +1365,30 @@ mod tests {
             program.statements(),
             &[EvalStmt::Foreach {
                 array: EvalExpr::LoadVar("items".to_string()),
+                key_name: None,
                 value_name: "item".to_string(),
                 body: vec![EvalStmt::Echo(EvalExpr::LoadVar("item".to_string()))],
+            }]
+        );
+    }
+
+    /// Verifies key-value foreach loops preserve both loop target names in EvalIR.
+    #[test]
+    fn parse_fragment_accepts_foreach_key_value_source() {
+        let program =
+            parse_fragment(br#"foreach ($items as $key => $item) { echo $key . $item; }"#)
+                .expect("parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Foreach {
+                array: EvalExpr::LoadVar("items".to_string()),
+                key_name: Some("key".to_string()),
+                value_name: "item".to_string(),
+                body: vec![EvalStmt::Echo(EvalExpr::Binary {
+                    op: EvalBinOp::Concat,
+                    left: Box::new(EvalExpr::LoadVar("key".to_string())),
+                    right: Box::new(EvalExpr::LoadVar("item".to_string())),
+                })],
             }]
         );
     }
