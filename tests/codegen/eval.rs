@@ -435,6 +435,20 @@ echo call_user_func('dyn_eval_cuf', 4);
     assert_eq!(out, "5");
 }
 
+/// Verifies native callable probes can see functions declared by eval after the barrier.
+#[test]
+fn test_eval_declared_function_is_visible_to_callable_probes() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_probe() { return 1; }');
+echo function_exists('dyn_eval_probe') ? '1' : '0';
+echo is_callable('DYN_EVAL_PROBE') ? '1' : '0';
+echo function_exists('missing_eval_probe') ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "110");
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {

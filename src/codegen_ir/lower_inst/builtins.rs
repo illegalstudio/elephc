@@ -528,6 +528,14 @@ pub(super) fn lower_eval_function_call(
     eval::lower_eval_function_call(ctx, inst)
 }
 
+/// Lowers post-eval dynamic function existence probes to the optional eval bridge.
+pub(super) fn lower_eval_function_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_function_exists(ctx, inst)
+}
+
 /// Lowers `define("NAME", value)` with the legacy duplicate-name runtime guard.
 fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "define", 2)?;

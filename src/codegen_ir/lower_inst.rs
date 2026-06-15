@@ -182,6 +182,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
         Op::EvalFunctionCall => builtins::lower_eval_function_call(ctx, &inst),
+        Op::EvalFunctionExists => builtins::lower_eval_function_exists(ctx, &inst),
         Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),

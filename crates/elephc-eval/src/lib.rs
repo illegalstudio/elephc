@@ -204,6 +204,23 @@ pub unsafe extern "C" fn __elephc_eval_execute(
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Checks whether a function was previously declared through `eval()`.
+///
+/// # Safety
+/// `ctx` must be null or a valid eval context handle. `name_ptr` must be
+/// readable for `name_len` bytes when `name_len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_function_exists(
+    ctx: *const ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_function_exists_inner(ctx, name_ptr, name_len)
+    })
+    .unwrap_or(0)
+}
+
 /// Calls a zero-argument function previously declared through `eval()`.
 ///
 /// # Safety
@@ -243,6 +260,28 @@ pub unsafe extern "C" fn __elephc_eval_call_function(
         call_eval_function_inner(ctx, name_ptr, name_len, args, arg_count, out)
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Runs the eval function-exists ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_function_exists`; invalid handles or unreadable name
+/// storage fail closed as `false`.
+unsafe fn eval_function_exists_inner(
+    ctx: *const ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_ref() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+        return 0;
+    };
+    i32::from(context.has_function(&name.to_ascii_lowercase()))
 }
 
 /// Runs the dynamic function-call ABI body after installing a panic boundary.
@@ -493,6 +532,29 @@ mod tests {
             __elephc_eval_context_free(ctx);
         }
         assert_eq!(version, ABI_VERSION);
+    }
+
+    /// Verifies the function-exists ABI probes eval-declared functions by folded name.
+    #[test]
+    fn function_exists_reports_declared_eval_function() {
+        let mut ctx = ElephcEvalContext::new();
+        ctx.define_function(
+            "dyn_probe",
+            crate::eval_ir::EvalFunction::new(Vec::new(), Vec::new()),
+        )
+        .expect("first dynamic function declaration should succeed");
+        let existing = b"DYN_PROBE";
+        let missing = b"missing";
+
+        let existing_result = unsafe {
+            __elephc_eval_function_exists(&ctx, existing.as_ptr(), existing.len() as u64)
+        };
+        let missing_result = unsafe {
+            __elephc_eval_function_exists(&ctx, missing.as_ptr(), missing.len() as u64)
+        };
+
+        assert_eq!(existing_result, 1);
+        assert_eq!(missing_result, 0);
     }
 
     /// Verifies scope allocation returns an empty opaque activation scope handle.

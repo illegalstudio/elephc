@@ -21,4 +21,5 @@ echo "meta-count=" . $meta_count . "\n";
 echo "dynamic-call=" . $dynamic_call . "\n";
 echo "native-dynamic-call=" . native_add(40, 2) . "\n";
 echo "call-user-func=" . call_user_func('native_double', 6) . "\n";
+echo "function-exists=" . (function_exists('native_double') ? "yes" : "no") . "\n";
 echo "result=" . $result . "\n";

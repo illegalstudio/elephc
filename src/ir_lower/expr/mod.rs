@@ -1509,6 +1509,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = lower_static_is_callable(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_eval_function_probe(ctx, canonical, args, expr) {
+        return value;
+    }
     let sig = call_signature(ctx, canonical, args);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical);
@@ -1579,6 +1582,44 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
 fn plain_positional_call_args(args: &[Expr]) -> bool {
     !crate::types::call_args::has_named_args(args)
         && !args.iter().any(is_spread_arg)
+}
+
+/// Lowers post-eval function-name probes through the eval context's dynamic table.
+fn lower_eval_function_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let probe_name = php_symbol_key(name.trim_start_matches('\\'));
+    if probe_name != "function_exists" && probe_name != "is_callable" {
+        return None;
+    }
+    if !ctx.has_eval_barrier()
+        || args.len() != 1
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::StringLiteral(function_name) = &args[0].kind else {
+        return None;
+    };
+    if function_name.contains("::")
+        || resolve_static_string_callable(ctx, function_name).is_some()
+    {
+        return None;
+    }
+    let dynamic_name = php_symbol_key(function_name.trim_start_matches('\\'));
+    let data = ctx.intern_function_name(&dynamic_name);
+    Some(ctx.emit_value(
+        Op::EvalFunctionExists,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::EvalFunctionExists.default_effects(),
+        Some(expr.span),
+    ))
 }
 
 /// Lowers `isset()` as a lazy language construct instead of an eager builtin call.

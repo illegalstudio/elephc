@@ -67,6 +67,11 @@ impl ElephcEvalContext {
     pub fn function(&self, name: &str) -> Option<&EvalFunction> {
         self.functions.get(name)
     }
+
+    /// Returns true when the context has a dynamic function with this lowercase PHP name.
+    pub fn has_function(&self, name: &str) -> bool {
+        self.functions.contains_key(name)
+    }
 }
 
 impl Default for ElephcEvalContext {
