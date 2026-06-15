@@ -748,6 +748,7 @@ fn eval_call(
             eval_builtin_function_probe(args, context, scope, values)
         }
         "gettype" => eval_builtin_gettype(args, context, scope, values),
+        "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_real" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
@@ -760,6 +761,7 @@ fn eval_call(
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             eval_builtin_string_search(name, args, context, scope, values)
         }
+        "strcmp" | "strcasecmp" => eval_builtin_string_compare(name, args, context, scope, values),
         "strlen" => eval_builtin_strlen(args, context, scope, values),
         "strtolower" | "strtoupper" => eval_builtin_string_case(name, args, context, scope, values),
         "trim" => eval_builtin_trim_like(name, args, context, scope, values),
@@ -880,6 +882,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "floatval"
             | "function_exists"
             | "gettype"
+            | "hash_equals"
             | "intval"
             | "ltrim"
             | "is_callable"
@@ -897,9 +900,11 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "rtrim"
             | "round"
             | "sqrt"
+            | "strcasecmp"
             | "str_contains"
             | "str_ends_with"
             | "str_starts_with"
+            | "strcmp"
             | "strlen"
             | "strtolower"
             | "strtoupper"
@@ -1093,6 +1098,12 @@ fn eval_builtin_with_values(
             };
             eval_gettype_result(*value, values)?
         }
+        "hash_equals" => {
+            let [known, user] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_hash_equals_result(*known, *user, values)?
+        }
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_real" | "is_string" => {
             let [value] = evaluated_args else {
@@ -1113,6 +1124,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_string_search_result(name, *haystack, *needle, values)?
+        }
+        "strcmp" | "strcasecmp" => {
+            let [left, right] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_string_compare_result(name, *left, *right, values)?
         }
         "strtolower" | "strtoupper" => {
             let [value] = evaluated_args else {
@@ -1356,6 +1373,80 @@ fn eval_type_predicate_result(
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     values.bool_value(result)
+}
+
+/// Evaluates PHP's `hash_equals(...)` over two eval expressions.
+fn eval_builtin_hash_equals(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [known, user] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let known = eval_expr(known, context, scope, values)?;
+    let user = eval_expr(user, context, scope, values)?;
+    eval_hash_equals_result(known, user, values)
+}
+
+/// Compares two converted strings with PHP `hash_equals()` semantics.
+fn eval_hash_equals_result(
+    known: RuntimeCellHandle,
+    user: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let known = values.string_bytes(known)?;
+    let user = values.string_bytes(user)?;
+    if known.len() != user.len() {
+        return values.bool_value(false);
+    }
+    let mut diff = 0u8;
+    for (known, user) in known.iter().zip(user.iter()) {
+        diff |= known ^ user;
+    }
+    values.bool_value(diff == 0)
+}
+
+/// Evaluates PHP string comparison builtins over two eval expressions.
+fn eval_builtin_string_compare(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [left, right] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let left = eval_expr(left, context, scope, values)?;
+    let right = eval_expr(right, context, scope, values)?;
+    eval_string_compare_result(name, left, right, values)
+}
+
+/// Compares two converted strings and returns -1, 0, or 1.
+fn eval_string_compare_result(
+    name: &str,
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut left = values.string_bytes(left)?;
+    let mut right = values.string_bytes(right)?;
+    match name {
+        "strcmp" => {}
+        "strcasecmp" => {
+            left.make_ascii_lowercase();
+            right.make_ascii_lowercase();
+        }
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    }
+    let result = match left.cmp(&right) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    };
+    values.int(result)
 }
 
 /// Evaluates PHP's byte-string search predicates over two eval expressions.
@@ -3362,6 +3453,31 @@ return function_exists("str_ends_with");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "S:s:se:E:e:ee:CS:CE:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval string comparison builtins return PHP-compatible scalar results.
+    #[test]
+    fn execute_program_dispatches_string_compare_builtins() {
+        let program = parse_fragment(
+            br#"echo strcmp("abc", "abc");
+echo ":"; echo strcmp("abc", "abd") < 0 ? "lt" : "bad";
+echo ":"; echo strcasecmp("Hello", "hello");
+echo ":"; echo call_user_func("strcmp", "b", "a") > 0 ? "gt" : "bad";
+echo ":"; echo call_user_func_array("strcasecmp", ["A", "a"]) === 0 ? "ci" : "bad";
+echo ":"; echo hash_equals("abc", "abc") ? "heq" : "bad";
+echo ":"; echo hash_equals("abc", "abcd") ? "bad" : "hlen";
+echo ":"; echo call_user_func("hash_equals", "abc", "abd") ? "bad" : "hneq";
+echo ":"; echo function_exists("strcmp"); echo function_exists("strcasecmp");
+return function_exists("hash_equals");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "0:lt:0:gt:ci:heq:hlen:hneq:11");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
