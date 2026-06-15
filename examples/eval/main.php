@@ -40,6 +40,7 @@ eval('$profile["name"] = "Grace";');
 eval('if ($x >= 3) { echo "x>=3\n"; }');
 eval('if ($x < 0) { echo "negative\n"; } elseif ($x == 3) { echo "x==3\n"; }');
 eval('foreach ([1, 2] as $n) { echo "n=" . $n . "\n"; }');
+eval('if (isset($profile["name"])) { echo "isset-name\n"; }');
 $meta = eval('return ["source" => "eval"];');
 $meta_count = eval('return count($meta);');
 eval('function plus_one($value) { return $value + 1; }');

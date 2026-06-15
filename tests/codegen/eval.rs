@@ -397,6 +397,26 @@ eval('echo STRLEN("abcd") . ":" . count([1, 2, 3]);');
     assert_eq!(out, "4:3");
 }
 
+/// Verifies eval `isset()` distinguishes missing, null, and falsey non-null values.
+#[test]
+fn test_eval_isset_distinguishes_missing_null_and_falsey_values() {
+    let out = compile_and_run(
+        r#"<?php
+$nullish = null;
+$zero = 0;
+$empty = "";
+eval('if (isset($missing)) { echo "1"; } else { echo "0"; }
+if (isset($nullish)) { echo "1"; } else { echo "0"; }
+if (isset($zero)) { echo "1"; } else { echo "0"; }
+if (isset($empty)) { echo "1"; } else { echo "0"; }
+if (isset($zero, $empty)) { echo "1"; } else { echo "0"; }
+if (isset($zero, $nullish)) { echo "1"; } else { echo "0"; }
+echo function_exists("isset") . "x";');
+"#,
+    );
+    assert_eq!(out, "001110x");
+}
+
 /// Verifies eval builtin dispatch can inspect arrays from the caller scope.
 #[test]
 fn test_eval_count_reads_scope_array() {

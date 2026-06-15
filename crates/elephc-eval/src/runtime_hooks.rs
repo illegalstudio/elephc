@@ -52,6 +52,7 @@ unsafe extern "C" {
     ) -> *mut RuntimeCell;
     fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
+    fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_null() -> *mut RuntimeCell;
     fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
     fn __elephc_eval_value_int(value: i64) -> *mut RuntimeCell;
@@ -211,6 +212,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Returns whether a boxed Mixed cell has an array-like runtime tag.
     fn is_array_like(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_is_array_like(value.as_ptr()) != 0 })
+    }
+
+    /// Returns whether a boxed Mixed cell unwraps to PHP null.
+    fn is_null(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_value_is_null(value.as_ptr()) != 0 })
     }
 
     /// Releases one boxed Mixed cell through the generated runtime wrapper.
