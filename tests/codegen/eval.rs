@@ -158,6 +158,17 @@ eval('echo 2 < 3; echo 3 <= 3; echo 4 > 3; echo 4 >= 4; echo 5 != 6; echo 7 == 7
     assert_eq!(out, "111111");
 }
 
+/// Verifies eval spaceship comparisons return boxed -1/0/1 integers.
+#[test]
+fn test_eval_spaceship_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo 1 <=> 2; echo ":"; echo 2 <=> 2; echo ":"; echo 3 <=> 2;');
+"#,
+    );
+    assert_eq!(out, "-1:0:1");
+}
+
 /// Verifies loose scalar equality in eval handles strings and null/empty-string rules.
 #[test]
 fn test_eval_scalar_loose_equality_executes_through_bridge() {

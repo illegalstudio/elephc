@@ -75,6 +75,7 @@ enum TokenKind {
     OrOr,
     Less,
     LessEqual,
+    Spaceship,
     LessLess,
     LessLessEqual,
     Greater,
@@ -281,7 +282,12 @@ impl<'a> Lexer<'a> {
                     }
                 } else if self.peek_char() == Some('=') {
                     self.bump_char();
-                    Ok(TokenKind::LessEqual)
+                    if self.peek_char() == Some('>') {
+                        self.bump_char();
+                        Ok(TokenKind::Spaceship)
+                    } else {
+                        Ok(TokenKind::LessEqual)
+                    }
                 } else {
                     Ok(TokenKind::Less)
                 }
@@ -1173,6 +1179,8 @@ impl Parser {
                 EvalBinOp::Gt
             } else if self.consume(TokenKind::GreaterEqual) {
                 EvalBinOp::GtEq
+            } else if self.consume(TokenKind::Spaceship) {
+                EvalBinOp::Spaceship
             } else {
                 break;
             };
@@ -2081,6 +2089,24 @@ mod tests {
             program.statements(),
             &[EvalStmt::Return(Some(EvalExpr::Binary {
                 op: EvalBinOp::Lt,
+                left: Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::Add,
+                    left: Box::new(EvalExpr::LoadVar("i".to_string())),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                }),
+                right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+            }))]
+        );
+    }
+
+    /// Verifies the spaceship operator parses at ordered-comparison precedence.
+    #[test]
+    fn parse_fragment_accepts_spaceship_source() {
+        let program = parse_fragment(br#"return $i + 1 <=> 3;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Binary {
+                op: EvalBinOp::Spaceship,
                 left: Box::new(EvalExpr::Binary {
                     op: EvalBinOp::Add,
                     left: Box::new(EvalExpr::LoadVar("i".to_string())),

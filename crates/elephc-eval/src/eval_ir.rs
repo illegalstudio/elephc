@@ -245,6 +245,7 @@ pub enum EvalBinOp {
     LtEq,
     Gt,
     GtEq,
+    Spaceship,
 }
 
 /// Unary operations supported by the initial EvalIR parser.

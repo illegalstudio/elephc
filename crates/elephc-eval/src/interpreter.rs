@@ -170,6 +170,13 @@ pub trait RuntimeValueOps {
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Compares two runtime cells and returns a boxed PHP spaceship integer.
+    fn spaceship(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Emits one runtime cell to stdout using PHP echo semantics.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
@@ -652,6 +659,7 @@ fn eval_expr(
                 | EvalBinOp::LtEq
                 | EvalBinOp::Gt
                 | EvalBinOp::GtEq => values.compare(*op, left, right),
+                EvalBinOp::Spaceship => values.spaceship(left, right),
                 EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr => {
                     Err(EvalStatus::UnsupportedConstruct)
                 }
@@ -1586,6 +1594,7 @@ mod tests {
                 | EvalBinOp::ShiftLeft
                 | EvalBinOp::ShiftRight
                 | EvalBinOp::Concat
+                | EvalBinOp::Spaceship
                 | EvalBinOp::LogicalAnd
                 | EvalBinOp::LogicalOr
                 | EvalBinOp::LogicalXor => {
@@ -1593,6 +1602,24 @@ mod tests {
                 }
             };
             self.bool_value(result)
+        }
+
+        /// Compares fake numeric cells and returns a PHP spaceship integer.
+        fn spaceship(
+            &mut self,
+            left: RuntimeCellHandle,
+            right: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            let left = self.numeric(left)?;
+            let right = self.numeric(right)?;
+            let value = if left < right {
+                -1
+            } else if left > right {
+                1
+            } else {
+                0
+            };
+            self.int(value)
         }
 
         /// Appends fake echo output for interpreter tests.
@@ -2056,6 +2083,20 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "1111ns");
+    }
+
+    /// Verifies spaceship comparisons return PHP -1/0/1 integer cells.
+    #[test]
+    fn execute_program_spaceship_returns_int_cells() {
+        let program =
+            parse_fragment(br#"echo 1 <=> 2; echo ":"; echo 2 <=> 2; echo ":"; echo 3 <=> 2;"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "-1:0:1");
     }
 
     /// Verifies strict equality keeps PHP type identity distinct from loose equality.

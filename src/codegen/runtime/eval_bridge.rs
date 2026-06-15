@@ -639,6 +639,31 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #96");                                     // release the loose-equality helper frame
     emitter.instruction("ret");                                                 // return the loose-equality boolean in x0
 
+    label_c_global(emitter, "__elephc_eval_value_spaceship");
+    emitter.instruction("sub sp, sp, #32");                                     // allocate wrapper slots for the right operand and left double
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the right boxed operand while casting the left operand
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("str d0, [sp, #8]");                                    // save the left numeric spaceship operand
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the right boxed operand for numeric casting
+    emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("ldr d1, [sp, #8]");                                    // reload the left numeric spaceship operand
+    emitter.instruction("fcmp d1, d0");                                         // compare left and right numeric operands for spaceship
+    emitter.instruction("b.vs __elephc_eval_value_spaceship_gt");               // PHP treats unordered NaN spaceship comparisons as greater
+    emitter.instruction("cset x1, gt");                                         // set result to 1 when left is greater than right
+    emitter.instruction("csinv x1, x1, xzr, ge");                               // keep 1/0 for greater/equal, or produce -1 for less
+    emitter.instruction("b __elephc_eval_value_spaceship_box");                 // box the ordered spaceship result
+    emitter.label("__elephc_eval_value_spaceship_gt");
+    emitter.instruction("mov x1, #1");                                          // greater or unordered comparisons produce result 1
+    emitter.label("__elephc_eval_value_spaceship_box");
+    emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the spaceship result into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the spaceship wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed spaceship result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_echo");
     emitter.instruction("b __rt_mixed_write_stdout");                           // echo one boxed mixed value and return to Rust
 
@@ -1356,6 +1381,36 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 96");                                         // release the loose-equality helper slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the loose-equality boolean in rax
+
+    label_c_global(emitter, "__elephc_eval_value_spaceship");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for the right operand and left double
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("movsd QWORD PTR [rbp - 16], xmm0");                    // save the left numeric spaceship operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for numeric casting
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("movsd xmm1, QWORD PTR [rbp - 16]");                    // reload the left numeric spaceship operand
+    emitter.instruction("ucomisd xmm1, xmm0");                                  // compare left and right numeric operands for spaceship
+    emitter.instruction("jp __elephc_eval_value_spaceship_gt_x86");             // PHP treats unordered NaN spaceship comparisons as greater
+    emitter.instruction("ja __elephc_eval_value_spaceship_gt_x86");             // route left > right to result 1
+    emitter.instruction("jb __elephc_eval_value_spaceship_lt_x86");             // route left < right to result -1
+    emitter.instruction("xor edi, edi");                                        // equal operands produce spaceship result 0
+    emitter.instruction("jmp __elephc_eval_value_spaceship_box_x86");           // box the equal spaceship result
+    emitter.label("__elephc_eval_value_spaceship_gt_x86");
+    emitter.instruction("mov rdi, 1");                                          // greater or unordered comparisons produce result 1
+    emitter.instruction("jmp __elephc_eval_value_spaceship_box_x86");           // box the greater spaceship result
+    emitter.label("__elephc_eval_value_spaceship_lt_x86");
+    emitter.instruction("mov rdi, -1");                                         // lesser comparisons produce result -1
+    emitter.label("__elephc_eval_value_spaceship_box_x86");
+    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
+    emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer
+    emitter.instruction("call __rt_mixed_from_value");                          // box the spaceship result into a Mixed cell
+    emitter.instruction("add rsp, 32");                                         // release the spaceship wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed spaceship result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_echo");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed value argument into mixed echo input

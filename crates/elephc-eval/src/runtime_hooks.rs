@@ -87,6 +87,10 @@ unsafe extern "C" {
         right: *mut RuntimeCell,
         op: u64,
     ) -> *mut RuntimeCell;
+    fn __elephc_eval_value_spaceship(
+        left: *mut RuntimeCell,
+        right: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     fn __elephc_eval_value_echo(value: *mut RuntimeCell);
     fn __elephc_eval_value_string_bytes(
         value: *mut RuntimeCell,
@@ -358,6 +362,15 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         })
     }
 
+    /// Computes a PHP numeric spaceship result through the generated runtime wrapper.
+    fn spaceship(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_spaceship(left.as_ptr(), right.as_ptr()) })
+    }
+
     /// Emits one boxed Mixed cell to stdout through the generated runtime wrapper.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         unsafe {
@@ -412,6 +425,7 @@ fn compare_op_tag(op: EvalBinOp) -> u64 {
         | EvalBinOp::ShiftLeft
         | EvalBinOp::ShiftRight
         | EvalBinOp::Concat
+        | EvalBinOp::Spaceship
         | EvalBinOp::LogicalAnd
         | EvalBinOp::LogicalOr
         | EvalBinOp::LogicalXor => 0,
@@ -443,6 +457,7 @@ fn bitwise_op_tag(op: EvalBinOp) -> u64 {
         | EvalBinOp::Lt
         | EvalBinOp::LtEq
         | EvalBinOp::Gt
-        | EvalBinOp::GtEq => 0,
+        | EvalBinOp::GtEq
+        | EvalBinOp::Spaceship => 0,
     }
 }
