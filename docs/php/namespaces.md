@@ -94,6 +94,17 @@ If the included file has no top-level `return`, the expression evaluates to `1`,
 the integer PHP yields for a successful include. Declarations (functions, classes)
 in the included file are hoisted to global scope as usual.
 
+The included file runs in the **calling scope**, exactly like PHP: it can read and
+write the caller's variables, and a variable first assigned in the included file
+becomes visible after the include.
+
+```php
+<?php
+$base = 10;
+$v = require 'double.php';   // double.php: `<?php return $base * 2;`
+echo $v;                     // 20 — the included file read the caller's $base
+```
+
 Expression-position includes are supported as the direct value of a `return` or a
 simple `=` assignment; nesting one deeper inside a larger expression is not. The
 included file's top-level code runs in its own scope, so top-level variables it

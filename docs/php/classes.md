@@ -264,6 +264,7 @@ Rules:
 - `protected(set)` allows writes from the declaring class and its subclasses; `private(set)` only from the declaring class.
 - The write visibility must not be weaker than the read visibility (`private public(set)` is rejected).
 - The property must be typed, and the modifier is not allowed on static properties.
+- Indirect writes through an array element (`$obj->items[] = x`, `$obj->items['k'] = x`) are writes too, so they honor the `set` visibility — not the (wider) read visibility.
 
 ### Property redeclaration
 
@@ -605,7 +606,7 @@ $static = "version";
 echo $class::$static();           // 1.0 — both class and method dynamic
 ```
 
-`$obj->$name(...)` and `$class::$name(...)` are equivalent to `call_user_func([$obj, $name], ...)` / `call_user_func([$class, $name], ...)`. Arguments are forwarded. A nullsafe dynamic method call (`$obj?->$name()`) is not yet supported.
+`$obj->$name(...)` and `$class::$name(...)` are equivalent to `call_user_func([$obj, $name], ...)` / `call_user_func([$class, $name], ...)`. A dynamic method name on a literal class also works (`ClassName::$name(...)`). Arguments are forwarded positionally. A nullsafe dynamic method call (`$obj?->$name()`) is not yet supported, and **named arguments are rejected** in dynamic calls because the target method — and therefore its parameter names — is not known at compile time.
 
 ## Anonymous classes (`new class {}`)
 
@@ -723,7 +724,9 @@ Rules:
 - An enum can `implements` one or more interfaces and be used through them.
 - `self`/`static` type hints in enum methods resolve to the enum.
 
-Current limitations: the `$this->name` property is not yet readable inside a method, a constant referenced as `EnumName::CONST` from outside the enum is not yet resolved (use `self::CONST` inside the enum), and using a trait inside an enum is not supported.
+Enum constants are readable both inside the enum (`self::CONST`) and from outside it (`EnumName::CONST`). Enum method bodies are type-checked like class method bodies, so a mismatched return type or an undefined variable inside an enum method is reported.
+
+Current limitations: the `$this->name` property is not yet readable inside a method, and using a trait inside an enum is not supported.
 
 ### Built-in `SortDirection`
 

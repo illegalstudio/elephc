@@ -254,9 +254,10 @@ function join_with(string $sep, string ...$parts): string {
 echo join_with("-", "a", "b", "c"); // a-b-c
 ```
 
-The collected array's element type is inferred from the actual call arguments, so
-`function sum(int ...$nums)` collects integers into `$nums`. The type hint documents
-the accepted element type; passing an argument of the wrong type is not rejected.
+A type hint on the variadic constrains its elements: `function sum(int ...$nums)`
+collects integers into `$nums`, and every argument passed to the variadic is checked
+against the declared element type, so passing an argument of the wrong type is
+rejected. An untyped variadic (`...$nums`) accepts heterogeneous arguments.
 
 ## Spread operator
 
