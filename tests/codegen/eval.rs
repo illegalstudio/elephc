@@ -696,6 +696,25 @@ echo ":"; echo function_exists("str_starts_with"); echo function_exists("str_end
     assert_eq!(out, "S:s:se:E:e:ee:CS:CE:11");
 }
 
+/// Verifies eval string comparison builtins return compatible scalar results.
+#[test]
+fn test_eval_dispatches_string_compare_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strcmp("abc", "abc");
+echo ":"; echo strcmp("abc", "abd") < 0 ? "lt" : "bad";
+echo ":"; echo strcasecmp("Hello", "hello");
+echo ":"; echo call_user_func("strcmp", "b", "a") > 0 ? "gt" : "bad";
+echo ":"; echo call_user_func_array("strcasecmp", ["A", "a"]) === 0 ? "ci" : "bad";
+echo ":"; echo hash_equals("abc", "abc") ? "heq" : "bad";
+echo ":"; echo hash_equals("abc", "abcd") ? "bad" : "hlen";
+echo ":"; echo call_user_func("hash_equals", "abc", "abd") ? "bad" : "hneq";
+echo ":"; echo function_exists("strcmp"); echo function_exists("strcasecmp"); echo function_exists("hash_equals");');
+"#,
+    );
+    assert_eq!(out, "0:lt:0:gt:ci:heq:hlen:hneq:111");
+}
+
 /// Verifies eval trim-like builtins strip default and explicit masks.
 #[test]
 fn test_eval_dispatches_trim_like_builtin_calls() {
