@@ -71,6 +71,45 @@ const EVAL_HASH_ALGOS: &[&str] = &[
     "joaat",
 ];
 
+/// Built-in stream wrappers reported by eval `stream_get_wrappers()`.
+const EVAL_STREAM_WRAPPERS: &[&str] = &[
+    "file",
+    "php",
+    "data",
+    "ftp",
+    "http",
+    "https",
+    "ftps",
+    "compress.zlib",
+    "compress.bzip2",
+    "phar",
+    "glob",
+];
+
+/// Built-in stream transports reported by eval `stream_get_transports()`.
+const EVAL_STREAM_TRANSPORTS: &[&str] = &[
+    "tcp", "udp", "unix", "udg", "tls", "ssl", "sslv2", "sslv3", "tlsv1.0", "tlsv1.1",
+    "tlsv1.2", "tlsv1.3",
+];
+
+/// Built-in stream filters reported by eval `stream_get_filters()`.
+const EVAL_STREAM_FILTERS: &[&str] = &[
+    "string.toupper",
+    "string.tolower",
+    "string.rot13",
+    "string.strip_tags",
+    "convert.base64-encode",
+    "convert.base64-decode",
+    "convert.quoted-printable-encode",
+    "convert.quoted-printable-decode",
+    "convert.iconv.*",
+    "dechunk",
+    "zlib.deflate",
+    "zlib.inflate",
+    "bzip2.compress",
+    "bzip2.decompress",
+];
+
 /// Root package manifest used to mirror native `phpversion()` in the eval crate.
 const EVAL_ROOT_CARGO_TOML: &str = include_str!("../../../Cargo.toml");
 
@@ -1345,6 +1384,9 @@ fn eval_positional_expr_call(
         "tempnam" => eval_builtin_tempnam(args, context, scope, values),
         "time" => eval_builtin_time(args, values),
         "touch" => eval_builtin_touch(args, context, scope, values),
+        "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => {
+            eval_builtin_stream_introspection(name, args, values)
+        }
         "unlink" => eval_builtin_unlink(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
         "str_repeat" => eval_builtin_str_repeat(args, context, scope, values),
@@ -1779,6 +1821,9 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "sinh"
             | "sqrt"
             | "strcasecmp"
+            | "stream_get_filters"
+            | "stream_get_transports"
+            | "stream_get_wrappers"
             | "str_contains"
             | "str_ends_with"
             | "str_ireplace"
@@ -1979,6 +2024,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
         "round" => Some(&["num", "precision"]),
         "sleep" => Some(&["seconds"]),
+        "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
         "strstr" => Some(&["haystack", "needle", "before_needle"]),
@@ -2791,6 +2837,12 @@ fn eval_builtin_with_values(
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_stream_introspection_result(name, values)?
+        }
         "umask" => match evaluated_args {
             [] => eval_umask_result(None, values)?,
             [mask] => eval_umask_result(Some(*mask), values)?,
@@ -4933,14 +4985,48 @@ fn eval_builtin_hash_algos(
 fn eval_hash_algos_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(EVAL_HASH_ALGOS.len())?;
-    for (index, algo) in EVAL_HASH_ALGOS.iter().enumerate() {
+    eval_static_string_array_result(EVAL_HASH_ALGOS, values)
+}
+
+/// Builds one indexed PHP array from a static string slice.
+fn eval_static_string_array_result(
+    items: &[&str],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(items.len())?;
+    for (index, item) in items.iter().enumerate() {
         let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
         let key = values.int(index)?;
-        let value = values.string(algo)?;
+        let value = values.string(item)?;
         result = values.array_set(result, key, value)?;
     }
     Ok(result)
+}
+
+/// Evaluates PHP stream introspection list builtins with no arguments.
+fn eval_builtin_stream_introspection(
+    name: &str,
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_stream_introspection_result(name, values)
+}
+
+/// Builds the static list returned by one eval stream introspection builtin.
+fn eval_stream_introspection_result(
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let items = match name {
+        "stream_get_filters" => EVAL_STREAM_FILTERS,
+        "stream_get_transports" => EVAL_STREAM_TRANSPORTS,
+        "stream_get_wrappers" => EVAL_STREAM_WRAPPERS,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    eval_static_string_array_result(items, values)
 }
 
 /// Evaluates PHP `time()` with no arguments.
@@ -11726,6 +11812,38 @@ return function_exists("realpath_cache_size");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "0:0:0:0:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval stream introspection builtins return native-compatible static lists.
+    #[test]
+    fn execute_program_dispatches_stream_introspection_builtins() {
+        let program = parse_fragment(
+            br#"$wrappers = stream_get_wrappers();
+$transports = stream_get_transports();
+$filters = stream_get_filters();
+echo count($wrappers) . ":" . $wrappers[0] . ":" . $wrappers[5] . ":";
+echo count($transports) . ":" . $transports[0] . ":" . $transports[8] . ":";
+echo count($filters) . ":" . $filters[2] . ":";
+$call_wrappers = call_user_func("stream_get_wrappers");
+echo $call_wrappers[10] . ":";
+$call_transports = call_user_func_array("stream_get_transports", []);
+echo $call_transports[11] . ":";
+$call_filters = call_user_func_array("stream_get_filters", []);
+echo $call_filters[13] . ":";
+echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_transports");
+return function_exists("stream_get_filters");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:11"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
