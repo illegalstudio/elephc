@@ -282,9 +282,20 @@ impl RuntimeValueOps for ElephcRuntimeOps {
 
     /// Creates a boxed Mixed object through the generated dynamic class-name wrapper.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe {
+        let object = Self::handle(unsafe {
             __elephc_eval_value_new_object(class_name.as_ptr(), class_name.len() as u64)
-        })
+        })?;
+        match self.is_null(object) {
+            Ok(false) => Ok(object),
+            Ok(true) => {
+                self.release(object)?;
+                Err(EvalStatus::RuntimeFatal)
+            }
+            Err(err) => {
+                let _ = self.release(object);
+                Err(err)
+            }
+        }
     }
 
     /// Calls a public AOT constructor through the generated user bridge when one exists.

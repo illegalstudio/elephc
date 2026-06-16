@@ -1979,6 +1979,16 @@ echo eval('$box = new EvalDynamicNewNoCtorArgs(99); return $box->x;');
     assert_eq!(out, "4");
 }
 
+/// Verifies eval object construction fails when no AOT class matches the name.
+#[test]
+fn test_eval_dynamic_new_missing_class_fails() {
+    let err = compile_and_run_expect_failure("<?php eval('new EvalDynamicNewMissingClass();');");
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval can construct explicitly qualified namespaced AOT classes.
 #[test]
 fn test_eval_dynamic_new_constructs_qualified_aot_class() {
