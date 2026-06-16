@@ -1318,6 +1318,32 @@ echo function_exists("gethostbyname");');
     assert_eq!(out, "127.0.0.1:not a host:127.0.0.1:not a host:1");
 }
 
+/// Verifies eval IPv4 conversion builtins handle integer, string, and raw-byte forms.
+#[test]
+fn test_eval_dispatches_ip_conversion_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo long2ip(3232235777) . ":";
+echo long2ip(ip: 4294967295) . ":";
+echo ip2long("192.168.1.1") . ":";
+echo ip2long(ip: "1.2.3") === false ? "bad-ip" : "bad"; echo ":";
+$packed = inet_pton("1.2.3.4");
+echo bin2hex($packed) . ":";
+echo inet_pton(ip: "nonsense") === false ? "bad-pton" : "bad"; echo ":";
+echo inet_ntop($packed) . ":";
+echo inet_ntop(ip: "xx") === false ? "bad-ntop" : "bad"; echo ":";
+echo call_user_func("long2ip", 2130706433) . ":";
+echo call_user_func_array("ip2long", ["ip" => "0.0.0.0"]) . ":";
+echo function_exists("long2ip"); echo function_exists("ip2long");
+echo function_exists("inet_pton"); echo function_exists("inet_ntop");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "192.168.1.1:255.255.255.255:3232235777:bad-ip:01020304:bad-pton:1.2.3.4:bad-ntop:127.0.0.1:0:1111"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

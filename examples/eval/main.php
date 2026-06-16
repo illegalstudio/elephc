@@ -155,6 +155,7 @@ $realpath_cache = eval('return count(realpath_cache_get()) . ":" . realpath_cach
 $environment = eval('putenv("ELEPHC_EVAL_EXAMPLE=ok"); $value = getenv("ELEPHC_EVAL_EXAMPLE"); putenv("ELEPHC_EVAL_EXAMPLE"); return $value . ":" . (getenv("ELEPHC_EVAL_EXAMPLE") === "" ? "cleared" : "left");');
 $sleeping = eval('usleep(0); return sleep(0) . ":awake";');
 $host_lookup = eval('return gethostbyname("127.0.0.1") . ":" . gethostbyname("not a host");');
+$ip_conversion = eval('$packed = inet_pton("1.2.3.4"); return long2ip(ip2long("192.168.1.1")) . ":" . bin2hex($packed) . ":" . inet_ntop($packed);');
 $hexed = eval('return bin2hex("Az");');
 $unhexed = eval('return hex2bin("417a");');
 $base64 = eval('return base64_encode("Hello");');
@@ -256,6 +257,7 @@ echo "realpath-cache=" . $realpath_cache . "\n";
 echo "environment=" . $environment . "\n";
 echo "sleep=" . $sleeping . "\n";
 echo "host-lookup=" . $host_lookup . "\n";
+echo "ip-conversion=" . $ip_conversion . "\n";
 echo "bin2hex=" . $hexed . "\n";
 echo "hex2bin=" . $unhexed . "\n";
 echo "base64=" . $base64 . "\n";

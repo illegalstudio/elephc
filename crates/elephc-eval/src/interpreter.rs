@@ -1228,10 +1228,13 @@ fn eval_positional_expr_call(
             eval_builtin_html_entity(name, args, context, scope, values)
         }
         "implode" => eval_builtin_implode(args, context, scope, values),
+        "inet_ntop" => eval_builtin_inet_ntop(args, context, scope, values),
+        "inet_pton" => eval_builtin_inet_pton(args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
+        "ip2long" => eval_builtin_ip2long(args, context, scope, values),
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
         "max" | "min" => eval_builtin_min_max(name, args, context, scope, values),
         "microtime" => eval_builtin_microtime(args, context, scope, values),
@@ -1275,6 +1278,7 @@ fn eval_positional_expr_call(
         "lcfirst" | "strtolower" | "strtoupper" | "ucfirst" => {
             eval_builtin_string_case(name, args, context, scope, values)
         }
+        "long2ip" => eval_builtin_long2ip(args, context, scope, values),
         "trim" => eval_builtin_trim_like(name, args, context, scope, values),
         "ucwords" => eval_builtin_ucwords(args, context, scope, values),
         "usleep" => eval_builtin_usleep(args, context, scope, values),
@@ -1572,6 +1576,9 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "htmlspecialchars"
             | "implode"
             | "in_array"
+            | "inet_ntop"
+            | "inet_pton"
+            | "ip2long"
             | "intval"
             | "ltrim"
             | "is_callable"
@@ -1588,6 +1595,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_resource"
             | "is_string"
             | "lcfirst"
+            | "long2ip"
             | "max"
             | "microtime"
             | "min"
@@ -1747,6 +1755,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "hash_equals" => Some(&["known_string", "user_string"]),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => Some(&["string"]),
         "implode" => Some(&["separator", "array"]),
+        "inet_ntop" => Some(&["ip"]),
+        "inet_pton" => Some(&["ip"]),
+        "ip2long" => Some(&["ip"]),
         "max" | "min" => Some(&["value"]),
         "microtime" => Some(&["as_float"]),
         "nl2br" => Some(&["string", "use_xhtml"]),
@@ -1773,6 +1784,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
             Some(&["string"])
         }
+        "long2ip" => Some(&["ip"]),
         "ucwords" => Some(&["string", "separators"]),
         "usleep" => Some(&["microseconds"]),
         "wordwrap" => Some(&["string", "width", "break", "cut_long_words"]),
@@ -2253,6 +2265,24 @@ fn eval_builtin_with_values(
             };
             eval_html_entity_result(name, *value, values)?
         }
+        "inet_ntop" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_inet_ntop_result(*value, values)?
+        }
+        "inet_pton" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_inet_pton_result(*value, values)?
+        }
+        "ip2long" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_ip2long_result(*value, values)?
+        }
         "phpversion" => {
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);
@@ -2347,6 +2377,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_string_case_result(name, *value, values)?
+        }
+        "long2ip" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_long2ip_result(*value, values)?
         }
         "ucwords" => match evaluated_args {
             [value] => eval_ucwords_result(*value, None, values)?,
@@ -3938,6 +3974,151 @@ fn eval_gethostbyname_result(
                 .next()
         });
     values.string(resolved.as_deref().unwrap_or_else(|| hostname.as_ref()))
+}
+
+/// Evaluates PHP `long2ip($ip)` over one eval expression.
+fn eval_builtin_long2ip(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [ip] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let ip = eval_expr(ip, context, scope, values)?;
+    eval_long2ip_result(ip, values)
+}
+
+/// Formats one 32-bit IPv4 integer as a dotted-quad string.
+fn eval_long2ip_result(
+    ip: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let ip = eval_int_value(ip, values)? as u32;
+    values.string(&eval_format_ipv4(ip))
+}
+
+/// Evaluates PHP `ip2long($ip)` over one eval expression.
+fn eval_builtin_ip2long(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [ip] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let ip = eval_expr(ip, context, scope, values)?;
+    eval_ip2long_result(ip, values)
+}
+
+/// Parses a dotted-quad IPv4 string into an integer or PHP false.
+fn eval_ip2long_result(
+    ip: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(ip)?;
+    match eval_parse_ipv4(&bytes) {
+        Some(ip) => values.int(i64::from(ip)),
+        None => values.bool_value(false),
+    }
+}
+
+/// Evaluates PHP `inet_pton($ip)` over one eval expression.
+fn eval_builtin_inet_pton(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [ip] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let ip = eval_expr(ip, context, scope, values)?;
+    eval_inet_pton_result(ip, values)
+}
+
+/// Packs a dotted-quad IPv4 string into four network-order bytes or PHP false.
+fn eval_inet_pton_result(
+    ip: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(ip)?;
+    let Some(ip) = eval_parse_ipv4(&bytes) else {
+        return values.bool_value(false);
+    };
+    values.string_bytes_value(&ip.to_be_bytes())
+}
+
+/// Evaluates PHP `inet_ntop($binary)` over one eval expression.
+fn eval_builtin_inet_ntop(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [binary] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let binary = eval_expr(binary, context, scope, values)?;
+    eval_inet_ntop_result(binary, values)
+}
+
+/// Renders a four-byte IPv4 string as dotted-quad text or PHP false.
+fn eval_inet_ntop_result(
+    binary: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(binary)?;
+    let [a, b, c, d] = bytes.as_slice() else {
+        return values.bool_value(false);
+    };
+    let ip = u32::from_be_bytes([*a, *b, *c, *d]);
+    values.string(&eval_format_ipv4(ip))
+}
+
+/// Parses exactly four decimal IPv4 octets separated by dots.
+fn eval_parse_ipv4(bytes: &[u8]) -> Option<u32> {
+    let mut octets = [0_u8; 4];
+    let mut position = 0_usize;
+    let mut index = 0_usize;
+
+    while index < 4 {
+        if position >= bytes.len() {
+            return None;
+        }
+        let start = position;
+        let mut value = 0_u16;
+        while position < bytes.len() && bytes[position].is_ascii_digit() {
+            value = value
+                .checked_mul(10)?
+                .checked_add(u16::from(bytes[position] - b'0'))?;
+            position += 1;
+            if position - start > 3 || value > 255 {
+                return None;
+            }
+        }
+        if position == start {
+            return None;
+        }
+        octets[index] = value as u8;
+        index += 1;
+        if index == 4 {
+            return (position == bytes.len()).then(|| u32::from_be_bytes(octets));
+        }
+        if bytes.get(position).copied() != Some(b'.') {
+            return None;
+        }
+        position += 1;
+    }
+    None
+}
+
+/// Formats one packed IPv4 integer into dotted-quad text.
+fn eval_format_ipv4(ip: u32) -> String {
+    let [a, b, c, d] = ip.to_be_bytes();
+    format!("{}.{}.{}.{}", a, b, c, d)
 }
 
 /// Evaluates PHP `getenv($name)` over one eval expression.
@@ -8322,6 +8503,38 @@ return function_exists("gethostbyname");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "127.0.0.1:not a host:127.0.0.1:not a host:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval IPv4 conversion builtins handle scalar and raw-byte paths.
+    #[test]
+    fn execute_program_dispatches_ip_conversion_builtins() {
+        let program = parse_fragment(
+            br#"echo long2ip(3232235777) . ":";
+echo long2ip(ip: 4294967295) . ":";
+echo ip2long("192.168.1.1") . ":";
+echo ip2long(ip: "1.2.3") === false ? "bad-ip" : "bad"; echo ":";
+$packed = inet_pton("1.2.3.4");
+echo bin2hex($packed) . ":";
+echo inet_pton(ip: "nonsense") === false ? "bad-pton" : "bad"; echo ":";
+echo inet_ntop($packed) . ":";
+echo inet_ntop(ip: "xx") === false ? "bad-ntop" : "bad"; echo ":";
+echo call_user_func("long2ip", 2130706433) . ":";
+echo call_user_func_array("ip2long", ["ip" => "0.0.0.0"]) . ":";
+echo function_exists("long2ip"); echo function_exists("ip2long");
+echo function_exists("inet_pton");
+return function_exists("inet_ntop");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "192.168.1.1:255.255.255.255:3232235777:bad-ip:01020304:bad-pton:1.2.3.4:bad-ntop:127.0.0.1:0:111"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
