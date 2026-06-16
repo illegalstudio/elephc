@@ -2630,6 +2630,31 @@ echo ":"; echo function_exists("number_format");');
     );
 }
 
+/// Verifies eval printf-family builtins format, print, and dispatch through callables.
+#[test]
+fn test_eval_dispatches_printf_family_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo sprintf("Hello %s", "World"); echo ":";
+echo sprintf("%05d", 42); echo ":";
+echo sprintf("%.2f", 3.14159); echo ":";
+echo sprintf("%-6s|", "hi"); echo ":";
+$printed = printf("%s=%d", "n", 42);
+echo ":" . $printed . ":";
+echo vsprintf("%s/%d/%.1f", ["age", 42, 3]); echo ":";
+$vprinted = vprintf("%s-%d", ["v", 7]);
+echo ":" . $vprinted . ":";
+echo call_user_func("sprintf", "%+d", 42); echo ":";
+echo call_user_func_array("vsprintf", ["format" => "%s", "values" => ["spread"]]); echo ":";
+echo function_exists("sprintf"); echo is_callable("printf"); echo function_exists("vsprintf"); echo is_callable("vprintf");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Hello World:00042:3.14:hi    |:n=42:4:age/42/3.0:v-7:3:+42:spread:1111"
+    );
+}
+
 /// Verifies eval `min()` and `max()` select numeric values directly and through callables.
 #[test]
 fn test_eval_dispatches_min_max_builtin_calls() {
