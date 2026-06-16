@@ -4587,6 +4587,22 @@ return 0;');
     assert_eq!(out, "7");
 }
 
+/// Verifies eval-internal catch clauses can omit the Throwable variable.
+#[test]
+fn test_eval_try_catch_without_variable_inside_eval() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('try {
+    throw new Exception("eval boom");
+} catch (Throwable) {
+    return 8;
+}
+return 0;');
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
 /// Verifies eval-internal finally runs before returning from the fragment.
 #[test]
 fn test_eval_finally_runs_before_eval_return() {

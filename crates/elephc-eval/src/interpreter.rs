@@ -1092,14 +1092,18 @@ fn execute_matching_catch(
     else {
         return Ok(EvalControl::Throw(thrown));
     };
-    for replaced in set_scope_cell(
-        context,
-        scope,
-        catch.var_name.clone(),
-        thrown,
-        ScopeCellOwnership::Owned,
-    )? {
-        values.release(replaced)?;
+    if let Some(var_name) = &catch.var_name {
+        for replaced in set_scope_cell(
+            context,
+            scope,
+            var_name.clone(),
+            thrown,
+            ScopeCellOwnership::Owned,
+        )? {
+            values.release(replaced)?;
+        }
+    } else {
+        values.release(thrown)?;
     }
     execute_statements(&catch.body, context, scope, values)
 }
@@ -15054,6 +15058,32 @@ mod tests {
 
         assert_eq!(values.type_tag(caught), Ok(EVAL_TAG_OBJECT));
         assert_eq!(values.get(result), FakeValue::Int(42));
+    }
+
+    /// Verifies eval `catch (Throwable)` can handle a throw without binding a variable.
+    #[test]
+    fn execute_program_catches_throwable_without_variable_inside_eval() {
+        let program = parse_fragment(
+            br#"try {
+    throw new Exception("eval boom");
+} catch (Throwable) {
+    return 9;
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let released = values
+            .releases
+            .first()
+            .copied()
+            .expect("unbound catch should release the thrown object");
+
+        assert_eq!(scope.visible_cell("caught"), None);
+        assert_eq!(values.type_tag(released), Ok(EVAL_TAG_OBJECT));
+        assert_eq!(values.get(result), FakeValue::Int(9));
     }
 
     /// Verifies eval `finally` runs before a pending try-body return is observed.

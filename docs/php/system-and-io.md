@@ -36,6 +36,8 @@ The evaluated string must be a PHP fragment without an opening `<?php` tag. Vari
 
 Eval `finally` is part of the eval control-flow subset and runs before a fragment returns or propagates a `Throwable`.
 
+Eval `catch (Throwable)` may omit the catch variable when the fragment only needs to handle and discard the thrown object.
+
 Inside eval fragments, two-element object-method callable arrays such as `[$this, "method"]` can be invoked through `$cb(...)`, `call_user_func($cb, ...)`, and `call_user_func_array($cb, [...])` with positional arguments. Static-method callable arrays and closure/descriptor callbacks are still outside the eval fragment subset.
 
 Eval `match` expressions support strict pattern comparison, comma-separated patterns, lazy result-arm evaluation, and `default` fallback. A miss without `default` is currently reported as an eval runtime fatal.
