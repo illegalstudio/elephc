@@ -21,7 +21,7 @@ use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
 use std::net::ToSocketAddrs;
-use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 
 /// Internal statement-control result used to propagate eval returns and loops.
 enum EvalControl {
@@ -339,6 +339,11 @@ const EVAL_PATHINFO_BASENAME: i64 = 2;
 const EVAL_PATHINFO_EXTENSION: i64 = 4;
 const EVAL_PATHINFO_FILENAME: i64 = 8;
 const EVAL_PATHINFO_ALL: i64 = 15;
+
+unsafe extern "C" {
+    /// Sets the process file-creation mask and returns the previous mask.
+    fn umask(mask: u32) -> u32;
+}
 
 /// Executes an EvalIR program and returns the eval result cell.
 pub fn execute_program(
@@ -1204,6 +1209,7 @@ fn eval_positional_expr_call(
         "chdir" | "mkdir" | "rmdir" => {
             eval_builtin_unary_path_bool(name, args, context, scope, values)
         }
+        "chmod" => eval_builtin_chmod(args, context, scope, values),
         "chr" => eval_builtin_chr(args, context, scope, values),
         "clearstatcache" => eval_builtin_clearstatcache(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
@@ -1289,6 +1295,7 @@ fn eval_positional_expr_call(
         "sleep" => eval_builtin_sleep(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
+        "tempnam" => eval_builtin_tempnam(args, context, scope, values),
         "time" => eval_builtin_time(args, values),
         "unlink" => eval_builtin_unlink(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
@@ -1313,6 +1320,7 @@ fn eval_positional_expr_call(
         "long2ip" => eval_builtin_long2ip(args, context, scope, values),
         "trim" => eval_builtin_trim_like(name, args, context, scope, values),
         "ucwords" => eval_builtin_ucwords(args, context, scope, values),
+        "umask" => eval_builtin_umask(args, context, scope, values),
         "usleep" => eval_builtin_usleep(args, context, scope, values),
         "wordwrap" => eval_builtin_wordwrap(args, context, scope, values),
         _ => Err(EvalStatus::UnsupportedConstruct),
@@ -1578,6 +1586,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "bin2hex"
             | "ceil"
             | "chdir"
+            | "chmod"
             | "call_user_func"
             | "call_user_func_array"
             | "class_exists"
@@ -1703,12 +1712,14 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strval"
             | "symlink"
             | "sys_get_temp_dir"
+            | "tempnam"
             | "time"
             | "trim"
             | "substr_replace"
             | "ucfirst"
             | "ucwords"
             | "unlink"
+            | "umask"
             | "urldecode"
             | "urlencode"
             | "usleep"
@@ -1809,6 +1820,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_exists" => Some(&["class", "autoload"]),
         "chdir" | "mkdir" | "rmdir" | "scandir" => Some(&["directory"]),
+        "chmod" => Some(&["filename", "permissions"]),
         "chr" => Some(&["codepoint"]),
         "clearstatcache" => Some(&["clear_realpath_cache", "filename"]),
         "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
@@ -1864,11 +1876,13 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "substr" => Some(&["string", "offset", "length"]),
         "substr_replace" => Some(&["string", "replace", "offset", "length"]),
         "sys_get_temp_dir" | "time" => Some(&[]),
+        "tempnam" => Some(&["directory", "prefix"]),
         "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
             Some(&["string"])
         }
         "long2ip" => Some(&["ip"]),
         "ucwords" => Some(&["string", "separators"]),
+        "umask" => Some(&["mask"]),
         "usleep" => Some(&["microseconds"]),
         "wordwrap" => Some(&["string", "width", "break", "cut_long_words"]),
         _ => None,
@@ -2101,6 +2115,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_unary_path_bool_result(name, *path, values)?
+        }
+        "chmod" => {
+            let [filename, permissions] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_chmod_result(*filename, *permissions, values)?
         }
         "clearstatcache" => {
             if evaluated_args.len() > 2 {
@@ -2504,6 +2524,12 @@ fn eval_builtin_with_values(
             }
             eval_sys_get_temp_dir_result(values)?
         }
+        "tempnam" => {
+            let [directory, prefix] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_tempnam_result(*directory, *prefix, values)?
+        }
         "sleep" => {
             let [seconds] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -2516,6 +2542,11 @@ fn eval_builtin_with_values(
             }
             eval_time_result(values)?
         }
+        "umask" => match evaluated_args {
+            [] => eval_umask_result(None, values)?,
+            [mask] => eval_umask_result(Some(*mask), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "usleep" => {
             let [microseconds] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -4491,6 +4522,33 @@ fn eval_binary_path_bool_result(
     values.bool_value(ok)
 }
 
+/// Evaluates PHP `chmod($filename, $permissions)` over eval expressions.
+fn eval_builtin_chmod(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename, permissions] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    let permissions = eval_expr(permissions, context, scope, values)?;
+    eval_chmod_result(filename, permissions, values)
+}
+
+/// Changes one local file's mode and returns whether the operation succeeded.
+fn eval_chmod_result(
+    filename: RuntimeCellHandle,
+    permissions: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let mode = eval_int_value(permissions, values)? as u32;
+    let permissions = std::fs::Permissions::from_mode(mode);
+    values.bool_value(std::fs::set_permissions(path, permissions).is_ok())
+}
+
 /// Evaluates PHP `scandir($directory)` over one eval expression.
 fn eval_builtin_scandir(
     args: &[EvalExpr],
@@ -4537,6 +4595,91 @@ fn eval_array_set_indexed_bytes(
     let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
     let value = values.string_bytes_value(value)?;
     values.array_set(array, key, value)
+}
+
+/// Evaluates PHP `tempnam($directory, $prefix)` over eval expressions.
+fn eval_builtin_tempnam(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [directory, prefix] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let directory = eval_expr(directory, context, scope, values)?;
+    let prefix = eval_expr(prefix, context, scope, values)?;
+    eval_tempnam_result(directory, prefix, values)
+}
+
+/// Creates a unique local temporary file and returns its path, or an empty string on failure.
+fn eval_tempnam_result(
+    directory: RuntimeCellHandle,
+    prefix: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let directory = eval_path_string(directory, values)?;
+    let prefix = values.string_bytes(prefix)?;
+    let prefix = String::from_utf8_lossy(&prefix);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    for attempt in 0..1000_u32 {
+        let candidate =
+            std::path::Path::new(&directory).join(eval_tempnam_filename(&prefix, nonce, attempt));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_) => return values.string(candidate.to_string_lossy().as_ref()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return values.string(""),
+        }
+    }
+    values.string("")
+}
+
+/// Builds one deterministic tempnam candidate basename from prefix, process, and attempt data.
+fn eval_tempnam_filename(prefix: &str, nonce: u128, attempt: u32) -> String {
+    format!("{}{}_{:x}_{attempt}", prefix, std::process::id(), nonce)
+}
+
+/// Evaluates PHP `umask($mask = null)` over an optional eval expression.
+fn eval_builtin_umask(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [] => eval_umask_result(None, values),
+        [mask] => {
+            let mask = eval_expr(mask, context, scope, values)?;
+            eval_umask_result(Some(mask), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Applies PHP `umask()` semantics and returns the previous mask.
+fn eval_umask_result(
+    mask: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let previous = match mask {
+        Some(mask) => {
+            let mask = eval_int_value(mask, values)? as u32;
+            unsafe { umask(mask) }
+        }
+        None => unsafe {
+            let current = umask(0);
+            umask(current);
+            current
+        },
+    };
+    values.int(i64::from(previous))
 }
 
 /// Evaluates PHP `readlink($path)` over one eval expression.
@@ -9861,6 +10004,68 @@ return true;"#
         assert_eq!(
             values.output,
             "2:line0:line1:[]0:missing-readfile:missing-file:4:scan:callfile:4:cleanup:111"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval file-modification builtins update modes, masks, temp files, and dispatch.
+    #[test]
+    fn execute_program_dispatches_file_modify_builtins() {
+        let pid = std::process::id();
+        let filename = format!("elephc_eval_modify_{pid}.txt");
+        let missing = format!("elephc_eval_modify_missing_{pid}.txt");
+        let prefix = format!("evm{pid}_");
+        let call_prefix = format!("evc{pid}_");
+        let source = format!(
+            r#"file_put_contents("{filename}", "x");
+echo chmod(filename: "{filename}", permissions: 384) ? "chmod" : "bad"; echo ":";
+echo (fileperms("{filename}") & 511) === 384 ? "mode" : "bad"; echo ":";
+echo chmod("{missing}", 384) ? "bad" : "chmod-false"; echo ":";
+$tmp = tempnam(directory: ".", prefix: "{prefix}");
+echo file_exists($tmp) && str_starts_with(basename($tmp), "{prefix}") ? "tempnam" : "bad"; echo ":";
+unlink($tmp);
+$previous = umask(mask: 18);
+$set = umask($previous);
+echo $set === 18 ? "umask" : "bad"; echo ":";
+$before = umask(18);
+$probe = umask();
+$restore = umask($before);
+echo $probe === 18 && $restore === 18 ? "probe" : "bad"; echo ":";
+echo call_user_func("chmod", "{filename}", 420) ? "callchmod" : "bad"; echo ":";
+$call_tmp = call_user_func_array("tempnam", ["directory" => ".", "prefix" => "{call_prefix}"]);
+echo file_exists($call_tmp) && str_starts_with(basename($call_tmp), "{call_prefix}") ? "calltempnam" : "bad"; echo ":";
+unlink($call_tmp);
+echo unlink("{filename}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("chmod"); echo function_exists("tempnam"); echo function_exists("umask");
+return true;"#
+        );
+        let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(&missing);
+        for entry in std::fs::read_dir(".").expect("read eval test cwd") {
+            let entry = entry.expect("read eval temp entry");
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&prefix) || name.starts_with(&call_prefix) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(&missing);
+        for entry in std::fs::read_dir(".").expect("read eval test cwd") {
+            let entry = entry.expect("read eval temp entry");
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&prefix) || name.starts_with(&call_prefix) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        assert_eq!(
+            values.output,
+            "chmod:mode:chmod-false:tempnam:umask:probe:callchmod:calltempnam:cleanup:111"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
