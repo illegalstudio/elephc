@@ -4586,3 +4586,18 @@ return 0;');
     );
     assert_eq!(out, "7");
 }
+
+/// Verifies eval-internal finally runs before returning from the fragment.
+#[test]
+fn test_eval_finally_runs_before_eval_return() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('try {
+    return 1;
+} finally {
+    echo "F";
+}');
+"#,
+    );
+    assert_eq!(out, "F1");
+}

@@ -116,6 +116,7 @@ pub enum EvalStmt {
     Try {
         body: Vec<EvalStmt>,
         catches: Vec<EvalCatch>,
+        finally_body: Vec<EvalStmt>,
     },
     UnsetVar {
         name: String,

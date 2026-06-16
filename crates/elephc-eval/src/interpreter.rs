@@ -1004,7 +1004,11 @@ fn execute_stmt(
             }
             Ok(EvalControl::Throw(thrown))
         }
-        EvalStmt::Try { body, catches } => execute_try_stmt(body, catches, context, scope, values),
+        EvalStmt::Try {
+            body,
+            catches,
+            finally_body,
+        } => execute_try_stmt(body, catches, finally_body, context, scope, values),
         EvalStmt::UnsetVar { name } => {
             if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
                 values.release(replaced)?;
@@ -1036,14 +1040,52 @@ fn execute_stmt(
 fn execute_try_stmt(
     body: &[EvalStmt],
     catches: &[EvalCatch],
+    finally_body: &[EvalStmt],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let thrown = match execute_statements(body, context, scope, values)? {
-        EvalControl::Throw(thrown) => thrown,
-        control => return Ok(control),
+    let control = match execute_statements(body, context, scope, values)? {
+        EvalControl::Throw(thrown) => {
+            execute_matching_catch(thrown, catches, context, scope, values)?
+        }
+        control => control,
     };
+    if finally_body.is_empty() {
+        return Ok(control);
+    }
+    match execute_statements(finally_body, context, scope, values) {
+        Ok(EvalControl::None) => Ok(control),
+        Ok(finally_control) => {
+            release_overridden_control(control, values)?;
+            Ok(finally_control)
+        }
+        Err(status) => {
+            release_overridden_control(control, values)?;
+            Err(status)
+        }
+    }
+}
+
+/// Releases a pending control-flow value when `finally` replaces that action.
+fn release_overridden_control(
+    control: EvalControl,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    match control {
+        EvalControl::Return(value) | EvalControl::Throw(value) => values.release(value),
+        EvalControl::None | EvalControl::Break | EvalControl::Continue => Ok(()),
+    }
+}
+
+/// Executes the first supported catch clause for a thrown eval object.
+fn execute_matching_catch(
+    thrown: RuntimeCellHandle,
+    catches: &[EvalCatch],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
     let Some(catch) = catches
         .iter()
         .find(|catch| catch_type_matches_throwable(&catch.class_name))
@@ -13723,11 +13765,16 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
                     collect_static_var_names(&case.body, names);
                 }
             }
-            EvalStmt::Try { body, catches } => {
+            EvalStmt::Try {
+                body,
+                catches,
+                finally_body,
+            } => {
                 collect_static_var_names(body, names);
                 for catch in catches {
                     collect_static_var_names(&catch.body, names);
                 }
+                collect_static_var_names(finally_body, names);
             }
             EvalStmt::ArrayAppendVar { .. }
             | EvalStmt::ArraySetVar { .. }
@@ -15009,6 +15056,101 @@ mod tests {
         assert_eq!(values.get(result), FakeValue::Int(42));
     }
 
+    /// Verifies eval `finally` runs before a pending try-body return is observed.
+    #[test]
+    fn execute_program_runs_finally_before_returning_try_value() {
+        let program = parse_fragment(
+            br#"try {
+    return 1;
+} finally {
+    echo "finally";
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "finally");
+        assert_eq!(values.get(result), FakeValue::Int(1));
+    }
+
+    /// Verifies eval `finally` return values replace pending try-body returns.
+    #[test]
+    fn execute_program_finally_return_overrides_try_return() {
+        let program = parse_fragment(
+            br#"try {
+    return 1;
+} finally {
+    return 2;
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(2));
+        assert_eq!(values.releases.len(), 1);
+    }
+
+    /// Verifies eval `finally` return values replace pending uncaught throws.
+    #[test]
+    fn execute_program_finally_return_overrides_uncaught_throw() {
+        let program = parse_fragment(
+            br#"try {
+    throw new Exception("eval boom");
+} finally {
+    return 2;
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let released = values
+            .releases
+            .first()
+            .copied()
+            .expect("overridden throw should be released");
+
+        assert_eq!(values.get(result), FakeValue::Int(2));
+        assert_eq!(values.type_tag(released), Ok(EVAL_TAG_OBJECT));
+    }
+
+    /// Verifies eval `finally` runs before an uncaught throw leaves the fragment.
+    #[test]
+    fn execute_program_runs_finally_before_uncaught_throw_outcome() {
+        let program = parse_fragment(
+            br#"try {
+    throw new Exception("eval boom");
+} finally {
+    echo "finally";
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let outcome = execute_program_outcome_with_context(
+            &mut context,
+            &program,
+            &mut scope,
+            &mut values,
+        )
+        .expect("throw should be an eval outcome");
+
+        match outcome {
+            EvalOutcome::Throwable(value) => assert_eq!(values.type_tag(value), Ok(EVAL_TAG_OBJECT)),
+            EvalOutcome::Value(value) => panic!("expected Throwable, got {:?}", values.get(value)),
+        }
+        assert_eq!(values.output, "finally");
+    }
+
     /// Verifies static locals declared inside eval catch blocks persist per function context.
     #[test]
     fn execute_context_function_persists_static_local_inside_catch() {
@@ -15045,6 +15187,36 @@ mod tests {
 
         assert_eq!(values.get(first), FakeValue::Int(43));
         assert_eq!(values.get(second), FakeValue::Int(44));
+    }
+
+    /// Verifies static locals declared inside eval finally blocks persist per function context.
+    #[test]
+    fn execute_context_function_persists_static_local_inside_finally() {
+        let program = parse_fragment(
+            br#"function dyn() {
+    try {
+        return 0;
+    } finally {
+        static $n = 0;
+        $n++;
+        return $n;
+    }
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("declare dynamic function");
+
+        let first = execute_context_function_zero_args(&mut context, "dyn", &mut values)
+            .expect("execute first dynamic function call");
+        let second = execute_context_function_zero_args(&mut context, "dyn", &mut values)
+            .expect("execute second dynamic function call");
+
+        assert_eq!(values.get(first), FakeValue::Int(1));
+        assert_eq!(values.get(second), FakeValue::Int(2));
     }
 
     /// Verifies throws from eval-declared functions escape through the shared context.
