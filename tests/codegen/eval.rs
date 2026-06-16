@@ -1076,7 +1076,7 @@ echo ":"; echo function_exists("gettype");');
 /// Verifies eval `define()` and `defined()` share dynamic constant names across fragments.
 #[test]
 fn test_eval_define_and_defined_dynamic_constants() {
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         r#"<?php
 echo eval('return define("DynEvalConst", 7) ? "Y" : "N";');
 echo eval('return defined("DynEvalConst") ? "Y" : "N";');
@@ -1091,7 +1091,29 @@ echo eval('return call_user_func_array("defined", ["constant_name" => "DynEvalCo
 echo eval('return function_exists("define") && function_exists("defined") ? "Y" : "N";');
 "#,
     );
-    assert_eq!(out, "YY77NNYYYYY");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "YY77NNYYYYY");
+    assert!(
+        out.stderr
+            .contains("Warning: define(): Constant already defined"),
+        "expected duplicate eval define warning, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies `@eval(...)` suppresses duplicate eval `define()` warnings.
+#[test]
+fn test_error_control_suppresses_duplicate_eval_define_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('define("DynEvalSuppressedConst", 1);');
+echo @eval('return define("DynEvalSuppressedConst", 2) ? "bad" : "ok";');
+echo eval('return DynEvalSuppressedConst;');
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok1");
+    assert_eq!(out.stderr, "");
 }
 
 /// Verifies missing eval dynamic constants fail through the eval runtime path.

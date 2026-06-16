@@ -68,6 +68,7 @@ unsafe extern "C" {
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_type_tag(value: *mut RuntimeCell) -> u64;
+    fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);
     fn __elephc_eval_value_null() -> *mut RuntimeCell;
     fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
     fn __elephc_eval_value_int(value: i64) -> *mut RuntimeCell;
@@ -357,6 +358,14 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Ok(RuntimeCellHandle::from_raw(unsafe {
             __elephc_eval_value_retain(value.as_ptr())
         }))
+    }
+
+    /// Emits one PHP warning through the generated runtime diagnostic helper.
+    fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
+        unsafe {
+            __elephc_eval_warning(message.as_ptr(), message.len() as u64);
+        }
+        Ok(())
     }
 
     /// Creates a boxed null Mixed cell through the generated runtime wrapper.

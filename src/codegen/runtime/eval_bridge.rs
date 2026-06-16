@@ -1076,6 +1076,11 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("b __rt_incref");                                       // retain one eval-owned boxed Mixed cell
 
+    label_c_global(emitter, "__elephc_eval_warning");
+    emitter.instruction("mov x2, x1");                                          // move warning length into the runtime diagnostic length register
+    emitter.instruction("mov x1, x0");                                          // move warning pointer into the runtime diagnostic buffer register
+    emitter.instruction("b __rt_diag_warning");                                 // emit or suppress one eval runtime warning
+
     label_c_global(emitter, "__elephc_eval_value_release");
     emitter.instruction("b __rt_decref_mixed");                                 // release one eval-owned boxed Mixed cell
 }
@@ -2217,6 +2222,9 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal retain register
     emitter.instruction("jmp __rt_incref");                                     // retain one eval-owned boxed Mixed cell
+
+    label_c_global(emitter, "__elephc_eval_warning");
+    emitter.instruction("jmp __rt_diag_warning");                               // emit or suppress one eval runtime warning
 
     label_c_global(emitter, "__elephc_eval_value_release");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal release register

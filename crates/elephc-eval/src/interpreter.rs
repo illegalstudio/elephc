@@ -129,6 +129,9 @@ pub trait RuntimeValueOps {
     /// Retains one runtime cell so the eval caller receives an independent owner.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Emits or suppresses one PHP runtime warning through the target runtime.
+    fn warning(&mut self, message: &str) -> Result<(), EvalStatus>;
+
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -286,6 +289,7 @@ const EVAL_TAG_ASSOC: u64 = 5;
 const EVAL_TAG_OBJECT: u64 = 6;
 const EVAL_TAG_NULL: u64 = 8;
 const EVAL_TAG_RESOURCE: u64 = 9;
+const DEFINE_ALREADY_DEFINED_WARNING: &str = "Warning: define(): Constant already defined\n";
 
 /// Executes an EvalIR program and returns the eval result cell.
 pub fn execute_program(
@@ -1273,6 +1277,7 @@ fn eval_define_name(
         return Err(EvalStatus::RuntimeFatal);
     }
     if context.has_constant(&name) {
+        values.warning(DEFINE_ALREADY_DEFINED_WARNING)?;
         return Ok(false);
     }
     let value = values.retain(value)?;
@@ -3440,6 +3445,7 @@ mod tests {
         values: HashMap<usize, FakeValue>,
         output: String,
         releases: Vec<RuntimeCellHandle>,
+        warnings: Vec<String>,
     }
 
     impl FakeOps {
@@ -3749,6 +3755,12 @@ mod tests {
         /// Returns the same fake handle because fake cells do not refcount.
         fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
             Ok(value)
+        }
+
+        /// Records fake PHP warnings without writing to stderr.
+        fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
+            self.warnings.push(message.to_string());
+            Ok(())
         }
 
         /// Creates a fake null cell.
@@ -6314,6 +6326,10 @@ echo call_user_func_array("defined", ["constant_name" => "\\DynEvalConst"]) ? "Y
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "YokokYYNNYY");
+        assert_eq!(
+            values.warnings,
+            vec![DEFINE_ALREADY_DEFINED_WARNING.to_string()]
+        );
     }
 
     /// Verifies missing eval dynamic constants fail through runtime status.
