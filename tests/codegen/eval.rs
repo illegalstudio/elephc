@@ -1915,6 +1915,19 @@ echo $x;
     assert_eq!(out, "5");
 }
 
+/// Verifies eval unset breaks a reference alias without unsetting the source variable.
+#[test]
+fn test_eval_unset_reference_alias_keeps_source_local() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+eval('$alias =& $x; unset($alias); $alias = 9;');
+echo $x . ":" . $alias;
+"#,
+    );
+    assert_eq!(out, "1:9");
+}
+
 /// Verifies `return` inside eval becomes the expression result of `eval(...)`.
 #[test]
 fn test_eval_return_value_is_available_to_native_code() {
