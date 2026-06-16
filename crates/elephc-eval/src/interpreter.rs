@@ -13458,9 +13458,10 @@ fn eval_json_decode_result(
     if flags & !supported_flags != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
     }
-    if let Some(associative) = associative {
-        let _ = values.truthy(associative)?;
-    }
+    let objects_as_assoc = associative
+        .map(|associative| values.truthy(associative))
+        .transpose()?
+        .unwrap_or(false);
     let depth = depth
         .map(|depth| eval_int_value(depth, values))
         .transpose()?
@@ -13489,13 +13490,14 @@ fn eval_json_decode_result(
         }
     };
     context.clear_json_error();
-    eval_json_decode_to_cell(decoded, flags, values)
+    eval_json_decode_to_cell(decoded, flags, objects_as_assoc, values)
 }
 
 /// Materializes one parsed JSON value as an eval runtime cell.
 fn eval_json_decode_to_cell(
     value: JsonValue,
     flags: i64,
+    objects_as_assoc: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match value {
@@ -13508,21 +13510,39 @@ fn eval_json_decode_to_cell(
             for (index, element) in elements.into_iter().enumerate() {
                 let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
                 let key = values.int(index)?;
-                let element = eval_json_decode_to_cell(element, flags, values)?;
+                let element = eval_json_decode_to_cell(element, flags, objects_as_assoc, values)?;
                 result = values.array_set(result, key, element)?;
             }
             Ok(result)
         }
         JsonValue::Object(entries) => {
+            if !objects_as_assoc {
+                return eval_json_decode_object_to_cell(entries, flags, values);
+            }
             let mut result = values.assoc_new(entries.len())?;
             for (key, value) in entries {
                 let key = values.string_bytes_value(&key)?;
-                let value = eval_json_decode_to_cell(value, flags, values)?;
+                let value = eval_json_decode_to_cell(value, flags, objects_as_assoc, values)?;
                 result = values.array_set(result, key, value)?;
             }
             Ok(result)
         }
     }
+}
+
+/// Materializes a parsed JSON object as a `stdClass` runtime object.
+fn eval_json_decode_object_to_cell(
+    entries: Vec<(Vec<u8>, JsonValue)>,
+    flags: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let object = values.new_object("stdClass")?;
+    for (key, value) in entries {
+        let key = std::str::from_utf8(&key).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let value = eval_json_decode_to_cell(value, flags, false, values)?;
+        values.property_set(object, key, value)?;
+    }
+    Ok(object)
 }
 
 /// Materializes one JSON number as an int when possible and as a float otherwise.
@@ -18047,6 +18067,30 @@ return function_exists("json_decode") && defined("JSON_BIGINT_AS_STRING") && def
             values.output,
             "hello:42:T:NULL:1:x:F:4:v:utf8-null:5:6162:0:61efbfbd62:0:6befbfbd=76efbfbd:6b=76:BAD:9223372036854775808:-9223372036854775809:string:9223372036854775808:9223372036854775808:"
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `json_decode()` returns `stdClass` objects unless assoc is true.
+    #[test]
+    fn execute_program_dispatches_json_decode_stdclass_default() {
+        let program = parse_fragment(
+            br#"$object = json_decode("{\"a\":1,\"b\":{\"c\":\"x\"}}");
+echo $object->a . ":" . $object->b->c . ":";
+$objectFalse = json_decode("{\"z\":2}", false);
+echo $objectFalse->z . ":";
+$objectNull = json_decode("{\"n\":{\"m\":3}}", null);
+echo $objectNull->n->m . ":";
+$assoc = json_decode("{\"b\":{\"c\":\"y\"}}", true);
+echo $assoc["b"]["c"] . ":";
+return true;"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "1:x:2:3:y:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

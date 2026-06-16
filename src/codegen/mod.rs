@@ -609,6 +609,9 @@ fn collect_emitted_class_names(
     ] {
         names.insert(builtin.to_string());
     }
+    if classes.contains_key("stdClass") {
+        names.insert("stdClass".to_string());
+    }
     for builtin in [
         "ReflectionAttribute",
         "ReflectionClass",

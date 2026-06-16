@@ -45,10 +45,40 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame across dynamic object lookup
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across runtime calls
     emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("cmp x1, #8");                                          // stdClass has an 8-byte class name
+    emitter.instruction("b.ne __elephc_eval_value_new_object_generic");         // use the generic factory for non-stdClass lengths
+    emitter.instruction("ldrb w9, [x0]");                                       // load candidate byte 0 for stdClass comparison
+    emitter.instruction("cmp w9, #115");                                        // byte 0 must be 's'
+    emitter.instruction("b.ne __elephc_eval_value_new_object_generic");         // fall back when byte 0 differs
+    emitter.instruction("ldrb w9, [x0, #1]");                                   // load candidate byte 1 for stdClass comparison
+    emitter.instruction("cmp w9, #116");                                        // byte 1 must be 't'
+    emitter.instruction("b.ne __elephc_eval_value_new_object_generic");         // fall back when byte 1 differs
+    emitter.instruction("ldrb w9, [x0, #2]");                                   // load candidate byte 2 for stdClass comparison
+    emitter.instruction("cmp w9, #100");                                        // byte 2 must be 'd'
+    emitter.instruction("b.ne __elephc_eval_value_new_object_generic");         // fall back when byte 2 differs
+    emitter.instruction("ldrb w9, [x0, #3]");                                   // load candidate byte 3 for stdClass comparison
+    emitter.instruction("cmp w9, #67");                                         // byte 3 must be 'C'
+    emitter.instruction("b.ne __elephc_eval_value_new_object_generic");         // fall back when byte 3 differs
+    emitter.instruction("ldrb w9, [x0, #4]");                                   // load candidate byte 4 for stdClass comparison
+    emitter.instruction("cmp w9, #108");                                        // byte 4 must be 'l'
+    emitter.instruction("b.ne __elephc_eval_value_new_object_generic");         // fall back when byte 4 differs
+    emitter.instruction("ldrb w9, [x0, #5]");                                   // load candidate byte 5 for stdClass comparison
+    emitter.instruction("cmp w9, #97");                                         // byte 5 must be 'a'
+    emitter.instruction("b.ne __elephc_eval_value_new_object_generic");         // fall back when byte 5 differs
+    emitter.instruction("ldrb w9, [x0, #6]");                                   // load candidate byte 6 for stdClass comparison
+    emitter.instruction("cmp w9, #115");                                        // byte 6 must be 's'
+    emitter.instruction("b.ne __elephc_eval_value_new_object_generic");         // fall back when byte 6 differs
+    emitter.instruction("ldrb w9, [x0, #7]");                                   // load candidate byte 7 for stdClass comparison
+    emitter.instruction("cmp w9, #115");                                        // byte 7 must be 's'
+    emitter.instruction("b.ne __elephc_eval_value_new_object_generic");         // fall back when byte 7 differs
+    emitter.instruction("bl __rt_stdclass_new");                                // allocate stdClass with its dynamic-property hash
+    emitter.instruction("b __elephc_eval_value_new_object_box");                // box the stdClass object for Rust
+    emitter.label("__elephc_eval_value_new_object_generic");
     emitter.instruction("mov x2, x1");                                          // move the C class-name length into new_by_name's string ABI
     emitter.instruction("mov x1, x0");                                          // move the C class-name pointer into new_by_name's string ABI
     emitter.instruction("bl __rt_new_by_name");                                 // allocate the named AOT class object, or return null on miss
     emitter.instruction("cbz x0, __elephc_eval_value_new_object_null");         // box PHP null when no runtime class matched the eval name
+    emitter.label("__elephc_eval_value_new_object_box");
     emitter.instruction("mov x1, x0");                                          // move the allocated object pointer into the Mixed payload
     emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
@@ -1105,11 +1135,33 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_new_object");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable dynamic-object wrapper frame
+    emitter.instruction("cmp rsi, 8");                                          // stdClass has an 8-byte class name
+    emitter.instruction("jne __elephc_eval_value_new_object_generic_x86");      // use the generic factory for non-stdClass lengths
+    emitter.instruction("cmp BYTE PTR [rdi], 115");                             // byte 0 must be 's'
+    emitter.instruction("jne __elephc_eval_value_new_object_generic_x86");      // fall back when byte 0 differs
+    emitter.instruction("cmp BYTE PTR [rdi + 1], 116");                         // byte 1 must be 't'
+    emitter.instruction("jne __elephc_eval_value_new_object_generic_x86");      // fall back when byte 1 differs
+    emitter.instruction("cmp BYTE PTR [rdi + 2], 100");                         // byte 2 must be 'd'
+    emitter.instruction("jne __elephc_eval_value_new_object_generic_x86");      // fall back when byte 2 differs
+    emitter.instruction("cmp BYTE PTR [rdi + 3], 67");                          // byte 3 must be 'C'
+    emitter.instruction("jne __elephc_eval_value_new_object_generic_x86");      // fall back when byte 3 differs
+    emitter.instruction("cmp BYTE PTR [rdi + 4], 108");                         // byte 4 must be 'l'
+    emitter.instruction("jne __elephc_eval_value_new_object_generic_x86");      // fall back when byte 4 differs
+    emitter.instruction("cmp BYTE PTR [rdi + 5], 97");                          // byte 5 must be 'a'
+    emitter.instruction("jne __elephc_eval_value_new_object_generic_x86");      // fall back when byte 5 differs
+    emitter.instruction("cmp BYTE PTR [rdi + 6], 115");                         // byte 6 must be 's'
+    emitter.instruction("jne __elephc_eval_value_new_object_generic_x86");      // fall back when byte 6 differs
+    emitter.instruction("cmp BYTE PTR [rdi + 7], 115");                         // byte 7 must be 's'
+    emitter.instruction("jne __elephc_eval_value_new_object_generic_x86");      // fall back when byte 7 differs
+    emitter.instruction("call __rt_stdclass_new");                              // allocate stdClass with its dynamic-property hash
+    emitter.instruction("jmp __elephc_eval_value_new_object_box_x86");          // box the stdClass object for Rust
+    emitter.label("__elephc_eval_value_new_object_generic_x86");
     emitter.instruction("mov rax, rdi");                                        // move the C class-name pointer into new_by_name's string ABI
     emitter.instruction("mov rdx, rsi");                                        // move the C class-name length into new_by_name's string ABI
     emitter.instruction("call __rt_new_by_name");                               // allocate the named AOT class object, or return null on miss
     emitter.instruction("test rax, rax");                                       // did the runtime class-name lookup allocate an object?
     emitter.instruction("jz __elephc_eval_value_new_object_null_x86");          // box PHP null when no runtime class matched the eval name
+    emitter.label("__elephc_eval_value_new_object_box_x86");
     emitter.instruction("mov rdi, rax");                                        // move the allocated object pointer into the Mixed payload
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word

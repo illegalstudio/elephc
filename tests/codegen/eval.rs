@@ -907,6 +907,26 @@ echo function_exists("json_decode");');
     );
 }
 
+/// Verifies eval `json_decode()` returns `stdClass` objects unless assoc is true.
+#[test]
+fn test_eval_dispatches_json_decode_stdclass_default() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$object = json_decode("{\"a\":1,\"b\":{\"c\":\"x\"}}");
+echo $object->a . ":" . $object->b->c . ":";
+$objectFalse = json_decode("{\"z\":2}", false);
+echo $objectFalse->z . ":";
+$objectNull = json_decode("{\"n\":{\"m\":3}}", null);
+echo $objectNull->n->m . ":";
+$assoc = json_decode("{\"b\":{\"c\":\"y\"}}", true);
+echo $assoc["b"]["c"] . ":";');
+$object = eval('return json_decode("{\"a\":1,\"b\":{\"c\":\"x\"}}");');
+echo gettype($object) . ":" . $object->a . ":" . $object->b->c;
+"#,
+    );
+    assert_eq!(out, "1:x:2:3:y:object:1:x");
+}
+
 /// Verifies eval `json_last_error*()` track JSON parse failures and success resets.
 #[test]
 fn test_eval_dispatches_json_last_error_builtin_calls() {

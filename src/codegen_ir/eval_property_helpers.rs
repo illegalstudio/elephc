@@ -181,6 +181,7 @@ fn emit_property_get_aarch64(
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // save the requested property-name pointer
     emitter.instruction("str x2, [sp, #8]");                                    // save the requested property-name length
+    emitter.instruction("str x0, [sp, #24]");                                   // save the boxed receiver for stdClass fallback reads
     emitter.instruction(&format!("cbz x0, {}", null_label));                    // null Mixed receiver reads as PHP null
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
@@ -188,7 +189,8 @@ fn emit_property_get_aarch64(
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for property loads
     emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
     emit_aarch64_property_dispatch(module, emitter, data, slots, "get");
-    emitter.instruction(&format!("b {}", null_label));                          // no declared public property matched the request
+    emit_aarch64_stdclass_property_get_fallback(emitter);
+    emitter.instruction(&format!("b {}", done_label));                          // return after stdClass fallback get or null result
     emit_aarch64_get_slot_bodies(module, emitter, slots, done_label);
     emitter.label(null_label);
     let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
@@ -213,6 +215,7 @@ fn emit_property_get_x86_64(
     emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for name, length, and object
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested property-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested property-name length
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the boxed receiver for stdClass fallback reads
     emitter.instruction(&format!("test rdi, rdi"));                             // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", null_label));                         // null Mixed receiver reads as PHP null
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -222,7 +225,8 @@ fn emit_property_get_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for property loads
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
     emit_x86_64_property_dispatch(module, emitter, data, slots, "get");
-    emitter.instruction(&format!("jmp {}", null_label));                        // no declared public property matched the request
+    emit_x86_64_stdclass_property_get_fallback(emitter);
+    emitter.instruction(&format!("jmp {}", done_label));                        // return after stdClass fallback get or null result
     emit_x86_64_get_slot_bodies(module, emitter, slots, done_label);
     emitter.label(null_label);
     let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
@@ -248,6 +252,7 @@ fn emit_property_set_aarch64(
     emitter.instruction("str x1, [sp, #0]");                                    // save the requested property-name pointer
     emitter.instruction("str x2, [sp, #8]");                                    // save the requested property-name length
     emitter.instruction("str x3, [sp, #24]");                                   // save the boxed value being assigned
+    emitter.instruction("str x0, [sp, #32]");                                   // save the boxed receiver for stdClass fallback writes
     emitter.instruction(&format!("cbz x0, {}", fail_label));                    // null Mixed receiver cannot accept a property write
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
@@ -255,7 +260,7 @@ fn emit_property_set_aarch64(
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for property stores
     emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
     emit_aarch64_property_dispatch(module, emitter, data, slots, "set");
-    emitter.instruction(&format!("b {}", fail_label));                          // no declared public property matched the request
+    emit_aarch64_stdclass_property_set_fallback(module, emitter, fail_label, done_label);
     emit_aarch64_set_slot_bodies(module, emitter, slots, done_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, #0");                                          // report a failed eval property write to Rust
@@ -277,10 +282,11 @@ fn emit_property_set_x86_64(
     let done_label = "__elephc_eval_value_property_set_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for name, length, object, and value
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for name, length, object, and value
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested property-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested property-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed value being assigned
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the boxed receiver for stdClass fallback writes
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", fail_label));                         // null Mixed receiver cannot accept a property write
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -290,7 +296,7 @@ fn emit_property_set_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for property stores
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
     emit_x86_64_property_dispatch(module, emitter, data, slots, "set");
-    emitter.instruction(&format!("jmp {}", fail_label));                        // no declared public property matched the request
+    emit_x86_64_stdclass_property_set_fallback(module, emitter, fail_label, done_label);
     emit_x86_64_set_slot_bodies(module, emitter, slots, done_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report a failed eval property write to Rust
@@ -299,6 +305,81 @@ fn emit_property_set_x86_64(
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the write-status flag to Rust
+}
+
+/// Emits an ARM64 fallback read for stdClass dynamic properties.
+fn emit_aarch64_stdclass_property_get_fallback(emitter: &mut Emitter) {
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed receiver for the Mixed stdClass getter
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload requested property-name pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested property-name length
+    emitter.instruction("bl __rt_mixed_property_get");                          // read stdClass dynamic property or return Mixed(null)
+}
+
+/// Emits an x86_64 fallback read for stdClass dynamic properties.
+fn emit_x86_64_stdclass_property_get_fallback(emitter: &mut Emitter) {
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the boxed receiver for the Mixed stdClass getter
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload requested property-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload requested property-name length
+    emitter.instruction("call __rt_mixed_property_get");                        // read stdClass dynamic property or return Mixed(null)
+}
+
+/// Emits an ARM64 fallback write for stdClass dynamic properties.
+fn emit_aarch64_stdclass_property_set_fallback(
+    module: &Module,
+    emitter: &mut Emitter,
+    fail_label: &str,
+    done_label: &str,
+) {
+    let Some(class_id) = stdclass_class_id(module) else {
+        emitter.instruction(&format!("b {}", fail_label));                      // reject writes when stdClass metadata is unavailable
+        return;
+    };
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for stdClass class check
+    emitter.instruction("ldr x9, [x9]");                                        // load the object's runtime class id
+    abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
+    emitter.instruction("cmp x9, x10");                                         // check whether the receiver is stdClass
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // non-stdClass misses remain unsupported eval writes
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed receiver for the Mixed stdClass setter
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload requested property-name pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested property-name length
+    emitter.instruction("ldr x3, [sp, #24]");                                   // reload the boxed value being assigned
+    emitter.instruction("bl __rt_mixed_property_set");                          // write the stdClass dynamic property
+    emitter.instruction("mov x0, #1");                                          // report a successful eval property write to Rust
+    emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after stdClass write
+}
+
+/// Emits an x86_64 fallback write for stdClass dynamic properties.
+fn emit_x86_64_stdclass_property_set_fallback(
+    module: &Module,
+    emitter: &mut Emitter,
+    fail_label: &str,
+    done_label: &str,
+) {
+    let Some(class_id) = stdclass_class_id(module) else {
+        emitter.instruction(&format!("jmp {}", fail_label));                    // reject writes when stdClass metadata is unavailable
+        return;
+    };
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for stdClass class check
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the object's runtime class id
+    abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
+    emitter.instruction("cmp r11, r10");                                        // check whether the receiver is stdClass
+    emitter.instruction(&format!("jne {}", fail_label));                        // non-stdClass misses remain unsupported eval writes
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the boxed receiver for the Mixed stdClass setter
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload requested property-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload requested property-name length
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the boxed value being assigned
+    emitter.instruction("call __rt_mixed_property_set");                        // write the stdClass dynamic property
+    emitter.instruction("mov rax, 1");                                          // report a successful eval property write to Rust
+    emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after stdClass write
+}
+
+/// Returns the runtime class id for builtin `stdClass` in this module.
+fn stdclass_class_id(module: &Module) -> Option<u64> {
+    module
+        .class_infos
+        .iter()
+        .find(|(class_name, _)| crate::types::checker::builtin_stdclass::is_stdclass(class_name))
+        .map(|(_, class_info)| class_info.class_id)
 }
 
 /// Emits ARM64 class-id and property-name dispatch for helper slot bodies.

@@ -459,6 +459,7 @@ fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
         }
     }
     seed_runtime_throwable_class_names(module, &mut names);
+    seed_runtime_stdclass_name(module, &mut names);
     seed_builtin_reflection_class_names(module, &mut names);
     expand_class_dependencies(&mut names, &module.class_infos);
     names
@@ -485,6 +486,13 @@ fn seed_runtime_throwable_class_names(module: &Module, names: &mut HashSet<Strin
         if module.class_infos.contains_key(class_name) {
             names.insert(class_name.to_string());
         }
+    }
+}
+
+/// Adds builtin `stdClass` metadata for runtime helpers that materialize dynamic objects.
+fn seed_runtime_stdclass_name(module: &Module, names: &mut HashSet<String>) {
+    if module.class_infos.contains_key("stdClass") {
+        names.insert("stdClass".to_string());
     }
 }
 
