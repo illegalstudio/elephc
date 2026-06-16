@@ -45,6 +45,7 @@ pub enum EvalOutcome {
 }
 
 /// One already evaluated function-like call argument.
+#[derive(Clone)]
 struct EvaluatedCallArg {
     name: Option<String>,
     value: RuntimeCellHandle,
@@ -1646,6 +1647,7 @@ fn eval_positional_expr_call(
         "inet_ntop" => eval_builtin_inet_ntop(args, context, scope, values),
         "inet_pton" => eval_builtin_inet_pton(args, context, scope, values),
         "intdiv" => eval_builtin_intdiv(args, context, scope, values),
+        "iterator_apply" => eval_builtin_iterator_apply(args, context, scope, values),
         "iterator_count" => eval_builtin_iterator_count(args, context, scope, values),
         "iterator_to_array" => eval_builtin_iterator_to_array(args, context, scope, values),
         "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable" | "is_writable"
@@ -2132,6 +2134,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_real"
             | "is_resource"
             | "is_string"
+            | "iterator_apply"
             | "iterator_count"
             | "iterator_to_array"
             | "json_decode"
@@ -2405,6 +2408,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "inet_ntop" => Some(&["ip"]),
         "inet_pton" => Some(&["ip"]),
         "intdiv" => Some(&["num1", "num2"]),
+        "iterator_apply" => Some(&["iterator", "callback", "args"]),
         "iterator_count" => Some(&["iterator"]),
         "iterator_to_array" => Some(&["iterator", "preserve_keys"]),
         "ip2long" => Some(&["ip"]),
@@ -3418,6 +3422,18 @@ fn eval_builtin_with_values(
             };
             eval_intdiv_result(*left, *right, values)?
         }
+        "iterator_apply" => match evaluated_args {
+            [iterator, callback] => {
+                let callback = eval_callable_name(*callback, values)?;
+                eval_iterator_apply_result(*iterator, &callback, Vec::new(), context, values)?
+            }
+            [iterator, callback, args] => {
+                let callback = eval_callable_name(*callback, values)?;
+                let callback_args = eval_iterator_apply_arg_values(*args, values)?;
+                eval_iterator_apply_result(*iterator, &callback, callback_args, context, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "iterator_count" => {
             let [iterator] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -5617,6 +5633,99 @@ fn eval_array_projection_result(
         result = values.array_set(result, index, value)?;
     }
     Ok(result)
+}
+
+/// Evaluates PHP `iterator_apply()` for eval-supported Traversable object inputs.
+fn eval_builtin_iterator_apply(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [iterator, callback] => {
+            let iterator = eval_expr(iterator, context, scope, values)?;
+            let callback = eval_expr(callback, context, scope, values)?;
+            let callback = eval_callable_name(callback, values)?;
+            eval_iterator_apply_result(iterator, &callback, Vec::new(), context, values)
+        }
+        [iterator, callback, callback_args] => {
+            let iterator = eval_expr(iterator, context, scope, values)?;
+            let callback = eval_expr(callback, context, scope, values)?;
+            let callback = eval_callable_name(callback, values)?;
+            let callback_args = eval_expr(callback_args, context, scope, values)?;
+            let callback_args = eval_iterator_apply_arg_values(callback_args, values)?;
+            eval_iterator_apply_result(iterator, &callback, callback_args, context, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Converts the optional `iterator_apply()` callback-args value into call arguments.
+fn eval_iterator_apply_arg_values(
+    args: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    if values.is_null(args)? {
+        return Ok(Vec::new());
+    }
+    if !values.is_array_like(args)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_array_call_arg_values(args, values)
+}
+
+/// Applies a string callback to each valid position of an eval-supported Traversable object.
+fn eval_iterator_apply_result(
+    iterator: RuntimeCellHandle,
+    callback: &str,
+    callback_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.type_tag(iterator)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let count = match eval_iterator_apply_iterator_object(
+        iterator,
+        callback,
+        &callback_args,
+        context,
+        values,
+    ) {
+        Ok(count) => count,
+        Err(EvalStatus::UnsupportedConstruct) => {
+            let iterator = values.method_call(iterator, "getiterator", Vec::new())?;
+            eval_iterator_apply_iterator_object(iterator, callback, &callback_args, context, values)?
+        }
+        Err(err) => return Err(err),
+    };
+    values.int(count)
+}
+
+/// Drives one Iterator object through `rewind()`, `valid()`, callback, and `next()`.
+fn eval_iterator_apply_iterator_object(
+    iterator: RuntimeCellHandle,
+    callback: &str,
+    callback_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let _ = values.method_call(iterator, "rewind", Vec::new())?;
+    let mut count = 0_i64;
+    loop {
+        let valid = values.method_call(iterator, "valid", Vec::new())?;
+        if !values.truthy(valid)? {
+            return Ok(count);
+        }
+        count = count.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+        let result =
+            eval_callable_with_call_array_args(callback, callback_args.to_vec(), context, values)?;
+        if !values.truthy(result)? {
+            return Ok(count);
+        }
+        let _ = values.method_call(iterator, "next", Vec::new())?;
+    }
 }
 
 /// Evaluates PHP `iterator_count()` for eval-supported array iterator inputs.
@@ -13595,6 +13704,7 @@ mod tests {
         Array(Vec<RuntimeCellHandle>),
         Assoc(Vec<(FakeKey, RuntimeCellHandle)>),
         Object(HashMap<String, RuntimeCellHandle>),
+        Iterator { len: i64, position: i64 },
         Resource(i64),
     }
 
@@ -13803,6 +13913,27 @@ mod tests {
             args: Vec<RuntimeCellHandle>,
         ) -> Result<RuntimeCellHandle, EvalStatus> {
             match (self.get(object), method) {
+                (FakeValue::Iterator { .. }, "rewind") if args.is_empty() => {
+                    let id = object.as_ptr() as usize;
+                    let Some(FakeValue::Iterator { position, .. }) = self.values.get_mut(&id)
+                    else {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    };
+                    *position = 0;
+                    self.null()
+                }
+                (FakeValue::Iterator { len, position }, "valid") if args.is_empty() => {
+                    self.bool_value(position < len)
+                }
+                (FakeValue::Iterator { .. }, "next") if args.is_empty() => {
+                    let id = object.as_ptr() as usize;
+                    let Some(FakeValue::Iterator { position, .. }) = self.values.get_mut(&id)
+                    else {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    };
+                    *position += 1;
+                    self.null()
+                }
                 (FakeValue::Object(_), "answer") if args.is_empty() => self.int(42),
                 (FakeValue::Object(properties), "read_x") => {
                     if !args.is_empty() {
@@ -13906,7 +14037,7 @@ mod tests {
                 FakeValue::Bool(_) => EVAL_TAG_BOOL,
                 FakeValue::Array(_) => EVAL_TAG_ARRAY,
                 FakeValue::Assoc(_) => EVAL_TAG_ASSOC,
-                FakeValue::Object(_) => EVAL_TAG_OBJECT,
+                FakeValue::Object(_) | FakeValue::Iterator { .. } => EVAL_TAG_OBJECT,
                 FakeValue::Resource(_) => EVAL_TAG_RESOURCE,
                 FakeValue::Null => EVAL_TAG_NULL,
             })
@@ -14267,7 +14398,7 @@ mod tests {
                 FakeValue::Bytes(value) => !value.is_empty() && value.as_slice() != b"0",
                 FakeValue::Array(value) => !value.is_empty(),
                 FakeValue::Assoc(value) => !value.is_empty(),
-                FakeValue::Object(_) => true,
+                FakeValue::Object(_) | FakeValue::Iterator { .. } => true,
                 FakeValue::Resource(_) => true,
             })
         }
@@ -14347,7 +14478,7 @@ mod tests {
                     .unwrap_or(0.0),
                 FakeValue::Array(value) => value.len() as f64,
                 FakeValue::Assoc(value) => value.len() as f64,
-                FakeValue::Object(_) => 1.0,
+                FakeValue::Object(_) | FakeValue::Iterator { .. } => 1.0,
                 FakeValue::Resource(value) => (*value + 1) as f64,
             }
         }
@@ -14368,7 +14499,7 @@ mod tests {
                 FakeValue::Bytes(value) => !value.is_empty() && value.as_slice() != b"0",
                 FakeValue::Array(value) => !value.is_empty(),
                 FakeValue::Assoc(value) => !value.is_empty(),
-                FakeValue::Object(_) => true,
+                FakeValue::Object(_) | FakeValue::Iterator { .. } => true,
                 FakeValue::Resource(_) => true,
             }
         }
@@ -14385,7 +14516,7 @@ mod tests {
                 FakeValue::Bytes(value) => String::from_utf8_lossy(&value).into_owned(),
                 FakeValue::Array(_) => "Array".to_string(),
                 FakeValue::Assoc(_) => "Array".to_string(),
-                FakeValue::Object(_) => "Object".to_string(),
+                FakeValue::Object(_) | FakeValue::Iterator { .. } => "Object".to_string(),
                 FakeValue::Resource(value) => format!("Resource id #{}", value + 1),
             }
         }
@@ -14410,7 +14541,7 @@ mod tests {
                 FakeValue::String(value) => value.clone(),
                 FakeValue::Bytes(value) => String::from_utf8_lossy(value).into_owned(),
                 FakeValue::Array(_) | FakeValue::Assoc(_) => "Array".to_string(),
-                FakeValue::Object(_) => "Object".to_string(),
+                FakeValue::Object(_) | FakeValue::Iterator { .. } => "Object".to_string(),
                 FakeValue::Resource(value) => format!("Resource id #{}", value + 1),
             }
         }
@@ -16478,6 +16609,52 @@ return function_exists("iterator_count") && function_exists("iterator_to_array")
 
         assert_eq!(values.output, "2:12:reindexed:12:2:12:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `iterator_apply()` drives Iterator objects and callback args.
+    #[test]
+    fn execute_program_dispatches_iterator_apply_object_builtin() {
+        let program = parse_fragment(
+            br#"function eval_apply($prefix) { echo $prefix; return true; }
+echo iterator_apply($it, "eval_apply", ["prefix" => "x"]) . ":";
+echo call_user_func("iterator_apply", $it, "eval_apply", ["y"]) . ":";
+return function_exists("iterator_apply");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let iterator = values.alloc(FakeValue::Iterator {
+            len: 3,
+            position: 0,
+        });
+        scope.set("it", iterator, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "xxx3:yyy3:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `iterator_apply()` counts the position where the callback stops.
+    #[test]
+    fn execute_program_iterator_apply_stops_on_falsey_callback() {
+        let program = parse_fragment(
+            br#"function eval_stop() { echo "s"; return false; }
+return iterator_apply($it, "eval_stop");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let iterator = values.alloc(FakeValue::Iterator {
+            len: 3,
+            position: 0,
+        });
+        scope.set("it", iterator, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "s");
+        assert_eq!(values.get(result), FakeValue::Int(1));
     }
 
     /// Verifies eval `array_filter()` removes falsey values while preserving original keys.

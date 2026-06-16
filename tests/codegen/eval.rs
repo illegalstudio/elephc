@@ -1169,6 +1169,30 @@ echo function_exists("iterator_count") && function_exists("iterator_to_array");'
     assert_eq!(out, "2:12:reindexed:12:2:12:1");
 }
 
+/// Verifies eval `iterator_apply()` drives AOT Iterator objects through eval callbacks.
+#[test]
+fn test_eval_dispatches_iterator_apply_object_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalApplyRange implements Iterator {
+    private int $i;
+    private int $end;
+    public function __construct(int $end) { $this->i = 0; $this->end = $end; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < $this->end; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+eval('function eval_apply_label($prefix) { echo $prefix; return true; }
+$r = new EvalApplyRange(2);
+echo iterator_apply($r, "eval_apply_label", ["prefix" => "E"]) . ":";
+echo call_user_func("iterator_apply", $r, "eval_apply_label", ["C"]);');
+"#,
+    );
+    assert_eq!(out, "EE2:CC2");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {
