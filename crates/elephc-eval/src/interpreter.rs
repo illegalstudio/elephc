@@ -1356,6 +1356,9 @@ fn eval_call(
         let args = positional_call_arg_exprs(args)?;
         return eval_positional_expr_call(name, &args, context, scope, values);
     }
+    if matches!(name, "array_pop" | "array_shift") {
+        return eval_builtin_array_pop_shift_call(name, args, context, scope, values);
+    }
     if eval_php_visible_builtin_exists(name) {
         if eval_call_args_are_plain_positional(args) {
             let args = positional_call_arg_exprs(args)?;
@@ -1861,10 +1864,12 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_intersect_key"
             | "array_merge"
             | "array_pad"
+            | "array_pop"
             | "array_product"
             | "array_rand"
             | "array_reverse"
             | "array_search"
+            | "array_shift"
             | "array_slice"
             | "array_sum"
             | "array_unique"
@@ -2164,8 +2169,8 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_map" => Some(&["callback", "array"]),
         "array_reduce" => Some(&["array", "callback", "initial"]),
         "array_walk" => Some(&["array", "callback"]),
-        "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_unique"
-        | "array_rand" | "array_values" => Some(&["array"]),
+        "array_flip" | "array_keys" | "array_pop" | "array_product" | "array_shift"
+        | "array_sum" | "array_unique" | "array_rand" | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
         "array_pad" => Some(&["array", "length", "value"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
@@ -2495,6 +2500,15 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_walk_result(*array, *callback, context, values)?
+        }
+        "array_pop" | "array_shift" => {
+            let [array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            values.warning(&format!(
+                "{name}(): Argument #1 ($array) must be passed by reference, value given"
+            ))?;
+            eval_array_pop_shift_value_result(name, *array, values)?
         }
         "array_flip" => {
             let [array] = evaluated_args else {
@@ -3732,6 +3746,171 @@ fn eval_array_walk_result(
         let _ = eval_callable_with_values(&callback, vec![value, key], context, values)?;
     }
     values.bool_value(true)
+}
+
+/// Evaluates direct by-reference `array_pop()` / `array_shift()` calls and writes back the array.
+fn eval_builtin_array_pop_shift_call(
+    name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [arg] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if arg.is_spread() || !matches!(arg.name(), None | Some("array")) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let EvalExpr::LoadVar(var_name) = arg.value() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let Some(entry) = scope_entry(context, scope, var_name).filter(|entry| entry.flags().is_visible())
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = entry.cell();
+    let ownership = entry.flags().ownership;
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+
+    let (result, replacement) = eval_array_pop_shift_replacement(name, array, values)?;
+    for replaced in set_scope_cell(context, scope, var_name.clone(), replacement, ownership)? {
+        values.release(replaced)?;
+    }
+    Ok(result)
+}
+
+/// Returns the value produced by `array_pop()` / `array_shift()` without mutating the source.
+fn eval_array_pop_shift_value_result(
+    name: &str,
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let len = values.array_len(array)?;
+    if len == 0 {
+        return values.null();
+    }
+    let position = match name {
+        "array_pop" => len - 1,
+        "array_shift" => 0,
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    let key = values.array_iter_key(array, position)?;
+    values.array_get(array, key)
+}
+
+/// Builds the return value plus replacement array for direct pop/shift write-back.
+fn eval_array_pop_shift_replacement(
+    name: &str,
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
+    let len = values.array_len(array)?;
+    let tag = values.type_tag(array)?;
+    if len == 0 {
+        let replacement = match tag {
+            EVAL_TAG_ARRAY => values.array_new(0)?,
+            EVAL_TAG_ASSOC => values.assoc_new(0)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        };
+        return Ok((values.null()?, replacement));
+    }
+
+    let removed_position = match name {
+        "array_pop" => len - 1,
+        "array_shift" => 0,
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    let removed_key = values.array_iter_key(array, removed_position)?;
+    let removed_value = values.array_get(array, removed_key)?;
+    let replacement = match tag {
+        EVAL_TAG_ARRAY => {
+            eval_array_pop_shift_indexed_replacement(array, removed_position, len, values)?
+        }
+        EVAL_TAG_ASSOC => {
+            eval_array_pop_shift_assoc_replacement(name, array, removed_position, len, values)?
+        }
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    Ok((removed_value, replacement))
+}
+
+/// Rebuilds an indexed array after removing one position and reindexing values.
+fn eval_array_pop_shift_indexed_replacement(
+    array: RuntimeCellHandle,
+    removed_position: usize,
+    len: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(len.saturating_sub(1))?;
+    let mut target = 0_i64;
+    for position in 0..len {
+        if position == removed_position {
+            continue;
+        }
+        let source_key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, source_key)?;
+        let target_key = values.int(target)?;
+        target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+        result = values.array_set(result, target_key, value)?;
+    }
+    Ok(result)
+}
+
+/// Rebuilds an associative array after pop/shift, preserving PHP key behavior.
+fn eval_array_pop_shift_assoc_replacement(
+    name: &str,
+    array: RuntimeCellHandle,
+    removed_position: usize,
+    len: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if name == "array_shift" && eval_array_remaining_keys_are_int(array, removed_position, len, values)? {
+        return eval_array_pop_shift_indexed_replacement(array, removed_position, len, values);
+    }
+
+    let mut result = values.assoc_new(len.saturating_sub(1))?;
+    let mut next_int_key = 0_i64;
+    for position in 0..len {
+        if position == removed_position {
+            continue;
+        }
+        let source_key = values.array_iter_key(array, position)?;
+        let target_key = if name == "array_shift" && values.type_tag(source_key)? == EVAL_TAG_INT {
+            let key = values.int(next_int_key)?;
+            next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            key
+        } else {
+            source_key
+        };
+        let value = values.array_get(array, source_key)?;
+        result = values.array_set(result, target_key, value)?;
+    }
+    Ok(result)
+}
+
+/// Returns true when every remaining key is an integer after removing one element.
+fn eval_array_remaining_keys_are_int(
+    array: RuntimeCellHandle,
+    removed_position: usize,
+    len: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    for position in 0..len {
+        if position == removed_position {
+            continue;
+        }
+        let key = values.array_iter_key(array, position)?;
+        if values.type_tag(key)? != EVAL_TAG_INT {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Evaluates PHP `array_filter()` for null and string-callback filtering modes.
@@ -13849,6 +14028,37 @@ return function_exists("array_walk");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "a=2;b=3;T:0=4;1=5;z=6;");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_pop()` and `array_shift()` write back only for direct variable calls.
+    #[test]
+    fn execute_program_dispatches_array_pop_shift_builtins() {
+        let program = parse_fragment(
+            br#"$a = [1, 2, 3];
+echo array_pop($a) . ":" . count($a) . ":" . $a[1] . ":";
+$b = ["x" => 1, 10 => 2, "y" => 3, 11 => 4];
+echo array_shift(array: $b) . ":" . $b[0] . ":" . $b["y"] . ":" . $b[1] . ":";
+$c = [4, 5];
+echo call_user_func("array_pop", $c) . ":" . count($c) . ":" . $c[1] . ":";
+$d = [6, 7];
+echo call_user_func_array("array_shift", ["array" => $d]) . ":" . count($d) . ":" . $d[0] . ":";
+return function_exists("array_pop") && function_exists("array_shift");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "3:2:2:1:2:3:4:5:2:5:6:2:6:");
+        assert_eq!(
+            values.warnings,
+            vec![
+                "array_pop(): Argument #1 ($array) must be passed by reference, value given",
+                "array_shift(): Argument #1 ($array) must be passed by reference, value given",
+            ]
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

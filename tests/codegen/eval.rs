@@ -929,6 +929,25 @@ echo function_exists("array_walk");');
     assert_eq!(out, "a=2;b=3;T:0=4;1=5;z=6;1");
 }
 
+/// Verifies eval `array_pop()` and `array_shift()` mutate direct variable arguments only.
+#[test]
+fn test_eval_dispatches_array_pop_shift_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = [1, 2, 3];
+echo array_pop($a) . ":" . count($a) . ":" . $a[1] . ":";
+$b = ["x" => 1, 10 => 2, "y" => 3, 11 => 4];
+echo array_shift(array: $b) . ":" . $b[0] . ":" . $b["y"] . ":" . $b[1] . ":";
+$c = [4, 5];
+echo call_user_func("array_pop", $c) . ":" . count($c) . ":" . $c[1] . ":";
+$d = [6, 7];
+echo call_user_func_array("array_shift", ["array" => $d]) . ":" . count($d) . ":" . $d[0] . ":";
+echo function_exists("array_pop") && function_exists("array_shift");');
+"#,
+    );
+    assert_eq!(out, "3:2:2:1:2:3:4:5:2:5:6:2:6:1");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {
