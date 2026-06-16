@@ -84,6 +84,7 @@ struct EvalSprintfSpec {
 /// Eval-visible predefined constant payloads that are not stored in the dynamic context.
 enum EvalPredefinedConstant {
     Int(i64),
+    Float(f64),
     String(&'static str),
 }
 
@@ -603,7 +604,9 @@ const EVAL_JSON_NUMERIC_CHECK: i64 = 32;
 const EVAL_JSON_UNESCAPED_SLASHES: i64 = 64;
 const EVAL_JSON_PRETTY_PRINT: i64 = 128;
 const EVAL_JSON_UNESCAPED_UNICODE: i64 = 256;
+const EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR: i64 = 512;
 const EVAL_JSON_PRESERVE_ZERO_FRACTION: i64 = 1024;
+const EVAL_JSON_INF_OR_NAN_MESSAGE: &str = "Inf and NaN cannot be JSON encoded";
 
 unsafe extern "C" {
     /// Sets the process file-creation mask and returns the previous mask.
@@ -13340,6 +13343,7 @@ fn eval_json_encode_result(
         | EVAL_JSON_UNESCAPED_UNICODE
         | EVAL_JSON_FORCE_OBJECT
         | EVAL_JSON_PRETTY_PRINT
+        | EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR
         | EVAL_JSON_PRESERVE_ZERO_FRACTION;
     let supported_flags = supported_flags | EVAL_JSON_NUMERIC_CHECK;
     if flags & !supported_flags != 0 {
@@ -13354,6 +13358,7 @@ fn eval_json_encode_result(
     }
 
     let mut output = Vec::new();
+    let mut error = None;
     eval_json_encode_append(
         value,
         values,
@@ -13361,9 +13366,17 @@ fn eval_json_encode_result(
         depth as usize,
         0,
         &mut Vec::new(),
+        &mut error,
         &mut output,
     )?;
-    context.clear_json_error();
+    if let Some(error) = error {
+        context.set_json_error(error.code, error.message);
+        if flags & EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR == 0 {
+            return values.bool_value(false);
+        }
+    } else {
+        context.clear_json_error();
+    }
     values.string_bytes_value(&output)
 }
 
@@ -13673,12 +13686,13 @@ fn eval_json_encode_append(
     depth_limit: usize,
     depth: usize,
     arrays_seen: &mut Vec<usize>,
+    error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
     match values.type_tag(value)? {
         EVAL_TAG_INT => output.extend_from_slice(&values.string_bytes(value)?),
         EVAL_TAG_FLOAT => {
-            eval_json_encode_append_float(&values.string_bytes(value)?, flags, output);
+            eval_json_encode_append_float(value, values, flags, error, output)?;
         }
         EVAL_TAG_STRING => eval_json_encode_append_string(&values.string_bytes(value)?, flags, output),
         EVAL_TAG_BOOL => {
@@ -13696,6 +13710,7 @@ fn eval_json_encode_append(
                 depth_limit,
                 depth,
                 arrays_seen,
+                error,
                 output,
             )?;
         }
@@ -13707,6 +13722,7 @@ fn eval_json_encode_append(
                 depth_limit,
                 depth,
                 arrays_seen,
+                error,
                 output,
             )?;
         }
@@ -13716,9 +13732,31 @@ fn eval_json_encode_append(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct EvalJsonEncodeError {
+    code: i64,
+    message: &'static str,
+}
+
 /// Appends one JSON float while preserving a `.0` suffix when requested.
-fn eval_json_encode_append_float(bytes: &[u8], flags: i64, output: &mut Vec<u8>) {
-    output.extend_from_slice(bytes);
+fn eval_json_encode_append_float(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+    flags: i64,
+    error: &mut Option<EvalJsonEncodeError>,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    let float = eval_float_value(value, values)?;
+    if !float.is_finite() {
+        *error = Some(EvalJsonEncodeError {
+            code: EVAL_JSON_ERROR_INF_OR_NAN,
+            message: EVAL_JSON_INF_OR_NAN_MESSAGE,
+        });
+        output.push(b'0');
+        return Ok(());
+    }
+    let bytes = values.string_bytes(value)?;
+    output.extend_from_slice(&bytes);
     if flags & EVAL_JSON_PRESERVE_ZERO_FRACTION != 0
         && !bytes
             .iter()
@@ -13726,6 +13764,7 @@ fn eval_json_encode_append_float(bytes: &[u8], flags: i64, output: &mut Vec<u8>)
     {
         output.extend_from_slice(b".0");
     }
+    Ok(())
 }
 
 /// Appends one indexed eval array as a JSON array or forced JSON object.
@@ -13736,6 +13775,7 @@ fn eval_json_encode_append_indexed_array(
     depth_limit: usize,
     depth: usize,
     arrays_seen: &mut Vec<usize>,
+    error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
@@ -13773,6 +13813,7 @@ fn eval_json_encode_append_indexed_array(
             depth_limit,
             depth + 1,
             arrays_seen,
+            error,
             output,
         )?;
     }
@@ -13793,6 +13834,7 @@ fn eval_json_encode_append_assoc(
     depth_limit: usize,
     depth: usize,
     arrays_seen: &mut Vec<usize>,
+    error: &mut Option<EvalJsonEncodeError>,
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
@@ -13827,6 +13869,7 @@ fn eval_json_encode_append_assoc(
             depth_limit,
             depth + 1,
             arrays_seen,
+            error,
             output,
         )?;
     }
@@ -14684,6 +14727,7 @@ fn eval_predefined_constant(
     };
     match value {
         EvalPredefinedConstant::Int(value) => values.int(value).map(Some),
+        EvalPredefinedConstant::Float(value) => values.float(value).map(Some),
         EvalPredefinedConstant::String(value) => values.string(value).map(Some),
     }
 }
@@ -14746,12 +14790,19 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "JSON_NUMERIC_CHECK" => Some(EvalPredefinedConstant::Int(EVAL_JSON_NUMERIC_CHECK)),
         "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
         "JSON_UNESCAPED_UNICODE" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_UNICODE)),
+        "JSON_PARTIAL_OUTPUT_ON_ERROR" => {
+            Some(EvalPredefinedConstant::Int(
+                EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR,
+            ))
+        }
         "JSON_PRETTY_PRINT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_PRETTY_PRINT)),
         "JSON_PRESERVE_ZERO_FRACTION" => {
             Some(EvalPredefinedConstant::Int(
                 EVAL_JSON_PRESERVE_ZERO_FRACTION,
             ))
         }
+        "INF" => Some(EvalPredefinedConstant::Float(f64::INFINITY)),
+        "NAN" => Some(EvalPredefinedConstant::Float(f64::NAN)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
         "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
@@ -17789,8 +17840,14 @@ echo call_user_func_array("json_encode", ["value" => [1, 2], "flags" => JSON_FOR
 echo json_encode("<>&\"" . chr(39), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ":";
 echo json_encode(["01", "+12", "1e3", " 7", "7x"], JSON_NUMERIC_CHECK) . ":";
 echo json_encode([1.0, 2.5, -3.0], JSON_PRESERVE_ZERO_FRACTION) . ":";
+echo (json_encode(INF) === false ? "false" : "json") . ":";
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+echo json_encode([1.5, INF, NAN], JSON_PARTIAL_OUTPUT_ON_ERROR) . ":";
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_encode(3.5);
+echo json_last_error() . ":" . json_last_error_msg() . ":";
 echo str_replace("\n", "|", json_encode(["a" => [1, 2]], JSON_PRETTY_PRINT)) . ":";
-return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_UNESCAPED_UNICODE") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK") && defined("JSON_PRETTY_PRINT") && defined("JSON_PRESERVE_ZERO_FRACTION");"#,
+return function_exists("json_encode") && defined("INF") && defined("NAN") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_UNESCAPED_UNICODE") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK") && defined("JSON_PARTIAL_OUTPUT_ON_ERROR") && defined("JSON_PRETTY_PRINT") && defined("JSON_PRESERVE_ZERO_FRACTION");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17800,7 +17857,7 @@ return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && de
 
         assert_eq!(
             values.output,
-            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":225c75303065395c2f5c75643833645c756465303022:22c3a95c2ff09f988022:7b225c7530306539223a225c75643833645c7564653030227d:7b22c3a9223a22f09f9880227d:{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:{|    "a": [|        1,|        2|    ]|}:"#
+            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":225c75303065395c2f5c75643833645c756465303022:22c3a95c2ff09f988022:7b225c7530306539223a225c75643833645c7564653030227d:7b22c3a9223a22f09f9880227d:{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:false:7:Inf and NaN cannot be JSON encoded:[1.5,0,0]:7:Inf and NaN cannot be JSON encoded:0:No error:{|    "a": [|        1,|        2|    ]|}:"#
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
