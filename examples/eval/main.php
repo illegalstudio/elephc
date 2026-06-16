@@ -132,7 +132,7 @@ $ordinal = eval('return ord("A") . ":" . ord("");');
 $boundaries = eval('return (str_starts_with("dynamic eval", "dynamic") ? "starts" : "missing") . ":" . (str_ends_with("dynamic eval", "eval") ? "ends" : "missing");');
 $trimmed = eval('return trim("  boxed  ") . ":" . ltrim("0007", "0") . ":" . chop("tail...", ".");');
 $aggregates = eval('return array_sum([1, 2, 3]) . ":" . array_product([2, 3, 4]);');
-$array_map = eval('function eval_example_double($value) { return $value * 2; } $mapped = array_map("eval_example_double", ["a" => 2, "b" => 3]); return $mapped["a"] . ":" . $mapped["b"];');
+$array_map = eval('function eval_example_double($value) { return $value * 2; } function eval_example_pair($left, $right) { return $left . $right; } $mapped = array_map("eval_example_double", ["a" => 2, "b" => 3]); $pairs = array_map("eval_example_pair", ["x"], ["y"]); return $mapped["a"] . ":" . $mapped["b"] . ":" . $pairs[0];');
 $array_reduce = eval('function eval_example_sum($carry, $item) { return $carry + $item; } return array_reduce([1, 2, 3], "eval_example_sum", 10) . ":" . array_reduce([4, 5], "eval_example_sum");');
 $array_walk = eval('function eval_example_walk($value, $key) { echo "walk-" . $key . "=" . $value . "\n"; } return array_walk(["a" => 2, "b" => 3], "eval_example_walk") ? "ok" : "bad";');
 $array_filter = eval('$items = array_filter([0, 1, "", "ok"]); return count($items) . ":" . $items[1] . ":" . $items[3];');

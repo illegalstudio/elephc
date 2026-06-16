@@ -2458,10 +2458,10 @@ fn eval_builtin_with_values(
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "array_map" => {
-            let [callback, array] = evaluated_args else {
+            let Some((callback, arrays)) = evaluated_args.split_first() else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_array_map_result(*callback, *array, context, values)?
+            eval_array_map_result(*callback, arrays, context, values)?
         }
         "array_reduce" => match evaluated_args {
             [array, callback] => {
@@ -3500,31 +3500,37 @@ fn eval_builtin_array_map(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [callback, array] = args else {
+    let Some((callback, arrays)) = args.split_first() else {
         return Err(EvalStatus::RuntimeFatal);
     };
     let callback = eval_expr(callback, context, scope, values)?;
-    let array = eval_expr(array, context, scope, values)?;
-    eval_array_map_result(callback, array, context, values)
+    let mut evaluated_arrays = Vec::with_capacity(arrays.len());
+    for array in arrays {
+        evaluated_arrays.push(eval_expr(array, context, scope, values)?);
+    }
+    eval_array_map_result(callback, &evaluated_arrays, context, values)
 }
 
 /// Maps one eval array with PHP key preservation for the one-array form.
 fn eval_array_map_result(
     callback: RuntimeCellHandle,
-    array: RuntimeCellHandle,
+    arrays: &[RuntimeCellHandle],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array] = arrays else {
+        return eval_array_map_variadic_result(callback, arrays, context, values);
+    };
     let callback = if values.is_null(callback)? {
         None
     } else {
         Some(eval_callable_name(callback, values)?)
     };
-    let len = values.array_len(array)?;
+    let len = values.array_len(*array)?;
     let mut result = values.assoc_new(len)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
+        let key = values.array_iter_key(*array, position)?;
+        let value = values.array_get(*array, key)?;
         let mapped = if let Some(callback) = callback.as_deref() {
             eval_callable_with_values(callback, vec![value], context, values)?
         } else {
@@ -3533,6 +3539,65 @@ fn eval_array_map_result(
         result = values.array_set(result, key, mapped)?;
     }
     Ok(result)
+}
+
+/// Maps multiple eval arrays with PHP's reindexed and null-padded variadic behavior.
+fn eval_array_map_variadic_result(
+    callback: RuntimeCellHandle,
+    arrays: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if arrays.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let callback = if values.is_null(callback)? {
+        None
+    } else {
+        Some(eval_callable_name(callback, values)?)
+    };
+    let mut lengths = Vec::with_capacity(arrays.len());
+    let mut max_len = 0;
+    for array in arrays {
+        let len = values.array_len(*array)?;
+        max_len = max_len.max(len);
+        lengths.push(len);
+    }
+
+    let mut result = values.array_new(max_len)?;
+    for position in 0..max_len {
+        let mut callback_args = Vec::with_capacity(arrays.len());
+        for (array, len) in arrays.iter().zip(lengths.iter()) {
+            let value = if position < *len {
+                let key = values.array_iter_key(*array, position)?;
+                values.array_get(*array, key)?
+            } else {
+                values.null()?
+            };
+            callback_args.push(value);
+        }
+        let mapped = if let Some(callback) = callback.as_deref() {
+            eval_callable_with_values(callback, callback_args, context, values)?
+        } else {
+            eval_array_map_zipped_row(callback_args, values)?
+        };
+        let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        result = values.array_set(result, key, mapped)?;
+    }
+    Ok(result)
+}
+
+/// Builds one row for `array_map(null, $a, $b, ...)`.
+fn eval_array_map_zipped_row(
+    values_row: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut row = values.array_new(values_row.len())?;
+    for (index, value) in values_row.into_iter().enumerate() {
+        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        row = values.array_set(row, key, value)?;
+    }
+    Ok(row)
 }
 
 /// Evaluates PHP `array_reduce()` with an optional initial carry value.
@@ -13138,8 +13203,15 @@ $assoc = array_map("strtoupper", ["a" => "x", "b" => "y"]);
 echo $assoc["a"] . ":" . $assoc["b"] . ":";
 $identity = array_map(null, ["k" => "v"]);
 echo $identity["k"] . ":";
+function eval_map_pair($left, $right) { return $left . "-" . ($right ?? "N"); }
+$pairs = array_map("eval_map_pair", ["a" => "L", "b" => "R"], ["x" => "1"]);
+echo $pairs[0] . ":" . $pairs[1] . ":";
+$zipped = array_map(null, [1, 2], [3, 4]);
+echo $zipped[0][0] . $zipped[0][1] . ":" . $zipped[1][0] . $zipped[1][1] . ":";
 $call = call_user_func("array_map", "intval", ["7"]);
 echo $call[0] . ":";
+$multi_call = call_user_func("array_map", "eval_map_pair", ["Q"], ["9"]);
+echo $multi_call[0] . ":";
 $spread = call_user_func_array("array_map", ["callback" => "strval", "array" => [8]]);
 echo $spread[0] . ":";
 return function_exists("array_map");"#,
@@ -13150,7 +13222,7 @@ return function_exists("array_map");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "2:6:X:Y:v:7:8:");
+        assert_eq!(values.output, "2:6:X:Y:v:L-1:R-N:13:24:7:Q-9:8:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

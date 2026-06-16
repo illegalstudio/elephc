@@ -804,14 +804,21 @@ $assoc = array_map("strtoupper", ["a" => "x", "b" => "y"]);
 echo $assoc["a"] . ":" . $assoc["b"] . ":";
 $identity = array_map(null, ["k" => "v"]);
 echo $identity["k"] . ":";
+function eval_map_pair($left, $right) { return $left . "-" . ($right ?? "N"); }
+$pairs = array_map("eval_map_pair", ["a" => "L", "b" => "R"], ["x" => "1"]);
+echo $pairs[0] . ":" . $pairs[1] . ":";
+$zipped = array_map(null, [1, 2], [3, 4]);
+echo $zipped[0][0] . $zipped[0][1] . ":" . $zipped[1][0] . $zipped[1][1] . ":";
 $call = call_user_func("array_map", "intval", ["7"]);
 echo $call[0] . ":";
+$multi_call = call_user_func("array_map", "eval_map_pair", ["Q"], ["9"]);
+echo $multi_call[0] . ":";
 $spread = call_user_func_array("array_map", ["callback" => "strval", "array" => [8]]);
 echo $spread[0] . ":";
 echo function_exists("array_map");');
 "#,
     );
-    assert_eq!(out, "2:6:X:Y:v:7:8:1");
+    assert_eq!(out, "2:6:X:Y:v:L-1:R-N:13:24:7:Q-9:8:1");
 }
 
 /// Verifies eval `array_reduce()` folds values through a string callback.

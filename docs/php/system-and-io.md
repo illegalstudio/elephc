@@ -55,7 +55,7 @@ Eval `number_format()` supports decimal counts plus custom decimal and thousands
 
 Eval printf-family formatting supports `sprintf()`, `printf()`, `vsprintf()`, and `vprintf()` with direct calls, named arguments for declared parameters, callable dispatch, `function_exists()` probes, scalar coercions, `%%`, and the common `%s`, integer, float, width, precision, and sign/padding flags covered by the native runtime subset.
 
-Eval `array_map()` supports the one-array form with a string callback or `null` identity callback. String callbacks can target eval-declared functions, registered AOT callbacks, or supported builtins; result arrays preserve the source keys, matching PHP's one-array `array_map()` behavior.
+Eval `array_map()` supports one or more source arrays with a string callback or `null` callback. String callbacks can target eval-declared functions, registered AOT callbacks, or supported builtins; one-array results preserve source keys, while multi-array results are reindexed, pad missing source values with `null`, and `array_map(null, ...)` returns zipped row arrays.
 
 Eval `array_reduce()` supports the two- or three-argument form with string callbacks, using `null` as the initial carry when the initial value is omitted. Callback resolution is shared with `call_user_func()`, so eval-declared functions, registered AOT callbacks, and supported builtins can fold the carry and current item.
 
