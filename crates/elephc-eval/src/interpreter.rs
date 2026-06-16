@@ -1327,6 +1327,9 @@ fn eval_positional_expr_call(
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "dirname" => eval_builtin_dirname(args, context, scope, values),
+        "disk_free_space" | "disk_total_space" => {
+            eval_builtin_disk_space(name, args, context, scope, values)
+        }
         "empty" => eval_builtin_empty(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
         "explode" => eval_builtin_explode(args, context, scope, values),
@@ -1742,6 +1745,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "defined"
             | "deg2rad"
             | "dirname"
+            | "disk_free_space"
+            | "disk_total_space"
             | "exp"
             | "explode"
             | "fdiv"
@@ -2014,6 +2019,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "define" => Some(&["constant_name", "value"]),
         "defined" => Some(&["constant_name"]),
         "dirname" => Some(&["path", "levels"]),
+        "disk_free_space" | "disk_total_space" => Some(&["directory"]),
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "fnmatch" => Some(&["pattern", "filename", "flags"]),
@@ -2705,6 +2711,12 @@ fn eval_builtin_with_values(
             [path, levels] => eval_dirname_result(*path, Some(*levels), values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "disk_free_space" | "disk_total_space" => {
+            let [directory] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_disk_space_result(name, *directory, values)?
+        }
         "trim" | "ltrim" | "rtrim" | "chop" => match evaluated_args {
             [value] => eval_trim_like_result(name, *value, None, values)?,
             [value, mask] => eval_trim_like_result(name, *value, Some(*mask), values)?,
@@ -5720,6 +5732,56 @@ fn eval_stat_array_set_string_key(
 /// Converts unsigned stat metadata into the signed integer payload used by PHP cells.
 fn eval_u64_to_i64(value: u64) -> Result<i64, EvalStatus> {
     i64::try_from(value).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Evaluates PHP `disk_free_space($directory)` or `disk_total_space($directory)`.
+fn eval_builtin_disk_space(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [directory] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let directory = eval_expr(directory, context, scope, values)?;
+    eval_disk_space_result(name, directory, values)
+}
+
+/// Reports available or total filesystem bytes as a PHP float, or 0.0 on failure.
+fn eval_disk_space_result(
+    name: &str,
+    directory: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(directory)?;
+    let Ok(path) = CString::new(bytes) else {
+        return values.float(0.0);
+    };
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
+    let status = unsafe {
+        // libc writes the statvfs fields for this NUL-terminated local path.
+        libc::statvfs(path.as_ptr(), stats.as_mut_ptr())
+    };
+    if status != 0 {
+        return values.float(0.0);
+    }
+    let stats = unsafe {
+        // `statvfs` succeeded, so libc initialized the full stat buffer.
+        stats.assume_init()
+    };
+    let block_size = if stats.f_frsize > 0 {
+        stats.f_frsize
+    } else {
+        stats.f_bsize
+    };
+    let blocks = match name {
+        "disk_free_space" => stats.f_bavail,
+        "disk_total_space" => stats.f_blocks,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.float((block_size as f64) * (blocks as f64))
 }
 
 /// Evaluates a one-path filesystem operation that returns a PHP boolean.
@@ -12589,6 +12651,29 @@ return function_exists("unlink");"#
             values.output,
             "5:hello:exists:file:dir:readable:writable:writeable:5:missing-false:call-exists:5:unlinked:gone:111111111"
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval disk-space builtins query local filesystem capacity and dispatch dynamically.
+    #[test]
+    fn execute_program_dispatches_disk_space_builtins() {
+        let program = parse_fragment(
+            br#"echo disk_free_space(".") > 0 ? "free" : "bad"; echo ":";
+echo disk_total_space(directory: ".") > 0 ? "total" : "bad"; echo ":";
+echo disk_total_space(".") >= disk_free_space(".") ? "ordered" : "bad"; echo ":";
+echo disk_free_space("no/such/path/elephc-eval") === 0.0 ? "missing" : "bad"; echo ":";
+echo call_user_func("disk_free_space", ".") > 0 ? "call" : "bad"; echo ":";
+echo call_user_func_array("disk_total_space", ["directory" => "."]) > 0 ? "spread" : "bad"; echo ":";
+echo function_exists("disk_free_space");
+return function_exists("disk_total_space");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "free:total:ordered:missing:call:spread:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
