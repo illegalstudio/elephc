@@ -105,6 +105,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub enums: &'m HashMap<String, EnumInfo>,
     pub interfaces: &'m HashMap<String, InterfaceInfo>,
     pub packed_classes: &'m HashMap<String, PackedClassInfo>,
+    /// Names of user functions that return a never-rebound by-value parameter.
+    /// A call to one yields a value that borrows the caller's argument, so its
+    /// result is lowered with `Ownership::Borrowed`. See `store_local`.
+    pub(crate) borrowed_passthrough_fns: &'m HashSet<String>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
@@ -151,6 +155,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         enums: &'m HashMap<String, EnumInfo>,
         interfaces: &'m HashMap<String, InterfaceInfo>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
+        borrowed_passthrough_fns: &'m HashSet<String>,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
         current_class: Option<String>,
@@ -176,6 +181,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             enums,
             interfaces,
             packed_classes,
+            borrowed_passthrough_fns,
             constants: constants.clone(),
             top_level_env,
             current_class,
@@ -626,6 +632,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let release_source_after_store = self.value_needs_release_after_retaining_store(value);
         let transfer_callable_source_to_store = source_is_owning_temporary
             && matches!(php_type.codegen_repr(), PhpType::Callable);
+        let acquire_into_slot = (uses_global || previous_kind == LocalKind::PhpLocal)
+            && !transfer_callable_source_to_store;
+        // When the source borrows storage that may alias this slot's current
+        // value (e.g. `$x = f($x)` where `f` returns its argument), acquire an
+        // owned copy/retain BEFORE releasing the previous value so the aliased
+        // block stays live across the release. Otherwise the release would free
+        // the block the acquire then reads, a use-after-free under heap debug.
+        let source_is_borrowed =
+            matches!(self.builder.value_ownership(value.value), Ownership::Borrowed);
+        let value = if source_is_borrowed && acquire_into_slot {
+            crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
+        } else {
+            value
+        };
+        let acquired_before_release = source_is_borrowed && acquire_into_slot;
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| self.initialized_slots.contains(&slot))
@@ -655,9 +676,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             self.release_stored_local_value(name, slot, span);
         }
-        let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
-            && !transfer_callable_source_to_store
-        {
+        let value = if acquire_into_slot && !acquired_before_release {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
         } else {
             value
@@ -968,6 +987,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Returns whether a value producer owns storage duplicated by a retaining consumer.
     pub(crate) fn value_is_owning_temporary(&self, value: LoweredValue) -> bool {
+        // A borrowed value (e.g. a call result that aliases the caller's
+        // argument) owns no storage, so it must never be released as a
+        // temporary. This prevents double-freeing the borrowed-from value.
+        if matches!(self.builder.value_ownership(value.value), Ownership::Borrowed) {
+            return false;
+        }
         let php_type = self.builder.value_php_type(value.value);
         if !value.ir_type.is_refcounted_storage()
             && !Ownership::php_type_needs_lifetime_tracking(&php_type)
@@ -977,20 +1002,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_builtin_temporary(value.value) {
             return true;
         }
-        if self.value_is_owned_temp_load(value.value) {
-            return true;
-        }
-        if self.value_is_owning_mixed_string_cast(value.value) {
-            return true;
-        }
-        if self.value_is_owning_container_read(value.value) {
-            return true;
-        }
-        if matches!(
-            self.builder.value_defining_op(value.value),
-            Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
-        ) && matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        {
+        if self.cast_result_owns_string_storage(value.value) {
             return true;
         }
         matches!(
@@ -1119,6 +1131,34 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         };
         builtin_call_result_owns_storage_as_temporary(name)
+    }
+
+    /// Returns true when a `Cast` result is an owned heap string produced from a Mixed
+    /// or union source.
+    ///
+    /// `coerce_to_string`/`lower_cast` lower a Mixed or union value to string through
+    /// `Op::Cast` with a `Str` target, whose codegen calls `__rt_mixed_cast_string`. For a
+    /// boxed string payload that helper persists a fresh owned copy, so the cast result is a
+    /// temporary the caller must release. Every other `Cast` result either aliases its source
+    /// (string and array casts) or lives in scratch storage that is not heap-owned (int and
+    /// float casts), so only Mixed/union string casts own releasable storage here.
+    fn cast_result_owns_string_storage(&self, value: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(value) else {
+            return false;
+        };
+        if inst.op != Op::Cast {
+            return false;
+        }
+        if !matches!(inst.immediate, Some(Immediate::CastTarget(IrType::Str))) {
+            return false;
+        }
+        let Some(&source) = inst.operands.first() else {
+            return false;
+        };
+        matches!(
+            self.builder.value_php_type(source).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
     }
 
     /// Returns true when straight-line callable binding metadata is safe for a local.
@@ -1295,6 +1335,35 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .emit_with_effects(op, operands, immediate, ir_type, php_type, ownership, effects, span)
             .expect("value opcode produces a value");
         LoweredValue { value, ir_type }
+    }
+
+    /// Emits an instruction whose result carries an explicit ownership state,
+    /// overriding the type-derived default. Used for borrowed call results.
+    pub(crate) fn emit_value_with_ownership(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        php_type: PhpType,
+        ownership: Ownership,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let ir_type = value_ir_type(&php_type);
+        let value = self
+            .builder
+            .emit_with_effects(op, operands, immediate, ir_type, php_type, ownership, effects, span)
+            .expect("value opcode produces a value");
+        LoweredValue { value, ir_type }
+    }
+
+    /// Returns true when `name` is a user function that returns a never-rebound
+    /// by-value parameter, so its call result borrows the caller's argument.
+    pub(crate) fn is_borrowed_passthrough_fn(&self, name: &str) -> bool {
+        self.borrowed_passthrough_fns.contains(name)
+            || self
+                .borrowed_passthrough_fns
+                .contains(name.trim_start_matches('\\'))
     }
 
     /// Emits an `is_truthy` conversion when a value is not already I64.
