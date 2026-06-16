@@ -899,6 +899,22 @@ echo ":"; echo function_exists("strtoupper"); echo function_exists("strtolower")
     assert_eq!(out, "HELLO WORLD:loud:Eval:lOUD:XY:zz:Case:cASE:1111");
 }
 
+/// Verifies eval `ucwords()` capitalizes words directly and by callable dispatch.
+#[test]
+fn test_eval_dispatches_ucwords_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo ucwords("hello world"); echo ":";
+echo ucwords(string: "hello-world", separators: "-"); echo ":";
+echo ucwords("hello\tworld"); echo ":";
+echo call_user_func("ucwords", "a b"); echo ":";
+echo call_user_func_array("ucwords", ["string" => "a-b", "separators" => "-"]);
+echo ":"; echo function_exists("ucwords");');
+"#,
+    );
+    assert_eq!(out, "Hello World:Hello-World:Hello\tWorld:A B:A-B:1");
+}
+
 /// Verifies eval `strrev()` reverses byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_strrev_builtin_call() {

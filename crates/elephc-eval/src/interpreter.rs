@@ -1223,6 +1223,7 @@ fn eval_positional_expr_call(
             eval_builtin_string_case(name, args, context, scope, values)
         }
         "trim" => eval_builtin_trim_like(name, args, context, scope, values),
+        "ucwords" => eval_builtin_ucwords(args, context, scope, values),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
 }
@@ -1558,6 +1559,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "trim"
             | "substr_replace"
             | "ucfirst"
+            | "ucwords"
             | "urldecode"
             | "urlencode"
     )
@@ -1682,6 +1684,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
             Some(&["string"])
         }
+        "ucwords" => Some(&["string", "separators"]),
         _ => None,
     }
 }
@@ -2124,6 +2127,11 @@ fn eval_builtin_with_values(
             };
             eval_string_case_result(name, *value, values)?
         }
+        "ucwords" => match evaluated_args {
+            [value] => eval_ucwords_result(*value, None, values)?,
+            [value, separators] => eval_ucwords_result(*value, Some(*separators), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         _ => return Ok(None),
     };
     Ok(Some(result))
@@ -3937,6 +3945,52 @@ fn eval_string_case_result(
     }
     let value = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.string(&value)
+}
+
+/// Evaluates PHP `ucwords(...)` over one string and optional separator expression.
+fn eval_builtin_ucwords(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [value] => {
+            let value = eval_expr(value, context, scope, values)?;
+            eval_ucwords_result(value, None, values)
+        }
+        [value, separators] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let separators = eval_expr(separators, context, scope, values)?;
+            eval_ucwords_result(value, Some(separators), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Uppercases ASCII lowercase bytes at the start of words separated by PHP delimiters.
+fn eval_ucwords_result(
+    value: RuntimeCellHandle,
+    separators: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut bytes = values.string_bytes(value)?;
+    let separators = match separators {
+        Some(separators) => values.string_bytes(separators)?,
+        None => b" \t\r\n\x0c\x0b".to_vec(),
+    };
+    let mut word_start = true;
+    for byte in &mut bytes {
+        if separators.contains(byte) {
+            word_start = true;
+        } else if word_start {
+            if byte.is_ascii_lowercase() {
+                *byte -= b'a' - b'A';
+            }
+            word_start = false;
+        }
+    }
+    values.string_bytes_value(&bytes)
 }
 
 /// Evaluates nested `eval(...)` calls against the current materialized scope.
@@ -6994,6 +7048,27 @@ return function_exists("lcfirst");"#,
             values.output,
             "HELLO WORLD:loud:Eval:lOUD:XY:zz:Case:cASE:111"
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `ucwords()` capitalizes word starts directly and by callable dispatch.
+    #[test]
+    fn execute_program_dispatches_ucwords_builtin() {
+        let program = parse_fragment(
+            br#"echo ucwords("hello world"); echo ":";
+echo ucwords(string: "hello-world", separators: "-"); echo ":";
+echo ucwords("hello\tworld"); echo ":";
+echo call_user_func("ucwords", "a b"); echo ":";
+echo call_user_func_array("ucwords", ["string" => "a-b", "separators" => "-"]); echo ":";
+return function_exists("ucwords");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "Hello World:Hello-World:Hello\tWorld:A B:A-B:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
