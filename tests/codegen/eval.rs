@@ -1469,6 +1469,23 @@ echo $g;
     assert_eq!(out, "1");
 }
 
+/// Verifies eval references to global aliases update the source global storage.
+#[test]
+fn test_eval_reference_alias_to_global_updates_global_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$g = 1;
+function ref_eval_global_alias() {
+    global $g;
+    eval('$alias =& $g; $alias = 4;');
+}
+ref_eval_global_alias();
+echo $g;
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
 /// Verifies top-level eval fragments can read CLI `$argc` and `$argv`.
 #[test]
 fn test_eval_top_level_reads_argc_argv() {
