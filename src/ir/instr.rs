@@ -359,6 +359,7 @@ pub enum Op {
     EvalFunctionCallArray,
     EvalFunctionExists,
     EvalConstantExists,
+    EvalConstantFetch,
     RuntimeCall,
     ExternCall,
     ClosureNew,
@@ -496,6 +497,9 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalConstantExists => E::READS_GLOBAL,
+            EvalConstantFetch => {
+                E::READS_GLOBAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
+            }
             Call | FunctionVariantCall | BuiltinCall | EvalFunctionCall | EvalFunctionCallArray | RuntimeCall
             | ClosureCall | ExprCall | CallableDescriptorInvoke | PipeCall | FiberRuntimeCall => {
                 E::all().difference(E::REFCOUNT_OP)
@@ -700,6 +704,7 @@ impl Op {
             EvalFunctionCallArray => "eval_function_call_array",
             EvalFunctionExists => "eval_function_exists",
             EvalConstantExists => "eval_constant_exists",
+            EvalConstantFetch => "eval_constant_fetch",
             RuntimeCall => "runtime_call",
             ExternCall => "extern_call",
             ClosureNew => "closure_new",

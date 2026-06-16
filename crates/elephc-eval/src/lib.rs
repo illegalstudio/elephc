@@ -30,6 +30,8 @@ use abi::{
 use context::{NativeFunction, NativeFunctionInvoker};
 use errors::EvalStatus;
 #[cfg(not(test))]
+use interpreter::RuntimeValueOps;
+#[cfg(not(test))]
 use runtime_hooks::ElephcRuntimeOps;
 use scope::{ScopeCellOwnership, ScopeEntry};
 use std::ffi::c_void;
@@ -297,6 +299,25 @@ pub unsafe extern "C" fn __elephc_eval_constant_exists(
         .unwrap_or(0)
 }
 
+/// Fetches a constant previously defined through `eval()`.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `name_ptr` must be readable for
+/// `name_len` bytes when `name_len > 0`, and `out` may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_constant_fetch(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_constant_fetch_inner(ctx, name_ptr, name_len, out)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Registers a generated native PHP function callback in an eval context.
 ///
 /// # Safety
@@ -449,6 +470,48 @@ unsafe fn eval_constant_exists_inner(
         return 0;
     };
     i32::from(context.has_constant(&name))
+}
+
+/// Runs the eval constant-fetch ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_constant_fetch`; callers must provide a valid context,
+/// readable constant-name bytes, and optional writable result storage.
+#[cfg(not(test))]
+unsafe fn eval_constant_fetch_inner(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if !out.is_null() {
+        (*out).clear();
+    }
+    let Some(value) = context.constant(&name) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if out.is_null() {
+        return EvalStatus::Ok.code();
+    }
+    let mut values = ElephcRuntimeOps::new();
+    match values.retain(value) {
+        Ok(result) => {
+            (*out).kind = 0;
+            (*out).value_cell = result.as_ptr();
+            (*out).error = std::ptr::null_mut();
+            EvalStatus::Ok.code()
+        }
+        Err(status) => status.code(),
+    }
 }
 
 /// Runs the native registration ABI body after installing a panic boundary.

@@ -77,6 +77,17 @@ pub(super) fn lower_const_ref(
     if let Some((value, php_type)) = ctx.constant_value(name.as_str()) {
         return lower_constant_value(ctx, value, php_type, expr);
     }
+    if ctx.has_eval_barrier() {
+        let data = ctx.intern_global_name(name.as_str());
+        return ctx.emit_value(
+            Op::EvalConstantFetch,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            PhpType::Mixed,
+            Op::EvalConstantFetch.default_effects(),
+            Some(expr.span),
+        );
+    }
     let data = ctx.intern_global_name(name.as_str());
     ctx.emit_value(
         Op::LoadGlobal,

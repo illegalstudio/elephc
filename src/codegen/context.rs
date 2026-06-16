@@ -551,6 +551,7 @@ impl<'a> FunctionContext<'a> {
                 | Op::BuiltinCall
                 | Op::EvalFunctionCall
                 | Op::EvalFunctionCallArray
+                | Op::EvalConstantFetch
                 | Op::RuntimeCall
                 | Op::ExternCall
                 | Op::MethodCall

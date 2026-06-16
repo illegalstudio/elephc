@@ -463,9 +463,13 @@ impl Checker {
                 )
             }
             ExprKind::ConstRef(name) => {
-                self.constants.get(name.as_str()).cloned().ok_or_else(|| {
-                    CompileError::new(expr.span, &format!("Undefined constant: {}", name))
-                })
+                self.constants
+                    .get(name.as_str())
+                    .cloned()
+                    .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
+                    .ok_or_else(|| {
+                        CompileError::new(expr.span, &format!("Undefined constant: {}", name))
+                    })
             }
             ExprKind::FirstClassCallable(target) => {
                 self.infer_first_class_callable_target(target, expr.span, env)?;
