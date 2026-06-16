@@ -1911,10 +1911,55 @@ eval('function dyn_eval_dup() { return 2; }');
     );
 }
 
-/// Verifies unsupported eval class declarations fail through the eval diagnostic path.
+/// Verifies eval-declared empty classes are registered for later class probes.
 #[test]
-fn test_eval_unsupported_class_declaration_fails() {
-    let err = compile_and_run_expect_failure("<?php eval('class DynEvalUnsupported {}');");
+fn test_eval_declared_empty_class_is_visible_to_class_exists() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalClassExists {}');
+echo eval('return class_exists("DynEvalClassExists") ? "Y" : "N";');
+echo eval('return class_exists("dynevalclassexists") ? "Y" : "N";');
+"#,
+    );
+    assert_eq!(out, "YY");
+}
+
+/// Verifies duplicate eval-declared classes fail through the runtime bridge.
+#[test]
+fn test_eval_duplicate_declared_class_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class DynEvalClassDup {}');
+eval('class dynevalclassdup {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval class declarations cannot redeclare an AOT class name.
+#[test]
+fn test_eval_declared_class_duplicate_aot_class_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class DynEvalAotClassDup {}
+eval('class dynevalaotclassdup {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies non-empty eval class declarations remain unsupported until dynamic class bodies exist.
+#[test]
+fn test_eval_unsupported_non_empty_class_declaration_fails() {
+    let err = compile_and_run_expect_failure(
+        "<?php eval('class DynEvalUnsupported { public int $x = 1; }');",
+    );
     assert!(
         err.contains("Fatal error: eval() fragment uses an unsupported construct"),
         "stderr did not contain eval unsupported diagnostic: {err}"

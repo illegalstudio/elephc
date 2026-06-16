@@ -11,7 +11,7 @@
 //! - The handle is intentionally opaque to generated code.
 //! - No Rust-owned layout is promised across the C ABI.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
@@ -86,6 +86,7 @@ impl NativeFunction {
 /// grow dynamic registries without exposing them to generated assembly.
 pub struct ElephcEvalContext {
     abi_version: u32,
+    classes: HashSet<String>,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
@@ -101,6 +102,7 @@ impl ElephcEvalContext {
     pub fn new() -> Self {
         Self {
             abi_version: ABI_VERSION,
+            classes: HashSet::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
@@ -117,6 +119,7 @@ impl ElephcEvalContext {
     pub fn for_abi_version(abi_version: u32) -> Self {
         Self {
             abi_version,
+            classes: HashSet::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
@@ -131,6 +134,21 @@ impl ElephcEvalContext {
     /// Returns the ABI version this context was created for.
     pub const fn abi_version(&self) -> u32 {
         self.abi_version
+    }
+
+    /// Defines an eval-declared class name, failing if this context already has it.
+    pub fn define_class(&mut self, name: &str) -> bool {
+        let key = normalize_class_name(name);
+        if self.classes.contains(&key) {
+            return false;
+        }
+        self.classes.insert(key);
+        true
+    }
+
+    /// Returns true when this eval context has a dynamic class with the requested name.
+    pub fn has_class(&self, name: &str) -> bool {
+        self.classes.contains(&normalize_class_name(name))
     }
 
     /// Defines a dynamic user function, failing if the name already exists.
@@ -265,4 +283,9 @@ impl Default for ElephcEvalContext {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Normalizes PHP class names for the eval dynamic class registry.
+fn normalize_class_name(name: &str) -> String {
+    name.trim_start_matches('\\').to_ascii_lowercase()
 }

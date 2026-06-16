@@ -575,6 +575,7 @@ impl Parser {
             }
             TokenKind::Ident(name) if ident_eq(name, "for") => self.parse_for_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "foreach") => self.parse_foreach_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "class") => self.parse_class_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_function_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "global") => self.parse_global_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "if") => self.parse_if_stmt(),
@@ -708,6 +709,22 @@ impl Parser {
             value_name,
             body,
         }])
+    }
+
+    /// Parses an empty `class Name {}` declaration for dynamic class-name registration.
+    fn parse_class_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let name = name.clone();
+        self.advance();
+        self.expect(TokenKind::LBrace)?;
+        if !self.consume(TokenKind::RBrace) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        self.consume_semicolon();
+        Ok(vec![EvalStmt::ClassDecl { name }])
     }
 
     /// Parses `function name($param, ...) { ... }` declarations.
@@ -1767,7 +1784,6 @@ fn ident_eq(actual: &str, expected: &str) -> bool {
 /// Returns true for PHP statement forms that the eval subset intentionally does not parse yet.
 fn is_unsupported_statement_keyword(name: &str) -> bool {
     [
-        "class",
         "enum",
         "interface",
         "namespace",
@@ -3029,11 +3045,23 @@ mod tests {
         );
     }
 
-    /// Verifies unsupported class declarations report the unsupported construct status.
+    /// Verifies empty class declarations lower to dynamic class-registration statements.
     #[test]
-    fn parse_fragment_rejects_class_as_unsupported_construct() {
+    fn parse_fragment_accepts_empty_class_declaration_source() {
+        let program = parse_fragment(b"class DynEvalClass {};").expect("fragment should parse");
         assert_eq!(
-            parse_fragment(b"class DynEvalUnsupported {}"),
+            program.statements(),
+            &[EvalStmt::ClassDecl {
+                name: "DynEvalClass".to_string(),
+            }]
+        );
+    }
+
+    /// Verifies non-empty class declarations stay outside the supported eval subset.
+    #[test]
+    fn parse_fragment_rejects_non_empty_class_as_unsupported_construct() {
+        assert_eq!(
+            parse_fragment(b"class DynEvalUnsupported { public int $x = 1; }"),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }

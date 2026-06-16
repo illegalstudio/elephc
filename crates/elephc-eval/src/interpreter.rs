@@ -549,6 +549,10 @@ fn execute_stmt(
             scope,
             values,
         ),
+        EvalStmt::ClassDecl { name } => {
+            execute_class_decl_stmt(name, context, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::Foreach {
             array,
             key_name,
@@ -652,6 +656,23 @@ fn execute_stmt(
             let _ = eval_expr(expr, context, scope, values)?;
             Ok(EvalControl::None)
         }
+    }
+}
+
+/// Registers an empty eval-declared class name in the dynamic class table.
+fn execute_class_decl_stmt(
+    name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let name = name.trim_start_matches('\\');
+    if context.has_class(name) || values.class_exists(name)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if context.define_class(name) {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
     }
 }
 
@@ -1177,7 +1198,7 @@ fn eval_builtin_function_probe(
     values.bool_value(eval_function_probe_exists(context, &name))
 }
 
-/// Evaluates `class_exists(...)` against the generated AOT class-name table.
+/// Evaluates `class_exists(...)` against dynamic and generated class-name tables.
 fn eval_builtin_class_exists(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -1193,31 +1214,37 @@ fn eval_builtin_class_exists(
         }
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    let exists = eval_class_exists_name(name, values)?;
+    let exists = eval_class_exists_name(name, context, values)?;
     values.bool_value(exists)
 }
 
 /// Evaluates `class_exists(...)` from already materialized call arguments.
 fn eval_class_exists_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let exists = match evaluated_args {
-        [name] => eval_class_exists_name(*name, values)?,
-        [name, _autoload] => eval_class_exists_name(*name, values)?,
+        [name] => eval_class_exists_name(*name, context, values)?,
+        [name, _autoload] => eval_class_exists_name(*name, context, values)?,
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     values.bool_value(exists)
 }
 
-/// Normalizes a PHP class-name cell and probes the generated class table.
+/// Normalizes a PHP class-name cell and probes dynamic names before generated classes.
 fn eval_class_exists_name(
     name: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let name = values.string_bytes(name)?;
     let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
-    values.class_exists(name.trim_start_matches('\\'))
+    let name = name.trim_start_matches('\\');
+    if context.has_class(name) {
+        return Ok(true);
+    }
+    values.class_exists(name)
 }
 
 /// Evaluates PHP's `isset(...)` language construct over eval-visible values.
@@ -1747,7 +1774,7 @@ fn eval_builtin_with_values(
             let name = name.trim_start_matches('\\').to_ascii_lowercase();
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
-        "class_exists" => eval_class_exists_result(evaluated_args, values)?,
+        "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
         "gettype" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -3029,6 +3056,7 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
             EvalStmt::ArrayAppendVar { .. }
             | EvalStmt::ArraySetVar { .. }
             | EvalStmt::Break
+            | EvalStmt::ClassDecl { .. }
             | EvalStmt::Continue
             | EvalStmt::Echo(_)
             | EvalStmt::Expr(_)
@@ -6141,7 +6169,10 @@ echo function_exists("missing_probe") . "x";"#,
     #[test]
     fn execute_program_class_exists_uses_runtime_probe() {
         let program = parse_fragment(
-            br#"echo class_exists("KnownClass") ? "Y" : "N";
+            br#"class DynProbe {}
+echo class_exists("DynProbe") ? "Y" : "N";
+echo class_exists("\dynprobe") ? "Y" : "N";
+echo class_exists("KnownClass") ? "Y" : "N";
 echo class_exists("\knownclass") ? "Y" : "N";
 echo class_exists(class: "MissingClass", autoload: false) ? "Y" : "N";"#,
         )
@@ -6151,7 +6182,23 @@ echo class_exists(class: "MissingClass", autoload: false) ? "Y" : "N";"#,
 
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "YYN");
+        assert_eq!(values.output, "YYYYN");
+    }
+
+    /// Verifies duplicate eval-declared class names fail through runtime status.
+    #[test]
+    fn execute_program_duplicate_class_declaration_fails() {
+        let program = parse_fragment(
+            br#"class DynProbeDup {}
+class dynprobedup {}"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let err = execute_program(&program, &mut scope, &mut values).expect_err("duplicate fails");
+
+        assert_eq!(err, EvalStatus::RuntimeFatal);
     }
 
     /// Verifies eval fragments can dispatch registered native AOT functions.

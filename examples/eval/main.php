@@ -131,6 +131,8 @@ $array_key_probe = eval('$m = ["name" => null]; return (array_key_exists("name",
 $array_search = eval('return (in_array("b", ["a", "b"]) ? "in" : "missing") . ":" . array_search("Grace", ["name" => "Grace"]);');
 $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" . (strcasecmp("Hello", "hello") === 0 ? "ci" : "bad") . ":" . (hash_equals("abc", "abc") ? "hash" : "bad");');
 $eval_class_probe = eval('return class_exists("EvalAotBox") ? "yes" : "no";');
+eval('class EvalDynamicEmptyClass {}');
+$eval_dynamic_class_probe = eval('return class_exists("evaldynamicemptyclass") ? "yes" : "no";');
 $eval_dynamic_new = eval('$box = new EvalAotBox(21); return $box->value;');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
@@ -197,6 +199,7 @@ echo "array-key-exists=" . $array_key_probe . "\n";
 echo "array-search=" . $array_search . "\n";
 echo "string-compare=" . $string_compare . "\n";
 echo "eval-class-exists=" . $eval_class_probe . "\n";
+echo "eval-dynamic-class-exists=" . $eval_dynamic_class_probe . "\n";
 echo "eval-dynamic-new=" . $eval_dynamic_new . "\n";
 $counter = new EvalCounter();
 $counter->bump();

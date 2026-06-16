@@ -68,6 +68,9 @@ pub enum EvalStmt {
         update: Vec<EvalStmt>,
         body: Vec<EvalStmt>,
     },
+    ClassDecl {
+        name: String,
+    },
     Foreach {
         array: EvalExpr,
         key_name: Option<String>,
