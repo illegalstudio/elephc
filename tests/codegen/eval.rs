@@ -1543,6 +1543,29 @@ echo function_exists("usleep");');
     assert_eq!(out, "0:0:u:0:null:11");
 }
 
+/// Verifies eval `php_uname()` dispatches default, named, mode, and callable calls.
+#[test]
+fn test_eval_dispatches_php_uname_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strlen(php_uname()) > 0 ? "all" : "empty"; echo ":";
+echo php_uname() === php_uname("a") ? "same" : "different"; echo ":";
+echo strlen(php_uname(mode: "s")) > 0 ? "sys" : "empty"; echo ":";
+echo strlen(php_uname("n")) > 0 ? "node" : "empty"; echo ":";
+echo strlen(php_uname("r")) > 0 ? "release" : "empty"; echo ":";
+echo strlen(php_uname("v")) > 0 ? "version" : "empty"; echo ":";
+echo strlen(php_uname("m")) > 0 ? "machine" : "empty"; echo ":";
+echo strlen(call_user_func("php_uname", "m")) > 0 ? "call" : "empty"; echo ":";
+echo strlen(call_user_func_array("php_uname", ["mode" => "n"])) > 0 ? "spread" : "empty"; echo ":";
+echo function_exists("php_uname");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "all:same:sys:node:release:version:machine:call:spread:1"
+    );
+}
+
 /// Verifies eval `gethostbyname()` handles IPv4 literals and failed lookups.
 #[test]
 fn test_eval_dispatches_gethostbyname_builtin_call() {

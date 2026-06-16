@@ -161,7 +161,7 @@ $url_codec = eval('return urlencode("a b&=") . ":" . rawurldecode("a%20b%26%3D")
 $checksum = eval('return crc32("hello");');
 $hash_algos = eval('$algos = hash_algos(); return count($algos) . ":" . (in_array("sha256", $algos) ? "sha256" : "missing");');
 $digest = eval('return md5("abc") . ":" . substr(hash("sha256", "abc"), 0, 8) . ":" . substr(hash_hmac("sha256", "data", "key"), 0, 8);');
-$system_info = eval('return (time() > 1000000000 ? "time" : "bad") . ":" . phpversion() . ":" . sys_get_temp_dir() . ":" . (strlen(getcwd()) > 0 ? "cwd" : "bad");');
+$system_info = eval('return (time() > 1000000000 ? "time" : "bad") . ":" . phpversion() . ":" . (strlen(php_uname("s")) > 0 ? "uname" : "bad") . ":" . sys_get_temp_dir() . ":" . (strlen(getcwd()) > 0 ? "cwd" : "bad");');
 $micro_time = eval('return microtime(true) > 1000000000 ? "ok" : "bad";');
 $realpath_cache = eval('return count(realpath_cache_get()) . ":" . realpath_cache_size();');
 $environment = eval('putenv("ELEPHC_EVAL_EXAMPLE=ok"); $value = getenv("ELEPHC_EVAL_EXAMPLE"); putenv("ELEPHC_EVAL_EXAMPLE"); return $value . ":" . (getenv("ELEPHC_EVAL_EXAMPLE") === "" ? "cleared" : "left");');
