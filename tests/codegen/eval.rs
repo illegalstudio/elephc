@@ -1172,6 +1172,21 @@ echo ":"; echo function_exists("ctype_space");');
     );
 }
 
+/// Verifies eval `crc32()` returns PHP-compatible non-negative checksums.
+#[test]
+fn test_eval_dispatches_crc32_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo crc32(""); echo ":";
+echo crc32(string: "123456789"); echo ":";
+echo call_user_func("crc32", "hello"); echo ":";
+echo call_user_func_array("crc32", ["string" => "The quick brown fox jumps over the lazy dog"]);
+echo ":"; echo function_exists("crc32");');
+"#,
+    );
+    assert_eq!(out, "0:3421780262:907060870:1095738169:1");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

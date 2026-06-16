@@ -1167,6 +1167,7 @@ fn eval_positional_expr_call(
             eval_builtin_cast(name, args, context, scope, values)
         }
         "count" => eval_builtin_count(args, context, scope, values),
+        "crc32" => eval_builtin_crc32(args, context, scope, values),
         "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => {
             eval_builtin_ctype(name, args, context, scope, values)
         }
@@ -1497,6 +1498,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "chop"
             | "chr"
             | "count"
+            | "crc32"
             | "ctype_alnum"
             | "ctype_alpha"
             | "ctype_digit"
@@ -1669,6 +1671,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "chr" => Some(&["codepoint"]),
         "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
         "count" => Some(&["value", "mode"]),
+        "crc32" => Some(&["string"]),
         "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => Some(&["text"]),
         "define" => Some(&["constant_name", "value"]),
         "defined" => Some(&["constant_name"]),
@@ -2047,6 +2050,12 @@ fn eval_builtin_with_values(
             let len = values.array_len(*value)?;
             let len = i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
             values.int(len)?
+        }
+        "crc32" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_crc32_result(*value, values)?
         }
         "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => {
             let [value] = evaluated_args else {
@@ -3538,6 +3547,42 @@ fn eval_ctype_byte_matches(name: &str, byte: u8) -> Result<bool, EvalStatus> {
         "ctype_space" => Ok(matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Evaluates PHP `crc32(...)` over one eval string expression.
+fn eval_builtin_crc32(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_crc32_result(value, values)
+}
+
+/// Computes PHP's non-negative CRC-32 integer over one converted byte string.
+fn eval_crc32_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    values.int(i64::from(eval_crc32_bytes(&bytes)))
+}
+
+/// Returns the standard zlib/PHP CRC-32 checksum for a byte slice.
+fn eval_crc32_bytes(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffff_u32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = 0_u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
 }
 
 /// Casts one eval value to PHP int and returns the scalar payload.
@@ -7606,6 +7651,26 @@ return function_exists("ctype_space");"#,
             values.output,
             "A:D:N:S:empty:not-digit:not-space:111"
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `crc32()` returns PHP-compatible non-negative checksums.
+    #[test]
+    fn execute_program_dispatches_crc32_builtin() {
+        let program = parse_fragment(
+            br#"echo crc32(""); echo ":";
+echo crc32(string: "123456789"); echo ":";
+echo call_user_func("crc32", "hello"); echo ":";
+echo call_user_func_array("crc32", ["string" => "The quick brown fox jumps over the lazy dog"]); echo ":";
+return function_exists("crc32");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "0:3421780262:907060870:1095738169:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
