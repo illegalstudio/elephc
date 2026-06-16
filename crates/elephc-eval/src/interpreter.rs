@@ -98,6 +98,9 @@ pub trait RuntimeValueOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Creates a named runtime object without constructor arguments.
+    fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Returns the visible element count for an array-like runtime cell.
     fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus>;
 
@@ -871,6 +874,12 @@ fn eval_expr(
             visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok)
         }
         EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
+        EvalExpr::NewObject { class_name, args } => {
+            if !args.is_empty() {
+                return Err(EvalStatus::UnsupportedConstruct);
+            }
+            values.new_object(class_name)
+        }
         EvalExpr::MethodCall {
             object,
             method,
@@ -3456,6 +3465,11 @@ mod tests {
             }
         }
 
+        /// Creates one fake object for eval `new` unit tests.
+        fn new_object(&mut self, _class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
+            Ok(self.alloc(FakeValue::Object(HashMap::new())))
+        }
+
         /// Returns the visible element count for fake array values.
         fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus> {
             match self.get(array) {
@@ -4191,6 +4205,30 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(18));
+    }
+
+    /// Verifies eval object construction dispatches through runtime hooks.
+    #[test]
+    fn execute_program_constructs_named_object() {
+        let program = parse_fragment(br#"return new Box();"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Object(HashMap::new()));
+    }
+
+    /// Verifies eval object construction rejects constructor arguments until the ABI supports them.
+    #[test]
+    fn execute_program_rejects_new_object_constructor_args() {
+        let program = parse_fragment(br#"return new Box(1);"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let err = execute_program(&program, &mut scope, &mut values).expect_err("constructor args");
+
+        assert_eq!(err, EvalStatus::UnsupportedConstruct);
     }
 
     /// Verifies if/else executes only the PHP-truthy branch.

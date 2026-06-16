@@ -1904,19 +1904,18 @@ fn test_eval_unsupported_class_declaration_fails() {
     );
 }
 
-/// Verifies unsupported eval object construction fails through the eval diagnostic path.
+/// Verifies eval can construct an AOT class with no constructor arguments.
 #[test]
-fn test_eval_unsupported_dynamic_new_fails() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_dynamic_new_constructs_aot_class() {
+    let out = compile_and_run(
         r#"<?php
-class EvalDynamicNewUnsupported {}
-eval('return new EvalDynamicNewUnsupported();');
+class EvalDynamicNewSupported {
+    public int $x = 7;
+}
+echo eval('$box = new EvalDynamicNewSupported(); return $box->x;');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-        "stderr did not contain eval unsupported diagnostic: {err}"
-    );
+    assert_eq!(out, "7");
 }
 
 /// Verifies eval reference assignments update the referenced caller local.

@@ -1482,6 +1482,7 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 Ok(EvalExpr::Print(Box::new(expr)))
             }
+            TokenKind::Ident(name) if ident_eq(name, "new") => self.parse_new_object_expr(),
             TokenKind::Ident(name) if is_unsupported_expression_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
             }
@@ -1508,6 +1509,18 @@ impl Parser {
             name: name.to_ascii_lowercase(),
             args,
         })
+    }
+
+    /// Parses `new ClassName(...)` expressions in eval fragments.
+    fn parse_new_object_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+        self.advance();
+        let TokenKind::Ident(class_name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let class_name = class_name.clone();
+        self.advance();
+        let args = self.parse_call_args()?;
+        Ok(EvalExpr::NewObject { class_name, args })
     }
 
     /// Parses a parenthesized source-order argument list.
@@ -1728,7 +1741,6 @@ fn is_unsupported_statement_keyword(name: &str) -> bool {
         "require_once",
         "include",
         "include_once",
-        "new",
         "throw",
         "trait",
         "try",
@@ -1740,7 +1752,7 @@ fn is_unsupported_statement_keyword(name: &str) -> bool {
 
 /// Returns true for PHP expression forms that the eval subset intentionally does not parse yet.
 fn is_unsupported_expression_keyword(name: &str) -> bool {
-    ["clone", "match", "new", "yield"]
+    ["clone", "match", "yield"]
         .iter()
         .any(|keyword| ident_eq(name, keyword))
 }
@@ -2779,6 +2791,19 @@ mod tests {
             &[EvalStmt::Return(Some(EvalExpr::MethodCall {
                 object: Box::new(EvalExpr::LoadVar("this".to_string())),
                 method: "answer".to_string(),
+                args: Vec::new(),
+            }))]
+        );
+    }
+
+    /// Verifies object construction parses as a named EvalIR expression.
+    #[test]
+    fn parse_fragment_accepts_new_object_source() {
+        let program = parse_fragment(br#"return new Box();"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::NewObject {
+                class_name: "Box".to_string(),
                 args: Vec::new(),
             }))]
         );
