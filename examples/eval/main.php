@@ -166,7 +166,7 @@ $micro_time = eval('return microtime(true) > 1000000000 ? "ok" : "bad";');
 $realpath_cache = eval('return count(realpath_cache_get()) . ":" . realpath_cache_size();');
 $environment = eval('putenv("ELEPHC_EVAL_EXAMPLE=ok"); $value = getenv("ELEPHC_EVAL_EXAMPLE"); putenv("ELEPHC_EVAL_EXAMPLE"); return $value . ":" . (getenv("ELEPHC_EVAL_EXAMPLE") === "" ? "cleared" : "left");');
 $sleeping = eval('usleep(0); return sleep(0) . ":awake";');
-$host_lookup = eval('return gethostbyname("127.0.0.1") . ":" . gethostbyname("not a host");');
+$host_lookup = eval('return (strlen(gethostname()) > 0 ? "host" : "empty") . ":" . gethostbyname("127.0.0.1") . ":" . gethostbyname("not a host") . ":" . (strlen(gethostbyaddr("127.0.0.1")) > 0 ? "reverse" : "empty") . ":" . (gethostbyaddr("not-an-ip-address") === false ? "bad-ip" : "bad");');
 $ip_conversion = eval('$packed = inet_pton("1.2.3.4"); return long2ip(ip2long("192.168.1.1")) . ":" . bin2hex($packed) . ":" . inet_ntop($packed);');
 $path_components = eval('return basename("/var/log/syslog.log", ".log") . ":" . dirname("/usr/local/bin/tool", 2);');
 $resolved_path = eval('return realpath(".") !== false ? "resolved" : "missing";');

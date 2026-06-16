@@ -11,3 +11,4 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 elephc-crypto = { path = "../elephc-crypto" }
+libc = "0.2"
