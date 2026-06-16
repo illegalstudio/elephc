@@ -929,6 +929,21 @@ echo ":"; echo function_exists("chr");');
     assert_eq!(out, "A:00:ff:A:1");
 }
 
+/// Verifies eval `str_repeat()` repeats byte strings directly and by callable dispatch.
+#[test]
+fn test_eval_dispatches_str_repeat_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo str_repeat("ha", 3); echo ":";
+echo strlen(str_repeat(string: "x", times: 0)); echo ":";
+echo call_user_func("str_repeat", "ab", 2); echo ":";
+echo call_user_func_array("str_repeat", ["string" => "z", "times" => 3]);
+echo ":"; echo function_exists("str_repeat");');
+"#,
+    );
+    assert_eq!(out, "hahaha:0:abab:zzz:1");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

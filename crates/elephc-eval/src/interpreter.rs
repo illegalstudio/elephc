@@ -1192,6 +1192,7 @@ fn eval_positional_expr_call(
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
+        "str_repeat" => eval_builtin_str_repeat(args, context, scope, values),
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             eval_builtin_string_search(name, args, context, scope, values)
         }
@@ -1508,6 +1509,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strcasecmp"
             | "str_contains"
             | "str_ends_with"
+            | "str_repeat"
             | "str_starts_with"
             | "strcmp"
             | "strlen"
@@ -1628,6 +1630,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
         "strpos" | "strrpos" => Some(&["haystack", "needle", "offset"]),
+        "str_repeat" => Some(&["string", "times"]),
         "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
             Some(&["string"])
         }
@@ -1896,6 +1899,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.strrev(*value)?
+        }
+        "str_repeat" => {
+            let [value, times] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_str_repeat_result(*value, *times, values)?
         }
         "call_user_func" => {
             return eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)
@@ -2440,13 +2449,59 @@ fn eval_chr_result(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = eval_int_value(value, values)?;
+    values.string_bytes_value(&[value as u8])
+}
+
+/// Evaluates PHP's `str_repeat(...)` over one eval expression pair.
+fn eval_builtin_str_repeat(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value, times] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    let times = eval_expr(times, context, scope, values)?;
+    eval_str_repeat_result(value, times, values)
+}
+
+/// Repeats one PHP string byte sequence according to a PHP-cast integer count.
+fn eval_str_repeat_result(
+    value: RuntimeCellHandle,
+    times: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let times = eval_int_value(times, values)?;
+    if times < 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let times = usize::try_from(times).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let capacity = bytes
+        .len()
+        .checked_mul(times)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let mut output = Vec::with_capacity(capacity);
+    for _ in 0..times {
+        output.extend_from_slice(&bytes);
+    }
+    values.string_bytes_value(&output)
+}
+
+/// Casts one eval value to PHP int and returns the scalar payload.
+fn eval_int_value(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
     let value = values.cast_int(value)?;
     let bytes = values.string_bytes(value)?;
-    let value = std::str::from_utf8(&bytes)
+    std::str::from_utf8(&bytes)
         .map_err(|_| EvalStatus::RuntimeFatal)?
         .parse::<i64>()
-        .map_err(|_| EvalStatus::RuntimeFatal)?;
-    values.string_bytes_value(&[value as u8])
+        .map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Evaluates PHP's `bin2hex(...)` over one eval expression.
@@ -6561,6 +6616,26 @@ return function_exists("chr");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "A:00:01:A:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `str_repeat()` dispatches through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_str_repeat_builtin() {
+        let program = parse_fragment(
+            br#"echo str_repeat("ha", 3); echo ":";
+echo strlen(str_repeat(string: "x", times: 0)); echo ":";
+echo call_user_func("str_repeat", "ab", 2); echo ":";
+echo call_user_func_array("str_repeat", ["string" => "z", "times" => 3]); echo ":";
+return function_exists("str_repeat");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "hahaha:0:abab:zzz:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

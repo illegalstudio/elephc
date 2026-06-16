@@ -132,6 +132,7 @@ $array_search = eval('return (in_array("b", ["a", "b"]) ? "in" : "missing") . ":
 $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" . (strcasecmp("Hello", "hello") === 0 ? "ci" : "bad") . ":" . (hash_equals("abc", "abc") ? "hash" : "bad");');
 $slashes = eval('return addslashes("A\"B") . ":" . stripslashes(addslashes("A\"B"));');
 $chr = eval('return chr(65) . ":" . bin2hex(chr(256));');
+$repeated = eval('return str_repeat("ha", 3);');
 $hexed = eval('return bin2hex("Az");');
 $unhexed = eval('return hex2bin("417a");');
 $base64 = eval('return base64_encode("Hello");');
@@ -210,6 +211,7 @@ echo "array-search=" . $array_search . "\n";
 echo "string-compare=" . $string_compare . "\n";
 echo "slashes=" . $slashes . "\n";
 echo "chr=" . $chr . "\n";
+echo "str-repeat=" . $repeated . "\n";
 echo "bin2hex=" . $hexed . "\n";
 echo "hex2bin=" . $unhexed . "\n";
 echo "base64=" . $base64 . "\n";
