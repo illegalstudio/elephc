@@ -994,6 +994,28 @@ echo function_exists("array_splice");');
     assert_eq!(out, "2:20:30:2:40:2:3:1:4:3:4:3:2:6:7:3:1");
 }
 
+/// Verifies eval `sort()` and `rsort()` mutate direct variable arguments only.
+#[test]
+fn test_eval_dispatches_sort_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = [3, 1, 2];
+echo sort($a) . ":" . $a[0] . $a[1] . $a[2] . ":";
+$b = ["banana", "apple", "cherry"];
+echo rsort(array: $b) . ":" . $b[0] . ":" . $b[2] . ":";
+$c = ["x" => 3, "y" => 1, "z" => 2];
+sort($c);
+echo $c[0] . $c[1] . $c[2] . ":";
+$d = [3, 1, 2];
+echo call_user_func("sort", $d) . ":" . $d[0] . $d[1] . $d[2] . ":";
+$e = [1, 2, 3];
+echo call_user_func_array("rsort", ["array" => $e]) . ":" . $e[0] . ":" . $e[2] . ":";
+echo function_exists("sort") && function_exists("rsort");');
+"#,
+    );
+    assert_eq!(out, "1:123:1:cherry:apple:123:1:312:1:1:3:1");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {
