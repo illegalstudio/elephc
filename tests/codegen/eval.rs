@@ -4322,6 +4322,28 @@ echo AliasFunc(LocalValue) . ":" . $box->x;');
     assert_eq!(out, "6:17");
 }
 
+/// Verifies eval grouped namespace imports resolve functions, constants, and AOT class aliases.
+#[test]
+fn test_eval_fragment_grouped_namespace_use_imports() {
+    let out = compile_and_run(
+        r#"<?php
+namespace EvalGroupedUseBridge;
+class Box {
+    public int $x = 19;
+}
+eval('namespace EvalGroupedUseExec;
+function imported_eval_func($x) { return $x + 1; }
+define("EvalGroupedUseLib\\VALUE", 7);
+use EvalGroupedUseBridge\\{Box as BoxAlias};
+use function EvalGroupedUseExec\\{imported_eval_func as AliasFunc};
+use const EvalGroupedUseLib\\{VALUE as LocalValue};
+$box = new BoxAlias();
+echo AliasFunc(LocalValue) . ":" . $box->x;');
+"#,
+    );
+    assert_eq!(out, "8:19");
+}
+
 /// Verifies eval include executes PHP files through the bridge and shares caller scope.
 #[test]
 fn test_eval_fragment_include_executes_php_file_and_returns_value() {

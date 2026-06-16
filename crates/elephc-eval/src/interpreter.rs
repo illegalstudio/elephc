@@ -16204,6 +16204,30 @@ return LocalValue;"#,
         assert_eq!(values.get(result), FakeValue::Int(11));
     }
 
+    /// Verifies eval grouped namespace imports dispatch dynamic functions and constants.
+    #[test]
+    fn execute_program_grouped_namespace_use_imports_dispatch() {
+        let program = parse_fragment(
+            br#"namespace Eval\Lib;
+function target($x) { return $x + 2; }
+namespace Eval\App;
+use function Eval\Lib\{target as AliasTarget};
+use const Eval\Lib\{VALUE as LocalValue};
+return AliasTarget(LocalValue);"#,
+        )
+        .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let value = values.int(5).expect("create fake int");
+        assert!(context.define_constant("Eval\\Lib\\VALUE", value));
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(7));
+    }
+
     /// Verifies eval-declared functions bind named arguments by parameter name.
     #[test]
     fn execute_program_calls_declared_function_with_named_args() {
