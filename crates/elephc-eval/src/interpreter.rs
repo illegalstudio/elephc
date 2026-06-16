@@ -1211,6 +1211,7 @@ fn eval_positional_expr_call(
         "str_replace" | "str_ireplace" => {
             eval_builtin_str_replace(name, args, context, scope, values)
         }
+        "strstr" => eval_builtin_strstr(args, context, scope, values),
         "substr" => eval_builtin_substr(args, context, scope, values),
         "substr_replace" => eval_builtin_substr_replace(args, context, scope, values),
         "str_contains" | "str_starts_with" | "str_ends_with" => {
@@ -1551,6 +1552,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strpos"
             | "strrpos"
             | "strrev"
+            | "strstr"
             | "substr"
             | "stripslashes"
             | "strtolower"
@@ -1676,6 +1678,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "round" => Some(&["num", "precision"]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
+        "strstr" => Some(&["haystack", "needle", "before_needle"]),
         "str_replace" | "str_ireplace" => Some(&["search", "replace", "subject"]),
         "strpos" | "strrpos" => Some(&["haystack", "needle", "offset"]),
         "str_repeat" => Some(&["string", "times"]),
@@ -2115,6 +2118,14 @@ fn eval_builtin_with_values(
             };
             eval_string_search_result(name, *haystack, *needle, values)?
         }
+        "strstr" => match evaluated_args {
+            [haystack, needle] => eval_strstr_result(*haystack, *needle, false, values)?,
+            [haystack, needle, before_needle] => {
+                let before_needle = values.truthy(*before_needle)?;
+                eval_strstr_result(*haystack, *needle, before_needle, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "strcmp" | "strcasecmp" => {
             let [left, right] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -3831,6 +3842,55 @@ fn eval_string_position_result(
         }
         None => values.bool_value(false),
     }
+}
+
+/// Evaluates PHP `strstr(...)` over haystack, needle, and optional prefix mode.
+fn eval_builtin_strstr(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [haystack, needle] => {
+            let haystack = eval_expr(haystack, context, scope, values)?;
+            let needle = eval_expr(needle, context, scope, values)?;
+            eval_strstr_result(haystack, needle, false, values)
+        }
+        [haystack, needle, before_needle] => {
+            let haystack = eval_expr(haystack, context, scope, values)?;
+            let needle = eval_expr(needle, context, scope, values)?;
+            let before_needle = eval_expr(before_needle, context, scope, values)?;
+            let before_needle = values.truthy(before_needle)?;
+            eval_strstr_result(haystack, needle, before_needle, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Returns the suffix or prefix selected by PHP `strstr()`, or `false` when absent.
+fn eval_strstr_result(
+    haystack: RuntimeCellHandle,
+    needle: RuntimeCellHandle,
+    before_needle: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let haystack = values.string_bytes(haystack)?;
+    let needle = values.string_bytes(needle)?;
+    let position = if needle.is_empty() {
+        Some(0)
+    } else {
+        eval_find_subslice(&haystack, &needle, 0)
+    };
+    let Some(position) = position else {
+        return values.bool_value(false);
+    };
+    let result = if before_needle {
+        &haystack[..position]
+    } else {
+        &haystack[position..]
+    };
+    values.string_bytes_value(result)
 }
 
 const PHP_DEFAULT_TRIM_MASK: &[u8] = b" \n\r\t\x0B\x0C\0";
@@ -7114,6 +7174,31 @@ return function_exists("strrpos");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "2:4:F:0:3:1:3:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `strstr()` returns suffixes, prefixes, or false for misses.
+    #[test]
+    fn execute_program_dispatches_strstr_builtin() {
+        let program = parse_fragment(
+            br#"echo strstr("user@example.com", "@"); echo ":";
+echo strstr(haystack: "hello world", needle: "lo", before_needle: true); echo ":";
+echo strstr("hello", "x") === false ? "F" : "bad"; echo ":";
+echo strstr("hello", ""); echo ":";
+echo call_user_func("strstr", "abcabc", "bc"); echo ":";
+echo call_user_func_array("strstr", ["haystack" => "abcabc", "needle" => "bc", "before_needle" => true]); echo ":";
+return function_exists("strstr");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "@example.com:hel:F:hello:bcabc:a:"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

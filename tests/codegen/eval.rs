@@ -1225,6 +1225,23 @@ echo ":"; echo function_exists("strpos"); echo function_exists("strrpos");');
     assert_eq!(out, "2:4:F:0:3:1:3:11");
 }
 
+/// Verifies eval `strstr()` returns matching suffixes, prefixes, and false for misses.
+#[test]
+fn test_eval_dispatches_strstr_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strstr("user@example.com", "@"); echo ":";
+echo strstr(haystack: "hello world", needle: "lo", before_needle: true); echo ":";
+echo strstr("hello", "x") === false ? "F" : "bad"; echo ":";
+echo strstr("hello", ""); echo ":";
+echo call_user_func("strstr", "abcabc", "bc"); echo ":";
+echo call_user_func_array("strstr", ["haystack" => "abcabc", "needle" => "bc", "before_needle" => true]);
+echo ":"; echo function_exists("strstr");');
+"#,
+    );
+    assert_eq!(out, "@example.com:hel:F:hello:bcabc:a:1");
+}
+
 /// Verifies eval string boundary builtins support direct and callable byte-string checks.
 #[test]
 fn test_eval_dispatches_string_boundary_builtin_calls() {
