@@ -1472,6 +1472,34 @@ unlink("eval-stat.txt");');
     );
 }
 
+/// Verifies eval `stat()` and `lstat()` build PHP-compatible metadata arrays.
+#[test]
+fn test_eval_dispatches_stat_array_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('file_put_contents("eval-stat-array.txt", "hello");
+symlink("eval-stat-array.txt", "eval-lstat-array.txt");
+$stat = stat("eval-stat-array.txt");
+$lstat = lstat("eval-lstat-array.txt");
+echo $stat["size"] === 5 && $stat[7] === $stat["size"] ? "stat" : "bad"; echo ":";
+echo ($stat["mode"] & 61440) === 32768 ? "mode" : "bad"; echo ":";
+echo ($lstat["mode"] & 61440) === 40960 ? "lstat" : "bad"; echo ":";
+echo stat("eval-stat-array-missing.txt") === false && lstat("eval-stat-array-missing.txt") === false ? "missing" : "bad"; echo ":";
+$call = call_user_func("stat", "eval-stat-array.txt");
+echo $call["mtime"] === filemtime("eval-stat-array.txt") ? "callstat" : "bad"; echo ":";
+$call_lstat = call_user_func_array("lstat", ["filename" => "eval-lstat-array.txt"]);
+echo $call_lstat["ino"] > 0 ? "calllstat" : "bad"; echo ":";
+echo unlink("eval-lstat-array.txt") && unlink("eval-stat-array.txt") ? "cleanup" : "bad"; echo ":";
+echo function_exists("stat"); echo function_exists("lstat");
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "stat:mode:lstat:missing:callstat:calllstat:cleanup:11"
+    );
+}
+
 /// Verifies eval path operation builtins mutate local filesystem state.
 #[test]
 fn test_eval_dispatches_path_operation_builtin_calls() {

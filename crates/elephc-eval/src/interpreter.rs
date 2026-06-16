@@ -1242,6 +1242,7 @@ fn eval_positional_expr_call(
         "file_put_contents" => eval_builtin_file_put_contents(args, context, scope, values),
         "filesize" => eval_builtin_filesize(args, context, scope, values),
         "filetype" => eval_builtin_filetype(args, context, scope, values),
+        "stat" | "lstat" => eval_builtin_stat_array(name, args, context, scope, values),
         "floor" => eval_builtin_floor(args, context, scope, values),
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
@@ -1699,6 +1700,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "str_replace"
             | "str_starts_with"
             | "strcmp"
+            | "stat"
             | "strlen"
             | "strpos"
             | "strrpos"
@@ -1726,6 +1728,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "urlencode"
             | "usleep"
             | "wordwrap"
+            | "lstat"
     )
 }
 
@@ -1838,7 +1841,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "file" | "file_get_contents" | "file_exists" | "fileatime" | "filectime" | "filegroup"
         | "fileinode" | "filemtime" | "fileowner" | "fileperms" | "filesize" | "filetype"
         | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable" | "is_writable"
-        | "is_writeable" | "readfile" | "unlink" => Some(&["filename"]),
+        | "is_writeable" | "lstat" | "readfile" | "stat" | "unlink" => Some(&["filename"]),
         "file_put_contents" => Some(&["filename", "data"]),
         "function_exists" => Some(&["function"]),
         "gethostbyname" => Some(&["hostname"]),
@@ -2192,6 +2195,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_filetype_result(*filename, values)?
+        }
+        "stat" | "lstat" => {
+            let [filename] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_stat_array_result(name, *filename, values)?
         }
         "linkinfo" => {
             let [path] = evaluated_args else {
@@ -4465,6 +4474,97 @@ fn eval_filetype_result(
         "unknown"
     };
     values.string(label)
+}
+
+/// Evaluates PHP `stat($filename)` or `lstat($filename)` over one eval expression.
+fn eval_builtin_stat_array(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    eval_stat_array_result(name, filename, values)
+}
+
+/// Builds PHP's stat array for one local path, or returns false on stat failure.
+fn eval_stat_array_result(
+    name: &str,
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let metadata = match name {
+        "stat" => std::fs::metadata(path),
+        "lstat" => std::fs::symlink_metadata(path),
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    let metadata = match metadata {
+        Ok(metadata) => metadata,
+        Err(_) => return values.bool_value(false),
+    };
+    eval_stat_metadata_array(&metadata, values)
+}
+
+/// Converts filesystem metadata into PHP's numeric-and-string keyed stat array.
+fn eval_stat_metadata_array(
+    metadata: &std::fs::Metadata,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let fields = [
+        ("dev", eval_u64_to_i64(metadata.dev())?),
+        ("ino", eval_u64_to_i64(metadata.ino())?),
+        ("mode", i64::from(metadata.mode())),
+        ("nlink", eval_u64_to_i64(metadata.nlink())?),
+        ("uid", i64::from(metadata.uid())),
+        ("gid", i64::from(metadata.gid())),
+        ("rdev", eval_u64_to_i64(metadata.rdev())?),
+        ("size", eval_u64_to_i64(metadata.size())?),
+        ("atime", metadata.atime()),
+        ("mtime", metadata.mtime()),
+        ("ctime", metadata.ctime()),
+        ("blksize", eval_u64_to_i64(metadata.blksize())?),
+        ("blocks", eval_u64_to_i64(metadata.blocks())?),
+    ];
+    let mut result = values.assoc_new(fields.len() * 2)?;
+    for (index, (name, value)) in fields.iter().enumerate() {
+        result = eval_stat_array_set_int_key(result, index, *value, values)?;
+        result = eval_stat_array_set_string_key(result, name, *value, values)?;
+    }
+    Ok(result)
+}
+
+/// Inserts one integer stat field under a numeric PHP array key.
+fn eval_stat_array_set_int_key(
+    array: RuntimeCellHandle,
+    key: usize,
+    value: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = values.int(i64::try_from(key).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+    let value = values.int(value)?;
+    values.array_set(array, key, value)
+}
+
+/// Inserts one integer stat field under a string PHP array key.
+fn eval_stat_array_set_string_key(
+    array: RuntimeCellHandle,
+    key: &str,
+    value: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = values.string(key)?;
+    let value = values.int(value)?;
+    values.array_set(array, key, value)
+}
+
+/// Converts unsigned stat metadata into the signed integer payload used by PHP cells.
+fn eval_u64_to_i64(value: u64) -> Result<i64, EvalStatus> {
+    i64::try_from(value).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Evaluates a one-path filesystem operation that returns a PHP boolean.
@@ -9988,6 +10088,47 @@ return true;"#
         assert_eq!(
             values.output,
             "mtime:atime:ctime:perms:owner:group:inode:file:dir:link:noexec:link:missing-atime:missing-ctime:missing-perms:missing-owner:missing-group:missing-inode:missing-type:missing-mtime:file:callinode:1111111111"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `stat()` and `lstat()` build PHP-compatible metadata arrays.
+    #[test]
+    fn execute_program_dispatches_stat_array_builtins() {
+        let pid = std::process::id();
+        let filename = format!("elephc_eval_stat_array_{pid}.txt");
+        let link = format!("elephc_eval_lstat_array_{pid}.txt");
+        let missing = format!("elephc_eval_stat_array_missing_{pid}.txt");
+        let source = format!(
+            r#"$stat = stat("{filename}");
+$lstat = lstat("{link}");
+echo $stat["size"] === 5 && $stat[7] === $stat["size"] ? "stat" : "bad"; echo ":";
+echo ($stat["mode"] & 61440) === 32768 ? "mode" : "bad"; echo ":";
+echo ($lstat["mode"] & 61440) === 40960 ? "lstat" : "bad"; echo ":";
+echo stat("{missing}") === false && lstat("{missing}") === false ? "missing" : "bad"; echo ":";
+$call = call_user_func("stat", "{filename}");
+echo $call["mtime"] === filemtime("{filename}") ? "callstat" : "bad"; echo ":";
+$call_lstat = call_user_func_array("lstat", ["filename" => "{link}"]);
+echo $call_lstat["ino"] > 0 ? "calllstat" : "bad"; echo ":";
+echo unlink("{link}") && unlink("{filename}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("stat"); echo function_exists("lstat");
+return true;"#
+        );
+        let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(&link);
+        std::fs::write(&filename, b"hello").expect("write stat array fixture");
+        std::os::unix::fs::symlink(&filename, &link).expect("create stat array symlink");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(&link);
+        assert_eq!(
+            values.output,
+            "stat:mode:lstat:missing:callstat:calllstat:cleanup:11"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
