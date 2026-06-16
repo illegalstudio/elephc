@@ -38,7 +38,7 @@ Inside eval fragments, two-element object-method callable arrays such as `[$this
 
 Eval `match` expressions support strict pattern comparison, comma-separated patterns, lazy result-arm evaluation, and `default` fallback. A miss without `default` is currently reported as an eval runtime fatal.
 
-Eval namespace declarations support both `namespace Name;` and `namespace Name { ... }` forms. Eval-declared functions and empty class declarations inside a namespace are registered under their qualified names, `__NAMESPACE__` reflects the active eval namespace, and unqualified function and constant references fall back to the global builtin/constant namespace when the namespaced symbol is absent.
+Eval namespace declarations support both `namespace Name;` and `namespace Name { ... }` forms. Eval-declared functions and empty class declarations inside a namespace are registered under their qualified names, `__NAMESPACE__` reflects the active eval namespace, and unqualified function and constant references fall back to the global builtin/constant namespace when the namespaced symbol is absent. Simple `use`, `use function`, and `use const` declarations resolve class aliases for `new`, function aliases for unqualified calls, and constant aliases for unqualified constant fetches within the active namespace declaration region; grouped `use` syntax remains outside the eval subset.
 
 The URL codec builtins `urlencode()`, `urldecode()`, `rawurlencode()`, and `rawurldecode()` are available through eval direct calls, named arguments, `call_user_func()`, `call_user_func_array()`, and `function_exists()`.
 
