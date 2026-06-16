@@ -567,7 +567,7 @@ struct NamespaceImports {
 }
 
 /// The `use` declaration namespace being imported.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 enum UseImportKind {
     Class,
     Function,
@@ -875,18 +875,7 @@ impl Parser {
     /// Parses PHP `use`, `use function`, and `use const` import declarations.
     fn parse_use_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
-        let kind = if matches!(
-            self.current(),
-            TokenKind::Ident(name) if ident_eq(name, "function")
-        ) {
-            self.advance();
-            UseImportKind::Function
-        } else if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
-            self.advance();
-            UseImportKind::Const
-        } else {
-            UseImportKind::Class
-        };
+        let kind = self.parse_use_import_kind();
 
         loop {
             self.parse_use_import(kind)?;
@@ -898,9 +887,111 @@ impl Parser {
         Ok(Vec::new())
     }
 
+    /// Parses an optional top-level `function` or `const` use-import kind.
+    fn parse_use_import_kind(&mut self) -> UseImportKind {
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
+            self.advance();
+            UseImportKind::Function
+        } else if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
+            self.advance();
+            UseImportKind::Const
+        } else {
+            UseImportKind::Class
+        }
+    }
+
     /// Parses and registers one comma-separated import entry.
     fn parse_use_import(&mut self, kind: UseImportKind) -> Result<(), EvalParseError> {
-        let name = self.parse_qualified_name()?.name;
+        let (name, grouped) = self.parse_use_name_or_group_start()?;
+        if grouped {
+            return self.parse_grouped_use_imports(kind, name);
+        }
+        self.parse_use_alias_and_register(kind, name)
+    }
+
+    /// Parses a use-import name, stopping after a trailing namespace separator before `{`.
+    fn parse_use_name_or_group_start(&mut self) -> Result<(String, bool), EvalParseError> {
+        let _ = self.consume(TokenKind::Backslash);
+        let TokenKind::Ident(first) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let mut name = first.clone();
+        self.advance();
+        while self.consume(TokenKind::Backslash) {
+            if self.consume(TokenKind::LBrace) {
+                return Ok((name, true));
+            }
+            let TokenKind::Ident(part) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            name.push('\\');
+            name.push_str(part);
+            self.advance();
+        }
+        Ok((name, false))
+    }
+
+    /// Parses all members inside a grouped namespace import declaration.
+    fn parse_grouped_use_imports(
+        &mut self,
+        default_kind: UseImportKind,
+        prefix: String,
+    ) -> Result<(), EvalParseError> {
+        if matches!(self.current(), TokenKind::RBrace) {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        loop {
+            let kind = self.parse_grouped_use_entry_kind(default_kind)?;
+            let member = self.parse_grouped_use_member_name()?;
+            let name = join_grouped_use_name(&prefix, &member);
+            self.parse_use_alias_and_register(kind, name)?;
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            if self.consume(TokenKind::RBrace) {
+                return Ok(());
+            }
+        }
+        self.expect(TokenKind::RBrace)
+    }
+
+    /// Parses an optional per-entry grouped import kind, matching PHP's mixed group rules.
+    fn parse_grouped_use_entry_kind(
+        &mut self,
+        default_kind: UseImportKind,
+    ) -> Result<UseImportKind, EvalParseError> {
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
+            if default_kind != UseImportKind::Class {
+                return Err(EvalParseError::UnexpectedToken);
+            }
+            self.advance();
+            return Ok(UseImportKind::Function);
+        }
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
+            if default_kind != UseImportKind::Class {
+                return Err(EvalParseError::UnexpectedToken);
+            }
+            self.advance();
+            return Ok(UseImportKind::Const);
+        }
+        Ok(default_kind)
+    }
+
+    /// Parses one non-absolute member name inside a grouped use declaration.
+    fn parse_grouped_use_member_name(&mut self) -> Result<String, EvalParseError> {
+        let name = self.parse_qualified_name()?;
+        if name.absolute {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        Ok(name.name)
+    }
+
+    /// Parses an optional alias and stores one namespace import.
+    fn parse_use_alias_and_register(
+        &mut self,
+        kind: UseImportKind,
+        name: String,
+    ) -> Result<(), EvalParseError> {
         let alias = if matches!(
             self.current(),
             TokenKind::Ident(keyword) if ident_eq(keyword, "as")
@@ -2207,6 +2298,11 @@ fn last_name_segment(name: &str) -> &str {
     name.rsplit('\\').next().unwrap_or(name)
 }
 
+/// Combines a grouped use prefix with one relative member name.
+fn join_grouped_use_name(prefix: &str, member: &str) -> String {
+    format!("{prefix}\\{member}")
+}
+
 /// Returns true for PHP expression forms that the eval subset intentionally does not parse yet.
 fn is_unsupported_expression_keyword(name: &str) -> bool {
     ["clone", "yield"]
@@ -2776,6 +2872,45 @@ return Alias(LocalValue, new BoxAlias\Inner());"#,
                     }),
                 ],
             }))]
+        );
+    }
+
+    /// Verifies grouped namespace imports resolve functions, constants, and class aliases.
+    #[test]
+    fn parse_fragment_accepts_grouped_namespace_use_imports() {
+        let program = parse_fragment(
+            br#"namespace Eval\UseNs;
+use Lib\{Box as BoxAlias, Sub\Thing, function imported_func as Alias};
+use const Lib\{VALUE as LocalValue, OTHER};
+return Alias(LocalValue, OTHER, new BoxAlias\Inner(), new Thing());"#,
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Call {
+                name: "lib\\imported_func".to_string(),
+                args: vec![
+                    EvalCallArg::positional(EvalExpr::ConstFetch("Lib\\VALUE".to_string())),
+                    EvalCallArg::positional(EvalExpr::ConstFetch("Lib\\OTHER".to_string())),
+                    EvalCallArg::positional(EvalExpr::NewObject {
+                        class_name: "Lib\\Box\\Inner".to_string(),
+                        args: Vec::new(),
+                    }),
+                    EvalCallArg::positional(EvalExpr::NewObject {
+                        class_name: "Lib\\Sub\\Thing".to_string(),
+                        args: Vec::new(),
+                    }),
+                ],
+            }))]
+        );
+    }
+
+    /// Verifies typed grouped namespace imports reject mixed per-entry kinds.
+    #[test]
+    fn parse_fragment_rejects_mixed_kind_typed_grouped_use_imports() {
+        assert_eq!(
+            parse_fragment(br#"use function Lib\{target, const VALUE};"#),
+            Err(EvalParseError::UnexpectedToken)
         );
     }
 
