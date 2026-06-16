@@ -151,6 +151,7 @@ $array_filter = eval('$items = array_filter([0, 1, "", "ok"]); return count($ite
 $array_filter_callback = eval('function eval_example_keep_pair($value, $key) { return $key === "b" || $value === 3; } $items = array_filter(["a" => 1, "b" => 2, "c" => 3], "eval_example_keep_pair", ARRAY_FILTER_USE_BOTH); return count($items) . ":" . $items["b"] . ":" . $items["c"];');
 $named_builtins = eval('return strlen(string: "eval") . ":" . (str_contains(...["haystack" => "dynamic eval", "needle" => "eval"]) ? "yes" : "no");');
 $array_projection = eval('$vals = array_values(["a" => 10, "b" => 20]); $keys = array_keys(["a" => 10, "b" => 20]); return $keys[0] . ":" . $vals[1];');
+$iterator_arrays = eval('$items = ["x" => 1, "y" => 2]; $copy = iterator_to_array($items); $values = iterator_to_array($items, false); return iterator_count($items) . ":" . $copy["x"] . ":" . $values[0];');
 $mixed_literal = eval('return [2 => "two", "tail"][3] . ":" . (["2" => "two", "next"][3]);');
 $append_items = eval('$items = []; $items[] = "left"; $items[] = "right"; return $items[0] . ":" . $items[1] . ":" . count($items);');
 $append_assoc = eval('$items = ["name" => "Ada"]; $items[] = "Grace"; return $items[0];');
@@ -300,6 +301,7 @@ echo "array-filter=" . $array_filter . "\n";
 echo "array-filter-callback=" . $array_filter_callback . "\n";
 echo "named-builtins=" . $named_builtins . "\n";
 echo "array-projection=" . $array_projection . "\n";
+echo "iterator-arrays=" . $iterator_arrays . "\n";
 echo "mixed-literal=" . $mixed_literal . "\n";
 echo "append-items=" . $append_items . "\n";
 echo "append-assoc=" . $append_assoc . "\n";
