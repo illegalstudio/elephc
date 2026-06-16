@@ -1396,6 +1396,7 @@ fn eval_positional_expr_call(
         "array_column" => eval_builtin_array_column(args, context, scope, values),
         "array_fill" => eval_builtin_array_fill(args, context, scope, values),
         "array_fill_keys" => eval_builtin_array_fill_keys(args, context, scope, values),
+        "array_filter" => eval_builtin_array_filter(args, context, scope, values),
         "array_flip" => eval_builtin_array_flip(args, context, scope, values),
         "array_keys" | "array_values" => {
             eval_builtin_array_projection(name, args, context, scope, values)
@@ -1830,6 +1831,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_combine"
             | "array_fill"
             | "array_fill_keys"
+            | "array_filter"
             | "array_flip"
             | "array_key_exists"
             | "array_keys"
@@ -2130,6 +2132,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_combine" => Some(&["keys", "values"]),
         "array_fill" => Some(&["start_index", "count", "value"]),
         "array_fill_keys" => Some(&["keys", "value"]),
+        "array_filter" => Some(&["array", "callback", "mode"]),
         "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_unique"
         | "array_rand" | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
@@ -2421,6 +2424,14 @@ fn eval_builtin_with_values(
             };
             eval_array_fill_keys_result(*keys, *value, values)?
         }
+        "array_filter" => match evaluated_args {
+            [array] => eval_array_filter_result(*array, None, None, values)?,
+            [array, callback] => eval_array_filter_result(*array, Some(*callback), None, values)?,
+            [array, callback, mode] => {
+                eval_array_filter_result(*array, Some(*callback), Some(*mode), values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "array_flip" => {
             let [array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -3413,6 +3424,61 @@ fn eval_array_fill_keys_result(
         let source_key = values.array_iter_key(keys, position)?;
         let target_key = values.array_get(keys, source_key)?;
         result = values.array_set(result, target_key, value)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `array_filter()` for the default null-callback filtering mode.
+fn eval_builtin_array_filter(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [array] => {
+            let array = eval_expr(array, context, scope, values)?;
+            eval_array_filter_result(array, None, None, values)
+        }
+        [array, callback] => {
+            let array = eval_expr(array, context, scope, values)?;
+            let callback = eval_expr(callback, context, scope, values)?;
+            eval_array_filter_result(array, Some(callback), None, values)
+        }
+        [array, callback, mode] => {
+            let array = eval_expr(array, context, scope, values)?;
+            let callback = eval_expr(callback, context, scope, values)?;
+            let mode = eval_expr(mode, context, scope, values)?;
+            eval_array_filter_result(array, Some(callback), Some(mode), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Filters falsey values from an eval array while preserving original keys.
+fn eval_array_filter_result(
+    array: RuntimeCellHandle,
+    callback: Option<RuntimeCellHandle>,
+    mode: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(callback) = callback {
+        if !values.is_null(callback)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    if let Some(mode) = mode {
+        let _ = eval_int_value(mode, values)?;
+    }
+
+    let len = values.array_len(array)?;
+    let mut result = values.assoc_new(len)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        if values.truthy(value)? {
+            result = values.array_set(result, key, value)?;
+        }
     }
     Ok(result)
 }
@@ -12536,6 +12602,32 @@ return function_exists("array_product");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "6:24:0:1:7:7:10:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_filter()` removes falsey values while preserving original keys.
+    #[test]
+    fn execute_program_dispatches_array_filter_builtin() {
+        let program = parse_fragment(
+            br#"$filtered = array_filter([0, 1, 2, "", false, null, "0", "ok"]);
+echo count($filtered) . ":" . $filtered[1] . ":" . $filtered[2] . ":" . $filtered[7] . ":";
+$assoc = array_filter(["a" => 0, "b" => 2, "c" => ""]);
+echo (array_key_exists("a", $assoc) ? "bad" : "drop") . ":" . $assoc["b"] . ":";
+$null = array_filter([0, 3], null, 1);
+echo count($null) . ":" . $null[1] . ":";
+$call = call_user_func("array_filter", [0, 4]);
+echo count($call) . ":" . $call[1] . ":";
+$spread = call_user_func_array("array_filter", ["array" => [0, 5], "callback" => null]);
+echo count($spread) . ":" . $spread[1] . ":";
+return function_exists("array_filter");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "3:1:2:ok:drop:2:1:3:1:4:1:5:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

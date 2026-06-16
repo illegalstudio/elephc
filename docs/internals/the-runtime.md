@@ -41,6 +41,8 @@ Eval `number_format()` formats finite numeric cells inside the interpreter, incl
 
 Eval printf-family dispatch formats `sprintf()` and `vsprintf()` inside the interpreter, while `printf()` and `vprintf()` echo the formatted bytes through the eval output hook and return the byte count. The formatter consumes scalar values through the same eval cast hooks and array values in PHP iteration order for the `v*` forms.
 
+Eval `array_filter()` implements PHP's omitted/null callback form by iterating source keys through the eval value hooks, testing each value with PHP truthiness, and inserting key/value pairs into an associative result so numeric and string keys are preserved. Non-null callbacks are intentionally still outside the eval subset.
+
 Eval `crc32()` uses the same table-free reflected CRC-32 polynomial as the generated runtime helper. Eval one-shot digest calls `hash()`, `hash_file()`, `hash_hmac()`, `md5()`, and `sha1()` call through the same pure-Rust algorithm table as the generated crypto bridge, including raw `$binary` output. `hash_file()` reads local host files directly and boxes PHP false when the file cannot be read. Eval `hash_algos()` builds the same indexed supported-algorithm list as the generated runtime helper.
 
 Eval system and path calls include `time()`, `microtime()`, `date()`, `mktime()`, `strtotime()`, `phpversion()`, `getcwd()`, and `sys_get_temp_dir()`. `phpversion()` mirrors the root compiler package version, and `sys_get_temp_dir()` mirrors the static helper's `/tmp` literal.

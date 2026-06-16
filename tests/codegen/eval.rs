@@ -734,6 +734,27 @@ echo ":"; echo function_exists("array_sum"); echo function_exists("array_product
     assert_eq!(out, "6:24:0:1:7:7:10:11");
 }
 
+/// Verifies eval `array_filter()` removes falsey values and preserves source keys.
+#[test]
+fn test_eval_dispatches_array_filter_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$filtered = array_filter([0, 1, 2, "", false, null, "0", "ok"]);
+echo count($filtered) . ":" . $filtered[1] . ":" . $filtered[2] . ":" . $filtered[7] . ":";
+$assoc = array_filter(["a" => 0, "b" => 2, "c" => ""]);
+echo (array_key_exists("a", $assoc) ? "bad" : "drop") . ":" . $assoc["b"] . ":";
+$null = array_filter([0, 3], null, 1);
+echo count($null) . ":" . $null[1] . ":";
+$call = call_user_func("array_filter", [0, 4]);
+echo count($call) . ":" . $call[1] . ":";
+$spread = call_user_func_array("array_filter", ["array" => [0, 5], "callback" => null]);
+echo count($spread) . ":" . $spread[1] . ":";
+echo function_exists("array_filter");');
+"#,
+    );
+    assert_eq!(out, "3:1:2:ok:drop:2:1:3:1:4:1:5:1");
+}
+
 /// Verifies eval `array_combine()` supports PHP key conversions and callable dispatch.
 #[test]
 fn test_eval_dispatches_array_combine_builtin_call() {
