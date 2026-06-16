@@ -960,6 +960,22 @@ echo ":"; echo function_exists("substr");');
     assert_eq!(out, "cdef:bcde:ef:cd:cd:1");
 }
 
+/// Verifies eval `substr_replace()` replaces selected byte ranges through callable paths.
+#[test]
+fn test_eval_dispatches_substr_replace_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo substr_replace("hello world", "PHP", 6, 5); echo ":";
+echo substr_replace(string: "abcdef", replace: "X", offset: 1, length: -1); echo ":";
+echo substr_replace("abcdef", "X", -2); echo ":";
+echo call_user_func("substr_replace", "abcdef", "X", 99, 1); echo ":";
+echo call_user_func_array("substr_replace", ["string" => "abcdef", "replace" => "X", "offset" => -99, "length" => 2]);
+echo ":"; echo function_exists("substr_replace");');
+"#,
+    );
+    assert_eq!(out, "hello PHP:aXf:abcdX:abcdefX:Xcdef:1");
+}
+
 /// Verifies eval `nl2br()` preserves newline bytes while inserting HTML breaks.
 #[test]
 fn test_eval_dispatches_nl2br_builtin_call() {
