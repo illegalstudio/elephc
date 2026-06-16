@@ -593,6 +593,10 @@ const EVAL_JSON_ERROR_INF_OR_NAN: i64 = 7;
 const EVAL_JSON_ERROR_UNSUPPORTED_TYPE: i64 = 8;
 const EVAL_JSON_ERROR_INVALID_PROPERTY_NAME: i64 = 9;
 const EVAL_JSON_ERROR_UTF16: i64 = 10;
+const EVAL_JSON_HEX_TAG: i64 = 1;
+const EVAL_JSON_HEX_AMP: i64 = 2;
+const EVAL_JSON_HEX_APOS: i64 = 4;
+const EVAL_JSON_HEX_QUOT: i64 = 8;
 const EVAL_JSON_BIGINT_AS_STRING: i64 = 2;
 const EVAL_JSON_FORCE_OBJECT: i64 = 16;
 const EVAL_JSON_UNESCAPED_SLASHES: i64 = 64;
@@ -13160,7 +13164,13 @@ fn eval_json_encode_result(
         .map(|flags| eval_int_value(flags, values))
         .transpose()?
         .unwrap_or(0);
-    if flags & !(EVAL_JSON_UNESCAPED_SLASHES | EVAL_JSON_FORCE_OBJECT) != 0 {
+    let supported_flags = EVAL_JSON_HEX_TAG
+        | EVAL_JSON_HEX_AMP
+        | EVAL_JSON_HEX_APOS
+        | EVAL_JSON_HEX_QUOT
+        | EVAL_JSON_UNESCAPED_SLASHES
+        | EVAL_JSON_FORCE_OBJECT;
+    if flags & !supported_flags != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
     }
     let depth = depth
@@ -13629,12 +13639,17 @@ fn eval_json_encode_append_string(bytes: &[u8], flags: i64, output: &mut Vec<u8>
     output.push(b'"');
     for byte in bytes {
         match *byte {
+            b'"' if flags & EVAL_JSON_HEX_QUOT != 0 => output.extend_from_slice(b"\\u0022"),
             b'"' => output.extend_from_slice(b"\\\""),
             b'\\' => output.extend_from_slice(b"\\\\"),
             b'/' if flags & EVAL_JSON_UNESCAPED_SLASHES == 0 => {
                 output.extend_from_slice(b"\\/");
             }
             b'/' => output.push(b'/'),
+            b'<' if flags & EVAL_JSON_HEX_TAG != 0 => output.extend_from_slice(b"\\u003C"),
+            b'>' if flags & EVAL_JSON_HEX_TAG != 0 => output.extend_from_slice(b"\\u003E"),
+            b'&' if flags & EVAL_JSON_HEX_AMP != 0 => output.extend_from_slice(b"\\u0026"),
+            b'\'' if flags & EVAL_JSON_HEX_APOS != 0 => output.extend_from_slice(b"\\u0027"),
             b'\x08' => output.extend_from_slice(b"\\b"),
             b'\x0c' => output.extend_from_slice(b"\\f"),
             b'\n' => output.extend_from_slice(b"\\n"),
@@ -14410,6 +14425,10 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
             ))
         }
         "JSON_ERROR_UTF16" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF16)),
+        "JSON_HEX_TAG" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_TAG)),
+        "JSON_HEX_AMP" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_AMP)),
+        "JSON_HEX_APOS" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_APOS)),
+        "JSON_HEX_QUOT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_QUOT)),
         "JSON_BIGINT_AS_STRING" => Some(EvalPredefinedConstant::Int(EVAL_JSON_BIGINT_AS_STRING)),
         "JSON_FORCE_OBJECT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_FORCE_OBJECT)),
         "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
@@ -17441,7 +17460,8 @@ echo call_user_func_array("json_encode", ["value" => "x/y", "flags" => JSON_UNES
 echo json_encode([1, 2], JSON_FORCE_OBJECT) . ":";
 echo json_encode([], JSON_FORCE_OBJECT) . ":";
 echo call_user_func_array("json_encode", ["value" => [1, 2], "flags" => JSON_FORCE_OBJECT]) . ":";
-return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_FORCE_OBJECT");"#,
+echo json_encode("<>&\"" . chr(39), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ":";
+return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17451,7 +17471,7 @@ return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && de
 
         assert_eq!(
             values.output,
-            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"#
+            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":"#
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
