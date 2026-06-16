@@ -446,15 +446,32 @@ impl<'a> Lexer<'a> {
                     return Err(EvalParseError::UnterminatedString);
                 };
                 self.bump_char();
-                out.push(match escaped {
-                    'n' => '\n',
-                    'r' => '\r',
-                    't' => '\t',
-                    '\\' => '\\',
-                    '\'' => '\'',
-                    '"' => '"',
-                    other => other,
-                });
+                if quote == '\'' {
+                    match escaped {
+                        '\\' => out.push('\\'),
+                        '\'' => out.push('\''),
+                        other => {
+                            out.push('\\');
+                            out.push(other);
+                        }
+                    }
+                } else {
+                    match escaped {
+                        'n' => out.push('\n'),
+                        'r' => out.push('\r'),
+                        't' => out.push('\t'),
+                        'v' => out.push('\x0b'),
+                        'e' => out.push('\x1b'),
+                        'f' => out.push('\x0c'),
+                        '\\' => out.push('\\'),
+                        '"' => out.push('"'),
+                        '$' => out.push('$'),
+                        other => {
+                            out.push('\\');
+                            out.push(other);
+                        }
+                    }
+                }
             } else {
                 out.push(ch);
             }
@@ -3154,6 +3171,29 @@ function dyn() { return alias(); }"#,
             &[EvalStmt::Expr(EvalExpr::Print(Box::new(EvalExpr::Const(
                 EvalConst::String("hi".to_string())
             ))))]
+        );
+    }
+
+    /// Verifies single- and double-quoted strings keep PHP-compatible simple escapes.
+    #[test]
+    fn parse_fragment_preserves_php_string_escape_semantics() {
+        let program =
+            parse_fragment(br#"return ['A\nB', "A\qB", "A\v\e\fB", 'It\'s'];"#)
+                .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Array(vec![
+                EvalArrayElement::Value(EvalExpr::Const(EvalConst::String(
+                    "A\\nB".to_string()
+                ))),
+                EvalArrayElement::Value(EvalExpr::Const(EvalConst::String(
+                    "A\\qB".to_string()
+                ))),
+                EvalArrayElement::Value(EvalExpr::Const(EvalConst::String(
+                    "A\x0b\x1b\x0cB".to_string()
+                ))),
+                EvalArrayElement::Value(EvalExpr::Const(EvalConst::String("It's".to_string()))),
+            ])))]
         );
     }
 
