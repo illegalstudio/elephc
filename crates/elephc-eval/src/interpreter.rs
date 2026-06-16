@@ -9909,19 +9909,40 @@ fn eval_preg_match_capture_result(
     Ok((matched, matches))
 }
 
-/// Evaluates PHP `preg_match_all()` count-only calls over eval expressions.
+/// Evaluates PHP `preg_match_all()` over eval expressions.
 fn eval_builtin_preg_match_all(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [pattern, subject] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let pattern = eval_expr(pattern, context, scope, values)?;
-    let subject = eval_expr(subject, context, scope, values)?;
-    eval_preg_match_all_result(pattern, subject, values)
+    match args {
+        [pattern, subject] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            eval_preg_match_all_result(pattern, subject, values)
+        }
+        [pattern, subject, matches] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            let EvalExpr::LoadVar(matches_name) = matches else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let (result, matches_array) =
+                eval_preg_match_all_capture_result(pattern, subject, values)?;
+            for replaced in set_scope_cell(
+                context,
+                scope,
+                matches_name.clone(),
+                matches_array,
+                ScopeCellOwnership::Owned,
+            )? {
+                values.release(replaced)?;
+            }
+            Ok(result)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Counts all non-overlapping regex matches in one subject string.
@@ -9934,6 +9955,50 @@ fn eval_preg_match_all_result(
     let subject = values.string_bytes(subject)?;
     let count = regex.captures_iter(&subject).count();
     values.int(i64::try_from(count).map_err(|_| EvalStatus::RuntimeFatal)?)
+}
+
+/// Returns the match count plus PHP's default `PREG_PATTERN_ORDER` `$matches` array.
+fn eval_preg_match_all_capture_result(
+    pattern: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
+    let regex = eval_preg_regex(pattern, values)?;
+    let capture_count = regex.captures_len();
+    let subject = values.string_bytes(subject)?;
+    let captures: Vec<Captures<'_>> = regex.captures_iter(&subject).collect();
+    let count = values.int(i64::try_from(captures.len()).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+    let matches = eval_preg_match_all_pattern_order_array(
+        &subject,
+        &captures,
+        capture_count,
+        values,
+    )?;
+    Ok((count, matches))
+}
+
+/// Builds PHP's default `preg_match_all()` pattern-order capture matrix.
+fn eval_preg_match_all_pattern_order_array(
+    subject: &[u8],
+    captures: &[Captures<'_>],
+    capture_count: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut outer = values.array_new(capture_count)?;
+    for capture_index in 0..capture_count {
+        let mut row = values.array_new(captures.len())?;
+        for (match_index, capture) in captures.iter().enumerate() {
+            let key = values
+                .int(i64::try_from(match_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            let bytes = eval_preg_capture_bytes(subject, capture, capture_index).unwrap_or(b"");
+            let value = values.string_bytes_value(bytes)?;
+            row = values.array_set(row, key, value)?;
+        }
+        let key = values
+            .int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        outer = values.array_set(outer, key, row)?;
+    }
+    Ok(outer)
 }
 
 /// Evaluates PHP `preg_replace()` over eval expressions.
@@ -16774,6 +16839,10 @@ return function_exists("str_ireplace");"#,
 echo $ok . ":" . count($matches) . ":" . $matches[0] . ":" . $matches[1] . ":" . $matches[2] . ":";
 echo preg_match("/xyz/", "id42") . ":";
 echo preg_match_all("/[0-9]+/", "a1b22c333") . ":";
+$allCount = preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $all);
+echo $allCount . ":" . count($all) . ":" . $all[0][1] . ":" . $all[1][0] . ":" . $all[2][1] . ":";
+preg_match_all("/(x)(y)/", "abc", $none);
+echo count($none) . ":" . count($none[0]) . ":" . count($none[1]) . ":" . count($none[2]) . ":";
 echo preg_replace("/([a-z])([0-9])/", "$2-$1", "a1 b2") . ":";
 function eval_regex_wrap($matches) { return "[" . $matches[0] . "]"; }
 echo preg_replace_callback("/[A-Z]/", "eval_regex_wrap", "AB") . ":";
@@ -16796,7 +16865,7 @@ return function_exists("preg_match") && function_exists("preg_match_all") && fun
 
         assert_eq!(
             values.output,
-            "1:3:id42:id:42:0:3:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:"
+            "1:3:id42:id:42:0:3:2:3:b22:a:22:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
