@@ -1538,6 +1538,31 @@ echo ":"; echo function_exists("date"); echo function_exists("mktime");');
     );
 }
 
+/// Verifies eval `strtotime()` parses supported ISO date strings and rejects others.
+#[test]
+fn test_eval_dispatches_strtotime_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$date = strtotime("2024-06-15");
+echo date("Y-m-d H:i:s", $date);
+$full = strtotime("2024-06-15 12:30:45");
+echo ":" . date("Y-m-d H:i:s", $full);
+$short = strtotime("2024-06-15T12:30");
+echo ":" . date("Y-m-d H:i:s", $short);
+echo ":" . (strtotime("2024/06/15") === -1 ? "bad" : "wrong");
+$call = call_user_func("strtotime", "2024-01-02 03:04:05");
+echo ":" . date("Y-m-d H:i:s", $call);
+$spread = call_user_func_array("strtotime", ["datetime" => "2024-01-02"]);
+echo ":" . date("Y-m-d", $spread) . ":";
+echo function_exists("strtotime");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "2024-06-15 00:00:00:2024-06-15 12:30:45:2024-06-15 12:30:00:bad:2024-01-02 03:04:05:2024-01-02:1"
+    );
+}
+
 /// Verifies eval `microtime()` returns a plausible floating timestamp by all call paths.
 #[test]
 fn test_eval_dispatches_microtime_builtin_call() {

@@ -1530,6 +1530,7 @@ fn eval_positional_expr_call(
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => {
             eval_builtin_stream_introspection(name, args, values)
         }
+        "strtotime" => eval_builtin_strtotime(args, context, scope, values),
         "unlink" => eval_builtin_unlink(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
         "str_repeat" => eval_builtin_str_repeat(args, context, scope, values),
@@ -1996,6 +1997,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "str_pad"
             | "str_split"
             | "strstr"
+            | "strtotime"
             | "substr"
             | "stripslashes"
             | "strtolower"
@@ -2195,6 +2197,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
+        "strtotime" => Some(&["datetime"]),
         "strstr" => Some(&["haystack", "needle", "before_needle"]),
         "str_pad" => Some(&["string", "length", "pad_string", "pad_type"]),
         "str_replace" | "str_ireplace" => Some(&["search", "replace", "subject"]),
@@ -3073,6 +3076,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_stream_introspection_result(name, values)?
+        }
+        "strtotime" => {
+            let [datetime] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_strtotime_result(*datetime, values)?
         }
         "umask" => match evaluated_args {
             [] => eval_umask_result(None, values)?,
@@ -5522,17 +5531,36 @@ fn eval_mktime_result(
     year: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let timestamp = eval_mktime_timestamp(
+        eval_int_cell_as_c_int(hour, values)?,
+        eval_int_cell_as_c_int(minute, values)?,
+        eval_int_cell_as_c_int(second, values)?,
+        eval_int_cell_as_c_int(month, values)?,
+        eval_int_cell_as_c_int(day, values)?,
+        eval_int_cell_as_c_int(year, values)?,
+    )?;
+    values.int(timestamp)
+}
+
+/// Converts local date components into a Unix timestamp through libc `mktime`.
+fn eval_mktime_timestamp(
+    hour: libc::c_int,
+    minute: libc::c_int,
+    second: libc::c_int,
+    month: libc::c_int,
+    day: libc::c_int,
+    year: libc::c_int,
+) -> Result<i64, EvalStatus> {
     let mut tm = unsafe { MaybeUninit::<libc::tm>::zeroed().assume_init() };
-    tm.tm_hour = eval_int_cell_as_c_int(hour, values)?;
-    tm.tm_min = eval_int_cell_as_c_int(minute, values)?;
-    tm.tm_sec = eval_int_cell_as_c_int(second, values)?;
-    tm.tm_mon = eval_int_cell_as_c_int(month, values)? - 1;
-    tm.tm_mday = eval_int_cell_as_c_int(day, values)?;
-    tm.tm_year = eval_int_cell_as_c_int(year, values)? - 1900;
+    tm.tm_hour = hour;
+    tm.tm_min = minute;
+    tm.tm_sec = second;
+    tm.tm_mon = month - 1;
+    tm.tm_mday = day;
+    tm.tm_year = year - 1900;
     tm.tm_isdst = -1;
     let timestamp = unsafe { libc::mktime(&mut tm) };
-    let timestamp = i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)?;
-    values.int(timestamp)
+    i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Casts one eval cell to a PHP int and checks it fits a libc `c_int`.
@@ -5542,6 +5570,122 @@ fn eval_int_cell_as_c_int(
 ) -> Result<libc::c_int, EvalStatus> {
     let value = eval_int_value(value, values)?;
     libc::c_int::try_from(value).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Evaluates PHP `strtotime(datetime)` for eval's supported date-string subset.
+fn eval_builtin_strtotime(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [datetime] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let datetime = eval_expr(datetime, context, scope, values)?;
+    eval_strtotime_result(datetime, values)
+}
+
+/// Parses one eval `strtotime()` input and boxes the resulting timestamp.
+fn eval_strtotime_result(
+    datetime: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(datetime)?;
+    let timestamp = eval_strtotime_bytes(&bytes)?;
+    values.int(timestamp)
+}
+
+/// Parses eval's supported `strtotime()` strings into local Unix timestamps.
+fn eval_strtotime_bytes(bytes: &[u8]) -> Result<i64, EvalStatus> {
+    let bytes = eval_trim_ascii_whitespace(bytes);
+    if bytes.eq_ignore_ascii_case(b"now") {
+        return eval_current_unix_timestamp();
+    }
+    let Some((year, month, day, hour, minute, second)) = eval_parse_iso_datetime(bytes) else {
+        return Ok(-1);
+    };
+    eval_mktime_timestamp(hour, minute, second, month, day, year)
+}
+
+/// Trims ASCII whitespace from both ends of one byte slice.
+fn eval_trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let mut start = 0;
+    let mut end = bytes.len();
+    while start < end && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    while end > start && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    &bytes[start..end]
+}
+
+/// Parses fixed-width ISO date and datetime forms supported by eval `strtotime()`.
+fn eval_parse_iso_datetime(
+    bytes: &[u8],
+) -> Option<(
+    libc::c_int,
+    libc::c_int,
+    libc::c_int,
+    libc::c_int,
+    libc::c_int,
+    libc::c_int,
+)> {
+    if bytes.len() != 10 && bytes.len() != 16 && bytes.len() != 19 {
+        return None;
+    }
+    if bytes.get(4) != Some(&b'-') || bytes.get(7) != Some(&b'-') {
+        return None;
+    }
+    let year = eval_parse_fixed_digits(bytes, 0, 4)?;
+    let month = eval_parse_fixed_digits(bytes, 5, 2)?;
+    let day = eval_parse_fixed_digits(bytes, 8, 2)?;
+    let (hour, minute, second) = if bytes.len() == 10 {
+        (0, 0, 0)
+    } else {
+        if !matches!(bytes.get(10), Some(b' ') | Some(b'T') | Some(b't')) {
+            return None;
+        }
+        if bytes.get(13) != Some(&b':') {
+            return None;
+        }
+        let hour = eval_parse_fixed_digits(bytes, 11, 2)?;
+        let minute = eval_parse_fixed_digits(bytes, 14, 2)?;
+        let second = if bytes.len() == 19 {
+            if bytes.get(16) != Some(&b':') {
+                return None;
+            }
+            eval_parse_fixed_digits(bytes, 17, 2)?
+        } else {
+            0
+        };
+        (hour, minute, second)
+    };
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=59).contains(&second)
+    {
+        return None;
+    }
+    Some((year, month, day, hour, minute, second))
+}
+
+/// Parses a fixed-width decimal field as a libc-compatible integer.
+fn eval_parse_fixed_digits(bytes: &[u8], start: usize, len: usize) -> Option<libc::c_int> {
+    let end = start.checked_add(len)?;
+    let field = bytes.get(start..end)?;
+    let mut value: libc::c_int = 0;
+    for byte in field {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?;
+        value = value.checked_add(libc::c_int::from(byte - b'0'))?;
+    }
+    Some(value)
 }
 
 /// Evaluates PHP `microtime()` with an optional ignored argument.
@@ -12686,6 +12830,36 @@ return function_exists("mktime");"#,
         assert_eq!(
             values.output,
             "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:1"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `strtotime()` parses supported ISO date strings and rejects others.
+    #[test]
+    fn execute_program_dispatches_strtotime_builtin() {
+        let program = parse_fragment(
+            br#"$date = strtotime("2024-06-15");
+echo date("Y-m-d H:i:s", $date);
+$full = strtotime("2024-06-15 12:30:45");
+echo ":" . date("Y-m-d H:i:s", $full);
+$short = strtotime("2024-06-15T12:30");
+echo ":" . date("Y-m-d H:i:s", $short);
+echo ":" . (strtotime("2024/06/15") === -1 ? "bad" : "wrong");
+$call = call_user_func("strtotime", "2024-01-02 03:04:05");
+echo ":" . date("Y-m-d H:i:s", $call);
+$spread = call_user_func_array("strtotime", ["datetime" => "2024-01-02"]);
+echo ":" . date("Y-m-d", $spread) . ":";
+return function_exists("strtotime");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "2024-06-15 00:00:00:2024-06-15 12:30:45:2024-06-15 12:30:00:bad:2024-01-02 03:04:05:2024-01-02:"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
