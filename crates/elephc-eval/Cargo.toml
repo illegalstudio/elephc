@@ -10,3 +10,4 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+elephc-crypto = { path = "../elephc-crypto" }
