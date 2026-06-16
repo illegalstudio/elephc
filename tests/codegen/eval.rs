@@ -914,6 +914,21 @@ echo ":"; echo function_exists("strrev");');
     assert_eq!(out, "olleH:321:CBA:fed:1");
 }
 
+/// Verifies eval `chr()` returns single-byte strings directly and by callable dispatch.
+#[test]
+fn test_eval_dispatches_chr_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo chr(65); echo ":";
+echo bin2hex(chr(codepoint: 256)); echo ":";
+echo bin2hex(call_user_func("chr", -1)); echo ":";
+echo call_user_func_array("chr", ["codepoint" => 321]);
+echo ":"; echo function_exists("chr");');
+"#,
+    );
+    assert_eq!(out, "A:00:ff:A:1");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

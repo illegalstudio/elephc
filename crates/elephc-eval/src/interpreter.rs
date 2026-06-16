@@ -1158,6 +1158,7 @@ fn eval_positional_expr_call(
         "base64_decode" => eval_builtin_base64_decode(args, context, scope, values),
         "bin2hex" => eval_builtin_bin2hex(args, context, scope, values),
         "ceil" => eval_builtin_ceil(args, context, scope, values),
+        "chr" => eval_builtin_chr(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "class_exists" => eval_builtin_class_exists(args, context, scope, values),
@@ -1467,6 +1468,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "class_exists"
             | "boolval"
             | "chop"
+            | "chr"
             | "count"
             | "define"
             | "defined"
@@ -1610,6 +1612,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_exists" => Some(&["class", "autoload"]),
+        "chr" => Some(&["codepoint"]),
         "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
         "count" => Some(&["value", "mode"]),
         "define" => Some(&["constant_name", "value"]),
@@ -1846,6 +1849,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.ceil(*value)?
+        }
+        "chr" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_chr_result(*value, values)?
         }
         "floor" => {
             let [value] = evaluated_args else {
@@ -2410,6 +2419,34 @@ fn eval_builtin_strrev(
     };
     let value = eval_expr(value, context, scope, values)?;
     values.strrev(value)
+}
+
+/// Evaluates PHP's `chr(...)` over one eval expression.
+fn eval_builtin_chr(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_chr_result(value, values)
+}
+
+/// Converts one eval value to a PHP integer and returns the low byte as a string.
+fn eval_chr_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = values.cast_int(value)?;
+    let bytes = values.string_bytes(value)?;
+    let value = std::str::from_utf8(&bytes)
+        .map_err(|_| EvalStatus::RuntimeFatal)?
+        .parse::<i64>()
+        .map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.string_bytes_value(&[value as u8])
 }
 
 /// Evaluates PHP's `bin2hex(...)` over one eval expression.
@@ -6504,6 +6541,26 @@ return function_exists("strrev");"#,
         let mut values = FakeOps::default();
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
         assert_eq!(values.output, "olleH:321:CBA:fed:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `chr()` dispatches through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_chr_builtin() {
+        let program = parse_fragment(
+            br#"echo chr(65); echo ":";
+echo bin2hex(chr(codepoint: 256)); echo ":";
+echo bin2hex(call_user_func("chr", 257)); echo ":";
+echo call_user_func_array("chr", ["codepoint" => 321]); echo ":";
+return function_exists("chr");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "A:00:01:A:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
