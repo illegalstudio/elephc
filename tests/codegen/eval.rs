@@ -848,10 +848,18 @@ echo $call[1] . ":";
 $named = call_user_func_array("json_decode", ["json" => "{\"k\":\"v\"}", "associative" => true, "depth" => 4, "flags" => 0]);
 echo $named["k"] . ":";
 echo (is_null(json_decode("bad")) ? "BAD" : "wrong") . ":";
+$big = json_decode("[9223372036854775808]", true, 512, JSON_BIGINT_AS_STRING);
+echo json_decode("9223372036854775808", true, 512, JSON_BIGINT_AS_STRING) . ":";
+echo json_decode("-9223372036854775809", true, 512, JSON_BIGINT_AS_STRING) . ":";
+echo gettype($big[0]) . ":" . $big[0] . ":";
+echo call_user_func_array("json_decode", ["json" => "9223372036854775808", "associative" => true, "depth" => 512, "flags" => JSON_BIGINT_AS_STRING]) . ":";
 echo function_exists("json_decode");');
 "#,
     );
-    assert_eq!(out, "hello:42:T:NULL:1:x:F:4:v:BAD:1");
+    assert_eq!(
+        out,
+        "hello:42:T:NULL:1:x:F:4:v:BAD:9223372036854775808:-9223372036854775809:string:9223372036854775808:9223372036854775808:1"
+    );
 }
 
 /// Verifies eval `json_last_error*()` track JSON parse failures and success resets.

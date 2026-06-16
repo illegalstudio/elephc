@@ -593,6 +593,7 @@ const EVAL_JSON_ERROR_INF_OR_NAN: i64 = 7;
 const EVAL_JSON_ERROR_UNSUPPORTED_TYPE: i64 = 8;
 const EVAL_JSON_ERROR_INVALID_PROPERTY_NAME: i64 = 9;
 const EVAL_JSON_ERROR_UTF16: i64 = 10;
+const EVAL_JSON_BIGINT_AS_STRING: i64 = 2;
 const EVAL_JSON_UNESCAPED_SLASHES: i64 = 64;
 
 unsafe extern "C" {
@@ -13183,7 +13184,7 @@ fn eval_json_encode_result(
     values.string_bytes_value(&output)
 }
 
-/// Evaluates PHP `json_decode()` for zero-flag scalar, array, and object JSON text.
+/// Evaluates PHP `json_decode()` for eval-supported JSON text and flags.
 fn eval_builtin_json_decode(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -13233,12 +13234,11 @@ fn eval_json_decode_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if flags
+    let flags = flags
         .map(|flags| eval_int_value(flags, values))
         .transpose()?
-        .unwrap_or(0)
-        != 0
-    {
+        .unwrap_or(0);
+    if flags & !EVAL_JSON_BIGINT_AS_STRING != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
     }
     if let Some(associative) = associative {
@@ -13261,25 +13261,26 @@ fn eval_json_decode_result(
         }
     };
     context.clear_json_error();
-    eval_json_decode_to_cell(decoded, values)
+    eval_json_decode_to_cell(decoded, flags, values)
 }
 
 /// Materializes one parsed JSON value as an eval runtime cell.
 fn eval_json_decode_to_cell(
     value: JsonValue,
+    flags: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match value {
         JsonValue::Null => values.null(),
         JsonValue::Bool(value) => values.bool_value(value),
-        JsonValue::Number(value) => eval_json_decode_number_to_cell(&value, values),
+        JsonValue::Number(value) => eval_json_decode_number_to_cell(&value, flags, values),
         JsonValue::String(value) => values.string_bytes_value(&value),
         JsonValue::Array(elements) => {
             let mut result = values.array_new(elements.len())?;
             for (index, element) in elements.into_iter().enumerate() {
                 let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
                 let key = values.int(index)?;
-                let element = eval_json_decode_to_cell(element, values)?;
+                let element = eval_json_decode_to_cell(element, flags, values)?;
                 result = values.array_set(result, key, element)?;
             }
             Ok(result)
@@ -13288,7 +13289,7 @@ fn eval_json_decode_to_cell(
             let mut result = values.assoc_new(entries.len())?;
             for (key, value) in entries {
                 let key = values.string_bytes_value(&key)?;
-                let value = eval_json_decode_to_cell(value, values)?;
+                let value = eval_json_decode_to_cell(value, flags, values)?;
                 result = values.array_set(result, key, value)?;
             }
             Ok(result)
@@ -13299,8 +13300,12 @@ fn eval_json_decode_to_cell(
 /// Materializes one JSON number as an int when possible and as a float otherwise.
 fn eval_json_decode_number_to_cell(
     value: &[u8],
+    flags: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if flags & EVAL_JSON_BIGINT_AS_STRING != 0 && eval_json_number_overflows_i64(value) {
+        return values.string_bytes_value(value);
+    }
     let value = std::str::from_utf8(value).map_err(|_| EvalStatus::RuntimeFatal)?;
     if !value.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E')) {
         if let Ok(integer) = value.parse::<i64>() {
@@ -13309,6 +13314,27 @@ fn eval_json_decode_number_to_cell(
     }
     let float = value.parse::<f64>().map_err(|_| EvalStatus::RuntimeFatal)?;
     values.float(float)
+}
+
+/// Returns true when one integer-grammar JSON number exceeds PHP's int range.
+fn eval_json_number_overflows_i64(value: &[u8]) -> bool {
+    if value
+        .iter()
+        .any(|byte| matches!(*byte, b'.' | b'e' | b'E'))
+    {
+        return false;
+    }
+    let (negative, digits) = if let Some(digits) = value.strip_prefix(b"-") {
+        (true, digits)
+    } else {
+        (false, value)
+    };
+    let threshold = if negative {
+        b"9223372036854775808".as_slice()
+    } else {
+        b"9223372036854775807".as_slice()
+    };
+    digits.len() > threshold.len() || digits.len() == threshold.len() && digits > threshold
 }
 
 /// Evaluates PHP `json_last_error()` from the eval interpreter's current JSON state.
@@ -14378,6 +14404,7 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
             ))
         }
         "JSON_ERROR_UTF16" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF16)),
+        "JSON_BIGINT_AS_STRING" => Some(EvalPredefinedConstant::Int(EVAL_JSON_BIGINT_AS_STRING)),
         "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
@@ -17434,7 +17461,12 @@ echo $call[1] . ":";
 $named = call_user_func_array("json_decode", ["json" => "{\"k\":\"v\"}", "associative" => true, "depth" => 4, "flags" => 0]);
 echo $named["k"] . ":";
 echo (is_null(json_decode("bad")) ? "BAD" : "wrong") . ":";
-return function_exists("json_decode");"#,
+$big = json_decode("[9223372036854775808]", true, 512, JSON_BIGINT_AS_STRING);
+echo json_decode("9223372036854775808", true, 512, JSON_BIGINT_AS_STRING) . ":";
+echo json_decode("-9223372036854775809", true, 512, JSON_BIGINT_AS_STRING) . ":";
+echo gettype($big[0]) . ":" . $big[0] . ":";
+echo call_user_func_array("json_decode", ["json" => "9223372036854775808", "associative" => true, "depth" => 512, "flags" => JSON_BIGINT_AS_STRING]) . ":";
+return function_exists("json_decode") && defined("JSON_BIGINT_AS_STRING");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17442,7 +17474,10 @@ return function_exists("json_decode");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "hello:42:T:NULL:1:x:F:4:v:BAD:");
+        assert_eq!(
+            values.output,
+            "hello:42:T:NULL:1:x:F:4:v:BAD:9223372036854775808:-9223372036854775809:string:9223372036854775808:9223372036854775808:"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
