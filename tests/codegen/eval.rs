@@ -3654,6 +3654,27 @@ echo \dyn_eval_ns_global();
     assert_eq!(out, "0:1:42");
 }
 
+/// Verifies namespace declarations inside eval qualify dynamic declarations and fall back to builtins.
+#[test]
+fn test_eval_fragment_namespace_declares_qualified_function() {
+    let out = compile_and_run(
+        r#"<?php
+eval('namespace EvalInnerNs;
+function dyn_eval_inner_ns() { return __NAMESPACE__ . ":" . __FUNCTION__; }
+echo dyn_eval_inner_ns();
+echo ":" . strlen("abcd");');
+echo ":";
+echo function_exists("EvalInnerNs\\dyn_eval_inner_ns") ? "Y" : "N";
+echo ":";
+echo call_user_func("EvalInnerNs\\dyn_eval_inner_ns");
+"#,
+    );
+    assert_eq!(
+        out,
+        "EvalInnerNs:EvalInnerNs\\dyn_eval_inner_ns:4:Y:EvalInnerNs:EvalInnerNs\\dyn_eval_inner_ns"
+    );
+}
+
 /// Verifies native calls can pass positional arguments to eval-declared functions.
 #[test]
 fn test_eval_declared_function_native_call_accepts_positional_args() {

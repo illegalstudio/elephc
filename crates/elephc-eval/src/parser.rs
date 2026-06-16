@@ -529,6 +529,13 @@ struct Parser {
     tokens: Vec<TokenKind>,
     pos: usize,
     source_len: usize,
+    namespace: String,
+}
+
+/// A parsed PHP name plus whether it used a leading global namespace separator.
+struct ParsedQualifiedName {
+    name: String,
+    absolute: bool,
 }
 
 impl Parser {
@@ -538,6 +545,7 @@ impl Parser {
             tokens,
             pos: 0,
             source_len,
+            namespace: String::new(),
         }
     }
 
@@ -579,6 +587,7 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_function_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "global") => self.parse_global_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "if") => self.parse_if_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "namespace") => self.parse_namespace_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "return") => {
                 self.advance();
                 if self.consume_semicolon() {
@@ -718,7 +727,7 @@ impl Parser {
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
-        let name = name.clone();
+        let name = self.qualify_name_in_current_namespace(name);
         self.advance();
         self.expect(TokenKind::LBrace)?;
         if !self.consume(TokenKind::RBrace) {
@@ -734,12 +743,45 @@ impl Parser {
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
-        let name = name.clone();
+        let name = self.qualify_name_in_current_namespace(name);
         self.advance();
         self.expect(TokenKind::LParen)?;
         let params = self.parse_function_params()?;
         let body = self.parse_block()?;
         Ok(vec![EvalStmt::FunctionDecl { name, params, body }])
+    }
+
+    /// Parses `namespace Name;` or `namespace Name { ... }` eval namespace blocks.
+    fn parse_namespace_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let namespace = if self.consume(TokenKind::LBrace) {
+            return self.parse_namespace_block(String::new());
+        } else {
+            self.parse_namespace_name()?
+        };
+        if self.consume_semicolon() {
+            self.namespace = namespace;
+            return Ok(Vec::new());
+        }
+        self.expect(TokenKind::LBrace)?;
+        self.parse_namespace_block(namespace)
+    }
+
+    /// Parses statements inside an already opened namespace block.
+    fn parse_namespace_block(&mut self, namespace: String) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let previous = std::mem::replace(&mut self.namespace, namespace);
+        let result = self.parse_block_contents();
+        self.namespace = previous;
+        result
+    }
+
+    /// Parses a namespace declaration name without a leading global separator.
+    fn parse_namespace_name(&mut self) -> Result<String, EvalParseError> {
+        let name = self.parse_qualified_name()?;
+        if name.absolute {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        Ok(name.name)
     }
 
     /// Parses `global $name, $other;` declarations in eval fragments.
@@ -1086,6 +1128,11 @@ impl Parser {
     /// Parses a brace-delimited statement block.
     fn parse_block(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.expect(TokenKind::LBrace)?;
+        self.parse_block_contents()
+    }
+
+    /// Parses statements until the closing brace for the current block.
+    fn parse_block_contents(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         let mut statements = Vec::new();
         while !matches!(self.current(), TokenKind::RBrace) {
             if matches!(self.current(), TokenKind::Eof) {
@@ -1499,6 +1546,11 @@ impl Parser {
                 self.advance();
                 Ok(EvalExpr::LoadVar(name))
             }
+            TokenKind::Magic(EvalMagicConst::Namespace) => {
+                let namespace = self.namespace.clone();
+                self.advance();
+                Ok(EvalExpr::Const(EvalConst::String(namespace)))
+            }
             TokenKind::Magic(magic) => {
                 let magic = magic.clone();
                 self.advance();
@@ -1536,7 +1588,7 @@ impl Parser {
             TokenKind::Ident(name) => {
                 let name = name.clone();
                 self.advance();
-                Ok(EvalExpr::ConstFetch(name))
+                Ok(self.const_fetch_expr(name))
             }
             TokenKind::LBracket => self.parse_array_literal(),
             TokenKind::LParen => {
@@ -1609,15 +1661,13 @@ impl Parser {
     fn parse_call_expr(&mut self, name: String) -> Result<EvalExpr, EvalParseError> {
         self.advance();
         let args = self.parse_call_args()?;
-        Ok(EvalExpr::Call {
-            name: name.to_ascii_lowercase(),
-            args,
-        })
+        Ok(self.call_expr(name, args))
     }
 
     /// Parses an explicitly qualified call or constant-fetch expression.
     fn parse_qualified_name_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
         let name = self.parse_qualified_name()?;
+        let name = self.resolve_qualified_name(name);
         if matches!(self.current(), TokenKind::LParen) {
             let args = self.parse_call_args()?;
             return Ok(EvalExpr::Call {
@@ -1632,27 +1682,77 @@ impl Parser {
     fn parse_new_object_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
         self.advance();
         let class_name = self.parse_qualified_name()?;
+        let class_name = self.resolve_qualified_name(class_name);
         let args = self.parse_call_args()?;
         Ok(EvalExpr::NewObject { class_name, args })
     }
 
     /// Parses a simple or explicitly qualified PHP name.
-    fn parse_qualified_name(&mut self) -> Result<String, EvalParseError> {
-        self.consume(TokenKind::Backslash);
+    fn parse_qualified_name(&mut self) -> Result<ParsedQualifiedName, EvalParseError> {
+        let absolute = self.consume(TokenKind::Backslash);
         let TokenKind::Ident(first) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
-        let mut class_name = first.clone();
+        let mut name = first.clone();
         self.advance();
         while self.consume(TokenKind::Backslash) {
             let TokenKind::Ident(part) = self.current() else {
                 return Err(EvalParseError::UnexpectedToken);
             };
-            class_name.push('\\');
-            class_name.push_str(part);
+            name.push('\\');
+            name.push_str(part);
             self.advance();
         }
-        Ok(class_name)
+        Ok(ParsedQualifiedName { name, absolute })
+    }
+
+    /// Builds a call expression, adding namespace fallback for unqualified names.
+    fn call_expr(&self, name: String, args: Vec<EvalCallArg>) -> EvalExpr {
+        let fallback_name = name.to_ascii_lowercase();
+        if self.namespace.is_empty() {
+            EvalExpr::Call {
+                name: fallback_name,
+                args,
+            }
+        } else {
+            EvalExpr::NamespacedCall {
+                name: self
+                    .qualify_name_in_current_namespace(&name)
+                    .to_ascii_lowercase(),
+                fallback_name,
+                args,
+            }
+        }
+    }
+
+    /// Builds a constant fetch expression, adding namespace fallback for unqualified names.
+    fn const_fetch_expr(&self, name: String) -> EvalExpr {
+        if self.namespace.is_empty() {
+            EvalExpr::ConstFetch(name)
+        } else {
+            EvalExpr::NamespacedConstFetch {
+                name: self.qualify_name_in_current_namespace(&name),
+                fallback_name: name,
+            }
+        }
+    }
+
+    /// Prefixes a name with the parser's current namespace when one is active.
+    fn qualify_name_in_current_namespace(&self, name: &str) -> String {
+        if self.namespace.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}\\{}", self.namespace, name)
+        }
+    }
+
+    /// Resolves a parsed PHP name according to the current namespace.
+    fn resolve_qualified_name(&self, name: ParsedQualifiedName) -> String {
+        if name.absolute || self.namespace.is_empty() {
+            name.name
+        } else {
+            self.qualify_name_in_current_namespace(&name.name)
+        }
     }
 
     /// Parses a parenthesized source-order argument list.
@@ -1867,7 +1967,6 @@ fn is_unsupported_statement_keyword(name: &str) -> bool {
     [
         "enum",
         "interface",
-        "namespace",
         "require",
         "require_once",
         "include",
@@ -2372,6 +2471,60 @@ mod tests {
         );
     }
 
+    /// Verifies semicolon namespace declarations qualify functions and unqualified calls.
+    #[test]
+    fn parse_fragment_accepts_semicolon_namespace_source() {
+        let program = parse_fragment(
+            br#"namespace Eval\Ns;
+function dyn() { return __NAMESPACE__; }
+return dyn();"#,
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[
+                EvalStmt::FunctionDecl {
+                    name: "Eval\\Ns\\dyn".to_string(),
+                    params: Vec::new(),
+                    body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::String(
+                        "Eval\\Ns".to_string()
+                    ))))],
+                },
+                EvalStmt::Return(Some(EvalExpr::NamespacedCall {
+                    name: "eval\\ns\\dyn".to_string(),
+                    fallback_name: "dyn".to_string(),
+                    args: Vec::new(),
+                })),
+            ]
+        );
+    }
+
+    /// Verifies braced namespace declarations restore the previous namespace afterward.
+    #[test]
+    fn parse_fragment_accepts_braced_namespace_source() {
+        let program = parse_fragment(
+            br#"namespace Eval\Block {
+    class Box {}
+    return new Box();
+}
+return Box;"#,
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[
+                EvalStmt::ClassDecl {
+                    name: "Eval\\Block\\Box".to_string(),
+                },
+                EvalStmt::Return(Some(EvalExpr::NewObject {
+                    class_name: "Eval\\Block\\Box".to_string(),
+                    args: Vec::new(),
+                })),
+                EvalStmt::Return(Some(EvalExpr::ConstFetch("Box".to_string()))),
+            ]
+        );
+    }
+
     /// Verifies static local declarations preserve the target name and initializer expression.
     #[test]
     fn parse_fragment_accepts_static_var_source() {
@@ -2430,7 +2583,7 @@ mod tests {
         );
     }
 
-    /// Verifies eval scope magic constants lower to explicit EvalIR nodes.
+    /// Verifies eval scope magic constants lower with namespace resolved at parse time.
     #[test]
     fn parse_fragment_accepts_scope_magic_constants() {
         let program = parse_fragment(b"return __CLASS__ . __NAMESPACE__ . __TRAIT__ . __METHOD__;")
@@ -2444,7 +2597,7 @@ mod tests {
                     left: Box::new(EvalExpr::Binary {
                         op: EvalBinOp::Concat,
                         left: Box::new(EvalExpr::Magic(EvalMagicConst::Class)),
-                        right: Box::new(EvalExpr::Magic(EvalMagicConst::Namespace)),
+                        right: Box::new(EvalExpr::Const(EvalConst::String(String::new()))),
                     }),
                     right: Box::new(EvalExpr::Magic(EvalMagicConst::Trait)),
                 }),

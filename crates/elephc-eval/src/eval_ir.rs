@@ -181,6 +181,15 @@ pub enum EvalExpr {
         arms: Vec<EvalMatchArm>,
         default: Option<Box<EvalExpr>>,
     },
+    NamespacedCall {
+        name: String,
+        fallback_name: String,
+        args: Vec<EvalCallArg>,
+    },
+    NamespacedConstFetch {
+        name: String,
+        fallback_name: String,
+    },
     MethodCall {
         object: Box<EvalExpr>,
         method: String,

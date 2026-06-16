@@ -1292,6 +1292,15 @@ fn eval_expr(
             arms,
             default,
         } => eval_match_expr(subject, arms, default.as_deref(), context, scope, values),
+        EvalExpr::NamespacedCall {
+            name,
+            fallback_name,
+            args,
+        } => eval_namespaced_call(name, fallback_name, args, context, scope, values),
+        EvalExpr::NamespacedConstFetch {
+            name,
+            fallback_name,
+        } => eval_namespaced_const_fetch(name, fallback_name, context, values),
         EvalExpr::NewObject { class_name, args } => {
             let args = eval_method_call_arg_values(args, context, scope, values)?;
             values
@@ -1532,6 +1541,24 @@ fn eval_call(
         return eval_native_function(function, args, context, scope, values);
     }
     Err(EvalStatus::UnsupportedConstruct)
+}
+
+/// Evaluates an unqualified namespaced function call with PHP's global fallback.
+fn eval_namespaced_call(
+    name: &str,
+    fallback_name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(function) = context.function(name).cloned() {
+        return eval_dynamic_function(&function, args, context, scope, values);
+    }
+    if let Some(function) = context.native_function(name) {
+        return eval_native_function(function, args, context, scope, values);
+    }
+    eval_call(fallback_name, args, context, scope, values)
 }
 
 /// Evaluates a variable or expression callable and dispatches it with source-order arguments.
@@ -13702,6 +13729,22 @@ fn eval_const_fetch(
     values.retain(value)
 }
 
+/// Fetches a namespaced constant and falls back to the global constant namespace.
+fn eval_namespaced_const_fetch(
+    name: &str,
+    fallback_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(value) = eval_predefined_constant(name, values)? {
+        return Ok(value);
+    }
+    if let Some(value) = context.constant(name) {
+        return values.retain(value);
+    }
+    eval_const_fetch(fallback_name, context, values)
+}
+
 /// Materializes one eval-visible predefined constant into a runtime cell.
 fn eval_predefined_constant(
     name: &str,
@@ -15740,6 +15783,86 @@ return function_exists("var_dump");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(5));
+    }
+
+    /// Verifies eval namespace declarations qualify functions and namespace magic values.
+    #[test]
+    fn execute_program_namespace_qualifies_declared_function() {
+        let program = parse_fragment(
+            br#"namespace Eval\Ns;
+function dyn() { return __NAMESPACE__ . ":" . __FUNCTION__; }
+return dyn();"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.get(result),
+            FakeValue::String("Eval\\Ns:Eval\\Ns\\dyn".to_string())
+        );
+    }
+
+    /// Verifies unqualified namespaced calls fall back to global builtins when needed.
+    #[test]
+    fn execute_program_namespace_call_falls_back_to_builtin() {
+        let program = parse_fragment(br#"namespace Eval\Ns; return strlen("abcd");"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(4));
+    }
+
+    /// Verifies namespaced dynamic functions take precedence over global builtin fallback.
+    #[test]
+    fn execute_program_namespace_function_overrides_builtin_fallback() {
+        let program = parse_fragment(
+            br#"namespace Eval\Ns;
+function strlen($value) { return 99; }
+return strlen("abcd");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(99));
+    }
+
+    /// Verifies unqualified namespaced constants fall back to global predefined constants.
+    #[test]
+    fn execute_program_namespace_const_fetch_falls_back_to_global() {
+        let program =
+            parse_fragment(br#"namespace Eval\Ns; return PHP_EOL;"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("\n".to_string()));
+    }
+
+    /// Verifies namespaced dynamic constants take precedence over global fallback.
+    #[test]
+    fn execute_program_namespace_const_fetch_reads_dynamic_constant_first() {
+        let program =
+            parse_fragment(br#"namespace Eval\Ns; return LOCAL;"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let value = values.int(7).expect("create fake int");
+        assert!(context.define_constant("Eval\\Ns\\LOCAL", value));
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(7));
     }
 
     /// Verifies eval-declared functions bind named arguments by parameter name.
