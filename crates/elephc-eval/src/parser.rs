@@ -1491,6 +1491,10 @@ impl Parser {
             TokenKind::Ident(name) if is_unsupported_expression_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
             }
+            TokenKind::Backslash => self.parse_qualified_call_expr(),
+            TokenKind::Ident(_) if matches!(self.peek(), TokenKind::Backslash) => {
+                self.parse_qualified_call_expr()
+            }
             TokenKind::Ident(name) if matches!(self.peek(), TokenKind::LParen) => {
                 self.parse_call_expr(name.clone())
             }
@@ -1516,16 +1520,26 @@ impl Parser {
         })
     }
 
+    /// Parses an explicitly qualified function-like call expression.
+    fn parse_qualified_call_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let name = self.parse_qualified_name()?;
+        let args = self.parse_call_args()?;
+        Ok(EvalExpr::Call {
+            name: name.to_ascii_lowercase(),
+            args,
+        })
+    }
+
     /// Parses `new ClassName(...)` expressions in eval fragments.
     fn parse_new_object_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
         self.advance();
-        let class_name = self.parse_class_name()?;
+        let class_name = self.parse_qualified_name()?;
         let args = self.parse_call_args()?;
         Ok(EvalExpr::NewObject { class_name, args })
     }
 
-    /// Parses a simple or explicitly qualified class name after `new`.
-    fn parse_class_name(&mut self) -> Result<String, EvalParseError> {
+    /// Parses a simple or explicitly qualified PHP name.
+    fn parse_qualified_name(&mut self) -> Result<String, EvalParseError> {
         self.consume(TokenKind::Backslash);
         let TokenKind::Ident(first) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -2628,6 +2642,21 @@ mod tests {
                 name: "eval".to_string(),
                 args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
                     "return 1;".to_string()
+                )))],
+            }))]
+        );
+    }
+
+    /// Verifies explicitly qualified call expressions normalize away the leading slash.
+    #[test]
+    fn parse_fragment_accepts_qualified_call_expression_source() {
+        let program = parse_fragment(br#"return \strlen("abcd");"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Call {
+                name: "strlen".to_string(),
+                args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                    "abcd".to_string()
                 )))],
             }))]
         );
