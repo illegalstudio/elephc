@@ -929,6 +929,21 @@ echo ":"; echo function_exists("bin2hex");');
     assert_eq!(out, "417a:410a:213f:6f6b:1");
 }
 
+/// Verifies eval `hex2bin()` decodes hex strings directly and by callable dispatch.
+#[test]
+fn test_eval_dispatches_hex2bin_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo hex2bin("417a"); echo ":";
+echo bin2hex(hex2bin(string: "410a")); echo ":";
+echo call_user_func("hex2bin", "213f"); echo ":";
+echo call_user_func_array("hex2bin", ["string" => "6f6b"]);
+echo ":"; echo function_exists("hex2bin");');
+"#,
+    );
+    assert_eq!(out, "Az:410a:!?:ok:1");
+}
+
 /// Verifies eval `addslashes()` and `stripslashes()` use PHP byte escaping semantics.
 #[test]
 fn test_eval_dispatches_slash_escape_builtin_calls() {

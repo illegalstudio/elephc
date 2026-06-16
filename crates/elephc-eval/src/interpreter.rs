@@ -293,6 +293,10 @@ const EVAL_TAG_OBJECT: u64 = 6;
 const EVAL_TAG_NULL: u64 = 8;
 const EVAL_TAG_RESOURCE: u64 = 9;
 const DEFINE_ALREADY_DEFINED_WARNING: &str = "Warning: define(): Constant already defined\n";
+const HEX2BIN_ODD_LENGTH_WARNING: &str =
+    "Warning: hex2bin(): Hexadecimal input string must have an even length\n";
+const HEX2BIN_INVALID_WARNING: &str =
+    "Warning: hex2bin(): Input string must be hexadecimal string\n";
 
 /// Executes an EvalIR program and returns the eval result cell.
 pub fn execute_program(
@@ -1173,6 +1177,7 @@ fn eval_positional_expr_call(
         }
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
+        "hex2bin" => eval_builtin_hex2bin(args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
@@ -1472,6 +1477,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "function_exists"
             | "gettype"
             | "hash_equals"
+            | "hex2bin"
             | "in_array"
             | "intval"
             | "ltrim"
@@ -1596,9 +1602,8 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_key_exists" => Some(&["key", "array"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
-        "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "stripslashes" => {
-            Some(&["string"])
-        }
+        "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "hex2bin"
+        | "stripslashes" => Some(&["string"]),
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
         | "is_float" | "is_int" | "is_integer" | "is_long" | "is_null" | "is_numeric"
         | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
@@ -1943,6 +1948,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_hash_equals_result(*known, *user, values)?
+        }
+        "hex2bin" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_hex2bin_result(*value, values)?
         }
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
@@ -2428,6 +2439,55 @@ fn eval_bin2hex_result(
         output.push(HEX[(byte & 0x0f) as usize] as char);
     }
     values.string(&output)
+}
+
+/// Evaluates PHP's `hex2bin(...)` over one eval expression.
+fn eval_builtin_hex2bin(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_hex2bin_result(value, values)
+}
+
+/// Converts one eval value through PHP string conversion and decodes hexadecimal bytes.
+fn eval_hex2bin_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    if bytes.len() % 2 != 0 {
+        values.warning(HEX2BIN_ODD_LENGTH_WARNING)?;
+        return values.bool_value(false);
+    }
+    let mut output = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let Some(high) = eval_hex_nibble(pair[0]) else {
+            values.warning(HEX2BIN_INVALID_WARNING)?;
+            return values.bool_value(false);
+        };
+        let Some(low) = eval_hex_nibble(pair[1]) else {
+            values.warning(HEX2BIN_INVALID_WARNING)?;
+            return values.bool_value(false);
+        };
+        output.push((high << 4) | low);
+    }
+    values.string_bytes_value(&output)
+}
+
+/// Returns the four-bit value for one hexadecimal byte.
+fn eval_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Evaluates PHP's `addslashes(...)` or `stripslashes(...)` over one eval expression.
@@ -6465,6 +6525,31 @@ return function_exists("bin2hex");"#,
 
         assert_eq!(values.output, "417a:410a:213f:6f6b:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `hex2bin()` dispatches through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_hex2bin_builtin() {
+        let program = parse_fragment(
+            br#"echo hex2bin("417a"); echo ":";
+echo bin2hex(hex2bin(string: "410a")); echo ":";
+echo call_user_func("hex2bin", "213f"); echo ":";
+echo call_user_func_array("hex2bin", ["string" => "6f6b"]); echo ":";
+echo hex2bin("4") ? "bad" : "false"; echo ":";
+return function_exists("hex2bin");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "Az:410a:!?:ok:false:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+        assert_eq!(
+            values.warnings,
+            vec![HEX2BIN_ODD_LENGTH_WARNING.to_string()]
+        );
     }
 
     /// Verifies eval slash escaping builtins use PHP byte-string semantics.
