@@ -91,12 +91,14 @@ pub struct ElephcEvalContext {
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
+    included_files: HashSet<String>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     pending_throw: Option<RuntimeCellHandle>,
     call_file: String,
     call_dir: String,
     call_line: i64,
+    file_magic_override: Option<String>,
 }
 
 impl ElephcEvalContext {
@@ -109,12 +111,14 @@ impl ElephcEvalContext {
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
+            included_files: HashSet::new(),
             global_scope: None,
             function_stack: Vec::new(),
             pending_throw: None,
             call_file: String::new(),
             call_dir: String::new(),
             call_line: 0,
+            file_magic_override: None,
         }
     }
 
@@ -128,12 +132,14 @@ impl ElephcEvalContext {
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
+            included_files: HashSet::new(),
             global_scope: None,
             function_stack: Vec::new(),
             pending_throw: None,
             call_file: String::new(),
             call_dir: String::new(),
             call_line: 0,
+            file_magic_override: None,
         }
     }
 
@@ -252,6 +258,16 @@ impl ElephcEvalContext {
         previous.filter(|previous| *previous != cell)
     }
 
+    /// Returns true when an eval include key was already loaded by this context.
+    pub fn has_included_file(&self, path: &str) -> bool {
+        self.included_files.contains(path)
+    }
+
+    /// Records one successfully loaded eval include key for include_once/require_once.
+    pub fn mark_included_file(&mut self, path: impl Into<String>) {
+        self.included_files.insert(path.into());
+    }
+
     /// Stores the non-owned global scope handle used by eval `global` aliases.
     pub fn set_global_scope(&mut self, scope: *mut ElephcEvalScope) -> bool {
         if scope.is_null() {
@@ -298,6 +314,22 @@ impl ElephcEvalContext {
         self.call_file = file.into();
         self.call_dir = dir.into();
         self.call_line = line;
+        self.file_magic_override = None;
+    }
+
+    /// Returns a copy of the current call-site metadata for temporary overrides.
+    pub fn call_site(&self) -> (String, String, i64, Option<String>) {
+        (
+            self.call_file.clone(),
+            self.call_dir.clone(),
+            self.call_line,
+            self.file_magic_override.clone(),
+        )
+    }
+
+    /// Overrides `__FILE__` while executing an actual file through eval include.
+    pub fn set_file_magic_override(&mut self, file: Option<String>) {
+        self.file_magic_override = file;
     }
 
     /// Returns the source directory associated with the current eval call site.
@@ -307,6 +339,9 @@ impl ElephcEvalContext {
 
     /// Returns PHP's `__FILE__` string for code currently running inside eval.
     pub fn eval_file_magic(&self) -> String {
+        if let Some(file) = &self.file_magic_override {
+            return file.clone();
+        }
         if self.call_file.is_empty() {
             return String::new();
         }

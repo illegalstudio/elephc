@@ -175,6 +175,11 @@ pub enum EvalExpr {
         callee: Box<EvalExpr>,
         args: Vec<EvalCallArg>,
     },
+    Include {
+        path: Box<EvalExpr>,
+        required: bool,
+        once: bool,
+    },
     LoadVar(String),
     Match {
         subject: Box<EvalExpr>,
