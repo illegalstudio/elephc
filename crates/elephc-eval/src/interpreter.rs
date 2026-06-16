@@ -1144,6 +1144,7 @@ fn eval_positional_expr_call(
             eval_builtin_array_search(name, args, context, scope, values)
         }
         "array_unique" => eval_builtin_array_unique(args, context, scope, values),
+        "base64_encode" => eval_builtin_base64_encode(args, context, scope, values),
         "bin2hex" => eval_builtin_bin2hex(args, context, scope, values),
         "ceil" => eval_builtin_ceil(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
@@ -1444,6 +1445,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_sum"
             | "array_unique"
             | "array_values"
+            | "base64_encode"
             | "bin2hex"
             | "ceil"
             | "call_user_func"
@@ -1584,7 +1586,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_key_exists" => Some(&["key", "array"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
-        "bin2hex" => Some(&["string"]),
+        "base64_encode" | "bin2hex" => Some(&["string"]),
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
         | "is_float" | "is_int" | "is_integer" | "is_long" | "is_null" | "is_numeric"
         | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
@@ -1797,6 +1799,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_unique_result(*array, values)?
+        }
+        "base64_encode" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_base64_encode_result(*value, values)?
         }
         "bin2hex" => {
             let [value] = evaluated_args else {
@@ -2394,6 +2402,49 @@ fn eval_bin2hex_result(
     for byte in bytes {
         output.push(HEX[(byte >> 4) as usize] as char);
         output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    values.string(&output)
+}
+
+/// Evaluates PHP's `base64_encode(...)` over one eval expression.
+fn eval_builtin_base64_encode(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_base64_encode_result(value, values)
+}
+
+/// Converts one eval value through PHP string conversion and returns Base64 text.
+fn eval_base64_encode_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let mut output = String::with_capacity(((bytes.len() + 2) / 3) * 4);
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        output.push(ALPHABET[(first >> 2) as usize] as char);
+        output.push(ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(ALPHABET[(((second & 0x0f) << 2) | (third >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(ALPHABET[(third & 0x3f) as usize] as char);
+        } else {
+            output.push('=');
+        }
     }
     values.string(&output)
 }
@@ -6237,6 +6288,26 @@ return function_exists("bin2hex");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "417a:410a:213f:6f6b:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `base64_encode()` dispatches through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_base64_encode_builtin() {
+        let program = parse_fragment(
+            br#"echo base64_encode("Hello"); echo ":";
+echo base64_encode(string: "Hi"); echo ":";
+echo call_user_func("base64_encode", "Test 123!"); echo ":";
+echo call_user_func_array("base64_encode", ["string" => ""]); echo ":";
+return function_exists("base64_encode");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "SGVsbG8=:SGk=:VGVzdCAxMjMh::");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

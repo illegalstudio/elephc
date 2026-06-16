@@ -929,6 +929,21 @@ echo ":"; echo function_exists("bin2hex");');
     assert_eq!(out, "417a:410a:213f:6f6b:1");
 }
 
+/// Verifies eval `base64_encode()` encodes byte strings directly and by callable dispatch.
+#[test]
+fn test_eval_dispatches_base64_encode_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo base64_encode("Hello"); echo ":";
+echo base64_encode(string: "Hi"); echo ":";
+echo call_user_func("base64_encode", "Test 123!"); echo ":";
+echo call_user_func_array("base64_encode", ["string" => ""]);
+echo ":"; echo function_exists("base64_encode");');
+"#,
+    );
+    assert_eq!(out, "SGVsbG8=:SGk=:VGVzdCAxMjMh::1");
+}
+
 /// Verifies eval `str_contains()` supports direct and callable byte-string search.
 #[test]
 fn test_eval_dispatches_str_contains_builtin_call() {
