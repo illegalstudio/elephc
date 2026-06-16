@@ -11,7 +11,7 @@
 //! - Scope entries store runtime-cell handles only; the eval bridge does not
 //!   introduce a second PHP value representation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::value::RuntimeCellHandle;
 
@@ -140,7 +140,7 @@ impl ScopeEntry {
 /// Materialized activation scope passed opaquely across the eval ABI.
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
-    global_aliases: HashSet<String>,
+    global_aliases: HashMap<String, String>,
     generation: u64,
 }
 
@@ -149,7 +149,7 @@ impl ElephcEvalScope {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
-            global_aliases: HashSet::new(),
+            global_aliases: HashMap::new(),
             generation: 0,
         }
     }
@@ -322,7 +322,17 @@ impl ElephcEvalScope {
 
     /// Marks a variable name as an alias to the eval context's global scope.
     pub fn mark_global_alias(&mut self, name: impl Into<String>) {
-        self.global_aliases.insert(name.into());
+        let name = name.into();
+        self.mark_global_alias_to(name.clone(), name);
+    }
+
+    /// Marks a variable name as an alias to a differently named global variable.
+    pub fn mark_global_alias_to(
+        &mut self,
+        name: impl Into<String>,
+        global_name: impl Into<String>,
+    ) {
+        self.global_aliases.insert(name.into(), global_name.into());
     }
 
     /// Removes a variable's global alias marker after local `unset()`.
@@ -332,7 +342,12 @@ impl ElephcEvalScope {
 
     /// Returns true when the variable should resolve through the global scope.
     pub fn is_global_alias(&self, name: &str) -> bool {
-        self.global_aliases.contains(name)
+        self.global_aliases.contains_key(name)
+    }
+
+    /// Returns the target global name for a local alias.
+    pub fn global_alias_target(&self, name: &str) -> Option<&str> {
+        self.global_aliases.get(name).map(String::as_str)
     }
 
     /// Returns the names of entries dirtied since the last synchronization.
@@ -544,6 +559,18 @@ mod tests {
             scope.entry("source").expect("source").flags().ownership,
             ScopeCellOwnership::Owned
         );
+    }
+
+    /// Verifies local aliases can point at differently named globals.
+    #[test]
+    fn global_alias_to_records_target_name() {
+        let mut scope = ElephcEvalScope::new();
+
+        scope.mark_global_alias_to("alias", "source");
+
+        assert!(scope.is_global_alias("alias"));
+        assert_eq!(scope.global_alias_target("alias"), Some("source"));
+        assert_eq!(scope.global_alias_target("source"), None);
     }
 
     /// Verifies draining a scope returns only visible owned cells.

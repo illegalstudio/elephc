@@ -205,6 +205,32 @@ pub unsafe extern "C" fn __elephc_eval_scope_unset(
     EvalStatus::Ok.code()
 }
 
+/// Marks a local eval-scope variable as an alias of a program-global variable.
+///
+/// # Safety
+/// `scope` must be a valid eval scope handle. Name pointers must be readable
+/// for their matching lengths when the length is greater than zero.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_scope_mark_global_alias(
+    scope: *mut ElephcEvalScope,
+    name_ptr: *const u8,
+    name_len: u64,
+    global_name_ptr: *const u8,
+    global_name_len: u64,
+) -> i32 {
+    let Some(scope) = scope.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Ok(global_name) = abi_name_to_string(global_name_ptr, global_name_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    scope.mark_global_alias_to(name, global_name);
+    EvalStatus::Ok.code()
+}
+
 /// Clears dirty flags for every entry in a materialized eval scope.
 ///
 /// # Safety
@@ -850,7 +876,10 @@ mod tests {
         let status = unsafe { __elephc_eval_context_set_global_scope(&mut ctx, &mut scope) };
 
         assert_eq!(status, EvalStatus::Ok.code());
-        assert_eq!(ctx.global_scope_ptr(), Some(&mut scope as *mut ElephcEvalScope));
+        assert_eq!(
+            ctx.global_scope_ptr(),
+            Some(&mut scope as *mut ElephcEvalScope)
+        );
     }
 
     /// Verifies the function-exists ABI probes eval-declared functions by folded name.
@@ -997,6 +1026,31 @@ mod tests {
         assert_eq!(out_flags & SCOPE_FLAG_PRESENT, SCOPE_FLAG_PRESENT);
         assert_eq!(out_flags & SCOPE_FLAG_DIRTY, SCOPE_FLAG_DIRTY);
         assert_eq!(out_flags & SCOPE_FLAG_OWNED, SCOPE_FLAG_OWNED);
+    }
+
+    /// Verifies the alias ABI maps a local eval variable to a global name.
+    #[test]
+    fn scope_mark_global_alias_records_target_name() {
+        let scope = __elephc_eval_scope_new();
+        let name = b"alias";
+        let global_name = b"source";
+
+        let status = unsafe {
+            __elephc_eval_scope_mark_global_alias(
+                scope,
+                name.as_ptr(),
+                name.len() as u64,
+                global_name.as_ptr(),
+                global_name.len() as u64,
+            )
+        };
+        let target = unsafe { (*scope).global_alias_target("alias").map(str::to_string) };
+        unsafe {
+            __elephc_eval_scope_free(scope);
+        }
+
+        assert_eq!(status, EvalStatus::Ok.code());
+        assert_eq!(target.as_deref(), Some("source"));
     }
 
     /// Verifies scope unset and clear-dirty expose missing/clean state through the ABI.

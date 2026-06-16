@@ -355,17 +355,21 @@ fn scope_entry(
     scope: &ElephcEvalScope,
     name: &str,
 ) -> Option<ScopeEntry> {
-    if !scope.is_global_alias(name) {
+    let Some(global_name) = scope.global_alias_target(name) else {
         return scope.entry(name);
-    }
+    };
     let Some(global_scope) = context.global_scope_ptr() else {
         return scope.entry(name);
     };
     let current_scope = scope as *const ElephcEvalScope as *mut ElephcEvalScope;
     if global_scope == current_scope {
-        return scope.entry(name);
+        return scope.entry(global_name);
     }
-    unsafe { global_scope.as_ref().and_then(|scope| scope.entry(name)) }
+    unsafe {
+        global_scope
+            .as_ref()
+            .and_then(|scope| scope.entry(global_name))
+    }
 }
 
 /// Returns the eval-visible cell for a variable, following `global` aliases.
@@ -388,18 +392,18 @@ fn set_scope_cell(
     ownership: ScopeCellOwnership,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let name = name.into();
-    if scope.is_global_alias(&name) {
+    if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
         let Some(global_scope) = context.global_scope_ptr() else {
             return Err(EvalStatus::RuntimeFatal);
         };
         let current_scope = scope as *mut ElephcEvalScope;
         if global_scope == current_scope {
-            return Ok(scope.set_respecting_references(name, cell, ownership));
+            return Ok(scope.set_respecting_references(global_name, cell, ownership));
         }
         let Some(global_scope) = (unsafe { global_scope.as_mut() }) else {
             return Err(EvalStatus::RuntimeFatal);
         };
-        return Ok(global_scope.set_respecting_references(name, cell, ownership));
+        return Ok(global_scope.set_respecting_references(global_name, cell, ownership));
     }
     Ok(scope.set_respecting_references(name, cell, ownership))
 }
@@ -412,8 +416,8 @@ fn set_reference_alias(
     source: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    if scope.is_global_alias(source) {
-        scope.mark_global_alias(target.to_string());
+    if let Some(global_name) = scope.global_alias_target(source).map(str::to_string) {
+        scope.mark_global_alias_to(target.to_string(), global_name);
         return Ok(Vec::new());
     }
     let (cell, ownership) = scope_entry(context, scope, source)
@@ -4899,6 +4903,30 @@ return (dyn() * 10) + dyn();"#,
             .expect("global scope should contain g");
         assert_eq!(values.get(result), FakeValue::Int(2));
         assert_eq!(values.get(global), FakeValue::Int(2));
+    }
+
+    /// Verifies references to global aliases write the source global variable.
+    #[test]
+    fn execute_program_reference_alias_to_global_updates_source_global() {
+        let program = parse_fragment(br#"global $g; $alias =& $g; $alias = 4; return $g;"#)
+            .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut global_scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let initial = values.int(1).expect("allocate initial global");
+        global_scope.set("g", initial, ScopeCellOwnership::Owned);
+        context.set_global_scope(&mut global_scope);
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        let global = global_scope
+            .visible_cell("g")
+            .expect("global scope should contain g");
+        assert_eq!(values.get(result), FakeValue::Int(4));
+        assert_eq!(values.get(global), FakeValue::Int(4));
+        assert!(global_scope.visible_cell("alias").is_none());
     }
 
     /// Verifies named calls reject positional arguments that follow named arguments.

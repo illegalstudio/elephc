@@ -59,6 +59,13 @@ struct EvalSyncGlobal {
     ty: PhpType,
 }
 
+/// Local-to-global alias metadata inherited by eval from the caller function scope.
+#[derive(Clone)]
+struct EvalGlobalAlias {
+    name: String,
+    global_name: String,
+}
+
 /// A module-local function that can be registered with the eval context.
 struct EvalNativeFunctionRegistration {
     name: String,
@@ -85,8 +92,10 @@ pub(super) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     ensure_eval_global_scope(ctx)?;
     let sync_locals = eval_sync_locals(ctx);
     let sync_globals = eval_sync_globals(ctx);
+    let global_aliases = eval_global_aliases(ctx);
     flush_eval_scope_locals(ctx, &sync_locals)?;
     flush_eval_global_scope(ctx, &sync_globals)?;
+    mark_eval_scope_global_aliases(ctx, &global_aliases);
     set_eval_context_global_scope(ctx);
     load_eval_context_to_arg(ctx, 0);
     load_eval_scope_to_arg(ctx, 1);
@@ -594,6 +603,22 @@ fn local_uses_eval_global_sync(ctx: &FunctionContext<'_>, name: Option<&str>) ->
     ctx.is_main && name.is_some_and(|name| ctx.has_global_name(name))
 }
 
+/// Collects caller-scope `global` aliases that eval fragments inherit by name.
+fn eval_global_aliases(ctx: &FunctionContext<'_>) -> Vec<EvalGlobalAlias> {
+    ctx.function
+        .locals
+        .iter()
+        .filter(|local| local.kind == LocalKind::GlobalAlias)
+        .filter_map(|local| {
+            let name = local.name.clone()?;
+            Some(EvalGlobalAlias {
+                global_name: name.clone(),
+                name,
+            })
+        })
+        .collect()
+}
+
 /// Collects program globals that can be boxed into the eval global scope.
 fn eval_sync_globals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncGlobal> {
     let mut globals = ctx
@@ -628,7 +653,12 @@ fn push_eval_process_superglobal(globals: &mut Vec<EvalSyncGlobal>, name: &str, 
 /// Returns one unambiguous codegen type used for a program global, if available.
 fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Option<PhpType> {
     let mut inferred = None;
-    for function in ctx.module.functions.iter().chain(ctx.module.closures.iter()) {
+    for function in ctx
+        .module
+        .functions
+        .iter()
+        .chain(ctx.module.closures.iter())
+    {
         for inst in &function.instructions {
             if global_instruction_name(ctx, inst) != Some(name) {
                 continue;
@@ -656,7 +686,11 @@ fn global_instruction_name<'a>(
     let Some(Immediate::GlobalName(data)) = inst.immediate else {
         return None;
     };
-    ctx.module.data.global_names.get(data.as_raw() as usize).map(String::as_str)
+    ctx.module
+        .data
+        .global_names
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
 }
 
 /// Returns the value type carried by a global load or store instruction.
@@ -777,6 +811,36 @@ fn emit_eval_global_scope_set(ctx: &mut FunctionContext<'_>, global: &EvalSyncGl
     emit_eval_status_check(ctx);
 }
 
+/// Marks caller-scope global aliases in the materialized eval scope.
+fn mark_eval_scope_global_aliases(ctx: &mut FunctionContext<'_>, aliases: &[EvalGlobalAlias]) {
+    for alias in aliases {
+        let (name_label, name_len) = ctx.data.add_string(alias.name.as_bytes());
+        let (global_name_label, global_name_len) =
+            ctx.data.add_string(alias.global_name.as_bytes());
+        load_eval_scope_to_arg(ctx, 0);
+        let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 2),
+            name_len as i64,
+        );
+        let global_name_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+        abi::emit_symbol_address(ctx.emitter, global_name_arg, &global_name_label);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 4),
+            global_name_len as i64,
+        );
+        let symbol = ctx
+            .emitter
+            .target
+            .extern_symbol("__elephc_eval_scope_mark_global_alias");
+        abi::emit_call_label(ctx.emitter, &symbol);
+        emit_eval_status_check(ctx);
+    }
+}
+
 /// Calls `__elephc_eval_scope_set` for one boxed local value.
 fn emit_eval_scope_set(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal, flags: i64) {
     let (name_label, name_len) = ctx.data.add_string(local.name.as_bytes());
@@ -890,12 +954,12 @@ fn emit_branch_if_scope_entry_missing(ctx: &mut FunctionContext<'_>, label: &str
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("b.eq {}", label));                // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("b.eq {}", label)); // skip reload when eval unset or omitted the local
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("je {}", label));                  // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("je {}", label)); // skip reload when eval unset or omitted the local
         }
     }
 }
@@ -1013,12 +1077,12 @@ fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("b.eq {}", skip)); // borrowed scope entries can be copied back without retaining
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("je {}", skip));                   // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("je {}", skip)); // borrowed scope entries can be copied back without retaining
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -1137,12 +1201,12 @@ fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: i64, label:
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, #{}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("b.eq {}", label)); // branch to the matching eval status handler
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching eval status handler
         }
     }
 }
@@ -1152,7 +1216,7 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the eval runtime diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2"); // write the eval runtime diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
@@ -1161,12 +1225,12 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the eval runtime diagnostic to Linux stderr
+            ctx.emitter.instruction("mov edi, 2"); // write the eval runtime diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the eval runtime diagnostic byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the eval runtime diagnostic before exiting
+            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall"); // emit the eval runtime diagnostic before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }
