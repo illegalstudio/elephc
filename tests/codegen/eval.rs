@@ -944,6 +944,22 @@ echo ":"; echo function_exists("str_repeat");');
     assert_eq!(out, "hahaha:0:abab:zzz:1");
 }
 
+/// Verifies eval `substr()` slices byte strings directly and by callable dispatch.
+#[test]
+fn test_eval_dispatches_substr_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo substr("abcdef", 2); echo ":";
+echo substr(string: "abcdef", offset: 1, length: -1); echo ":";
+echo substr("abcdef", -2); echo ":";
+echo call_user_func("substr", "abcdef", 2, -2); echo ":";
+echo call_user_func_array("substr", ["string" => "abcdef", "offset" => -4, "length" => 2]);
+echo ":"; echo function_exists("substr");');
+"#,
+    );
+    assert_eq!(out, "cdef:bcde:ef:cd:cd:1");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

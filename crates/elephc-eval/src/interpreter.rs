@@ -1193,6 +1193,7 @@ fn eval_positional_expr_call(
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
         "str_repeat" => eval_builtin_str_repeat(args, context, scope, values),
+        "substr" => eval_builtin_substr(args, context, scope, values),
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             eval_builtin_string_search(name, args, context, scope, values)
         }
@@ -1516,6 +1517,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strpos"
             | "strrpos"
             | "strrev"
+            | "substr"
             | "stripslashes"
             | "strtolower"
             | "strtoupper"
@@ -1631,6 +1633,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
         "strpos" | "strrpos" => Some(&["haystack", "needle", "offset"]),
         "str_repeat" => Some(&["string", "times"]),
+        "substr" => Some(&["string", "offset", "length"]),
         "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
             Some(&["string"])
         }
@@ -1906,6 +1909,11 @@ fn eval_builtin_with_values(
             };
             eval_str_repeat_result(*value, *times, values)?
         }
+        "substr" => match evaluated_args {
+            [value, offset] => eval_substr_result(*value, *offset, None, values)?,
+            [value, offset, length] => eval_substr_result(*value, *offset, Some(*length), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "call_user_func" => {
             return eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)
                 .map(Some);
@@ -2489,6 +2497,62 @@ fn eval_str_repeat_result(
         output.extend_from_slice(&bytes);
     }
     values.string_bytes_value(&output)
+}
+
+/// Evaluates PHP's `substr(...)` over one eval string, offset, and optional length.
+fn eval_builtin_substr(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [value, offset] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let offset = eval_expr(offset, context, scope, values)?;
+            eval_substr_result(value, offset, None, values)
+        }
+        [value, offset, length] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let offset = eval_expr(offset, context, scope, values)?;
+            let length = eval_expr(length, context, scope, values)?;
+            eval_substr_result(value, offset, Some(length), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Slices a PHP byte string using PHP `substr()` offset and length rules.
+fn eval_substr_result(
+    value: RuntimeCellHandle,
+    offset: RuntimeCellHandle,
+    length: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let total = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let offset = eval_int_value(offset, values)?;
+    let start = if offset < 0 {
+        (total + offset).max(0)
+    } else {
+        offset.min(total)
+    };
+    let end = match length {
+        None => total,
+        Some(length) if values.is_null(length)? => total,
+        Some(length) => {
+            let length = eval_int_value(length, values)?;
+            if length < 0 {
+                (total + length).max(0)
+            } else {
+                start.saturating_add(length).min(total)
+            }
+        }
+    };
+    let end = end.max(start);
+    let start = usize::try_from(start).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let end = usize::try_from(end).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.string_bytes_value(&bytes[start..end])
 }
 
 /// Casts one eval value to PHP int and returns the scalar payload.
@@ -6636,6 +6700,27 @@ return function_exists("str_repeat");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "hahaha:0:abab:zzz:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `substr()` dispatches through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_substr_builtin() {
+        let program = parse_fragment(
+            br#"echo substr("abcdef", 2); echo ":";
+echo substr(string: "abcdef", offset: 1, length: -1); echo ":";
+echo substr("abcdef", -2); echo ":";
+echo call_user_func("substr", "abcdef", 2, -2); echo ":";
+echo call_user_func_array("substr", ["string" => "abcdef", "offset" => -4, "length" => 2]); echo ":";
+return function_exists("substr");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "cdef:bcde:ef:cd:cd:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
