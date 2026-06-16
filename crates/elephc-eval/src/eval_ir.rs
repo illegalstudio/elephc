@@ -113,6 +113,10 @@ pub enum EvalStmt {
         cases: Vec<EvalSwitchCase>,
     },
     Throw(EvalExpr),
+    Try {
+        body: Vec<EvalStmt>,
+        catches: Vec<EvalCatch>,
+    },
     UnsetVar {
         name: String,
     },
@@ -121,6 +125,14 @@ pub enum EvalStmt {
         body: Vec<EvalStmt>,
     },
     Expr(EvalExpr),
+}
+
+/// One `catch` block attached to an eval `try` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalCatch {
+    pub class_name: String,
+    pub var_name: String,
+    pub body: Vec<EvalStmt>,
 }
 
 /// Runtime user function declared by an eval fragment.

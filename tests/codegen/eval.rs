@@ -4570,3 +4570,19 @@ try {
     );
     assert_eq!(out, "caught:nested boom");
 }
+
+/// Verifies eval-internal try/catch consumes a thrown Throwable before returning.
+#[test]
+fn test_eval_try_catch_catches_throwable_inside_eval() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('try {
+    throw new Exception("eval boom");
+} catch (Throwable $caught) {
+    return 7;
+}
+return 0;');
+"#,
+    );
+    assert_eq!(out, "7");
+}

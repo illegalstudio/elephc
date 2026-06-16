@@ -14,8 +14,8 @@
 use crate::context::{ElephcEvalContext, NativeFunction};
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalFunction, EvalMagicConst,
-    EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalCatch, EvalConst, EvalExpr, EvalFunction,
+    EvalMagicConst, EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
 use crate::json_validate::{self, JsonValue};
 use crate::parser::parse_fragment;
@@ -1004,6 +1004,7 @@ fn execute_stmt(
             }
             Ok(EvalControl::Throw(thrown))
         }
+        EvalStmt::Try { body, catches } => execute_try_stmt(body, catches, context, scope, values),
         EvalStmt::UnsetVar { name } => {
             if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
                 values.release(replaced)?;
@@ -1029,6 +1030,41 @@ fn execute_stmt(
             Ok(EvalControl::None)
         }
     }
+}
+
+/// Executes an eval `try` body and handles supported `catch` clauses.
+fn execute_try_stmt(
+    body: &[EvalStmt],
+    catches: &[EvalCatch],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    let thrown = match execute_statements(body, context, scope, values)? {
+        EvalControl::Throw(thrown) => thrown,
+        control => return Ok(control),
+    };
+    let Some(catch) = catches
+        .iter()
+        .find(|catch| catch_type_matches_throwable(&catch.class_name))
+    else {
+        return Ok(EvalControl::Throw(thrown));
+    };
+    for replaced in set_scope_cell(
+        context,
+        scope,
+        catch.var_name.clone(),
+        thrown,
+        ScopeCellOwnership::Owned,
+    )? {
+        values.release(replaced)?;
+    }
+    execute_statements(&catch.body, context, scope, values)
+}
+
+/// Returns true for catch types that are known to accept any valid thrown object.
+fn catch_type_matches_throwable(class_name: &str) -> bool {
+    class_name.eq_ignore_ascii_case("Throwable")
 }
 
 /// Registers an empty eval-declared class name in the dynamic class table.
@@ -13687,6 +13723,12 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
                     collect_static_var_names(&case.body, names);
                 }
             }
+            EvalStmt::Try { body, catches } => {
+                collect_static_var_names(body, names);
+                for catch in catches {
+                    collect_static_var_names(&catch.body, names);
+                }
+            }
             EvalStmt::ArrayAppendVar { .. }
             | EvalStmt::ArraySetVar { .. }
             | EvalStmt::Break
@@ -14942,6 +14984,67 @@ mod tests {
             }
             EvalOutcome::Value(value) => panic!("expected Throwable, got {:?}", values.get(value)),
         }
+    }
+
+    /// Verifies eval `try/catch` catches a thrown object and binds the catch variable.
+    #[test]
+    fn execute_program_catches_throwable_inside_eval() {
+        let program = parse_fragment(
+            br#"try {
+    throw new Exception("eval boom");
+} catch (Throwable $caught) {
+    return $caught->answer();
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let caught = scope
+            .visible_cell("caught")
+            .expect("scope should contain catch variable");
+
+        assert_eq!(values.type_tag(caught), Ok(EVAL_TAG_OBJECT));
+        assert_eq!(values.get(result), FakeValue::Int(42));
+    }
+
+    /// Verifies static locals declared inside eval catch blocks persist per function context.
+    #[test]
+    fn execute_context_function_persists_static_local_inside_catch() {
+        let program = parse_fragment(
+            br#"function dyn($e) {
+    try {
+        throw $e;
+    } catch (Throwable $caught) {
+        static $n = 0;
+        $n++;
+        return $caught->answer() + $n;
+    }
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("declare dynamic function");
+        let first_thrown = values
+            .new_object("Exception")
+            .expect("allocate first fake exception");
+        let second_thrown = values
+            .new_object("Exception")
+            .expect("allocate second fake exception");
+
+        let first =
+            execute_context_function(&mut context, "dyn", vec![first_thrown], &mut values)
+                .expect("execute first dynamic function call");
+        let second =
+            execute_context_function(&mut context, "dyn", vec![second_thrown], &mut values)
+                .expect("execute second dynamic function call");
+
+        assert_eq!(values.get(first), FakeValue::Int(43));
+        assert_eq!(values.get(second), FakeValue::Int(44));
     }
 
     /// Verifies throws from eval-declared functions escape through the shared context.
