@@ -64,6 +64,7 @@ eval('foreach (["a" => 1, "b" => 2] as $key => $value) { echo "pair=" . $key . "
 eval('switch (2) { case 1: echo "switch-one\n"; break; case 2: echo "switch-two\n"; break; }');
 eval('echo "echo-list=", "ok\n";');
 eval('print_r("print-r=ok\n");');
+eval('var_dump("var-dump-ok");');
 eval('if (isset($profile["name"])) { echo "isset-name\n"; }');
 eval('if (empty($profile["missing"])) { echo "empty-missing\n"; }');
 $meta = eval('return ["source" => "eval"];');
