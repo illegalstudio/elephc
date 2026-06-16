@@ -1089,6 +1089,33 @@ echo function_exists("shuffle");');
     assert_eq!(out, "1:reindexed:2:3:1:12:1");
 }
 
+/// Verifies eval user-comparator sort builtins call callbacks and mutate direct arrays.
+#[test]
+fn test_eval_dispatches_user_sort_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function eval_sort_cmp($left, $right) { echo "c"; return $left <=> $right; }
+function eval_key_cmp($left, $right) { return strcmp($left, $right); }
+$a = [3, 1, 2];
+echo usort($a, "eval_sort_cmp") . ":";
+foreach ($a as $value) { echo $value; }
+echo ":";
+$b = ["b" => 1, "a" => 3, "c" => 2];
+echo uasort(array: $b, callback: "eval_sort_cmp") . ":";
+foreach ($b as $key => $value) { echo $key . $value; }
+echo ":";
+$c = ["b" => 1, "a" => 2];
+echo uksort($c, "eval_key_cmp") . ":";
+foreach ($c as $key => $value) { echo $key . $value; }
+echo ":";
+$d = [2, 1];
+echo call_user_func("usort", $d, "eval_sort_cmp") . ":" . $d[0] . $d[1] . ":";
+echo function_exists("usort") && function_exists("uasort") && function_exists("uksort");');
+"#,
+    );
+    assert_eq!(out, "ccc1:123:ccc1:b1c2a3:1:a2b1:c1:21:1");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {
