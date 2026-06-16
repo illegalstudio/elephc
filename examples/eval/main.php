@@ -140,6 +140,7 @@ $substring = eval('return substr("abcdef", 2) . ":" . substr("abcdef", 1, -1);')
 $substring_replaced = eval('return substr_replace("hello world", "PHP", 6, 5);');
 $linebreaks = eval('return bin2hex(nl2br("a\nb", false));');
 $split_joined = eval('$parts = explode(",", "red,green,blue"); return implode("|", $parts);');
+$string_chunks = eval('$chunks = str_split("eval", 2); return $chunks[0] . ":" . $chunks[1];');
 $replaced = eval('return str_replace("green", "lime", "red green blue");');
 $html_escaped = eval('return htmlspecialchars("<b>bold</b>");');
 $url_codec = eval('return urlencode("a b&=") . ":" . rawurldecode("a%20b%26%3D");');
@@ -229,6 +230,7 @@ echo "substr=" . $substring . "\n";
 echo "substr-replace=" . $substring_replaced . "\n";
 echo "nl2br-hex=" . $linebreaks . "\n";
 echo "explode-implode=" . $split_joined . "\n";
+echo "str-split=" . $string_chunks . "\n";
 echo "str-replace=" . $replaced . "\n";
 echo "htmlspecialchars=" . $html_escaped . "\n";
 echo "url-codec=" . $url_codec . "\n";
