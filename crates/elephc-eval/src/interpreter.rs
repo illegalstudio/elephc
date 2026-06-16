@@ -15,7 +15,7 @@ use crate::context::{ElephcEvalContext, NativeFunction};
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalFunction, EvalMagicConst,
-    EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
+    EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
 use crate::json_validate::{self, JsonValue};
 use crate::parser::parse_fragment;
@@ -1287,6 +1287,11 @@ fn eval_expr(
             visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok)
         }
         EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
+        EvalExpr::Match {
+            subject,
+            arms,
+            default,
+        } => eval_match_expr(subject, arms, default.as_deref(), context, scope, values),
         EvalExpr::NewObject { class_name, args } => {
             let args = eval_method_call_arg_values(args, context, scope, values)?;
             values
@@ -1407,6 +1412,30 @@ fn eval_expr(
             }
         }
     }
+}
+
+/// Evaluates a PHP `match` expression with strict comparison and lazy arm values.
+fn eval_match_expr(
+    subject: &EvalExpr,
+    arms: &[EvalMatchArm],
+    default: Option<&EvalExpr>,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let subject = eval_expr(subject, context, scope, values)?;
+    for arm in arms {
+        for pattern in &arm.patterns {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let matched = values.compare(EvalBinOp::StrictEq, subject, pattern)?;
+            if values.truthy(matched)? {
+                return eval_expr(&arm.value, context, scope, values);
+            }
+        }
+    }
+    default
+        .map(|expr| eval_expr(expr, context, scope, values))
+        .unwrap_or(Err(EvalStatus::RuntimeFatal))
 }
 
 /// Returns cloned positional argument expressions, rejecting named arguments.
@@ -15246,6 +15275,50 @@ return function_exists("var_dump");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies match expressions use strict comparison across comma-separated patterns.
+    #[test]
+    fn execute_program_match_uses_strict_pattern_comparison() {
+        let program = parse_fragment(
+            br#"return match ($x) { 1, "1" => "string", default => "other" };"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let x = values.string("1").expect("create fake string");
+        scope.set("x", x, ScopeCellOwnership::Owned);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("string".to_string()));
+    }
+
+    /// Verifies match expressions evaluate only the selected arm result.
+    #[test]
+    fn execute_program_match_skips_unselected_results() {
+        let program =
+            parse_fragment(br#"return match (2) { 1 => missing(), 2 => "two", default => missing() };"#)
+                .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("two".to_string()));
+    }
+
+    /// Verifies match expressions without a matching arm or default fail at runtime.
+    #[test]
+    fn execute_program_match_without_default_fails_on_miss() {
+        let program = parse_fragment(br#"return match (3) { 1 => "one", 2 => "two" };"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values);
+
+        assert_eq!(result, Err(EvalStatus::RuntimeFatal));
     }
 
     /// Verifies PHP keyword logical operators use PHP precedence and short-circuiting.

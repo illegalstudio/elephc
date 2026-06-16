@@ -481,6 +481,20 @@ eval('$x = 2; switch ($x) { default: echo "d"; case 2: echo "2"; break; } $x = 3
     assert_eq!(out, "2DF");
 }
 
+/// Verifies eval match expressions use strict comparisons and lazy result arms.
+#[test]
+fn test_eval_match_expression_dispatches_strict_arms() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$x = "1";
+echo match ($x) { 1 => "int", "1" => "string", default => "other" };
+echo ":";
+echo match (3) { 1, 2 => missing(), default => "fallback" };');
+"#,
+    );
+    assert_eq!(out, "string:fallback");
+}
+
 /// Verifies break and continue control a loop interpreted inside eval.
 #[test]
 fn test_eval_break_and_continue_control_loop() {

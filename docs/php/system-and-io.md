@@ -35,6 +35,8 @@ The evaluated string must be a PHP fragment without an opening `<?php` tag. Vari
 
 Inside eval fragments, two-element object-method callable arrays such as `[$this, "method"]` can be invoked through `$cb(...)`, `call_user_func($cb, ...)`, and `call_user_func_array($cb, [...])` with positional arguments. Static-method callable arrays and closure/descriptor callbacks are still outside the eval fragment subset.
 
+Eval `match` expressions support strict pattern comparison, comma-separated patterns, lazy result-arm evaluation, and `default` fallback. A miss without `default` is currently reported as an eval runtime fatal.
+
 The URL codec builtins `urlencode()`, `urldecode()`, `rawurlencode()`, and `rawurldecode()` are available through eval direct calls, named arguments, `call_user_func()`, `call_user_func_array()`, and `function_exists()`.
 
 Eval also supports ASCII character-class predicates `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, and `ctype_space()` with the same direct, named-argument, callable, and `function_exists()` dispatch paths.

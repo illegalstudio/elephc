@@ -176,6 +176,11 @@ pub enum EvalExpr {
         args: Vec<EvalCallArg>,
     },
     LoadVar(String),
+    Match {
+        subject: Box<EvalExpr>,
+        arms: Vec<EvalMatchArm>,
+        default: Option<Box<EvalExpr>>,
+    },
     MethodCall {
         object: Box<EvalExpr>,
         method: String,
@@ -268,6 +273,13 @@ impl EvalCallArg {
 pub enum EvalArrayElement {
     Value(EvalExpr),
     KeyValue { key: EvalExpr, value: EvalExpr },
+}
+
+/// One ordered arm in a PHP `match` expression parsed from an eval fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalMatchArm {
+    pub patterns: Vec<EvalExpr>,
+    pub value: EvalExpr,
 }
 
 /// One ordered case arm in a PHP switch parsed from an eval fragment.

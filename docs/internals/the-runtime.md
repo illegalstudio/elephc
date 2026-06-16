@@ -21,6 +21,8 @@ The bridge crate parses the fragment at runtime into a small EvalIR and interpre
 
 The eval callable dispatcher currently normalizes string callbacks and two-element object-method callable arrays such as `[$this, "method"]`. Object-method arrays are supported for direct `$cb(...)`, `call_user_func()`, `call_user_func_array()`, and `iterator_apply()` paths with positional arguments; static-method callable arrays and closure/descriptor callback values are still handled only by the native descriptor runtime outside eval fragments.
 
+Eval `match` expressions live entirely inside the interpreter: the subject is evaluated once, patterns are compared through the existing strict-comparison value hook, result arms are evaluated lazily, and a miss without `default` returns the eval runtime-fatal status.
+
 Eval URL codec dispatch includes `urlencode()`, `urldecode()`, `rawurlencode()`, and `rawurldecode()` through direct eval calls, named arguments, `call_user_func()`, `call_user_func_array()`, and `function_exists()`.
 
 Eval ASCII character-class dispatch includes `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, and `ctype_space()` on non-empty byte strings through the same builtin-call binding path.

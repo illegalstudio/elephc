@@ -15,8 +15,8 @@
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalMagicConst, EvalProgram,
-    EvalStmt, EvalSwitchCase, EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalMagicConst, EvalMatchArm,
+    EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
 
 /// Parses an eval fragment into by-name EvalIR statements.
@@ -1521,6 +1521,7 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 Ok(EvalExpr::Print(Box::new(expr)))
             }
+            TokenKind::Ident(name) if ident_eq(name, "match") => self.parse_match_expr(),
             TokenKind::Ident(name) if ident_eq(name, "new") => self.parse_new_object_expr(),
             TokenKind::Ident(name) if is_unsupported_expression_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
@@ -1547,6 +1548,61 @@ impl Parser {
             TokenKind::Eof => Err(EvalParseError::UnexpectedEof),
             _ => Err(EvalParseError::UnexpectedToken),
         }
+    }
+
+    /// Parses `match (expr) { pattern, other => value, default => fallback }`.
+    fn parse_match_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let subject = self.parse_expr()?;
+        self.expect(TokenKind::RParen)?;
+        self.expect(TokenKind::LBrace)?;
+
+        let mut arms = Vec::new();
+        let mut default = None;
+        while !self.consume(TokenKind::RBrace) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "default")) {
+                self.advance();
+                self.expect(TokenKind::FatArrow)?;
+                default = Some(Box::new(self.parse_expr()?));
+            } else {
+                arms.push(self.parse_match_arm()?);
+            }
+            if self.consume(TokenKind::Comma) {
+                continue;
+            }
+            self.expect(TokenKind::RBrace)?;
+            break;
+        }
+
+        Ok(EvalExpr::Match {
+            subject: Box::new(subject),
+            arms,
+            default,
+        })
+    }
+
+    /// Parses one non-default `match` arm and its comma-separated pattern list.
+    fn parse_match_arm(&mut self) -> Result<EvalMatchArm, EvalParseError> {
+        let mut patterns = Vec::new();
+        loop {
+            patterns.push(self.parse_expr()?);
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            if matches!(self.current(), TokenKind::FatArrow) {
+                return Err(EvalParseError::UnexpectedToken);
+            }
+            if matches!(self.current(), TokenKind::Eof | TokenKind::RBrace) {
+                return Err(EvalParseError::UnexpectedToken);
+            }
+        }
+        self.expect(TokenKind::FatArrow)?;
+        let value = self.parse_expr()?;
+        Ok(EvalMatchArm { patterns, value })
     }
 
     /// Parses a function-like call expression and its source-order arguments.
@@ -1826,7 +1882,7 @@ fn is_unsupported_statement_keyword(name: &str) -> bool {
 
 /// Returns true for PHP expression forms that the eval subset intentionally does not parse yet.
 fn is_unsupported_expression_keyword(name: &str) -> bool {
-    ["clone", "match", "yield"]
+    ["clone", "yield"]
         .iter()
         .any(|keyword| ident_eq(name, keyword))
 }
@@ -2602,6 +2658,29 @@ mod tests {
         );
     }
 
+    /// Verifies match expressions preserve subject, patterns, and default expression.
+    #[test]
+    fn parse_fragment_accepts_match_source() {
+        let program = parse_fragment(br#"return match ($x) { 1, 2 => "small", default => "other" };"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Match {
+                subject: Box::new(EvalExpr::LoadVar("x".to_string())),
+                arms: vec![EvalMatchArm {
+                    patterns: vec![
+                        EvalExpr::Const(EvalConst::Int(1)),
+                        EvalExpr::Const(EvalConst::Int(2)),
+                    ],
+                    value: EvalExpr::Const(EvalConst::String("small".to_string())),
+                }],
+                default: Some(Box::new(EvalExpr::Const(EvalConst::String(
+                    "other".to_string()
+                )))),
+            }))]
+        );
+    }
+
     /// Verifies null coalescing binds tighter than PHP ternary expressions.
     #[test]
     fn parse_fragment_null_coalesce_binds_tighter_than_ternary() {
@@ -3171,7 +3250,6 @@ mod tests {
     fn parse_fragment_rejects_expression_keywords_as_unsupported_constructs() {
         for source in [
             b"return clone $value;" as &[u8],
-            b"return match ($value) { 1 => 2 };" as &[u8],
             b"return yield 1;" as &[u8],
         ] {
             assert_eq!(
