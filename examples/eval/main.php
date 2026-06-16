@@ -1,6 +1,10 @@
 <?php
 function compiled_add($left, $right) { return $left + $right; }
 
+function eval_arg_summary() {
+    return eval('global $argc, $argv; return ($argc > 0 ? "argc" : "no-argc") . ":" . (count($argv) > 0 ? "argv" : "no-argv");');
+}
+
 class EvalCounter {
     public int $value = 1;
 
@@ -56,9 +60,12 @@ eval('if (empty($profile["missing"])) { echo "empty-missing\n"; }');
 $meta = eval('return ["source" => "eval"];');
 $meta_count = eval('return count($meta);');
 eval('function plus_one($value) { return $value + 1; }');
+eval('function eval_example_counter() { static $n = 0; $n++; return $n; }');
 $dynamic_call = eval('return plus_one(4);');
 $dynamic_named = eval('function named_pair($left, $right) { return $left . ":" . $right; } return named_pair(right: "R", left: "L");');
 $dynamic_spread = eval('function spread_pair($left, $right) { return $left . ":" . $right; } return spread_pair(...["L", "R"]);');
+$static_first = eval('return eval_example_counter();');
+$static_second = eval('return eval_example_counter();');
 $dynamic_cuf = eval('return call_user_func("plus_one", 6);');
 $dynamic_cufa = eval('return call_user_func_array("plus_one", [8]);');
 $eval_native_call = eval('return compiled_add(2, 8);');
@@ -126,6 +133,7 @@ echo "meta-count=" . $meta_count . "\n";
 echo "dynamic-call=" . $dynamic_call . "\n";
 echo "dynamic-named=" . $dynamic_named . "\n";
 echo "dynamic-spread=" . $dynamic_spread . "\n";
+echo "static-counter=" . $static_first . ":" . $static_second . "\n";
 echo "dynamic-cuf=" . $dynamic_cuf . "\n";
 echo "dynamic-cufa=" . $dynamic_cufa . "\n";
 echo "eval-native-call=" . $eval_native_call . "\n";
@@ -188,4 +196,5 @@ $counter->echoLabelSpreadThroughEval();
 echo "native-dynamic-call=" . native_add(40, 2) . "\n";
 echo "call-user-func=" . call_user_func('native_double', 6) . "\n";
 echo "function-exists=" . (function_exists('native_double') ? "yes" : "no") . "\n";
+echo "arg-globals=" . eval_arg_summary() . "\n";
 echo "result=" . $result . "\n";
