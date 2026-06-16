@@ -2708,12 +2708,15 @@ fn test_eval_dispatches_bin2hex_builtin_call() {
         r#"<?php
 eval('echo bin2hex("Az"); echo ":";
 echo bin2hex(string: "A\n"); echo ":";
+echo bin2hex(\'\n\'); echo ":";
+echo bin2hex("A\q"); echo ":";
+echo bin2hex("A\v\e\f"); echo ":";
 echo call_user_func("bin2hex", "!?"); echo ":";
 echo call_user_func_array("bin2hex", ["string" => "ok"]);
 echo ":"; echo function_exists("bin2hex");');
 "#,
     );
-    assert_eq!(out, "417a:410a:213f:6f6b:1");
+    assert_eq!(out, "417a:410a:5c6e:415c71:410b1b0c:213f:6f6b:1");
 }
 
 /// Verifies eval `hex2bin()` decodes hex strings directly and by callable dispatch.
@@ -4293,7 +4296,7 @@ class Box {
 }
 eval('namespace EvalUseExec;
 function imported_eval_func($x) { return $x + 1; }
-define("EvalUseLib\\\\VALUE", 5);
+define("EvalUseLib\\VALUE", 5);
 use function EvalUseExec\\imported_eval_func as AliasFunc;
 use const EvalUseLib\\VALUE as LocalValue;
 use EvalUseBridge\\Box as BoxAlias;
