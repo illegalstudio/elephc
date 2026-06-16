@@ -1155,6 +1155,39 @@ echo function_exists("empty") . "x";');
     assert_eq!(out, "111110x");
 }
 
+/// Verifies eval `isset()` and `empty()` use PHP offset semantics for array reads.
+#[test]
+fn test_eval_isset_and_empty_support_array_offsets() {
+    let out = compile_and_run(
+        r#"<?php
+$map = eval('return [
+    "present" => "x",
+    "nullish" => null,
+    "zero" => 0,
+    "empty" => "",
+    "child" => ["leaf" => "ok", "null" => null],
+];');
+eval('echo isset($map["present"]) ? "1" : "0";
+echo isset($map["nullish"]) ? "1" : "0";
+echo isset($map["missing"]) ? "1" : "0";
+echo isset($map["zero"]) ? "1" : "0";
+echo isset($map["child"]["leaf"]) ? "1" : "0";
+echo isset($map["child"]["null"]) ? "1" : "0";
+echo isset($map["missing"]["leaf"]) ? "1" : "0";
+echo ":";
+echo empty($map["present"]) ? "1" : "0";
+echo empty($map["nullish"]) ? "1" : "0";
+echo empty($map["missing"]) ? "1" : "0";
+echo empty($map["zero"]) ? "1" : "0";
+echo empty($map["empty"]) ? "1" : "0";
+echo empty($map["child"]["leaf"]) ? "1" : "0";
+echo empty($map["child"]["null"]) ? "1" : "0";
+echo empty($map["missing"]["leaf"]) ? "1" : "0";');
+"#,
+    );
+    assert_eq!(out, "1001100:01111011");
+}
+
 /// Verifies eval builtin dispatch can inspect arrays from the caller scope.
 #[test]
 fn test_eval_count_reads_scope_array() {
