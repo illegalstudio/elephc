@@ -1417,6 +1417,40 @@ eval('static $n = 0; $n++; echo $n;');
     assert_eq!(out, "1:1");
 }
 
+/// Verifies `global` inside eval can write compiler-known global storage.
+#[test]
+fn test_eval_global_alias_updates_global_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$g = 1;
+function bump_eval_global() {
+    global $g;
+    eval('global $g; $g = $g + 1;');
+}
+bump_eval_global();
+echo $g;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Verifies unsetting an eval global alias does not unset the actual global value.
+#[test]
+fn test_eval_global_alias_unset_keeps_global_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$g = 1;
+function unset_eval_global_alias() {
+    global $g;
+    eval('global $g; unset($g);');
+}
+unset_eval_global_alias();
+echo $g;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
 /// Verifies functions declared by eval from a namespace are registered globally.
 #[test]
 fn test_eval_declared_function_in_namespace_is_global() {

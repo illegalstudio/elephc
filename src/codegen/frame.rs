@@ -604,7 +604,7 @@ fn eval_scope_locals(ctx: &FunctionContext<'_>) -> Vec<(String, usize)> {
         .function
         .locals
         .iter()
-        .filter(|local| local.kind == LocalKind::EvalScope)
+        .filter(|local| matches!(local.kind, LocalKind::EvalScope | LocalKind::EvalGlobalScope))
         .filter_map(|local| {
             let offset = ctx.local_offset(local.id).ok()?;
             let name = local
@@ -643,7 +643,7 @@ fn function_has_eval_scope(function: &Function) -> bool {
     function
         .locals
         .iter()
-        .any(|local| local.kind == LocalKind::EvalScope)
+        .any(|local| matches!(local.kind, LocalKind::EvalScope | LocalKind::EvalGlobalScope))
 }
 
 /// Returns true when a local slot is written by an explicit EIR `StoreLocal`.

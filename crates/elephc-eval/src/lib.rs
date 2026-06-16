@@ -85,6 +85,21 @@ pub unsafe extern "C" fn __elephc_eval_context_set_call_site(
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Records the materialized program-global eval scope for `global` aliases.
+///
+/// # Safety
+/// `ctx` and `scope` must be valid handles allocated by the eval bridge. The
+/// context does not own `scope`; generated code must keep the scope alive for
+/// as long as the context can execute eval fragments that reference globals.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_set_global_scope(
+    ctx: *mut ElephcEvalContext,
+    scope: *mut ElephcEvalScope,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe { eval_context_set_global_scope_inner(ctx, scope) })
+        .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Allocates a materialized activation scope handle for generated code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_scope_new() -> *mut ElephcEvalScope {
@@ -476,6 +491,27 @@ unsafe fn eval_context_set_call_site_inner(
     EvalStatus::Ok.code()
 }
 
+/// Runs the global-scope setter ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_context_set_global_scope`; callers must pass valid
+/// context and scope handles owned by generated code.
+unsafe fn eval_context_set_global_scope_inner(
+    ctx: *mut ElephcEvalContext,
+    scope: *mut ElephcEvalScope,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    if !context.set_global_scope(scope) {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    EvalStatus::Ok.code()
+}
+
 /// Runs the dynamic function-call ABI body after installing a panic boundary.
 ///
 /// # Safety
@@ -802,6 +838,18 @@ mod tests {
         assert_eq!(status, EvalStatus::Ok.code());
         assert_eq!(ctx.call_dir(), "/tmp");
         assert_eq!(ctx.eval_file_magic(), "/tmp/source.php(9) : eval()'d code");
+    }
+
+    /// Verifies the context ABI records a non-owned global scope handle.
+    #[test]
+    fn context_set_global_scope_records_handle() {
+        let mut ctx = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+
+        let status = unsafe { __elephc_eval_context_set_global_scope(&mut ctx, &mut scope) };
+
+        assert_eq!(status, EvalStatus::Ok.code());
+        assert_eq!(ctx.global_scope_ptr(), Some(&mut scope as *mut ElephcEvalScope));
     }
 
     /// Verifies the function-exists ABI probes eval-declared functions by folded name.

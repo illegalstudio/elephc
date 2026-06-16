@@ -90,6 +90,7 @@ pub(crate) struct ClosureCapture {
 
 const EVAL_CONTEXT_LOCAL_NAME: &str = "__eir_eval_context";
 const EVAL_SCOPE_LOCAL_NAME: &str = "__eir_eval_scope";
+const EVAL_GLOBAL_SCOPE_LOCAL_NAME: &str = "__eir_eval_global_scope";
 
 /// Mutable state for one function body while it is lowered.
 pub(crate) struct LoweringContext<'m, 'f> {
@@ -468,11 +469,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.declare_local_with_kind(EVAL_SCOPE_LOCAL_NAME, PhpType::Int, LocalKind::EvalScope)
     }
 
+    /// Ensures this function has a persistent eval global-scope handle slot.
+    pub(crate) fn declare_eval_global_scope_local(&mut self) -> LocalSlotId {
+        self.declare_local_with_kind(
+            EVAL_GLOBAL_SCOPE_LOCAL_NAME,
+            PhpType::Int,
+            LocalKind::EvalGlobalScope,
+        )
+    }
+
     /// Applies the static part of the eval barrier to visible PHP local storage.
     pub(crate) fn apply_eval_barrier(&mut self) {
         self.eval_barrier_active = true;
         self.declare_eval_context_local();
         self.declare_eval_scope_local();
+        self.declare_eval_global_scope_local();
         let local_names = self
             .local_slots
             .iter()

@@ -16,6 +16,7 @@ use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::EvalFunction;
+use crate::scope::ElephcEvalScope;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 /// Native descriptor-invoker ABI registered by generated code for AOT functions.
@@ -88,6 +89,7 @@ pub struct ElephcEvalContext {
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
+    global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     call_file: String,
     call_dir: String,
@@ -102,6 +104,7 @@ impl ElephcEvalContext {
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
+            global_scope: None,
             function_stack: Vec::new(),
             call_file: String::new(),
             call_dir: String::new(),
@@ -117,6 +120,7 @@ impl ElephcEvalContext {
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
+            global_scope: None,
             function_stack: Vec::new(),
             call_file: String::new(),
             call_dir: String::new(),
@@ -202,6 +206,22 @@ impl ElephcEvalContext {
             .static_locals
             .insert((function_name.into(), name.into()), cell);
         previous.filter(|previous| *previous != cell)
+    }
+
+    /// Stores the non-owned global scope handle used by eval `global` aliases.
+    pub fn set_global_scope(&mut self, scope: *mut ElephcEvalScope) -> bool {
+        if scope.is_null() {
+            self.global_scope = None;
+            false
+        } else {
+            self.global_scope = Some(scope);
+            true
+        }
+    }
+
+    /// Returns the non-owned global scope handle for eval `global` aliases.
+    pub fn global_scope_ptr(&self) -> Option<*mut ElephcEvalScope> {
+        self.global_scope
     }
 
     /// Pushes an eval-executed function name for magic-constant resolution.

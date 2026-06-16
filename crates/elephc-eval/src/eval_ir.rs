@@ -79,6 +79,9 @@ pub enum EvalStmt {
         params: Vec<String>,
         body: Vec<EvalStmt>,
     },
+    Global {
+        vars: Vec<String>,
+    },
     If {
         condition: EvalExpr,
         then_branch: Vec<EvalStmt>,
