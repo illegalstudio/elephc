@@ -1372,6 +1372,9 @@ fn eval_call(
             | "rsort"
             | "shuffle"
             | "sort"
+            | "uasort"
+            | "uksort"
+            | "usort"
     ) {
         return eval_builtin_array_pop_shift_call(name, args, context, scope, values);
     }
@@ -2099,10 +2102,13 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "substr_replace"
             | "ucfirst"
             | "ucwords"
+            | "uasort"
+            | "uksort"
             | "unlink"
             | "umask"
             | "urldecode"
             | "urlencode"
+            | "usort"
             | "usleep"
             | "var_dump"
             | "printf"
@@ -2197,6 +2203,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_map" => Some(&["callback", "array"]),
         "array_reduce" => Some(&["array", "callback", "initial"]),
         "array_walk" => Some(&["array", "callback"]),
+        "uasort" | "uksort" | "usort" => Some(&["array", "callback"]),
         "array_flip" | "array_keys" | "array_pop" | "array_product" | "array_shift"
         | "array_sum" | "array_unique" | "array_rand" | "array_values" | "arsort"
         | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort"
@@ -2575,6 +2582,15 @@ fn eval_builtin_with_values(
                 "{name}(): Argument #1 ($array) must be passed by reference, value given"
             ))?;
             eval_array_sort_value_result(*array, values)?
+        }
+        "uasort" | "uksort" | "usort" => {
+            let [array, callback] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            values.warning(&format!(
+                "{name}(): Argument #1 ($array) must be passed by reference, value given"
+            ))?;
+            eval_user_sort_value_result(name, *array, *callback, context, values)?
         }
         "array_flip" => {
             let [array] = evaluated_args else {
@@ -3835,6 +3851,9 @@ fn eval_builtin_array_pop_shift_call(
     ) {
         return eval_builtin_array_sort_call(name, args, context, scope, values);
     }
+    if matches!(name, "uasort" | "uksort" | "usort") {
+        return eval_builtin_user_sort_call(name, args, context, scope, values);
+    }
 
     let [arg] = args else {
         return Err(EvalStatus::RuntimeFatal);
@@ -3950,6 +3969,209 @@ fn eval_builtin_array_sort_call(
     let result = values.bool_value(true)?;
     for replaced in set_scope_cell(context, scope, array_name, replacement, ownership)? {
         values.release(replaced)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates direct by-reference user-comparator sort calls and writes back the array.
+fn eval_builtin_user_sort_call(
+    name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (array_name, callback) = eval_user_sort_direct_args(args, context, scope, values)?;
+    let Some(entry) =
+        scope_entry(context, scope, &array_name).filter(|entry| entry.flags().is_visible())
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = entry.cell();
+    let ownership = entry.flags().ownership;
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+
+    let replacement = eval_user_sort_replacement(name, array, callback, context, values)?;
+    let result = values.bool_value(true)?;
+    for replaced in set_scope_cell(context, scope, array_name, replacement, ownership)? {
+        values.release(replaced)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates and binds direct user-sort arguments while preserving source order.
+fn eval_user_sort_direct_args(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(String, RuntimeCellHandle), EvalStatus> {
+    let mut array = None;
+    let mut callback = None;
+    let mut positional_index = 0;
+    let mut saw_named = false;
+
+    for arg in args {
+        if arg.is_spread() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let parameter = if let Some(name) = arg.name() {
+            saw_named = true;
+            name
+        } else {
+            if saw_named {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let parameter = match positional_index {
+                0 => "array",
+                1 => "callback",
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            positional_index += 1;
+            parameter
+        };
+
+        match parameter {
+            "array" => {
+                if array.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                let EvalExpr::LoadVar(name) = arg.value() else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                array = Some(name.clone());
+            }
+            "callback" => {
+                if callback.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                callback = Some(eval_expr(arg.value(), context, scope, values)?);
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
+    let array = array.ok_or(EvalStatus::RuntimeFatal)?;
+    let callback = callback.ok_or(EvalStatus::RuntimeFatal)?;
+    Ok((array, callback))
+}
+
+/// Returns the dynamic callable result for by-value user-comparator sort calls.
+fn eval_user_sort_value_result(
+    name: &str,
+    array: RuntimeCellHandle,
+    callback: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let replacement = eval_user_sort_replacement(name, array, callback, context, values)?;
+    values.release(replacement)?;
+    values.bool_value(true)
+}
+
+/// One source array entry used by eval user-comparator sort routines.
+struct EvalUserSortEntry {
+    source_key: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+}
+
+/// Builds the sorted replacement array for user-comparator sort builtins.
+fn eval_user_sort_replacement(
+    name: &str,
+    array: RuntimeCellHandle,
+    callback: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = eval_callable_name(callback, values)?;
+    let mut entries = eval_user_sort_entries(array, values)?;
+    eval_user_sort_entries_in_place(name, &callback, &mut entries, context, values)?;
+    if name == "usort" {
+        return eval_user_sort_reindex_result(entries, values);
+    }
+    eval_user_sort_preserve_key_result(entries, values)
+}
+
+/// Collects source keys and values from one eval array for user sorting.
+fn eval_user_sort_entries(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalUserSortEntry>, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut entries = Vec::with_capacity(len);
+    for position in 0..len {
+        let source_key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, source_key)?;
+        entries.push(EvalUserSortEntry { source_key, value });
+    }
+    Ok(entries)
+}
+
+/// Sorts entries by repeatedly invoking the PHP comparator callback.
+fn eval_user_sort_entries_in_place(
+    name: &str,
+    callback: &str,
+    entries: &mut [EvalUserSortEntry],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for pass in 0..entries.len() {
+        let upper = entries.len().saturating_sub(pass + 1);
+        for index in 0..upper {
+            let comparison =
+                eval_user_sort_compare(name, callback, &entries[index], &entries[index + 1], context, values)?;
+            if comparison > 0 {
+                entries.swap(index, index + 1);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Invokes one user-sort comparator and returns its integer ordering result.
+fn eval_user_sort_compare(
+    name: &str,
+    callback: &str,
+    left: &EvalUserSortEntry,
+    right: &EvalUserSortEntry,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let args = if name == "uksort" {
+        vec![left.source_key, right.source_key]
+    } else {
+        vec![left.value, right.value]
+    };
+    let result = eval_callable_with_values(callback, args, context, values)?;
+    eval_int_value(result, values)
+}
+
+/// Builds the reindexed result for `usort()`.
+fn eval_user_sort_reindex_result(
+    entries: Vec<EvalUserSortEntry>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(entries.len())?;
+    for (index, entry) in entries.into_iter().enumerate() {
+        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        result = values.array_set(result, key, entry.value)?;
+    }
+    Ok(result)
+}
+
+/// Builds the key-preserving result for `uksort()` and `uasort()`.
+fn eval_user_sort_preserve_key_result(
+    entries: Vec<EvalUserSortEntry>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.assoc_new(entries.len())?;
+    for entry in entries {
+        result = values.array_set(result, entry.source_key, entry.value)?;
     }
     Ok(result)
 }
@@ -15168,6 +15390,42 @@ return function_exists("shuffle");"#,
         assert_eq!(
             values.warnings,
             vec!["shuffle(): Argument #1 ($array) must be passed by reference, value given"]
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval user-comparator sort builtins call callbacks and write back direct arrays.
+    #[test]
+    fn execute_program_dispatches_user_sort_builtins() {
+        let program = parse_fragment(
+            br#"function eval_sort_cmp($left, $right) { echo "c"; return $left <=> $right; }
+function eval_key_cmp($left, $right) { return strcmp($left, $right); }
+$a = [3, 1, 2];
+echo usort($a, "eval_sort_cmp") . ":";
+foreach ($a as $value) { echo $value; }
+echo ":";
+$b = ["b" => 1, "a" => 3, "c" => 2];
+echo uasort(array: $b, callback: "eval_sort_cmp") . ":";
+foreach ($b as $key => $value) { echo $key . $value; }
+echo ":";
+$c = ["b" => 1, "a" => 2];
+echo uksort($c, "eval_key_cmp") . ":";
+foreach ($c as $key => $value) { echo $key . $value; }
+echo ":";
+$d = [2, 1];
+echo call_user_func("usort", $d, "eval_sort_cmp") . ":" . $d[0] . $d[1] . ":";
+return function_exists("usort") && function_exists("uasort") && function_exists("uksort");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "ccc1:123:ccc1:b1c2a3:1:a2b1:c1:21:");
+        assert_eq!(
+            values.warnings,
+            vec!["usort(): Argument #1 ($array) must be passed by reference, value given"]
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
