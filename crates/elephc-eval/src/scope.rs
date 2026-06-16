@@ -11,7 +11,7 @@
 //! - Scope entries store runtime-cell handles only; the eval bridge does not
 //!   introduce a second PHP value representation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::value::RuntimeCellHandle;
 
@@ -116,6 +116,7 @@ impl ScopeEntry {
 /// Materialized activation scope passed opaquely across the eval ABI.
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
+    global_aliases: HashSet<String>,
     generation: u64,
 }
 
@@ -124,6 +125,7 @@ impl ElephcEvalScope {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            global_aliases: HashSet::new(),
             generation: 0,
         }
     }
@@ -172,6 +174,21 @@ impl ElephcEvalScope {
     /// Returns true when the scope contains a visible value for the named variable.
     pub fn contains_visible(&self, name: &str) -> bool {
         self.visible_cell(name).is_some()
+    }
+
+    /// Marks a variable name as an alias to the eval context's global scope.
+    pub fn mark_global_alias(&mut self, name: impl Into<String>) {
+        self.global_aliases.insert(name.into());
+    }
+
+    /// Removes a variable's global alias marker after local `unset()`.
+    pub fn clear_global_alias(&mut self, name: &str) {
+        self.global_aliases.remove(name);
+    }
+
+    /// Returns true when the variable should resolve through the global scope.
+    pub fn is_global_alias(&self, name: &str) -> bool {
+        self.global_aliases.contains(name)
     }
 
     /// Returns the names of entries dirtied since the last synchronization.

@@ -18,7 +18,7 @@ use crate::eval_ir::{
     EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
 use crate::parser::parse_fragment;
-use crate::scope::{ElephcEvalScope, ScopeCellOwnership};
+use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
 
 /// Internal statement-control result used to propagate eval returns and loops.
@@ -349,6 +349,88 @@ fn execute_statements(
     Ok(EvalControl::None)
 }
 
+/// Returns the eval-visible entry for a variable, following `global` aliases.
+fn scope_entry(
+    context: &ElephcEvalContext,
+    scope: &ElephcEvalScope,
+    name: &str,
+) -> Option<ScopeEntry> {
+    if !scope.is_global_alias(name) {
+        return scope.entry(name);
+    }
+    let Some(global_scope) = context.global_scope_ptr() else {
+        return scope.entry(name);
+    };
+    let current_scope = scope as *const ElephcEvalScope as *mut ElephcEvalScope;
+    if global_scope == current_scope {
+        return scope.entry(name);
+    }
+    unsafe { global_scope.as_ref().and_then(|scope| scope.entry(name)) }
+}
+
+/// Returns the eval-visible cell for a variable, following `global` aliases.
+fn visible_scope_cell(
+    context: &ElephcEvalContext,
+    scope: &ElephcEvalScope,
+    name: &str,
+) -> Option<RuntimeCellHandle> {
+    scope_entry(context, scope, name)
+        .filter(|entry| entry.flags().is_visible())
+        .map(ScopeEntry::cell)
+}
+
+/// Stores a variable cell, redirecting `global` aliases to the global scope.
+fn set_scope_cell(
+    context: &ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    name: impl Into<String>,
+    cell: RuntimeCellHandle,
+    ownership: ScopeCellOwnership,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let name = name.into();
+    if scope.is_global_alias(&name) {
+        let Some(global_scope) = context.global_scope_ptr() else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        let current_scope = scope as *mut ElephcEvalScope;
+        if global_scope == current_scope {
+            return Ok(scope.set(name, cell, ownership));
+        }
+        let Some(global_scope) = (unsafe { global_scope.as_mut() }) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        return Ok(global_scope.set(name, cell, ownership));
+    }
+    Ok(scope.set(name, cell, ownership))
+}
+
+/// Unsets a variable, removing only the local alias when the name is global.
+fn unset_scope_cell(
+    scope: &mut ElephcEvalScope,
+    name: impl Into<String>,
+) -> Option<RuntimeCellHandle> {
+    let name = name.into();
+    if scope.is_global_alias(&name) {
+        scope.clear_global_alias(&name);
+    }
+    scope.unset(name)
+}
+
+/// Marks variables as aliases to the context global scope for later reads/writes.
+fn execute_global_stmt(
+    vars: &[String],
+    context: &ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+) -> Result<(), EvalStatus> {
+    if context.global_scope_ptr().is_none() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    for name in vars {
+        scope.mark_global_alias(name.clone());
+    }
+    Ok(())
+}
+
 /// Executes one statement and returns `Some` only for eval `return`.
 fn execute_stmt(
     stmt: &EvalStmt,
@@ -360,7 +442,7 @@ fn execute_stmt(
         EvalStmt::ArrayAppendVar { name, value } => {
             let mut ownership = ScopeCellOwnership::Owned;
             let array = if let Some(existing) =
-                scope.entry(name).filter(|entry| entry.flags().is_visible())
+                scope_entry(context, scope, name).filter(|entry| entry.flags().is_visible())
             {
                 if values.is_array_like(existing.cell())? {
                     let tag = values.type_tag(existing.cell())?;
@@ -378,7 +460,9 @@ fn execute_stmt(
             let index = eval_array_append_key(array, values)?;
             let value = eval_expr(value, context, scope, values)?;
             let array = values.array_set(array, index, value)?;
-            if let Some(replaced) = scope.set(name.clone(), array, ownership) {
+            if let Some(replaced) =
+                set_scope_cell(context, scope, name.clone(), array, ownership)?
+            {
                 values.release(replaced)?;
             }
             Ok(EvalControl::None)
@@ -386,7 +470,7 @@ fn execute_stmt(
         EvalStmt::ArraySetVar { name, index, value } => {
             let mut ownership = ScopeCellOwnership::Owned;
             let array = if let Some(existing) =
-                scope.entry(name).filter(|entry| entry.flags().is_visible())
+                scope_entry(context, scope, name).filter(|entry| entry.flags().is_visible())
             {
                 if values.is_array_like(existing.cell())? {
                     ownership = existing.flags().ownership;
@@ -400,7 +484,9 @@ fn execute_stmt(
             let index = eval_expr(index, context, scope, values)?;
             let value = eval_expr(value, context, scope, values)?;
             let array = values.array_set(array, index, value)?;
-            if let Some(replaced) = scope.set(name.clone(), array, ownership) {
+            if let Some(replaced) =
+                set_scope_cell(context, scope, name.clone(), array, ownership)?
+            {
                 values.release(replaced)?;
             }
             Ok(EvalControl::None)
@@ -453,6 +539,10 @@ fn execute_stmt(
                 .map_err(|_| EvalStatus::RuntimeFatal)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::Global { vars } => {
+            execute_global_stmt(vars, context, scope)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::If {
             condition,
             then_branch,
@@ -485,7 +575,9 @@ fn execute_stmt(
         }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_expr(value, context, scope, values)?;
-            if let Some(replaced) = scope.set(name.clone(), value, ScopeCellOwnership::Owned) {
+            if let Some(replaced) =
+                set_scope_cell(context, scope, name.clone(), value, ScopeCellOwnership::Owned)?
+            {
                 values.release(replaced)?;
             }
             Ok(EvalControl::None)
@@ -494,7 +586,7 @@ fn execute_stmt(
             execute_switch_stmt(expr, cases, context, scope, values)
         }
         EvalStmt::UnsetVar { name } => {
-            if let Some(replaced) = scope.unset(name.clone()) {
+            if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
                 values.release(replaced)?;
             }
             Ok(EvalControl::None)
@@ -662,14 +754,16 @@ fn execute_foreach_stmt(
         let key = values.array_iter_key(array, index)?;
         let value = values.array_get(array, key)?;
         if let Some(key_name) = key_name {
-            if let Some(replaced) = scope.set(key_name.to_string(), key, ScopeCellOwnership::Owned)
+            if let Some(replaced) =
+                set_scope_cell(context, scope, key_name.to_string(), key, ScopeCellOwnership::Owned)?
             {
                 values.release(replaced)?;
             }
         } else {
             values.release(key)?;
         }
-        if let Some(replaced) = scope.set(value_name.to_string(), value, ScopeCellOwnership::Owned)
+        if let Some(replaced) =
+            set_scope_cell(context, scope, value_name.to_string(), value, ScopeCellOwnership::Owned)?
         {
             values.release(replaced)?;
         }
@@ -734,7 +828,9 @@ fn eval_expr(
         }
         EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
-        EvalExpr::LoadVar(name) => scope.visible_cell(name).map_or_else(|| values.null(), Ok),
+        EvalExpr::LoadVar(name) => {
+            visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok)
+        }
         EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
         EvalExpr::MethodCall {
             object,
@@ -1062,7 +1158,7 @@ fn eval_empty_arg(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     if let EvalExpr::LoadVar(name) = arg {
-        let Some(value) = scope.visible_cell(name) else {
+        let Some(value) = visible_scope_cell(context, scope, name) else {
             return Ok(true);
         };
         return Ok(!values.truthy(value)?);
@@ -1079,7 +1175,7 @@ fn eval_isset_arg(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     if let EvalExpr::LoadVar(name) = arg {
-        let Some(value) = scope.visible_cell(name) else {
+        let Some(value) = visible_scope_cell(context, scope, name) else {
             return Ok(false);
         };
         return Ok(!values.is_null(value)?);
@@ -2822,6 +2918,7 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
             | EvalStmt::Continue
             | EvalStmt::Echo(_)
             | EvalStmt::Expr(_)
+            | EvalStmt::Global { .. }
             | EvalStmt::PropertySet { .. }
             | EvalStmt::Return(_)
             | EvalStmt::StoreVar { .. }
@@ -4719,6 +4816,29 @@ return (dyn() * 10) + dyn();"#,
 
         assert_eq!(values.get(first), FakeValue::Int(1));
         assert_eq!(values.get(second), FakeValue::Int(1));
+    }
+
+    /// Verifies `global` declarations read and write the context global scope.
+    #[test]
+    fn execute_program_global_alias_writes_context_global_scope() {
+        let program = parse_fragment(br#"global $g; $g = $g + 1; return $g;"#)
+            .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut global_scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let initial = values.int(1).expect("allocate initial global");
+        global_scope.set("g", initial, ScopeCellOwnership::Owned);
+        context.set_global_scope(&mut global_scope);
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        let global = global_scope
+            .visible_cell("g")
+            .expect("global scope should contain g");
+        assert_eq!(values.get(result), FakeValue::Int(2));
+        assert_eq!(values.get(global), FakeValue::Int(2));
     }
 
     /// Verifies named calls reject positional arguments that follow named arguments.

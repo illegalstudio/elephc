@@ -72,7 +72,12 @@ fn function_uses_eval(function: &Function) -> bool {
     function
         .locals
         .iter()
-        .any(|local| matches!(local.kind, LocalKind::EvalContext | LocalKind::EvalScope))
+        .any(|local| {
+            matches!(
+                local.kind,
+                LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
+            )
+        })
 }
 
 /// Collects public bridge-supported instance methods backed by emitted EIR symbols.

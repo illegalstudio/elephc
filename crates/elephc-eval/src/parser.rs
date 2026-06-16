@@ -571,6 +571,7 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "for") => self.parse_for_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "foreach") => self.parse_foreach_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_function_decl_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "global") => self.parse_global_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "if") => self.parse_if_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "return") => {
                 self.advance();
@@ -713,6 +714,24 @@ impl Parser {
         let params = self.parse_function_params()?;
         let body = self.parse_block()?;
         Ok(vec![EvalStmt::FunctionDecl { name, params, body }])
+    }
+
+    /// Parses `global $name, $other;` declarations in eval fragments.
+    fn parse_global_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let mut vars = Vec::new();
+        loop {
+            let TokenKind::DollarIdent(name) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            vars.push(name.clone());
+            self.advance();
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect_semicolon()?;
+        Ok(vec![EvalStmt::Global { vars }])
     }
 
     /// Parses `static $name = expr;` declarations in eval fragments.
@@ -2162,6 +2181,18 @@ mod tests {
                     left: Box::new(EvalExpr::Const(EvalConst::Int(1))),
                     right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
                 },
+            }]
+        );
+    }
+
+    /// Verifies global declarations preserve source-order variable names.
+    #[test]
+    fn parse_fragment_accepts_global_source() {
+        let program = parse_fragment(br#"global $left, $right;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Global {
+                vars: vec!["left".to_string(), "right".to_string()],
             }]
         );
     }

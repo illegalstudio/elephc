@@ -169,6 +169,7 @@ pub enum LocalKind {
     GeneratorState,
     EvalContext,
     EvalScope,
+    EvalGlobalScope,
 }
 
 /// Function-level shape flags used by lowering and later codegen.

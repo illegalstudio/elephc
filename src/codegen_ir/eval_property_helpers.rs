@@ -69,7 +69,12 @@ fn function_uses_eval(function: &Function) -> bool {
     function
         .locals
         .iter()
-        .any(|local| matches!(local.kind, LocalKind::EvalContext | LocalKind::EvalScope))
+        .any(|local| {
+            matches!(
+                local.kind,
+                LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
+            )
+        })
 }
 
 /// Collects public declared properties with storage layouts the bridge can access.

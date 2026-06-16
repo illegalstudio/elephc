@@ -17,8 +17,8 @@ use std::path::Path;
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed};
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::{Function, Instruction, LocalKind, LocalSlotId};
-use crate::names::function_symbol;
+use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op};
+use crate::names::{function_symbol, ir_global_symbol};
 use crate::types::{FunctionSig, PhpType};
 
 use super::super::super::context::FunctionContext;
@@ -33,13 +33,14 @@ const EVAL_PARSE_ERROR_MESSAGE: &str = "Parse error: eval() fragment is invalid\
 const EVAL_UNSUPPORTED_MESSAGE: &str =
     "Fatal error: eval() fragment uses an unsupported construct\n";
 const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";
-const EVAL_STACK_BYTES: usize = 64;
+const EVAL_STACK_BYTES: usize = 80;
 const EVAL_RESULT_VALUE_CELL_OFFSET: usize = 8;
 const EVAL_CONTEXT_HANDLE_OFFSET: usize = 24;
 const EVAL_SCOPE_HANDLE_OFFSET: usize = 32;
 const EVAL_TEMP_CELL_OFFSET: usize = 40;
 const EVAL_CODE_PTR_OFFSET: usize = 48;
 const EVAL_CODE_LEN_OFFSET: usize = 56;
+const EVAL_GLOBAL_SCOPE_HANDLE_OFFSET: usize = 64;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 
@@ -48,6 +49,13 @@ const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 struct EvalSyncLocal {
     name: String,
     slot: LocalSlotId,
+    ty: PhpType,
+}
+
+/// Program-global metadata synchronized with eval `global` aliases.
+#[derive(Clone)]
+struct EvalSyncGlobal {
+    name: String,
     ty: PhpType,
 }
 
@@ -74,8 +82,12 @@ pub(super) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     ensure_eval_context(ctx)?;
     set_eval_call_site(ctx, inst);
     ensure_eval_scope(ctx)?;
+    ensure_eval_global_scope(ctx)?;
     let sync_locals = eval_sync_locals(ctx);
+    let sync_globals = eval_sync_globals(ctx);
     flush_eval_scope_locals(ctx, &sync_locals)?;
+    flush_eval_global_scope(ctx, &sync_globals)?;
+    set_eval_context_global_scope(ctx);
     load_eval_context_to_arg(ctx, 0);
     load_eval_scope_to_arg(ctx, 1);
     move_saved_eval_code_to_eval_args(ctx);
@@ -88,6 +100,7 @@ pub(super) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     reload_eval_scope_locals(ctx, &sync_locals)?;
+    reload_eval_global_scope(ctx, &sync_globals)?;
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
@@ -496,6 +509,23 @@ fn ensure_eval_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Ensures a persistent eval global-scope exists and stores its handle in scratch.
+fn ensure_eval_global_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let slot = eval_global_scope_slot(ctx)?;
+    let offset = ctx.local_offset(slot)?;
+    let ready = ctx.next_label("eval_global_scope_ready");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_new");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::store_at_offset(ctx.emitter, result_reg, offset);
+    ctx.emitter.label(&ready);
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_GLOBAL_SCOPE_HANDLE_OFFSET);
+    Ok(())
+}
+
 /// Returns the hidden frame slot that owns this function's persistent eval scope.
 fn eval_scope_slot(ctx: &FunctionContext<'_>) -> Result<LocalSlotId> {
     ctx.function
@@ -506,10 +536,38 @@ fn eval_scope_slot(ctx: &FunctionContext<'_>) -> Result<LocalSlotId> {
         .ok_or_else(|| CodegenIrError::invalid_module("eval call missing eval scope local"))
 }
 
+/// Returns the hidden frame slot that owns this function's eval global scope.
+fn eval_global_scope_slot(ctx: &FunctionContext<'_>) -> Result<LocalSlotId> {
+    ctx.function
+        .locals
+        .iter()
+        .find(|local| local.kind == LocalKind::EvalGlobalScope)
+        .map(|local| local.id)
+        .ok_or_else(|| CodegenIrError::invalid_module("eval call missing eval global scope local"))
+}
+
 /// Loads the current eval scope handle into the selected integer argument register.
 fn load_eval_scope_to_arg(ctx: &mut FunctionContext<'_>, arg_index: usize) {
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, EVAL_SCOPE_HANDLE_OFFSET);
+}
+
+/// Loads the current eval global-scope handle into the selected integer argument register.
+fn load_eval_global_scope_to_arg(ctx: &mut FunctionContext<'_>, arg_index: usize) {
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, arg_index);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg_reg, EVAL_GLOBAL_SCOPE_HANDLE_OFFSET);
+}
+
+/// Installs the current eval global-scope handle into the eval context.
+fn set_eval_context_global_scope(ctx: &mut FunctionContext<'_>) {
+    load_eval_context_to_arg(ctx, 0);
+    load_eval_global_scope_to_arg(ctx, 1);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_context_set_global_scope");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
 }
 
 /// Collects PHP-visible locals that the current conservative scope sync can round-trip.
@@ -518,6 +576,7 @@ fn eval_sync_locals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncLocal> {
         .locals
         .iter()
         .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter(|local| !local_uses_eval_global_sync(ctx, local.name.as_deref()))
         .filter_map(|local| {
             let name = local.name.clone()?;
             let ty = local.php_type.codegen_repr();
@@ -528,6 +587,89 @@ fn eval_sync_locals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncLocal> {
             })
         })
         .collect()
+}
+
+/// Returns true when a local name is backed by program-global storage during eval.
+fn local_uses_eval_global_sync(ctx: &FunctionContext<'_>, name: Option<&str>) -> bool {
+    ctx.is_main && name.is_some_and(|name| ctx.has_global_name(name))
+}
+
+/// Collects program globals that can be boxed into the eval global scope.
+fn eval_sync_globals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncGlobal> {
+    ctx.module
+        .data
+        .global_names
+        .iter()
+        .filter_map(|name| {
+            let ty = eval_sync_global_type(ctx, name)?;
+            eval_sync_global_type_supported(&ty).then_some(EvalSyncGlobal {
+                name: name.clone(),
+                ty,
+            })
+        })
+        .collect()
+}
+
+/// Returns one unambiguous codegen type used for a program global, if available.
+fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Option<PhpType> {
+    let mut inferred = None;
+    for function in ctx.module.functions.iter().chain(ctx.module.closures.iter()) {
+        for inst in &function.instructions {
+            if global_instruction_name(ctx, inst) != Some(name) {
+                continue;
+            }
+            let candidate = global_instruction_value_type(function, inst)?;
+            let candidate = candidate.codegen_repr();
+            if !eval_sync_global_type_supported(&candidate) {
+                return None;
+            }
+            match &inferred {
+                Some(existing) if existing != &candidate => return None,
+                Some(_) => {}
+                None => inferred = Some(candidate),
+            }
+        }
+    }
+    inferred
+}
+
+/// Returns the global name referenced by a load/store-global instruction.
+fn global_instruction_name<'a>(
+    ctx: &'a FunctionContext<'_>,
+    inst: &Instruction,
+) -> Option<&'a str> {
+    let Some(Immediate::GlobalName(data)) = inst.immediate else {
+        return None;
+    };
+    ctx.module.data.global_names.get(data.as_raw() as usize).map(String::as_str)
+}
+
+/// Returns the value type carried by a global load or store instruction.
+fn global_instruction_value_type(function: &Function, inst: &Instruction) -> Option<PhpType> {
+    match inst.op {
+        Op::LoadGlobal => {
+            let result = inst.result?;
+            function.value(result).map(|value| value.php_type.clone())
+        }
+        Op::StoreGlobal => {
+            let value = *inst.operands.first()?;
+            function.value(value).map(|value| value.php_type.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Returns true when a global type can round-trip through eval global scope sync.
+fn eval_sync_global_type_supported(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
 }
 
 /// Returns true when a local type can be boxed to Mixed and restored from Mixed after eval.
@@ -558,6 +700,31 @@ fn flush_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[EvalSyncLoca
     Ok(())
 }
 
+/// Flushes supported program globals into the eval global scope before eval.
+fn flush_eval_global_scope(
+    ctx: &mut FunctionContext<'_>,
+    globals: &[EvalSyncGlobal],
+) -> Result<()> {
+    for global in globals {
+        load_global_to_result(ctx, global);
+        if !matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            emit_box_current_value_as_mixed(ctx.emitter, &global.ty);
+        }
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+        emit_eval_global_scope_set(ctx, global, scope_set_flags_for_type(&global.ty));
+    }
+    Ok(())
+}
+
+/// Loads a program-global symbol into result registers using its inferred type.
+fn load_global_to_result(ctx: &mut FunctionContext<'_>, global: &EvalSyncGlobal) {
+    let symbol = ir_global_symbol(&global.name);
+    let ty = global.ty.codegen_repr();
+    ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
+    abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
+}
+
 /// Returns ABI flags for a scope value produced from the given native type.
 fn scope_set_flags_for_type(ty: &PhpType) -> i64 {
     if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
@@ -565,6 +732,32 @@ fn scope_set_flags_for_type(ty: &PhpType) -> i64 {
     } else {
         EVAL_SCOPE_FLAG_OWNED
     }
+}
+
+/// Calls `__elephc_eval_scope_set` for one boxed global value.
+fn emit_eval_global_scope_set(ctx: &mut FunctionContext<'_>, global: &EvalSyncGlobal, flags: i64) {
+    let (name_label, name_len) = ctx.data.add_string(global.name.as_bytes());
+    load_eval_global_scope_to_arg(ctx, 0);
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        EVAL_TEMP_CELL_OFFSET,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        flags,
+    );
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
 }
 
 /// Calls `__elephc_eval_scope_set` for one boxed local value.
@@ -611,10 +804,51 @@ fn reload_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[EvalSyncLoc
     Ok(())
 }
 
+/// Reloads synchronized program globals from the eval global scope after eval.
+fn reload_eval_global_scope(
+    ctx: &mut FunctionContext<'_>,
+    globals: &[EvalSyncGlobal],
+) -> Result<()> {
+    for global in globals {
+        emit_eval_global_scope_get(ctx, global);
+        let missing = ctx.next_label("eval_global_reload_missing");
+        let done = ctx.next_label("eval_global_reload_done");
+        emit_branch_if_scope_entry_missing(ctx, &missing);
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+        store_mixed_scope_cell_to_global(ctx, global)?;
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&missing);
+        store_missing_scope_entry_to_global(ctx, global)?;
+        ctx.emitter.label(&done);
+    }
+    Ok(())
+}
+
 /// Calls `__elephc_eval_scope_get` and stores out cell/flags at the start of eval scratch.
 fn emit_eval_scope_get(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) {
     let (name_label, name_len) = ctx.data.add_string(local.name.as_bytes());
     load_eval_scope_to_arg(ctx, 0);
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    let out_cell_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_temporary_stack_address(ctx.emitter, out_cell_arg, 0);
+    let out_flags_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_temporary_stack_address(ctx.emitter, out_flags_arg, 8);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_get");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+}
+
+/// Calls `__elephc_eval_scope_get` for one program global.
+fn emit_eval_global_scope_get(ctx: &mut FunctionContext<'_>, global: &EvalSyncGlobal) {
+    let (name_label, name_len) = ctx.data.add_string(global.name.as_bytes());
+    load_eval_global_scope_to_arg(ctx, 0);
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
     abi::emit_load_int_immediate(
@@ -702,6 +936,45 @@ fn store_mixed_scope_cell_to_local(
     Ok(())
 }
 
+/// Converts a scope Mixed cell back to a program-global storage symbol.
+fn store_mixed_scope_cell_to_global(
+    ctx: &mut FunctionContext<'_>,
+    global: &EvalSyncGlobal,
+) -> Result<()> {
+    let symbol = ir_global_symbol(&global.name);
+    let ty = global.ty.codegen_repr();
+    ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
+    match ty {
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_retain_scope_cell_if_owned(ctx);
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
+        }
+        PhpType::Int => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Int, false);
+        }
+        PhpType::Bool => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Bool, false);
+        }
+        PhpType::Float => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Float, false);
+        }
+        PhpType::Str => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Str, false);
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "eval global reload for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    Ok(())
+}
+
 /// Retains a scope-owned Mixed cell before storing it into a native local owner.
 fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
     let flags_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -758,6 +1031,49 @@ fn store_missing_scope_entry_to_local(
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "eval scope missing reload for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Stores the program-global fallback for a missing eval global entry.
+fn store_missing_scope_entry_to_global(
+    ctx: &mut FunctionContext<'_>,
+    global: &EvalSyncGlobal,
+) -> Result<()> {
+    let symbol = ir_global_symbol(&global.name);
+    let ty = global.ty.codegen_repr();
+    ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
+    match ty {
+        PhpType::Mixed | PhpType::Union(_) => {
+            let symbol_name = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
+            abi::emit_call_label(ctx.emitter, &symbol_name);
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
+        }
+        PhpType::Int => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Int, false);
+        }
+        PhpType::Bool => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Bool, false);
+        }
+        PhpType::Float => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            abi::emit_int_result_to_float_result(ctx.emitter);
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Float, false);
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+            abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Str, false);
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "eval global missing reload for PHP type {:?}",
                 other
             )))
         }
