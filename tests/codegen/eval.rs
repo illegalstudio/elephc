@@ -1232,6 +1232,21 @@ echo function_exists("sys_get_temp_dir");');
     );
 }
 
+/// Verifies eval `microtime()` returns a plausible floating timestamp by all call paths.
+#[test]
+fn test_eval_dispatches_microtime_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo microtime() > 1000000000 ? "now" : "bad"; echo ":";
+echo microtime(as_float: false) > 1000000000 ? "named" : "bad"; echo ":";
+echo call_user_func("microtime", true) > 1000000000 ? "call" : "bad"; echo ":";
+echo call_user_func_array("microtime", ["as_float" => true]) > 1000000000 ? "array" : "bad";
+echo ":"; echo function_exists("microtime");');
+"#,
+    );
+    assert_eq!(out, "now:named:call:array:1");
+}
+
 /// Verifies eval realpath-cache builtins expose elephc's empty-cache convention.
 #[test]
 fn test_eval_dispatches_realpath_cache_builtin_calls() {

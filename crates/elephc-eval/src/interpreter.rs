@@ -1232,6 +1232,7 @@ fn eval_positional_expr_call(
         }
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
         "max" | "min" => eval_builtin_min_max(name, args, context, scope, values),
+        "microtime" => eval_builtin_microtime(args, context, scope, values),
         "nl2br" => eval_builtin_nl2br(args, context, scope, values),
         "number_format" => eval_builtin_number_format(args, context, scope, values),
         "ord" => eval_builtin_ord(args, context, scope, values),
@@ -1585,6 +1586,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_string"
             | "lcfirst"
             | "max"
+            | "microtime"
             | "min"
             | "nl2br"
             | "number_format"
@@ -1742,6 +1744,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => Some(&["string"]),
         "implode" => Some(&["separator", "array"]),
         "max" | "min" => Some(&["value"]),
+        "microtime" => Some(&["as_float"]),
         "nl2br" => Some(&["string", "use_xhtml"]),
         "number_format" => Some(&["num", "decimals", "decimal_separator", "thousands_separator"]),
         "ord" => Some(&["character"]),
@@ -2150,6 +2153,10 @@ fn eval_builtin_with_values(
             eval_implode_result(*separator, *array, values)?
         }
         "max" | "min" => eval_min_max_result(name, evaluated_args, values)?,
+        "microtime" => match evaluated_args {
+            [] | [_] => eval_microtime_result(values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "nl2br" => match evaluated_args {
             [value] => eval_nl2br_result(*value, true, values)?,
             [value, use_xhtml] => {
@@ -3748,6 +3755,35 @@ fn eval_time_result(values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHand
         .as_secs();
     let timestamp = i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.int(timestamp)
+}
+
+/// Evaluates PHP `microtime()` with an optional ignored argument.
+fn eval_builtin_microtime(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [] => eval_microtime_result(values),
+        [as_float] => {
+            let _ = eval_expr(as_float, context, scope, values)?;
+            eval_microtime_result(values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Returns the current Unix timestamp with microsecond precision as a boxed float.
+fn eval_microtime_result(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| EvalStatus::RuntimeFatal)?;
+    let seconds = timestamp.as_secs() as f64;
+    let micros = f64::from(timestamp.subsec_micros()) / 1_000_000.0;
+    values.float(seconds + micros)
 }
 
 /// Evaluates PHP `sleep($seconds)` over one eval expression.
@@ -8126,6 +8162,27 @@ return function_exists("sys_get_temp_dir");"#,
                 eval_compiler_php_version()
             )
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `microtime()` returns a plausible float timestamp by all call paths.
+    #[test]
+    fn execute_program_dispatches_microtime_builtin() {
+        let program = parse_fragment(
+            br#"echo microtime() > 1000000000 ? "now" : "bad"; echo ":";
+echo microtime(as_float: false) > 1000000000 ? "named" : "bad"; echo ":";
+echo call_user_func("microtime", true) > 1000000000 ? "call" : "bad"; echo ":";
+echo call_user_func_array("microtime", ["as_float" => true]) > 1000000000 ? "array" : "bad";
+echo ":";
+return function_exists("microtime");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "now:named:call:array:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

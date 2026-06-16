@@ -150,6 +150,7 @@ $url_codec = eval('return urlencode("a b&=") . ":" . rawurldecode("a%20b%26%3D")
 $checksum = eval('return crc32("hello");');
 $hash_algos = eval('$algos = hash_algos(); return count($algos) . ":" . (in_array("sha256", $algos) ? "sha256" : "missing");');
 $system_info = eval('return (time() > 1000000000 ? "time" : "bad") . ":" . phpversion() . ":" . sys_get_temp_dir() . ":" . (strlen(getcwd()) > 0 ? "cwd" : "bad");');
+$micro_time = eval('return microtime(true) > 1000000000 ? "ok" : "bad";');
 $realpath_cache = eval('return count(realpath_cache_get()) . ":" . realpath_cache_size();');
 $environment = eval('putenv("ELEPHC_EVAL_EXAMPLE=ok"); $value = getenv("ELEPHC_EVAL_EXAMPLE"); putenv("ELEPHC_EVAL_EXAMPLE"); return $value . ":" . (getenv("ELEPHC_EVAL_EXAMPLE") === "" ? "cleared" : "left");');
 $sleeping = eval('usleep(0); return sleep(0) . ":awake";');
@@ -249,6 +250,7 @@ echo "url-codec=" . $url_codec . "\n";
 echo "crc32=" . $checksum . "\n";
 echo "hash-algos=" . $hash_algos . "\n";
 echo "system-info=" . $system_info . "\n";
+echo "microtime=" . $micro_time . "\n";
 echo "realpath-cache=" . $realpath_cache . "\n";
 echo "environment=" . $environment . "\n";
 echo "sleep=" . $sleeping . "\n";
