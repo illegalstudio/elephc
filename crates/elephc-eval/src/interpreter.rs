@@ -67,6 +67,9 @@ const EVAL_HASH_ALGOS: &[&str] = &[
     "joaat",
 ];
 
+/// Root package manifest used to mirror native `phpversion()` in the eval crate.
+const EVAL_ROOT_CARGO_TOML: &str = include_str!("../../../Cargo.toml");
+
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
     /// Creates a runtime indexed-array cell with room for at least `capacity` elements.
@@ -1213,6 +1216,7 @@ fn eval_positional_expr_call(
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
         }
+        "getcwd" => eval_builtin_getcwd(args, values),
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "hash_algos" => eval_builtin_hash_algos(args, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
@@ -1231,6 +1235,7 @@ fn eval_positional_expr_call(
         "number_format" => eval_builtin_number_format(args, context, scope, values),
         "ord" => eval_builtin_ord(args, context, scope, values),
         "pi" => eval_builtin_pi(args, values),
+        "phpversion" => eval_builtin_phpversion(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
         "rawurldecode" | "urldecode" => {
             eval_builtin_url_decode(name, args, context, scope, values)
@@ -1241,6 +1246,8 @@ fn eval_positional_expr_call(
         "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
+        "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
+        "time" => eval_builtin_time(args, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
         "str_repeat" => eval_builtin_str_repeat(args, context, scope, values),
         "str_replace" | "str_ireplace" => {
@@ -1544,6 +1551,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "floatval"
             | "fmod"
             | "function_exists"
+            | "getcwd"
             | "gettype"
             | "hash_algos"
             | "hash_equals"
@@ -1576,6 +1584,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "ord"
             | "pi"
             | "pow"
+            | "phpversion"
             | "rawurldecode"
             | "rawurlencode"
             | "rtrim"
@@ -1601,6 +1610,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strtolower"
             | "strtoupper"
             | "strval"
+            | "sys_get_temp_dir"
+            | "time"
             | "trim"
             | "substr_replace"
             | "ucfirst"
@@ -1712,6 +1723,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "function_exists" => Some(&["function"]),
+        "getcwd" => Some(&[]),
         "hash_algos" => Some(&[]),
         "hash_equals" => Some(&["known_string", "user_string"]),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => Some(&["string"]),
@@ -1721,6 +1733,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "number_format" => Some(&["num", "decimals", "decimal_separator", "thousands_separator"]),
         "ord" => Some(&["character"]),
         "pi" => Some(&[]),
+        "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
         "round" => Some(&["num", "precision"]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
@@ -1733,6 +1746,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "str_split" => Some(&["string", "length"]),
         "substr" => Some(&["string", "offset", "length"]),
         "substr_replace" => Some(&["string", "replace", "offset", "length"]),
+        "sys_get_temp_dir" | "time" => Some(&[]),
         "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
             Some(&["string"])
         }
@@ -2163,6 +2177,12 @@ fn eval_builtin_with_values(
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
+        "getcwd" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_getcwd_result(values)?
+        }
         "gettype" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -2193,12 +2213,30 @@ fn eval_builtin_with_values(
             };
             eval_html_entity_result(name, *value, values)?
         }
+        "phpversion" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_phpversion_result(values)?
+        }
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_type_predicate_result(name, *value, values)?
+        }
+        "sys_get_temp_dir" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_sys_get_temp_dir_result(values)?
+        }
+        "time" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_time_result(values)?
         }
         "strlen" => {
             let [value] = evaluated_args else {
@@ -3636,6 +3674,101 @@ fn eval_hash_algos_result(
         result = values.array_set(result, key, value)?;
     }
     Ok(result)
+}
+
+/// Evaluates PHP `time()` with no arguments.
+fn eval_builtin_time(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_time_result(values)
+}
+
+/// Returns the current Unix timestamp as a boxed PHP integer.
+fn eval_time_result(values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| EvalStatus::RuntimeFatal)?
+        .as_secs();
+    let timestamp = i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.int(timestamp)
+}
+
+/// Evaluates PHP `phpversion()` with no arguments.
+fn eval_builtin_phpversion(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_phpversion_result(values)
+}
+
+/// Returns the root elephc package version as a boxed PHP string.
+fn eval_phpversion_result(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    values.string(eval_compiler_php_version())
+}
+
+/// Reads the root package version from the workspace manifest used by native `phpversion()`.
+fn eval_compiler_php_version() -> &'static str {
+    let mut in_package = false;
+    for line in EVAL_ROOT_CARGO_TOML.lines() {
+        let line = line.trim();
+        if line == "[package]" {
+            in_package = true;
+            continue;
+        }
+        if in_package && line.starts_with('[') {
+            break;
+        }
+        if in_package {
+            if let Some(value) = line.strip_prefix("version = ") {
+                return value.trim_matches('"');
+            }
+        }
+    }
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Evaluates PHP `getcwd()` with no arguments.
+fn eval_builtin_getcwd(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_getcwd_result(values)
+}
+
+/// Returns the process current working directory as a boxed PHP string.
+fn eval_getcwd_result(values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
+    let cwd = std::env::current_dir().map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.string(cwd.to_string_lossy().as_ref())
+}
+
+/// Evaluates PHP `sys_get_temp_dir()` with no arguments.
+fn eval_builtin_sys_get_temp_dir(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_sys_get_temp_dir_result(values)
+}
+
+/// Returns the same temporary directory literal as the native static builtin.
+fn eval_sys_get_temp_dir_result(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    values.string("/tmp")
 }
 
 /// Returns the standard zlib/PHP CRC-32 checksum for a byte slice.
@@ -7765,6 +7898,38 @@ return count($algos);"#,
             "28:md2:sha256:crc:whirlpool:joaat:exists"
         );
         assert_eq!(values.get(result), FakeValue::Int(28));
+    }
+
+    /// Verifies eval zero-argument system builtins return native-compatible values.
+    #[test]
+    fn execute_program_dispatches_zero_arg_system_builtins() {
+        let program = parse_fragment(
+            br#"echo time() > 1000000000 ? "time" : "bad"; echo ":";
+echo phpversion(); echo ":";
+echo sys_get_temp_dir(); echo ":";
+echo strlen(getcwd()) > 0 ? "cwd" : "bad"; echo ":";
+echo call_user_func("time") > 1000000000 ? "call-time" : "bad"; echo ":";
+echo call_user_func("phpversion"); echo ":";
+echo call_user_func_array("getcwd", []) !== "" ? "call-cwd" : "bad"; echo ":";
+echo call_user_func_array("sys_get_temp_dir", []); echo ":";
+echo function_exists("time"); echo function_exists("phpversion"); echo function_exists("getcwd");
+return function_exists("sys_get_temp_dir");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            format!(
+                "time:{}:/tmp:cwd:call-time:{}:call-cwd:/tmp:111",
+                eval_compiler_php_version(),
+                eval_compiler_php_version()
+            )
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
     /// Verifies eval ASCII string case builtins work directly and through callable dispatch.
