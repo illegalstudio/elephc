@@ -10482,12 +10482,20 @@ fn eval_preg_match_capture_result(
     let subject = values.string_bytes(subject)?;
     let flags = eval_preg_match_flags(flags, values)?;
     let offset_capture = flags & EVAL_PREG_OFFSET_CAPTURE != 0;
+    let unmatched_as_null = flags & EVAL_PREG_UNMATCHED_AS_NULL != 0;
     if let Some(captures) = regex.captures(&subject) {
-        let matches = eval_preg_capture_array(&subject, Some(&captures), offset_capture, values)?;
+        let matches = eval_preg_capture_array(
+            &subject,
+            Some(&captures),
+            offset_capture,
+            unmatched_as_null,
+            values,
+        )?;
         let matched = values.int(1)?;
         return Ok((matched, matches));
     }
-    let matches = eval_preg_capture_array(&subject, None, offset_capture, values)?;
+    let matches =
+        eval_preg_capture_array(&subject, None, offset_capture, unmatched_as_null, values)?;
     let matched = values.int(0)?;
     Ok((matched, matches))
 }
@@ -10501,7 +10509,8 @@ fn eval_preg_match_flags(
         return Ok(0);
     };
     let flags = eval_int_value(flags, values)?;
-    if flags & !EVAL_PREG_OFFSET_CAPTURE != 0 {
+    let supported = EVAL_PREG_OFFSET_CAPTURE | EVAL_PREG_UNMATCHED_AS_NULL;
+    if flags & !supported != 0 {
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(flags)
@@ -10605,7 +10614,10 @@ fn eval_preg_match_all_flags(
         return Ok(EVAL_PREG_PATTERN_ORDER);
     };
     let flags = eval_int_value(flags, values)?;
-    let supported = EVAL_PREG_PATTERN_ORDER | EVAL_PREG_SET_ORDER | EVAL_PREG_OFFSET_CAPTURE;
+    let supported = EVAL_PREG_PATTERN_ORDER
+        | EVAL_PREG_SET_ORDER
+        | EVAL_PREG_OFFSET_CAPTURE
+        | EVAL_PREG_UNMATCHED_AS_NULL;
     if flags & !supported != 0 {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -10621,6 +10633,7 @@ fn eval_preg_match_all_pattern_order_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let offset_capture = flags & EVAL_PREG_OFFSET_CAPTURE != 0;
+    let unmatched_as_null = flags & EVAL_PREG_UNMATCHED_AS_NULL != 0;
     let mut outer = values.array_new(capture_count)?;
     for capture_index in 0..capture_count {
         let mut row = values.array_new(captures.len())?;
@@ -10628,7 +10641,14 @@ fn eval_preg_match_all_pattern_order_array(
             let key = values
                 .int(i64::try_from(match_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
             let value =
-                eval_preg_capture_value(subject, capture, capture_index, offset_capture, values)?;
+                eval_preg_capture_value(
+                    subject,
+                    capture,
+                    capture_index,
+                    offset_capture,
+                    unmatched_as_null,
+                    values,
+                )?;
             row = values.array_set(row, key, value)?;
         }
         let key = values
@@ -10647,6 +10667,7 @@ fn eval_preg_match_all_set_order_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let offset_capture = flags & EVAL_PREG_OFFSET_CAPTURE != 0;
+    let unmatched_as_null = flags & EVAL_PREG_UNMATCHED_AS_NULL != 0;
     let mut outer = values.array_new(captures.len())?;
     for (match_index, capture) in captures.iter().enumerate() {
         let mut row = values.array_new(capture_count)?;
@@ -10654,7 +10675,14 @@ fn eval_preg_match_all_set_order_array(
             let key = values
                 .int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
             let value =
-                eval_preg_capture_value(subject, capture, capture_index, offset_capture, values)?;
+                eval_preg_capture_value(
+                    subject,
+                    capture,
+                    capture_index,
+                    offset_capture,
+                    unmatched_as_null,
+                    values,
+                )?;
             row = values.array_set(row, key, value)?;
         }
         let key = values
@@ -10738,7 +10766,7 @@ fn eval_preg_replace_callback_result(
             continue;
         };
         result.extend_from_slice(&subject[cursor..matched.start()]);
-        let matches = eval_preg_capture_array(&subject, Some(&captures), false, values)?;
+        let matches = eval_preg_capture_array(&subject, Some(&captures), false, false, values)?;
         let callback_result = eval_callable_with_values(&callback, vec![matches], context, values)?;
         let callback_result = values.cast_string(callback_result)?;
         let callback_bytes = values.string_bytes(callback_result)?;
@@ -10946,14 +10974,24 @@ fn eval_preg_capture_array(
     subject: &[u8],
     captures: Option<&Captures<'_>>,
     offset_capture: bool,
+    unmatched_as_null: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let len = captures.map_or(0, eval_preg_visible_capture_len);
+    let len = captures.map_or(0, |captures| {
+        eval_preg_visible_capture_len(captures, unmatched_as_null)
+    });
     let mut result = values.array_new(len)?;
     if let Some(captures) = captures {
         for index in 0..len {
             let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-            let value = eval_preg_capture_value(subject, captures, index, offset_capture, values)?;
+            let value = eval_preg_capture_value(
+                subject,
+                captures,
+                index,
+                offset_capture,
+                unmatched_as_null,
+                values,
+            )?;
             result = values.array_set(result, key, value)?;
         }
     }
@@ -10961,7 +10999,10 @@ fn eval_preg_capture_array(
 }
 
 /// Returns the capture count PHP should expose, dropping trailing unmatched groups.
-fn eval_preg_visible_capture_len(captures: &Captures<'_>) -> usize {
+fn eval_preg_visible_capture_len(captures: &Captures<'_>, unmatched_as_null: bool) -> usize {
+    if unmatched_as_null {
+        return captures.len();
+    }
     let mut len = captures.len();
     while len > 1 && captures.get(len - 1).is_none() {
         len -= 1;
@@ -10986,13 +11027,18 @@ fn eval_preg_capture_value(
     captures: &Captures<'_>,
     index: usize,
     offset_capture: bool,
+    unmatched_as_null: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let matched = captures.get(index);
-    let bytes = matched
-        .as_ref()
-        .map_or(b"".as_slice(), |matched| &subject[matched.start()..matched.end()]);
-    let value = values.string_bytes_value(bytes)?;
+    let value = if matched.is_none() && unmatched_as_null {
+        values.null()?
+    } else {
+        let bytes = matched
+            .as_ref()
+            .map_or(b"".as_slice(), |matched| &subject[matched.start()..matched.end()]);
+        values.string_bytes_value(bytes)?
+    };
     if !offset_capture {
         return Ok(value);
     }
@@ -18949,6 +18995,14 @@ preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $offsetAll, PREG_OFFSET_CAPTURE);
 echo $offsetAll[0][1][0] . ":" . $offsetAll[0][1][1] . ":" . $offsetAll[1][0][1] . ":" . $offsetAll[2][1][1] . ":";
 preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $offsetSet, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
 echo $offsetSet[1][0][0] . ":" . $offsetSet[1][0][1] . ":" . $offsetSet[0][2][1] . ":";
+preg_match("/(a)?(b)(c)?/", "b", $nullOne, PREG_UNMATCHED_AS_NULL);
+echo count($nullOne) . ":" . ($nullOne[1] === null ? "n" : "bad") . ":" . $nullOne[2] . ":" . ($nullOne[3] === null ? "n" : "bad") . ":";
+preg_match("/(a)?(b)(c)?/", "b", $nullOffset, PREG_UNMATCHED_AS_NULL | PREG_OFFSET_CAPTURE);
+echo ($nullOffset[1][0] === null ? "n" : "bad") . ":" . $nullOffset[1][1] . ":" . ($nullOffset[3][0] === null ? "n" : "bad") . ":" . $nullOffset[3][1] . ":";
+preg_match_all("/(a)?(b)(c)?/", "b", $nullAll, PREG_UNMATCHED_AS_NULL);
+echo ($nullAll[1][0] === null ? "n" : "bad") . ":" . $nullAll[2][0] . ":" . ($nullAll[3][0] === null ? "n" : "bad") . ":";
+preg_match_all("/(a)?(b)(c)?/", "b", $nullSet, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL | PREG_OFFSET_CAPTURE);
+echo ($nullSet[0][1][0] === null ? "n" : "bad") . ":" . $nullSet[0][1][1] . ":" . ($nullSet[0][3][0] === null ? "n" : "bad") . ":" . $nullSet[0][3][1] . ":";
 preg_match_all("/(x)(y)/", "abc", $none);
 echo count($none) . ":" . count($none[0]) . ":" . count($none[1]) . ":" . count($none[2]) . ":";
 echo preg_replace("/([a-z])([0-9])/", "$2-$1", "a1 b2") . ":";
@@ -18969,7 +19023,7 @@ $splitBoth = preg_split("/(,)/", "a,b", 0, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT
 echo count($splitBoth) . ":" . $splitBoth[1][0] . ":" . $splitBoth[1][1] . ":";
 $splitNoEmpty = preg_split("/,/", "a,,b", 0, PREG_SPLIT_NO_EMPTY | PREG_SPLIT_OFFSET_CAPTURE);
 echo $splitNoEmpty[1][0] . ":" . $splitNoEmpty[1][1] . ":";
-return function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY") && defined("PREG_SET_ORDER") && defined("PREG_OFFSET_CAPTURE") && defined("PREG_SPLIT_OFFSET_CAPTURE");"#,
+return function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY") && defined("PREG_SET_ORDER") && defined("PREG_OFFSET_CAPTURE") && defined("PREG_SPLIT_OFFSET_CAPTURE") && defined("PREG_UNMATCHED_AS_NULL");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -18979,7 +19033,7 @@ return function_exists("preg_match") && function_exists("preg_match_all") && fun
 
         assert_eq!(
             values.output,
-            "1:3:id42:id:42:0:3:2:3:b22:a:22:2:2:a1:a:22:b:0::-1:b:0:b22:3:0:4:b22:3:1:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:a:0:b,c:2:3:,:1:b:3:"
+            "1:3:id42:id:42:0:3:2:3:b22:a:22:2:2:a1:a:22:b:0::-1:b:0:b22:3:0:4:b22:3:1:4:n:b:n:n:-1:n:-1:n:b:n:n:-1:n:-1:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:a:0:b,c:2:3:,:1:b:3:"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
