@@ -51,7 +51,7 @@ Eval `number_format()` supports decimal counts plus custom decimal and thousands
 
 Eval `crc32()` computes the same non-negative CRC-32 integer as the static runtime helper. Eval one-shot digest calls `hash()`, `hash_hmac()`, `md5()`, and `sha1()` use the same supported algorithm table as elephc's crypto bridge, including raw `$binary` output. Eval `hash_algos()` returns the same indexed supported-algorithm name list as the native runtime helper.
 
-Eval zero-argument system and path calls include `time()`, `phpversion()`, `getcwd()`, and `sys_get_temp_dir()`. `phpversion()` reports the root elephc package version, and `sys_get_temp_dir()` matches the native static helper's `/tmp` literal.
+Eval system and path calls include `time()`, `phpversion()`, `php_uname()`, `getcwd()`, and `sys_get_temp_dir()`. `phpversion()` reports the root elephc package version, `php_uname()` supports the same `a`/`s`/`n`/`r`/`v`/`m` modes as the native runtime helper, and `sys_get_temp_dir()` matches the native static helper's `/tmp` literal.
 
 Eval `microtime()` returns a float Unix timestamp with microsecond precision, matching elephc's static `microtime()` lowering.
 

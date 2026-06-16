@@ -1386,6 +1386,7 @@ fn eval_positional_expr_call(
         "ord" => eval_builtin_ord(args, context, scope, values),
         "pathinfo" => eval_builtin_pathinfo(args, context, scope, values),
         "pi" => eval_builtin_pi(args, values),
+        "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
@@ -1829,6 +1830,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "pathinfo"
             | "pi"
             | "pow"
+            | "php_uname"
             | "phpversion"
             | "putenv"
             | "range"
@@ -2050,6 +2052,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "ord" => Some(&["character"]),
         "pathinfo" => Some(&["path", "flags"]),
         "pi" => Some(&[]),
+        "php_uname" => Some(&["mode"]),
         "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
         "putenv" => Some(&["assignment"]),
@@ -2501,6 +2504,11 @@ fn eval_builtin_with_values(
             }
             values.float(std::f64::consts::PI)?
         }
+        "php_uname" => match evaluated_args {
+            [] => eval_php_uname_result(None, values)?,
+            [mode] => eval_php_uname_result(Some(*mode), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "pow" => {
             let [left, right] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -5224,6 +5232,86 @@ fn eval_compiler_php_version() -> &'static str {
         }
     }
     env!("CARGO_PKG_VERSION")
+}
+
+/// Evaluates PHP `php_uname($mode = "a")` over zero or one eval expression.
+fn eval_builtin_php_uname(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [] => eval_php_uname_result(None, values),
+        [mode] => {
+            let mode = eval_expr(mode, context, scope, values)?;
+            eval_php_uname_result(Some(mode), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Reads the local uname fields and formats the PHP `php_uname()` mode result.
+fn eval_php_uname_result(
+    mode: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mode = match mode {
+        Some(mode) => {
+            let bytes = values.string_bytes(mode)?;
+            let [mode] = bytes.as_slice() else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            *mode
+        }
+        None => b'a',
+    };
+
+    let mut utsname = std::mem::MaybeUninit::<libc::utsname>::zeroed();
+    let status = unsafe {
+        // libc writes all uname fields into the stack-owned utsname buffer.
+        libc::uname(utsname.as_mut_ptr())
+    };
+    if status != 0 {
+        return values.string("");
+    }
+    let utsname = unsafe {
+        // `uname` succeeded, so libc initialized the full `utsname` structure.
+        utsname.assume_init()
+    };
+    let sysname = eval_uname_field_bytes(&utsname.sysname);
+    let nodename = eval_uname_field_bytes(&utsname.nodename);
+    let release = eval_uname_field_bytes(&utsname.release);
+    let version = eval_uname_field_bytes(&utsname.version);
+    let machine = eval_uname_field_bytes(&utsname.machine);
+
+    match mode {
+        b'a' => {
+            let mut output = Vec::new();
+            for field in [&sysname, &nodename, &release, &version, &machine] {
+                if !output.is_empty() {
+                    output.push(b' ');
+                }
+                output.extend_from_slice(field);
+            }
+            values.string_bytes_value(&output)
+        }
+        b's' => values.string_bytes_value(&sysname),
+        b'n' => values.string_bytes_value(&nodename),
+        b'r' => values.string_bytes_value(&release),
+        b'v' => values.string_bytes_value(&version),
+        b'm' => values.string_bytes_value(&machine),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Copies one NUL-terminated `utsname` field into raw PHP string bytes.
+fn eval_uname_field_bytes(field: &[libc::c_char]) -> Vec<u8> {
+    let length = field
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(field.len());
+    field[..length].iter().map(|byte| *byte as u8).collect()
 }
 
 /// Evaluates PHP `getcwd()` with no arguments.
@@ -12137,6 +12225,34 @@ return function_exists("usleep");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "0:0:u:0:null:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `php_uname()` dispatches default, named, mode, and callable calls.
+    #[test]
+    fn execute_program_dispatches_php_uname_builtin() {
+        let program = parse_fragment(
+            br#"echo strlen(php_uname()) > 0 ? "all" : "empty"; echo ":";
+echo php_uname() === php_uname("a") ? "same" : "different"; echo ":";
+echo strlen(php_uname(mode: "s")) > 0 ? "sys" : "empty"; echo ":";
+echo strlen(php_uname("n")) > 0 ? "node" : "empty"; echo ":";
+echo strlen(php_uname("r")) > 0 ? "release" : "empty"; echo ":";
+echo strlen(php_uname("v")) > 0 ? "version" : "empty"; echo ":";
+echo strlen(php_uname("m")) > 0 ? "machine" : "empty"; echo ":";
+echo strlen(call_user_func("php_uname", "m")) > 0 ? "call" : "empty"; echo ":";
+echo strlen(call_user_func_array("php_uname", ["mode" => "n"])) > 0 ? "spread" : "empty"; echo ":";
+return function_exists("php_uname");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "all:same:sys:node:release:version:machine:call:spread:"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
