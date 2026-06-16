@@ -1211,6 +1211,7 @@ fn eval_positional_expr_call(
         "str_replace" | "str_ireplace" => {
             eval_builtin_str_replace(name, args, context, scope, values)
         }
+        "str_pad" => eval_builtin_str_pad(args, context, scope, values),
         "str_split" => eval_builtin_str_split(args, context, scope, values),
         "strstr" => eval_builtin_strstr(args, context, scope, values),
         "substr" => eval_builtin_substr(args, context, scope, values),
@@ -1553,6 +1554,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strpos"
             | "strrpos"
             | "strrev"
+            | "str_pad"
             | "str_split"
             | "strstr"
             | "substr"
@@ -1681,6 +1683,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
         "strstr" => Some(&["haystack", "needle", "before_needle"]),
+        "str_pad" => Some(&["string", "length", "pad_string", "pad_type"]),
         "str_replace" | "str_ireplace" => Some(&["search", "replace", "subject"]),
         "strpos" | "strrpos" => Some(&["haystack", "needle", "offset"]),
         "str_repeat" => Some(&["string", "times"]),
@@ -1981,6 +1984,20 @@ fn eval_builtin_with_values(
             };
             eval_str_replace_result(name, *search, *replace, *subject, values)?
         }
+        "str_pad" => match evaluated_args {
+            [value, length] => eval_str_pad_result(*value, *length, None, None, values)?,
+            [value, length, pad_string] => {
+                eval_str_pad_result(*value, *length, Some(*pad_string), None, values)?
+            }
+            [value, length, pad_string, pad_type] => eval_str_pad_result(
+                *value,
+                *length,
+                Some(*pad_string),
+                Some(*pad_type),
+                values,
+            )?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "str_split" => match evaluated_args {
             [value] => eval_str_split_result(*value, None, values)?,
             [value, length] => eval_str_split_result(*value, Some(*length), values)?,
@@ -2787,6 +2804,95 @@ fn eval_find_replace_match(
             })
             .map(|position| position + start)),
         _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Evaluates PHP `str_pad(...)` over a string, target length, pad string, and pad mode.
+fn eval_builtin_str_pad(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [value, length] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let length = eval_expr(length, context, scope, values)?;
+            eval_str_pad_result(value, length, None, None, values)
+        }
+        [value, length, pad_string] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let length = eval_expr(length, context, scope, values)?;
+            let pad_string = eval_expr(pad_string, context, scope, values)?;
+            eval_str_pad_result(value, length, Some(pad_string), None, values)
+        }
+        [value, length, pad_string, pad_type] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let length = eval_expr(length, context, scope, values)?;
+            let pad_string = eval_expr(pad_string, context, scope, values)?;
+            let pad_type = eval_expr(pad_type, context, scope, values)?;
+            eval_str_pad_result(value, length, Some(pad_string), Some(pad_type), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Pads one byte string to a PHP target length using cyclic pad bytes.
+fn eval_str_pad_result(
+    value: RuntimeCellHandle,
+    length: RuntimeCellHandle,
+    pad_string: Option<RuntimeCellHandle>,
+    pad_type: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let target_length = eval_int_value(length, values)?;
+    let Ok(target_length) = usize::try_from(target_length) else {
+        return values.string_bytes_value(&bytes);
+    };
+    if target_length <= bytes.len() {
+        return values.string_bytes_value(&bytes);
+    }
+
+    let pad_string = match pad_string {
+        Some(pad_string) => values.string_bytes(pad_string)?,
+        None => b" ".to_vec(),
+    };
+    if pad_string.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let pad_type = match pad_type {
+        Some(pad_type) => eval_int_value(pad_type, values)?,
+        None => 1,
+    };
+    let (left_pad, right_pad) =
+        eval_str_pad_sides(target_length - bytes.len(), pad_type)?;
+    let capacity = bytes
+        .len()
+        .checked_add(left_pad)
+        .and_then(|size| size.checked_add(right_pad))
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let mut output = Vec::with_capacity(capacity);
+    eval_append_repeated_pad(&mut output, &pad_string, left_pad);
+    output.extend_from_slice(&bytes);
+    eval_append_repeated_pad(&mut output, &pad_string, right_pad);
+    values.string_bytes_value(&output)
+}
+
+/// Splits a `str_pad()` pad budget into left and right byte counts.
+fn eval_str_pad_sides(pad_budget: usize, pad_type: i64) -> Result<(usize, usize), EvalStatus> {
+    match pad_type {
+        0 => Ok((pad_budget, 0)),
+        1 => Ok((0, pad_budget)),
+        2 => Ok((pad_budget / 2, pad_budget - (pad_budget / 2))),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Appends `count` bytes by cycling through the provided non-empty pad string.
+fn eval_append_repeated_pad(output: &mut Vec<u8>, pad_string: &[u8], count: usize) {
+    for index in 0..count {
+        output.push(pad_string[index % pad_string.len()]);
     }
 }
 
@@ -7057,6 +7163,27 @@ return function_exists("str_split");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "3:abc:ab-cd:0:xy-z:pqr-s:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `str_pad()` supports PHP left, right, and both-side padding modes.
+    #[test]
+    fn execute_program_dispatches_str_pad_builtin() {
+        let program = parse_fragment(
+            br#"echo "[" . str_pad("hi", 5) . "]"; echo ":";
+echo "[" . str_pad(string: "hi", length: 5, pad_string: "_", pad_type: 0) . "]"; echo ":";
+echo "[" . str_pad("x", 6, "ab", 2) . "]"; echo ":";
+echo call_user_func("str_pad", "42", 5, "0", 0); echo ":";
+echo call_user_func_array("str_pad", ["string" => "x", "length" => 3, "pad_string" => "."]); echo ":";
+return function_exists("str_pad");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "[hi   ]:[___hi]:[abxaba]:00042:x..:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

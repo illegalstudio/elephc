@@ -1050,6 +1050,22 @@ echo ":"; echo function_exists("str_split");');
     assert_eq!(out, "3:abc:ab-cd:0:xy-z:pqr-s:1");
 }
 
+/// Verifies eval `str_pad()` supports all PHP pad modes and callable dispatch.
+#[test]
+fn test_eval_dispatches_str_pad_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo "[" . str_pad("hi", 5) . "]"; echo ":";
+echo "[" . str_pad(string: "hi", length: 5, pad_string: "_", pad_type: 0) . "]"; echo ":";
+echo "[" . str_pad("x", 6, "ab", 2) . "]"; echo ":";
+echo call_user_func("str_pad", "42", 5, "0", 0); echo ":";
+echo call_user_func_array("str_pad", ["string" => "x", "length" => 3, "pad_string" => "."]);
+echo ":"; echo function_exists("str_pad");');
+"#,
+    );
+    assert_eq!(out, "[hi   ]:[___hi]:[abxaba]:00042:x..:1");
+}
+
 /// Verifies eval string replacement builtins support direct and callable dispatch.
 #[test]
 fn test_eval_dispatches_string_replace_builtin_calls() {
