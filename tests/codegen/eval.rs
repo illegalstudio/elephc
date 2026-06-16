@@ -960,6 +960,24 @@ echo ":"; echo function_exists("substr");');
     assert_eq!(out, "cdef:bcde:ef:cd:cd:1");
 }
 
+/// Verifies eval `nl2br()` preserves newline bytes while inserting HTML breaks.
+#[test]
+fn test_eval_dispatches_nl2br_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo bin2hex(nl2br("a\nb")); echo ":";
+echo bin2hex(nl2br(string: "a\nb", use_xhtml: false)); echo ":";
+echo bin2hex(call_user_func("nl2br", "a\r\nb")); echo ":";
+echo bin2hex(call_user_func_array("nl2br", ["string" => "a\n\rb", "use_xhtml" => false]));
+echo ":"; echo function_exists("nl2br");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "613c6272202f3e0a62:613c62723e0a62:613c6272202f3e0d0a62:613c62723e0a0d62:1"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
