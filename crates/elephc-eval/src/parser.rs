@@ -1729,6 +1729,7 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 Ok(EvalExpr::Print(Box::new(expr)))
             }
+            TokenKind::Ident(name) if is_include_construct_name(name) => self.parse_include_expr(),
             TokenKind::Ident(name) if ident_eq(name, "match") => self.parse_match_expr(),
             TokenKind::Ident(name) if ident_eq(name, "new") => self.parse_new_object_expr(),
             TokenKind::Ident(name) if is_unsupported_expression_keyword(name) => {
@@ -1756,6 +1757,28 @@ impl Parser {
             TokenKind::Eof => Err(EvalParseError::UnexpectedEof),
             _ => Err(EvalParseError::UnexpectedToken),
         }
+    }
+
+    /// Parses PHP include/require expression constructs and their path expression.
+    fn parse_include_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let required = ident_eq(name, "require") || ident_eq(name, "require_once");
+        let once = ident_eq(name, "include_once") || ident_eq(name, "require_once");
+        self.advance();
+        let path = if self.consume(TokenKind::LParen) {
+            let path = self.parse_expr()?;
+            self.expect(TokenKind::RParen)?;
+            path
+        } else {
+            self.parse_expr()?
+        };
+        Ok(EvalExpr::Include {
+            path: Box::new(path),
+            required,
+            once,
+        })
     }
 
     /// Parses `match (expr) { pattern, other => value, default => fallback }`.
@@ -2140,18 +2163,16 @@ fn ident_eq(actual: &str, expected: &str) -> bool {
 
 /// Returns true for PHP statement forms that the eval subset intentionally does not parse yet.
 fn is_unsupported_statement_keyword(name: &str) -> bool {
-    [
-        "enum",
-        "interface",
-        "require",
-        "require_once",
-        "include",
-        "include_once",
-        "trait",
-        "try",
-    ]
-    .iter()
-    .any(|keyword| ident_eq(name, keyword))
+    ["enum", "interface", "trait", "try"]
+        .iter()
+        .any(|keyword| ident_eq(name, keyword))
+}
+
+/// Returns true when an identifier is an include/require expression construct.
+fn is_include_construct_name(name: &str) -> bool {
+    ["include", "include_once", "require", "require_once"]
+        .iter()
+        .any(|keyword| ident_eq(name, keyword))
 }
 
 /// Returns the first namespace segment and the optional remaining suffix.
@@ -3210,6 +3231,32 @@ function dyn() { return alias(); }"#,
                     "return 1;".to_string()
                 )))],
             }))]
+        );
+    }
+
+    /// Verifies include and require constructs parse as expressions with path metadata.
+    #[test]
+    fn parse_fragment_accepts_include_require_expression_source() {
+        let program = parse_fragment(br#"return include "a" . ".php"; require_once("b.php");"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[
+                EvalStmt::Return(Some(EvalExpr::Include {
+                    path: Box::new(EvalExpr::Binary {
+                        op: EvalBinOp::Concat,
+                        left: Box::new(EvalExpr::Const(EvalConst::String("a".to_string()))),
+                        right: Box::new(EvalExpr::Const(EvalConst::String(".php".to_string()))),
+                    }),
+                    required: false,
+                    once: false,
+                })),
+                EvalStmt::Expr(EvalExpr::Include {
+                    path: Box::new(EvalExpr::Const(EvalConst::String("b.php".to_string()))),
+                    required: true,
+                    once: true,
+                }),
+            ]
         );
     }
 

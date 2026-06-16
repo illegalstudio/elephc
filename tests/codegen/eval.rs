@@ -4307,6 +4307,45 @@ echo AliasFunc(LocalValue) . ":" . $box->x;');
     assert_eq!(out, "6:17");
 }
 
+/// Verifies eval include executes PHP files through the bridge and shares caller scope.
+#[test]
+fn test_eval_fragment_include_executes_php_file_and_returns_value() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("eval-include-piece.php", '<?php echo "I"; $x = $x + 1; return $x;');
+$x = 4;
+echo eval('return include "eval-include-piece.php";');
+echo ":" . $x;
+"#,
+    );
+    assert_eq!(out, "I5:5");
+}
+
+/// Verifies eval include_once skips files already included and plain files echo as text.
+#[test]
+fn test_eval_fragment_include_once_and_plain_file() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("eval-once-piece.php", '<?php echo "O";');
+file_put_contents("eval-plain-piece.txt", 'RAW');
+eval('include_once "eval-once-piece.php"; include_once "eval-once-piece.php"; echo (include_once "eval-once-piece.php") ? "T" : "F";');
+echo ":";
+echo eval('return include "eval-plain-piece.txt";');
+"#,
+    );
+    assert_eq!(out, "OT:RAW1");
+}
+
+/// Verifies missing eval require aborts through the runtime eval fatal path.
+#[test]
+fn test_eval_fragment_missing_require_fails() {
+    let err = compile_and_run_expect_failure("<?php eval('require \"missing-eval-require.php\";');");
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal: {err}"
+    );
+}
+
 /// Verifies eval reference assignments update the referenced caller local.
 #[test]
 fn test_eval_reference_assignment_updates_caller_local() {
