@@ -174,6 +174,7 @@ $path_components = eval('return basename("/var/log/syslog.log", ".log") . ":" . 
 $resolved_path = eval('return realpath(".") !== false ? "resolved" : "missing";');
 $path_info = eval('$info = pathinfo("/var/log/syslog.log"); $match = fnmatch("*.LOG", "system.log", FNM_CASEFOLD); return $info["basename"] . ":" . pathinfo("archive.tar.gz", PATHINFO_EXTENSION) . ":" . ($match ? "match" : "bad");');
 $filesystem = eval('file_put_contents("eval-example.txt", "hello"); $read = file_get_contents("eval-example.txt"); $size = filesize("eval-example.txt"); $ok = file_exists("eval-example.txt") && is_file("eval-example.txt") && is_readable("eval-example.txt") && is_writable("eval-example.txt") && unlink("eval-example.txt"); return $read . ":" . $size . ":" . ($ok ? "ok" : "bad");');
+$disk_space = eval('return (disk_free_space(".") > 0 ? "free" : "bad") . ":" . (disk_total_space(".") >= disk_free_space(".") ? "ordered" : "bad");');
 $file_stats = eval('file_put_contents("eval-stat.txt", "hello"); $type = filetype("eval-stat.txt"); $info = stat("eval-stat.txt"); $meta = filemtime("eval-stat.txt") > 0 && fileinode("eval-stat.txt") > 0 && fileperms("eval-stat.txt") > 0 && $info["size"] === 5 && $info[7] === $info["size"]; unlink("eval-stat.txt"); return $type . ":" . ($meta ? "meta" : "bad");');
 $path_ops = eval('mkdir("eval-ops-dir"); file_put_contents("eval-ops-src.txt", "hello"); copy("eval-ops-src.txt", "eval-ops-copy.txt"); rename("eval-ops-copy.txt", "eval-ops-moved.txt"); symlink("eval-ops-src.txt", "eval-ops-link.txt"); $ok = is_dir("eval-ops-dir") && file_exists("eval-ops-moved.txt") && readlink("eval-ops-link.txt") === "eval-ops-src.txt" && linkinfo("eval-ops-link.txt") >= 0; unlink("eval-ops-link.txt"); unlink("eval-ops-moved.txt"); unlink("eval-ops-src.txt"); rmdir("eval-ops-dir"); return $ok ? "ok" : "bad";');
 $file_listing = eval('file_put_contents("eval-lines.txt", "one\ntwo"); file_put_contents("eval-empty.txt", ""); mkdir("eval-list-dir"); file_put_contents("eval-list-dir/a.txt", "a"); $lines = file("eval-lines.txt"); $scan = scandir("eval-list-dir"); $glob = glob("eval-list-dir/*.txt"); $bytes = readfile("eval-empty.txt"); $ok = count($lines) === 2 && $lines[0] === "one\n" && $bytes === 0 && in_array("a.txt", $scan) && count($glob) === 1; unlink("eval-list-dir/a.txt"); rmdir("eval-list-dir"); unlink("eval-lines.txt"); unlink("eval-empty.txt"); return $ok ? "ok" : "bad";');
@@ -298,6 +299,7 @@ echo "path-components=" . $path_components . "\n";
 echo "realpath=" . $resolved_path . "\n";
 echo "pathinfo=" . $path_info . "\n";
 echo "filesystem=" . $filesystem . "\n";
+echo "disk-space=" . $disk_space . "\n";
 echo "file-stats=" . $file_stats . "\n";
 echo "path-ops=" . $path_ops . "\n";
 echo "file-listing=" . $file_listing . "\n";

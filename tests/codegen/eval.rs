@@ -1806,6 +1806,23 @@ echo function_exists("filesize"); echo function_exists("unlink");');
     );
 }
 
+/// Verifies eval disk-space builtins return positive local capacity and zero on failure.
+#[test]
+fn test_eval_dispatches_disk_space_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo disk_free_space(".") > 0 ? "free" : "bad"; echo ":";
+echo disk_total_space(directory: ".") > 0 ? "total" : "bad"; echo ":";
+echo disk_total_space(".") >= disk_free_space(".") ? "ordered" : "bad"; echo ":";
+echo disk_free_space("no/such/path/elephc-eval") === 0.0 ? "missing" : "bad"; echo ":";
+echo call_user_func("disk_free_space", ".") > 0 ? "call" : "bad"; echo ":";
+echo call_user_func_array("disk_total_space", ["directory" => "."]) > 0 ? "spread" : "bad";
+echo ":"; echo function_exists("disk_free_space"); echo function_exists("disk_total_space");');
+"#,
+    );
+    assert_eq!(out, "free:total:ordered:missing:call:spread:11");
+}
+
 /// Verifies eval stat metadata builtins return scalar metadata and dispatch dynamically.
 #[test]
 fn test_eval_dispatches_stat_metadata_builtin_calls() {
