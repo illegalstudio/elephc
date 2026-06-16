@@ -95,6 +95,8 @@ pub struct ElephcEvalContext {
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     pending_throw: Option<RuntimeCellHandle>,
+    json_last_error: i64,
+    json_last_error_msg: String,
     call_file: String,
     call_dir: String,
     call_line: i64,
@@ -115,6 +117,8 @@ impl ElephcEvalContext {
             global_scope: None,
             function_stack: Vec::new(),
             pending_throw: None,
+            json_last_error: 0,
+            json_last_error_msg: String::from("No error"),
             call_file: String::new(),
             call_dir: String::new(),
             call_line: 0,
@@ -136,6 +140,8 @@ impl ElephcEvalContext {
             global_scope: None,
             function_stack: Vec::new(),
             pending_throw: None,
+            json_last_error: 0,
+            json_last_error_msg: String::from("No error"),
             call_file: String::new(),
             call_dir: String::new(),
             call_line: 0,
@@ -307,6 +313,29 @@ impl ElephcEvalContext {
     /// Returns and clears the Throwable cell currently escaping through eval.
     pub fn take_pending_throw(&mut self) -> Option<RuntimeCellHandle> {
         self.pending_throw.take()
+    }
+
+    /// Clears the eval-local JSON error state after a successful JSON operation.
+    pub fn clear_json_error(&mut self) {
+        self.json_last_error = 0;
+        self.json_last_error_msg.clear();
+        self.json_last_error_msg.push_str("No error");
+    }
+
+    /// Records the eval-local JSON error state for `json_last_error*()` calls.
+    pub fn set_json_error(&mut self, code: i64, message: impl Into<String>) {
+        self.json_last_error = code;
+        self.json_last_error_msg = message.into();
+    }
+
+    /// Returns the PHP `JSON_ERROR_*` code for the last eval JSON operation.
+    pub const fn json_last_error(&self) -> i64 {
+        self.json_last_error
+    }
+
+    /// Returns the PHP message for the last eval JSON operation.
+    pub fn json_last_error_msg(&self) -> &str {
+        &self.json_last_error_msg
     }
 
     /// Updates the source file, directory, and line for the current eval call site.

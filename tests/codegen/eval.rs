@@ -849,18 +849,33 @@ echo function_exists("json_decode");');
     assert_eq!(out, "hello:42:T:NULL:1:x:F:4:v:BAD:1");
 }
 
-/// Verifies eval `json_last_error()` and `json_last_error_msg()` report no-error status.
+/// Verifies eval `json_last_error*()` track JSON parse failures and success resets.
 #[test]
 fn test_eval_dispatches_json_last_error_builtin_calls() {
     let out = compile_and_run(
         r#"<?php
 eval('echo json_last_error() . ":" . json_last_error_msg() . ":";
-echo call_user_func("json_last_error") . ":";
-echo call_user_func_array("json_last_error_msg", []) . ":";
-echo function_exists("json_last_error") && function_exists("json_last_error_msg");');
+json_decode("bad");
+echo json_last_error() . ":" . (json_last_error() === JSON_ERROR_SYNTAX ? "syntax" : "bad") . ":" . json_last_error_msg() . ":";
+json_validate("[1]", 1);
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_validate("\"ok\"");
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_validate("\"a" . chr(10) . "b\"");
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_decode("\"\\uD83D\"");
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_decode("\"" . chr(128) . "\"");
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_validate("[0]");
+echo call_user_func("json_last_error") . ":" . call_user_func_array("json_last_error_msg", []) . ":";
+echo function_exists("json_last_error") && function_exists("json_last_error_msg") && defined("JSON_ERROR_SYNTAX");');
 "#,
     );
-    assert_eq!(out, "0:No error:0:No error:1");
+    assert_eq!(
+        out,
+        "0:No error:4:syntax:Syntax error:1:Maximum stack depth exceeded:0:No error:3:Control character error, possibly incorrectly encoded:10:Single unpaired UTF-16 surrogate in unicode escape:5:Malformed UTF-8 characters, possibly incorrectly encoded:0:No error:1"
+    );
 }
 
 /// Verifies eval `json_validate()` validates JSON syntax, depth, and dynamic calls.

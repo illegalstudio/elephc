@@ -21,13 +21,21 @@ pub(crate) enum JsonValue {
     Object(Vec<(Vec<u8>, JsonValue)>),
 }
 
-/// Returns whether one byte slice is a complete JSON document within the depth limit.
-pub(crate) fn bytes(bytes: &[u8], depth_limit: usize) -> bool {
-    decode(bytes, depth_limit).is_some()
+/// PHP JSON error category produced while parsing eval-side JSON bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JsonParseError {
+    Depth,
+    Syntax,
+    ControlChar,
+    Utf8,
+    Utf16,
 }
 
-/// Parses one complete JSON document into an eval-side JSON value.
-pub(crate) fn decode(bytes: &[u8], depth_limit: usize) -> Option<JsonValue> {
+/// Parses one complete JSON document and preserves the PHP-visible error category.
+pub(crate) fn decode_result(
+    bytes: &[u8],
+    depth_limit: usize,
+) -> Result<JsonValue, JsonParseError> {
     let mut parser = Parser::new(bytes, depth_limit);
     parser.parse_document()
 }
@@ -50,62 +58,79 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses one complete JSON document and rejects trailing non-whitespace bytes.
-    fn parse_document(&mut self) -> Option<JsonValue> {
+    fn parse_document(&mut self) -> Result<JsonValue, JsonParseError> {
         self.skip_ws();
         let value = self.parse_value(0)?;
         self.skip_ws();
-        (self.cursor == self.bytes.len()).then_some(value)
+        if self.cursor == self.bytes.len() {
+            Ok(value)
+        } else {
+            Err(JsonParseError::Syntax)
+        }
     }
 
     /// Parses any JSON value at the given active container depth.
-    fn parse_value(&mut self, depth: usize) -> Option<JsonValue> {
+    fn parse_value(&mut self, depth: usize) -> Result<JsonValue, JsonParseError> {
         self.skip_ws();
-        match self.peek()? {
-            b'n' => self.consume_literal(b"null").then_some(JsonValue::Null),
-            b't' => self.consume_literal(b"true").then_some(JsonValue::Bool(true)),
-            b'f' => self.consume_literal(b"false").then_some(JsonValue::Bool(false)),
+        match self.peek().ok_or(JsonParseError::Syntax)? {
+            b'n' => self.consume_literal_value(b"null", JsonValue::Null),
+            b't' => self.consume_literal_value(b"true", JsonValue::Bool(true)),
+            b'f' => self.consume_literal_value(b"false", JsonValue::Bool(false)),
             b'"' => self.parse_string().map(JsonValue::String),
             b'[' => self.parse_array(depth),
             b'{' => self.parse_object(depth),
             b'-' | b'0'..=b'9' => self.parse_number().map(JsonValue::Number),
-            _ => None,
+            _ => Err(JsonParseError::Syntax),
+        }
+    }
+
+    /// Consumes one JSON literal and returns its parsed value.
+    fn consume_literal_value(
+        &mut self,
+        literal: &[u8],
+        value: JsonValue,
+    ) -> Result<JsonValue, JsonParseError> {
+        if self.consume_literal(literal) {
+            Ok(value)
+        } else {
+            Err(JsonParseError::Syntax)
         }
     }
 
     /// Parses a JSON array and enforces PHP's validate/decode depth threshold.
-    fn parse_array(&mut self, depth: usize) -> Option<JsonValue> {
+    fn parse_array(&mut self, depth: usize) -> Result<JsonValue, JsonParseError> {
         if depth + 1 >= self.depth_limit {
-            return None;
+            return Err(JsonParseError::Depth);
         }
         self.cursor += 1;
         self.skip_ws();
         let mut elements = Vec::new();
         if self.consume_byte(b']') {
-            return Some(JsonValue::Array(elements));
+            return Ok(JsonValue::Array(elements));
         }
 
         loop {
             elements.push(self.parse_value(depth + 1)?);
             self.skip_ws();
             if self.consume_byte(b']') {
-                return Some(JsonValue::Array(elements));
+                return Ok(JsonValue::Array(elements));
             }
             if !self.consume_byte(b',') {
-                return None;
+                return Err(JsonParseError::Syntax);
             }
         }
     }
 
     /// Parses a JSON object and enforces PHP's validate/decode depth threshold.
-    fn parse_object(&mut self, depth: usize) -> Option<JsonValue> {
+    fn parse_object(&mut self, depth: usize) -> Result<JsonValue, JsonParseError> {
         if depth + 1 >= self.depth_limit {
-            return None;
+            return Err(JsonParseError::Depth);
         }
         self.cursor += 1;
         self.skip_ws();
         let mut entries = Vec::new();
         if self.consume_byte(b'}') {
-            return Some(JsonValue::Object(entries));
+            return Ok(JsonValue::Object(entries));
         }
 
         loop {
@@ -113,23 +138,23 @@ impl<'a> Parser<'a> {
             let key = self.parse_string()?;
             self.skip_ws();
             if !self.consume_byte(b':') {
-                return None;
+                return Err(JsonParseError::Syntax);
             }
             entries.push((key, self.parse_value(depth + 1)?));
             self.skip_ws();
             if self.consume_byte(b'}') {
-                return Some(JsonValue::Object(entries));
+                return Ok(JsonValue::Object(entries));
             }
             if !self.consume_byte(b',') {
-                return None;
+                return Err(JsonParseError::Syntax);
             }
         }
     }
 
     /// Parses a JSON string into UTF-8 bytes after applying JSON escapes.
-    fn parse_string(&mut self) -> Option<Vec<u8>> {
+    fn parse_string(&mut self) -> Result<Vec<u8>, JsonParseError> {
         if !self.consume_byte(b'"') {
-            return None;
+            return Err(JsonParseError::Syntax);
         }
 
         let mut output = Vec::new();
@@ -137,12 +162,12 @@ impl<'a> Parser<'a> {
             match byte {
                 b'"' => {
                     self.cursor += 1;
-                    return Some(output);
+                    return Ok(output);
                 }
                 b'\\' => {
                     self.parse_string_escape(&mut output)?;
                 }
-                0x00..=0x1f => return None,
+                0x00..=0x1f => return Err(JsonParseError::ControlChar),
                 0x00..=0x7f => {
                     output.push(byte);
                     self.cursor += 1;
@@ -154,13 +179,13 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        None
+        Err(JsonParseError::Syntax)
     }
 
     /// Parses one JSON string escape sequence at the current backslash.
-    fn parse_string_escape(&mut self, output: &mut Vec<u8>) -> Option<()> {
+    fn parse_string_escape(&mut self, output: &mut Vec<u8>) -> Result<(), JsonParseError> {
         self.cursor += 1;
-        match self.peek()? {
+        match self.peek().ok_or(JsonParseError::Syntax)? {
             b'"' => output.push(b'"'),
             b'\\' => output.push(b'\\'),
             b'/' => output.push(b'/'),
@@ -171,73 +196,71 @@ impl<'a> Parser<'a> {
             b't' => output.push(b'\t'),
             b'u' => {
                 self.parse_unicode_escape(output)?;
-                return Some(());
+                return Ok(());
             }
-            _ => return None,
+            _ => return Err(JsonParseError::Syntax),
         }
         self.cursor += 1;
-        Some(())
+        Ok(())
     }
 
     /// Parses one JSON `\uXXXX` escape, including mandatory surrogate pairs.
-    fn parse_unicode_escape(&mut self, output: &mut Vec<u8>) -> Option<()> {
+    fn parse_unicode_escape(&mut self, output: &mut Vec<u8>) -> Result<(), JsonParseError> {
         let unit = self.parse_unicode_unit()?;
         if (0xd800..=0xdbff).contains(&unit) {
-            let checkpoint = self.cursor;
             if !self.consume_byte(b'\\') || !self.consume_byte(b'u') {
-                return None;
+                return Err(JsonParseError::Utf16);
             }
-            let Some(low) = self.parse_unicode_unit_after_u() else {
-                self.cursor = checkpoint;
-                return None;
-            };
+            let low = self
+                .parse_unicode_unit_after_u()
+                .map_err(|_| JsonParseError::Utf16)?;
             if !(0xdc00..=0xdfff).contains(&low) {
-                return None;
+                return Err(JsonParseError::Utf16);
             }
             let high = u32::from(unit - 0xd800);
             let low = u32::from(low - 0xdc00);
             append_codepoint(output, 0x10000 + ((high << 10) | low))
         } else if (0xdc00..=0xdfff).contains(&unit) {
-            None
+            Err(JsonParseError::Utf16)
         } else {
             append_codepoint(output, u32::from(unit))
         }
     }
 
     /// Parses the `uXXXX` suffix after the backslash has already been consumed.
-    fn parse_unicode_unit(&mut self) -> Option<u16> {
+    fn parse_unicode_unit(&mut self) -> Result<u16, JsonParseError> {
         if !self.consume_byte(b'u') {
-            return None;
+            return Err(JsonParseError::Syntax);
         }
         self.parse_unicode_unit_after_u()
     }
 
     /// Parses the four hex digits after a consumed JSON unicode escape marker.
-    fn parse_unicode_unit_after_u(&mut self) -> Option<u16> {
+    fn parse_unicode_unit_after_u(&mut self) -> Result<u16, JsonParseError> {
         if self.cursor + 4 > self.bytes.len() {
-            return None;
+            return Err(JsonParseError::Syntax);
         }
         let mut value = 0_u16;
         for _ in 0..4 {
-            value = value.checked_mul(16)?;
-            value = value.checked_add(u16::from(hex_value(self.bytes[self.cursor])?))?;
+            let digit = hex_value(self.bytes[self.cursor]).ok_or(JsonParseError::Syntax)?;
+            value = value * 16 + u16::from(digit);
             self.cursor += 1;
         }
-        Some(value)
+        Ok(value)
     }
 
     /// Parses a JSON number with RFC-compatible leading-zero, fraction, and exponent rules.
-    fn parse_number(&mut self) -> Option<Vec<u8>> {
+    fn parse_number(&mut self) -> Result<Vec<u8>, JsonParseError> {
         let start = self.cursor;
         if self.consume_byte(b'-') && self.peek().is_none() {
-            return None;
+            return Err(JsonParseError::Syntax);
         }
 
-        match self.peek()? {
+        match self.peek().ok_or(JsonParseError::Syntax)? {
             b'0' => {
                 self.cursor += 1;
                 if matches!(self.peek(), Some(b'0'..=b'9')) {
-                    return None;
+                    return Err(JsonParseError::Syntax);
                 }
             }
             b'1'..=b'9' => {
@@ -246,12 +269,12 @@ impl<'a> Parser<'a> {
                     self.cursor += 1;
                 }
             }
-            _ => return None,
+            _ => return Err(JsonParseError::Syntax),
         }
 
         if self.consume_byte(b'.') {
             if !matches!(self.peek(), Some(b'0'..=b'9')) {
-                return None;
+                return Err(JsonParseError::Syntax);
             }
             while matches!(self.peek(), Some(b'0'..=b'9')) {
                 self.cursor += 1;
@@ -264,14 +287,14 @@ impl<'a> Parser<'a> {
                 self.cursor += 1;
             }
             if !matches!(self.peek(), Some(b'0'..=b'9')) {
-                return None;
+                return Err(JsonParseError::Syntax);
             }
             while matches!(self.peek(), Some(b'0'..=b'9')) {
                 self.cursor += 1;
             }
         }
 
-        Some(self.bytes[start..self.cursor].to_vec())
+        Ok(self.bytes[start..self.cursor].to_vec())
     }
 
     /// Consumes exactly one expected byte when it is present.
@@ -295,23 +318,23 @@ impl<'a> Parser<'a> {
     }
 
     /// Consumes one valid UTF-8 codepoint from a raw JSON string segment.
-    fn consume_utf8_char(&mut self) -> Option<()> {
+    fn consume_utf8_char(&mut self) -> Result<(), JsonParseError> {
         let first = self.bytes[self.cursor];
         let width = match first {
             0xc2..=0xdf => 2,
             0xe0..=0xef => 3,
             0xf0..=0xf4 => 4,
-            _ => return None,
+            _ => return Err(JsonParseError::Utf8),
         };
         if self.cursor + width > self.bytes.len() {
-            return None;
+            return Err(JsonParseError::Utf8);
         }
         let slice = &self.bytes[self.cursor..self.cursor + width];
         if std::str::from_utf8(slice).is_err() {
-            return None;
+            return Err(JsonParseError::Utf8);
         }
         self.cursor += width;
-        Some(())
+        Ok(())
     }
 
     /// Skips JSON whitespace accepted between tokens.
@@ -328,11 +351,11 @@ impl<'a> Parser<'a> {
 }
 
 /// Appends one Unicode codepoint to a decoded JSON string.
-fn append_codepoint(output: &mut Vec<u8>, codepoint: u32) -> Option<()> {
-    let ch = char::from_u32(codepoint)?;
+fn append_codepoint(output: &mut Vec<u8>, codepoint: u32) -> Result<(), JsonParseError> {
+    let ch = char::from_u32(codepoint).ok_or(JsonParseError::Utf16)?;
     let mut buffer = [0_u8; 4];
     output.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
-    Some(())
+    Ok(())
 }
 
 /// Returns one hexadecimal digit value for JSON unicode escapes.
