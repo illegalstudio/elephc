@@ -1051,10 +1051,25 @@ echo $tail[0] . ":" . count($c) . ":" . $c[2] . ":";
 $d = [5, 6, 7];
 $all = call_user_func_array("array_splice", ["array" => $d, "offset" => 1]);
 echo count($all) . ":" . $all[0] . ":" . $all[1] . ":" . count($d) . ":";
+$e = [1, 2, 3, 4];
+$rep = array_splice($e, 1, 2, ["A", "B"]);
+echo count($rep) . ":" . $rep[0] . ":" . $rep[1] . ":" . $e[0] . ":" . $e[1] . ":" . $e[2] . ":" . $e[3] . ":";
+$f = ["x" => 1, 10 => 2, "y" => 3, 11 => 4];
+$rep2 = array_splice(array: $f, offset: 1, length: 2, replacement: ["s" => "S", 9 => "N"]);
+echo $rep2[0] . ":" . $rep2["y"] . ":" . $f["x"] . ":" . $f[0] . ":" . $f[1] . ":" . $f[2] . ":";
+$g = [1, 2, 3];
+$rep3 = array_splice($g, offset: 1, replacement: [9]);
+echo count($rep3) . ":" . $rep3[0] . ":" . $rep3[1] . ":" . count($g) . ":" . $g[1] . ":";
+$h = [1, 2, 3];
+$removed2 = call_user_func_array("array_splice", ["array" => $h, "offset" => 1, "replacement" => [9]]);
+echo count($removed2) . ":" . $removed2[0] . ":" . $removed2[1] . ":" . count($h) . ":" . $h[1] . ":";
 echo function_exists("array_splice");');
 "#,
     );
-    assert_eq!(out, "2:20:30:2:40:2:3:1:4:3:4:3:2:6:7:3:1");
+    assert_eq!(
+        out,
+        "2:20:30:2:40:2:3:1:4:3:4:3:2:6:7:3:2:2:3:1:A:B:4:2:3:1:S:N:4:2:2:3:2:9:2:2:3:3:2:1"
+    );
 }
 
 /// Verifies eval `sort()` and `rsort()` mutate direct variable arguments only.
