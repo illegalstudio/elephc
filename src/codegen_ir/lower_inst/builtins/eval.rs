@@ -270,6 +270,31 @@ pub(super) fn lower_eval_function_exists(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a post-eval dynamic class existence probe to the eval bridge ABI.
+pub(super) fn lower_eval_class_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let (name_label, name_len) = ctx.intern_class_name_data(expect_data(inst)?)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    load_eval_context_to_arg(ctx, 0);
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_dynamic_class_exists");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a post-eval dynamic constant existence probe to the eval bridge ABI.
 pub(super) fn lower_eval_constant_exists(
     ctx: &mut FunctionContext<'_>,

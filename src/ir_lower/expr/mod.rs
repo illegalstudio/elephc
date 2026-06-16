@@ -1512,6 +1512,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = lower_eval_function_probe(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_eval_class_probe(ctx, canonical, args, expr) {
+        return value;
+    }
     let sig = call_signature(ctx, canonical, args);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical);
@@ -1620,6 +1623,53 @@ fn lower_eval_function_probe(
         Op::EvalFunctionExists.default_effects(),
         Some(expr.span),
     ))
+}
+
+/// Lowers post-eval class-name probes through the eval context's dynamic class table.
+fn lower_eval_class_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let probe_name = php_symbol_key(name.trim_start_matches('\\'));
+    if probe_name != "class_exists" {
+        return None;
+    }
+    if !ctx.has_eval_barrier()
+        || args.is_empty()
+        || args.len() > 2
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::StringLiteral(class_name) = &args[0].kind else {
+        return None;
+    };
+    if aot_class_exists_for_eval_probe(ctx, class_name) {
+        return None;
+    }
+    if let Some(autoload) = args.get(1) {
+        lower_expr(ctx, autoload);
+    }
+    let data = ctx.intern_class_name(class_name);
+    Some(ctx.emit_value(
+        Op::EvalClassExists,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::EvalClassExists.default_effects(),
+        Some(expr.span),
+    ))
+}
+
+/// Returns true when an AOT class already satisfies a native class_exists probe.
+fn aot_class_exists_for_eval_probe(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let key = php_symbol_key(class_name.trim_start_matches('\\'));
+    ctx.classes
+        .keys()
+        .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
 }
 
 /// Lowers `isset()` as a lazy language construct instead of an eager builtin call.

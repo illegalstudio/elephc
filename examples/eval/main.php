@@ -133,6 +133,7 @@ $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" .
 $eval_class_probe = eval('return class_exists("EvalAotBox") ? "yes" : "no";');
 eval('class EvalDynamicEmptyClass {}');
 $eval_dynamic_class_probe = eval('return class_exists("evaldynamicemptyclass") ? "yes" : "no";');
+$eval_dynamic_class_native_probe = class_exists("EvalDynamicEmptyClass") ? "yes" : "no";
 $eval_dynamic_const_probe = eval('define("EvalDynamicConst", "yes"); return EvalDynamicConst;');
 $eval_dynamic_const_native_probe = defined("EvalDynamicConst") ? "yes" : "no";
 $eval_dynamic_const_native_fetch = EvalDynamicConst;
@@ -203,6 +204,7 @@ echo "array-search=" . $array_search . "\n";
 echo "string-compare=" . $string_compare . "\n";
 echo "eval-class-exists=" . $eval_class_probe . "\n";
 echo "eval-dynamic-class-exists=" . $eval_dynamic_class_probe . "\n";
+echo "native-class-exists-eval-class=" . $eval_dynamic_class_native_probe . "\n";
 echo "eval-dynamic-const-exists=" . $eval_dynamic_const_probe . "\n";
 echo "native-defined-eval-const=" . $eval_dynamic_const_native_probe . "\n";
 echo "native-fetch-eval-const=" . $eval_dynamic_const_native_fetch . "\n";

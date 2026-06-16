@@ -277,6 +277,7 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         | FunctionVariantDispatch
         | EvalFunctionCallArray
         | EvalFunctionExists
+        | EvalClassExists
         | EvalConstantExists
         | EvalConstantFetch => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
@@ -360,6 +361,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         | FunctionVariantMark
         | FunctionVariantDispatch
         | EvalFunctionExists
+        | EvalClassExists
         | EvalConstantExists
         | EvalConstantFetch
         | ConcatReset

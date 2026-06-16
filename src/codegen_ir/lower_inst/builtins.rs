@@ -544,6 +544,14 @@ pub(super) fn lower_eval_function_exists(
     eval::lower_eval_function_exists(ctx, inst)
 }
 
+/// Lowers post-eval dynamic class existence probes to the optional eval bridge.
+pub(super) fn lower_eval_class_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_class_exists(ctx, inst)
+}
+
 /// Lowers post-eval dynamic constant existence probes to the optional eval bridge.
 pub(super) fn lower_eval_constant_exists(
     ctx: &mut FunctionContext<'_>,

@@ -128,6 +128,7 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 Op::EvalFunctionCall
                 | Op::EvalFunctionCallArray
                 | Op::EvalFunctionExists
+                | Op::EvalClassExists
                 | Op::EvalConstantExists
                 | Op::EvalConstantFetch => {
                     features.eval = true;

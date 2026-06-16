@@ -2014,6 +2014,35 @@ echo eval('return class_exists("dynevalclassexists") ? "Y" : "N";');
     assert_eq!(out, "YY");
 }
 
+/// Verifies native `class_exists()` probes can see eval-declared classes after the barrier.
+#[test]
+fn test_eval_declared_empty_class_is_visible_to_native_class_exists_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+echo class_exists("DynEvalNativeClassExists") ? "bad" : "N";
+eval('class DynEvalNativeClassExists {}');
+echo class_exists("DynEvalNativeClassExists") ? "Y" : "N";
+echo class_exists("dynevalnativeclassexists") ? "Y" : "N";
+echo class_exists("\DynEvalNativeClassExists", false) ? "Y" : "N";
+echo class_exists("MissingDynEvalNativeClassExists") ? "bad" : "N";
+"#,
+    );
+    assert_eq!(out, "NYYYN");
+}
+
+/// Verifies post-eval native class probes keep AOT class results static.
+#[test]
+fn test_eval_barrier_keeps_native_class_exists_for_aot_classes() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNativeClassExistsAot {}
+eval('');
+echo class_exists("evalnativeclassexistsaot") ? "Y" : "N";
+"#,
+    );
+    assert_eq!(out, "Y");
+}
+
 /// Verifies duplicate eval-declared classes fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_class_fails() {

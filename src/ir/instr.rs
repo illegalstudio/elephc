@@ -295,6 +295,7 @@ pub enum Op {
     EvalFunctionCall,
     EvalFunctionCallArray,
     EvalFunctionExists,
+    EvalClassExists,
     EvalConstantExists,
     EvalConstantFetch,
     RuntimeCall,
@@ -415,7 +416,7 @@ impl Op {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
-            EvalFunctionExists | EvalConstantExists => E::READS_GLOBAL,
+            EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
             EvalConstantFetch => {
                 E::READS_GLOBAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
             }
@@ -603,6 +604,7 @@ impl Op {
             EvalFunctionCall => "eval_function_call",
             EvalFunctionCallArray => "eval_function_call_array",
             EvalFunctionExists => "eval_function_exists",
+            EvalClassExists => "eval_class_exists",
             EvalConstantExists => "eval_constant_exists",
             EvalConstantFetch => "eval_constant_fetch",
             RuntimeCall => "runtime_call",
