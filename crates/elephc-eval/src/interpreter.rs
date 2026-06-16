@@ -101,6 +101,13 @@ pub trait RuntimeValueOps {
     /// Creates a named runtime object without constructor arguments.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Calls the runtime constructor for an object when the class declares one.
+    fn construct_object(
+        &mut self,
+        object: RuntimeCellHandle,
+        args: Vec<RuntimeCellHandle>,
+    ) -> Result<(), EvalStatus>;
+
     /// Returns the visible element count for an array-like runtime cell.
     fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus>;
 
@@ -875,10 +882,10 @@ fn eval_expr(
         }
         EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
         EvalExpr::NewObject { class_name, args } => {
-            if !args.is_empty() {
-                return Err(EvalStatus::UnsupportedConstruct);
-            }
-            values.new_object(class_name)
+            let args = eval_method_call_arg_values(args, context, scope, values)?;
+            values
+                .new_object(class_name)
+                .and_then(|object| values.construct_object(object, args).map(|()| object))
         }
         EvalExpr::MethodCall {
             object,
@@ -3470,6 +3477,22 @@ mod tests {
             Ok(self.alloc(FakeValue::Object(HashMap::new())))
         }
 
+        /// Applies fake constructor side effects for eval `new` unit tests.
+        fn construct_object(
+            &mut self,
+            object: RuntimeCellHandle,
+            args: Vec<RuntimeCellHandle>,
+        ) -> Result<(), EvalStatus> {
+            let id = object.as_ptr() as usize;
+            let Some(FakeValue::Object(properties)) = self.values.get_mut(&id) else {
+                return Err(EvalStatus::UnsupportedConstruct);
+            };
+            if let Some(first) = args.first().copied() {
+                properties.insert("x".to_string(), first);
+            }
+            Ok(())
+        }
+
         /// Returns the visible element count for fake array values.
         fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus> {
             match self.get(array) {
@@ -4219,16 +4242,19 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
         assert_eq!(values.get(result), FakeValue::Object(HashMap::new()));
     }
 
-    /// Verifies eval object construction rejects constructor arguments until the ABI supports them.
+    /// Verifies eval object construction passes constructor arguments through runtime hooks.
     #[test]
-    fn execute_program_rejects_new_object_constructor_args() {
+    fn execute_program_constructs_named_object_with_args() {
         let program = parse_fragment(br#"return new Box(1);"#).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
-        let err = execute_program(&program, &mut scope, &mut values).expect_err("constructor args");
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let FakeValue::Object(properties) = values.get(result) else {
+            panic!("expected fake object");
+        };
 
-        assert_eq!(err, EvalStatus::UnsupportedConstruct);
+        assert_eq!(values.get(properties["x"]), FakeValue::Int(1));
     }
 
     /// Verifies if/else executes only the PHP-truthy branch.

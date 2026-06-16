@@ -59,6 +59,10 @@ unsafe extern "C" {
         args: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
     fn __elephc_eval_value_new_object(name_ptr: *const u8, name_len: u64) -> *mut RuntimeCell;
+    fn __elephc_eval_value_construct_object(
+        object: *mut RuntimeCell,
+        args: *mut RuntimeCell,
+    ) -> u64;
     fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
@@ -149,6 +153,19 @@ impl ElephcRuntimeOps {
         } else {
             Ok(RuntimeCellHandle::from_raw(ptr))
         }
+    }
+
+    /// Packs source-order argument cells into the boxed eval array ABI.
+    fn arg_array(args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
+        let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
+        let arg_array = Self::handle(arg_array)?;
+        for (index, value) in args.into_iter().enumerate() {
+            let index = Self::handle(unsafe { __elephc_eval_value_int(index as i64) })?;
+            Self::handle(unsafe {
+                __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
+            })?;
+        }
+        Ok(arg_array)
     }
 }
 
@@ -247,14 +264,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         method: &str,
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
-        let arg_array = Self::handle(arg_array)?;
-        for (index, value) in args.into_iter().enumerate() {
-            let index = Self::handle(unsafe { __elephc_eval_value_int(index as i64) })?;
-            Self::handle(unsafe {
-                __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
-            })?;
-        }
+        let arg_array = Self::arg_array(args)?;
         let result = Self::handle(unsafe {
             __elephc_eval_value_method_call(
                 object.as_ptr(),
@@ -274,6 +284,25 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe {
             __elephc_eval_value_new_object(class_name.as_ptr(), class_name.len() as u64)
         })
+    }
+
+    /// Calls a public AOT constructor through the generated user bridge when one exists.
+    fn construct_object(
+        &mut self,
+        object: RuntimeCellHandle,
+        args: Vec<RuntimeCellHandle>,
+    ) -> Result<(), EvalStatus> {
+        let arg_array = Self::arg_array(args)?;
+        let ok =
+            unsafe { __elephc_eval_value_construct_object(object.as_ptr(), arg_array.as_ptr()) };
+        unsafe {
+            __elephc_eval_value_release(arg_array.as_ptr());
+        }
+        if ok == 0 {
+            Err(EvalStatus::RuntimeFatal)
+        } else {
+            Ok(())
+        }
     }
 
     /// Returns the visible element count for a boxed Mixed array through the generated runtime wrapper.
