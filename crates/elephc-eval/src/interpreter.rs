@@ -1185,6 +1185,7 @@ fn eval_positional_expr_call(
         }
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
         "max" | "min" => eval_builtin_min_max(name, args, context, scope, values),
+        "nl2br" => eval_builtin_nl2br(args, context, scope, values),
         "ord" => eval_builtin_ord(args, context, scope, values),
         "pi" => eval_builtin_pi(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
@@ -1501,6 +1502,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "lcfirst"
             | "max"
             | "min"
+            | "nl2br"
             | "ord"
             | "pi"
             | "pow"
@@ -1625,6 +1627,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "function_exists" => Some(&["function"]),
         "hash_equals" => Some(&["known_string", "user_string"]),
         "max" | "min" => Some(&["value"]),
+        "nl2br" => Some(&["string", "use_xhtml"]),
         "ord" => Some(&["character"]),
         "pi" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
@@ -1948,6 +1951,14 @@ fn eval_builtin_with_values(
             eval_ord_result(*value, values)?
         }
         "max" | "min" => eval_min_max_result(name, evaluated_args, values)?,
+        "nl2br" => match evaluated_args {
+            [value] => eval_nl2br_result(*value, true, values)?,
+            [value, use_xhtml] => {
+                let use_xhtml = values.truthy(*use_xhtml)?;
+                eval_nl2br_result(*value, use_xhtml, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "trim" | "ltrim" | "rtrim" | "chop" => match evaluated_args {
             [value] => eval_trim_like_result(name, *value, None, values)?,
             [value, mask] => eval_trim_like_result(name, *value, Some(*mask), values)?,
@@ -2495,6 +2506,63 @@ fn eval_str_repeat_result(
     let mut output = Vec::with_capacity(capacity);
     for _ in 0..times {
         output.extend_from_slice(&bytes);
+    }
+    values.string_bytes_value(&output)
+}
+
+/// Evaluates PHP's `nl2br(...)` over one eval expression and optional XHTML flag.
+fn eval_builtin_nl2br(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [value] => {
+            let value = eval_expr(value, context, scope, values)?;
+            eval_nl2br_result(value, true, values)
+        }
+        [value, use_xhtml] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let use_xhtml = eval_expr(use_xhtml, context, scope, values)?;
+            let use_xhtml = values.truthy(use_xhtml)?;
+            eval_nl2br_result(value, use_xhtml, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Inserts an HTML line break before each PHP newline sequence while preserving bytes.
+fn eval_nl2br_result(
+    value: RuntimeCellHandle,
+    use_xhtml: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let br = if use_xhtml {
+        b"<br />".as_slice()
+    } else {
+        b"<br>".as_slice()
+    };
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'\r' || byte == b'\n' {
+            output.extend_from_slice(br);
+            output.push(byte);
+            if index + 1 < bytes.len()
+                && ((byte == b'\r' && bytes[index + 1] == b'\n')
+                    || (byte == b'\n' && bytes[index + 1] == b'\r'))
+            {
+                output.push(bytes[index + 1]);
+                index += 2;
+                continue;
+            }
+        } else {
+            output.push(byte);
+        }
+        index += 1;
     }
     values.string_bytes_value(&output)
 }
@@ -6721,6 +6789,29 @@ return function_exists("substr");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "cdef:bcde:ef:cd:cd:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `nl2br()` dispatches through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_nl2br_builtin() {
+        let program = parse_fragment(
+            br#"echo bin2hex(nl2br("a\nb")); echo ":";
+echo bin2hex(nl2br(string: "a\nb", use_xhtml: false)); echo ":";
+echo bin2hex(call_user_func("nl2br", "a\r\nb")); echo ":";
+echo bin2hex(call_user_func_array("nl2br", ["string" => "a\n\rb", "use_xhtml" => false])); echo ":";
+return function_exists("nl2br");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "613c6272202f3e0a62:613c62723e0a62:613c6272202f3e0d0a62:613c62723e0a0d62:"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
