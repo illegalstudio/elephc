@@ -160,6 +160,7 @@ $path_components = eval('return basename("/var/log/syslog.log", ".log") . ":" . 
 $resolved_path = eval('return realpath(".") !== false ? "resolved" : "missing";');
 $path_info = eval('$info = pathinfo("/var/log/syslog.log"); return $info["basename"] . ":" . pathinfo("archive.tar.gz", PATHINFO_EXTENSION);');
 $filesystem = eval('file_put_contents("eval-example.txt", "hello"); $read = file_get_contents("eval-example.txt"); $size = filesize("eval-example.txt"); $ok = file_exists("eval-example.txt") && is_file("eval-example.txt") && is_readable("eval-example.txt") && is_writable("eval-example.txt") && unlink("eval-example.txt"); return $read . ":" . $size . ":" . ($ok ? "ok" : "bad");');
+$file_stats = eval('file_put_contents("eval-stat.txt", "hello"); $type = filetype("eval-stat.txt"); $meta = filemtime("eval-stat.txt") > 0 && fileinode("eval-stat.txt") > 0 && fileperms("eval-stat.txt") > 0; unlink("eval-stat.txt"); return $type . ":" . ($meta ? "meta" : "bad");');
 $hexed = eval('return bin2hex("Az");');
 $unhexed = eval('return hex2bin("417a");');
 $base64 = eval('return base64_encode("Hello");');
@@ -266,6 +267,7 @@ echo "path-components=" . $path_components . "\n";
 echo "realpath=" . $resolved_path . "\n";
 echo "pathinfo=" . $path_info . "\n";
 echo "filesystem=" . $filesystem . "\n";
+echo "file-stats=" . $file_stats . "\n";
 echo "bin2hex=" . $hexed . "\n";
 echo "hex2bin=" . $unhexed . "\n";
 echo "base64=" . $base64 . "\n";
