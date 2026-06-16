@@ -2242,6 +2242,8 @@ eval('echo is_int(1); echo is_integer(1); echo is_long(1);
 echo is_float(1.5); echo is_double(1.5); echo is_real(1.5);
 echo is_string("x"); echo is_bool(false); echo is_null(null);
 echo is_array([1]); echo is_array(["a" => 1]);
+echo is_iterable([1]); echo is_iterable(["a" => 1]);
+echo is_iterable(1) ? "bad" : "T";
 echo is_array(1) ? "bad" : "ok";
 echo is_numeric(42); echo is_numeric(3.14); echo is_numeric("42");
 echo is_numeric("-5"); echo is_numeric("3.14");
@@ -2258,15 +2260,17 @@ echo ":";
 echo call_user_func("is_string", "x");
 echo call_user_func_array("is_array", [[1]]);
 echo call_user_func("is_numeric", "12");
+echo call_user_func("is_iterable", [1]);
+echo call_user_func_array("is_iterable", ["value" => 1]) ? "bad" : "t";
 echo call_user_func("is_resource", $h);
 echo call_user_func_array("is_resource", [$h]);
 echo call_user_func("is_nan", fdiv(0, 0)) ? "N" : "bad";
 echo call_user_func_array("is_finite", [42]) ? "F" : "bad";
 echo function_exists("is_double"); echo function_exists("is_numeric"); echo function_exists("is_resource");
-echo function_exists("is_nan"); echo function_exists("is_finite"); echo function_exists("is_infinite");');
+echo function_exists("is_nan"); echo function_exists("is_finite"); echo function_exists("is_iterable"); echo function_exists("is_infinite");');
 "#,
     );
-    assert_eq!(out, "11111111111ok11111NBRNIiFfH:11111NF111111");
+    assert_eq!(out, "1111111111111Tok11111NBRNIiFfH:1111t11NF1111111");
 }
 
 /// Verifies eval scalar cast builtins return boxed Mixed cells through direct and callable calls.
