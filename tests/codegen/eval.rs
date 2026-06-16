@@ -1596,6 +1596,26 @@ echo ":"; echo function_exists("round");');
     assert_eq!(out, "4:3.14:double:3:1.6:1");
 }
 
+/// Verifies eval `number_format()` groups and rounds numbers through callable paths.
+#[test]
+fn test_eval_dispatches_number_format_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo number_format(1234567); echo ":";
+echo number_format(1234.5678, 2); echo ":";
+echo number_format(num: 1234567.89, decimals: 2, decimal_separator: ",", thousands_separator: "."); echo ":";
+echo number_format(1234567.89, 2, ".", ""); echo ":";
+echo call_user_func("number_format", -1234.5, 1); echo ":";
+echo call_user_func_array("number_format", ["num" => 1234, "decimals" => 0, "decimal_separator" => ".", "thousands_separator" => " "]);
+echo ":"; echo function_exists("number_format");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1,234,567:1,234.57:1.234.567,89:1234567.89:-1,234.5:1 234:1"
+    );
+}
+
 /// Verifies eval `min()` and `max()` select numeric values directly and through callables.
 #[test]
 fn test_eval_dispatches_min_max_builtin_calls() {
