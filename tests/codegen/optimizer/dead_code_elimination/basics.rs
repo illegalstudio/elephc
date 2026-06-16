@@ -44,6 +44,41 @@ echo 7;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies that a bare `eval(...)` expression statement is retained because it can
+/// mutate the caller scope even when the expression result itself is unused.
+#[test]
+fn test_dead_code_elimination_keeps_bare_eval_expr_statement() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_eval_expr_stmt");
+    let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+eval('$x = 7;');
+echo $x;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        user_asm.contains("__elephc_eval_execute"),
+        "bare eval expr statements must remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        &runtime_obj_for_asm(&runtime_asm),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies that a duplicated match arm (same value 1 => "a", 1 => "shadowed") produces
 /// output "a!" with "shadowed" absent from user assembly.
 #[test]

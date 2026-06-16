@@ -89,6 +89,33 @@ fn test_propagate_constants_invalidates_non_scalar_reassignment() {
     );
 }
 
+/// Tests that `eval` invalidates all prior scalar facts because it can read,
+/// write, create, or unset visible variables in the caller scope.
+#[test]
+fn test_propagate_constants_stops_at_eval_barrier() {
+    let program = vec![
+        Stmt::assign("x", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::from("eval"),
+                    args: vec![Expr::string_lit("$x = 5;")],
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1)))
+    );
+}
+
 /// Tests that when both branches of a ternary expression are the same constant,
 /// the resulting assignment is treated as a uniform constant. `base = flag ? 2 : 2`
 /// always yields `2`, so `base ** 3` folds to `8.0`.
