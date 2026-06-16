@@ -1050,6 +1050,30 @@ echo function_exists("asort") && function_exists("arsort") && function_exists("k
     );
 }
 
+/// Verifies eval natural sort builtins preserve keys and use natural string order.
+#[test]
+fn test_eval_dispatches_natural_sort_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = ["img10", "img2", "img1"];
+echo natsort($a) . ":";
+foreach ($a as $key => $value) { echo $key . $value . ";"; }
+echo ":";
+$b = ["b" => "Img10", "a" => "img2", "c" => "IMG1"];
+echo natcasesort(array: $b) . ":";
+foreach ($b as $key => $value) { echo $key . $value . ";"; }
+echo ":";
+$c = ["x" => "b", "y" => "a"];
+echo call_user_func("natsort", $c) . ":" . $c["x"] . $c["y"] . ":";
+echo function_exists("natsort") && function_exists("natcasesort");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:2img1;1img2;0img10;:1:cIMG1;aimg2;bImg10;:1:ba:1"
+    );
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {
