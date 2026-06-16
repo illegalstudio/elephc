@@ -1116,6 +1116,25 @@ echo function_exists("usort") && function_exists("uasort") && function_exists("u
     assert_eq!(out, "ccc1:123:ccc1:b1c2a3:1:a2b1:c1:21:1");
 }
 
+/// Verifies eval iterator array helpers dispatch through direct and dynamic calls.
+#[test]
+fn test_eval_dispatches_iterator_array_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$items = ["x" => 1, "y" => 2];
+$copy = iterator_to_array($items);
+echo iterator_count($items) . ":" . $copy["x"] . $copy["y"] . ":";
+$values = iterator_to_array($items, false);
+echo (isset($values["x"]) ? "bad" : "reindexed") . ":" . $values[0] . $values[1] . ":";
+echo call_user_func("iterator_count", $items) . ":";
+$spread = call_user_func_array("iterator_to_array", ["iterator" => $items, "preserve_keys" => false]);
+echo $spread[0] . $spread[1] . ":";
+echo function_exists("iterator_count") && function_exists("iterator_to_array");');
+"#,
+    );
+    assert_eq!(out, "2:12:reindexed:12:2:12:1");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {

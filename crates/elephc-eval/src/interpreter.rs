@@ -1532,6 +1532,8 @@ fn eval_positional_expr_call(
         "inet_ntop" => eval_builtin_inet_ntop(args, context, scope, values),
         "inet_pton" => eval_builtin_inet_pton(args, context, scope, values),
         "intdiv" => eval_builtin_intdiv(args, context, scope, values),
+        "iterator_count" => eval_builtin_iterator_count(args, context, scope, values),
+        "iterator_to_array" => eval_builtin_iterator_to_array(args, context, scope, values),
         "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable" | "is_writable"
         | "is_writeable" => eval_builtin_file_probe(name, args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_finite" | "is_float" | "is_infinite"
@@ -2009,6 +2011,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_real"
             | "is_resource"
             | "is_string"
+            | "iterator_count"
+            | "iterator_to_array"
             | "json_decode"
             | "json_encode"
             | "json_last_error"
@@ -2275,6 +2279,8 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "inet_ntop" => Some(&["ip"]),
         "inet_pton" => Some(&["ip"]),
         "intdiv" => Some(&["num1", "num2"]),
+        "iterator_count" => Some(&["iterator"]),
+        "iterator_to_array" => Some(&["iterator", "preserve_keys"]),
         "ip2long" => Some(&["ip"]),
         "json_decode" => Some(&["json", "associative", "depth", "flags"]),
         "json_encode" => Some(&["value", "flags", "depth"]),
@@ -3251,6 +3257,20 @@ fn eval_builtin_with_values(
             };
             eval_intdiv_result(*left, *right, values)?
         }
+        "iterator_count" => {
+            let [iterator] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_iterator_count_result(*iterator, values)?
+        }
+        "iterator_to_array" => match evaluated_args {
+            [iterator] => eval_iterator_to_array_result(*iterator, true, values)?,
+            [iterator, preserve_keys] => {
+                let preserve_keys = values.truthy(*preserve_keys)?;
+                eval_iterator_to_array_result(*iterator, preserve_keys, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "ip2long" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -5434,6 +5454,84 @@ fn eval_array_projection_result(
         };
         let index = values.int(position as i64)?;
         result = values.array_set(result, index, value)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `iterator_count()` for eval-supported array iterator inputs.
+fn eval_builtin_iterator_count(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [iterator] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let iterator = eval_expr(iterator, context, scope, values)?;
+    eval_iterator_count_result(iterator, values)
+}
+
+/// Returns the element count for eval-supported array iterator inputs.
+fn eval_iterator_count_result(
+    iterator: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !matches!(values.type_tag(iterator)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let len = values.array_len(iterator)?;
+    values.int(i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?)
+}
+
+/// Evaluates PHP `iterator_to_array()` for eval-supported array iterator inputs.
+fn eval_builtin_iterator_to_array(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [iterator] => {
+            let iterator = eval_expr(iterator, context, scope, values)?;
+            eval_iterator_to_array_result(iterator, true, values)
+        }
+        [iterator, preserve_keys] => {
+            let iterator = eval_expr(iterator, context, scope, values)?;
+            let preserve_keys = eval_expr(preserve_keys, context, scope, values)?;
+            let preserve_keys = values.truthy(preserve_keys)?;
+            eval_iterator_to_array_result(iterator, preserve_keys, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Copies eval-supported array iterator inputs into a PHP array result.
+fn eval_iterator_to_array_result(
+    iterator: RuntimeCellHandle,
+    preserve_keys: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !matches!(values.type_tag(iterator)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if preserve_keys {
+        return eval_array_copy_preserve_keys(iterator, values);
+    }
+    eval_array_projection_result("array_values", iterator, values)
+}
+
+/// Copies one array-like eval value while preserving iteration keys and order.
+fn eval_array_copy_preserve_keys(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut result = values.assoc_new(len)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        result = values.array_set(result, key, value)?;
     }
     Ok(result)
 }
@@ -15427,6 +15525,30 @@ return function_exists("usort") && function_exists("uasort") && function_exists(
             values.warnings,
             vec!["usort(): Argument #1 ($array) must be passed by reference, value given"]
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval iterator array helpers support direct and dynamic builtin calls.
+    #[test]
+    fn execute_program_dispatches_iterator_array_builtins() {
+        let program = parse_fragment(
+            br#"$items = ["x" => 1, "y" => 2];
+$copy = iterator_to_array($items);
+echo iterator_count($items) . ":" . $copy["x"] . $copy["y"] . ":";
+$values = iterator_to_array($items, false);
+echo (isset($values["x"]) ? "bad" : "reindexed") . ":" . $values[0] . $values[1] . ":";
+echo call_user_func("iterator_count", $items) . ":";
+$spread = call_user_func_array("iterator_to_array", ["iterator" => $items, "preserve_keys" => false]);
+echo $spread[0] . $spread[1] . ":";
+return function_exists("iterator_count") && function_exists("iterator_to_array");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "2:12:reindexed:12:2:12:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
