@@ -1196,6 +1196,9 @@ fn eval_positional_expr_call(
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
         "str_repeat" => eval_builtin_str_repeat(args, context, scope, values),
+        "str_replace" | "str_ireplace" => {
+            eval_builtin_str_replace(name, args, context, scope, values)
+        }
         "substr" => eval_builtin_substr(args, context, scope, values),
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             eval_builtin_string_search(name, args, context, scope, values)
@@ -1516,7 +1519,9 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strcasecmp"
             | "str_contains"
             | "str_ends_with"
+            | "str_ireplace"
             | "str_repeat"
+            | "str_replace"
             | "str_starts_with"
             | "strcmp"
             | "strlen"
@@ -1640,6 +1645,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "round" => Some(&["num", "precision"]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
+        "str_replace" | "str_ireplace" => Some(&["search", "replace", "subject"]),
         "strpos" | "strrpos" => Some(&["haystack", "needle", "offset"]),
         "str_repeat" => Some(&["string", "times"]),
         "substr" => Some(&["string", "offset", "length"]),
@@ -1917,6 +1923,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_str_repeat_result(*value, *times, values)?
+        }
+        "str_replace" | "str_ireplace" => {
+            let [search, replace, subject] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_str_replace_result(name, *search, *replace, *subject, values)?
         }
         "substr" => match evaluated_args {
             [value, offset] => eval_substr_result(*value, *offset, None, values)?,
@@ -2623,6 +2635,69 @@ fn eval_str_repeat_result(
         output.extend_from_slice(&bytes);
     }
     values.string_bytes_value(&output)
+}
+
+/// Evaluates PHP's `str_replace(...)` or `str_ireplace(...)` over eval expressions.
+fn eval_builtin_str_replace(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [search, replace, subject] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let search = eval_expr(search, context, scope, values)?;
+    let replace = eval_expr(replace, context, scope, values)?;
+    let subject = eval_expr(subject, context, scope, values)?;
+    eval_str_replace_result(name, search, replace, subject, values)
+}
+
+/// Replaces every non-overlapping occurrence of a byte-string needle in a subject.
+fn eval_str_replace_result(
+    name: &str,
+    search: RuntimeCellHandle,
+    replace: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let search = values.string_bytes(search)?;
+    let replace = values.string_bytes(replace)?;
+    let subject = values.string_bytes(subject)?;
+    if search.is_empty() {
+        return values.string_bytes_value(&subject);
+    }
+
+    let mut output = Vec::with_capacity(subject.len());
+    let mut start = 0;
+    while let Some(found) = eval_find_replace_match(name, &subject, &search, start)? {
+        output.extend_from_slice(&subject[start..found]);
+        output.extend_from_slice(&replace);
+        start = found + search.len();
+    }
+    output.extend_from_slice(&subject[start..]);
+    values.string_bytes_value(&output)
+}
+
+/// Finds the next replacement match using case-sensitive or ASCII-insensitive comparison.
+fn eval_find_replace_match(
+    name: &str,
+    subject: &[u8],
+    search: &[u8],
+    start: usize,
+) -> Result<Option<usize>, EvalStatus> {
+    match name {
+        "str_replace" => Ok(eval_find_subslice(subject, search, start)),
+        "str_ireplace" => Ok(subject
+            .get(start..)
+            .and_then(|tail| {
+                tail.windows(search.len())
+                    .position(|window| window.eq_ignore_ascii_case(search))
+            })
+            .map(|position| position + start)),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
 }
 
 /// Evaluates PHP's `nl2br(...)` over one eval expression and optional XHTML flag.
@@ -6432,6 +6507,29 @@ return function_exists("implode");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "3:a:b::a|b|:x-2-1-:n:p/q:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval string replacement builtins support direct, named, and callable dispatch.
+    #[test]
+    fn execute_program_dispatches_string_replace_builtins() {
+        let program = parse_fragment(
+            br#"echo str_replace("o", "0", "Hello World"); echo ":";
+echo str_replace(search: "aa", replace: "b", subject: "aaaa"); echo ":";
+echo str_replace("", "x", "abc"); echo ":";
+echo str_ireplace("HE", "ye", "Hello he"); echo ":";
+echo call_user_func("str_replace", "l", "L", "hello"); echo ":";
+echo call_user_func_array("str_ireplace", ["search" => "x", "replace" => "Y", "subject" => "xX"]); echo ":";
+echo function_exists("str_replace");
+return function_exists("str_ireplace");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "Hell0 W0rld:bb:abc:yello ye:heLLo:YY:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

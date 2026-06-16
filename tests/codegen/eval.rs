@@ -997,6 +997,24 @@ echo ":"; echo function_exists("implode");');
     assert_eq!(out, "3:a:b::a|b|:x-2-1-:n:p/q:1:1");
 }
 
+/// Verifies eval string replacement builtins support direct and callable dispatch.
+#[test]
+fn test_eval_dispatches_string_replace_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo str_replace("o", "0", "Hello World"); echo ":";
+echo str_replace(search: "aa", replace: "b", subject: "aaaa"); echo ":";
+echo str_replace("", "x", "abc"); echo ":";
+echo str_ireplace("HE", "ye", "Hello he"); echo ":";
+echo call_user_func("str_replace", "l", "L", "hello"); echo ":";
+echo call_user_func_array("str_ireplace", ["search" => "x", "replace" => "Y", "subject" => "xX"]);
+echo ":"; echo function_exists("str_replace");
+echo ":"; echo function_exists("str_ireplace");');
+"#,
+    );
+    assert_eq!(out, "Hell0 W0rld:bb:abc:yello ye:heLLo:YY:1:1");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
