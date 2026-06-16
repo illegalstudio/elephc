@@ -126,6 +126,7 @@ $case = eval('return strtoupper("eval") . ":" . strtolower("LOUD") . ":" . ucfir
 $word_case = eval('return ucwords("hello eval");');
 $reversed = eval('return strrev("eval");');
 $json_encoded = eval('return json_encode(["name" => "Ada", "skills" => ["math", "code"]]);');
+$json_decoded = eval('$decoded = json_decode("{\"ok\":true,\"items\":[1,2]}", true); return ($decoded["ok"] ? "ok" : "bad") . ":" . $decoded["items"][1];');
 $json_status = eval('return json_last_error() . ":" . json_last_error_msg();');
 $json_valid = eval('return (json_validate("[1,2,3]") ? "valid" : "bad") . ":" . (json_validate("[1]", 1) ? "bad" : "depth");');
 $contains = eval('return str_contains("dynamic eval", "eval") ? "contains" : "missing";');
@@ -266,6 +267,7 @@ echo "case=" . $case . "\n";
 echo "ucwords=" . $word_case . "\n";
 echo "reversed=" . $reversed . "\n";
 echo "json-encoded=" . $json_encoded . "\n";
+echo "json-decoded=" . $json_decoded . "\n";
 echo "json-status=" . $json_status . "\n";
 echo "json-valid=" . $json_valid . "\n";
 echo "contains=" . $contains . "\n";
