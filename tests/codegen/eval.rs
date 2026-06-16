@@ -757,6 +757,30 @@ echo function_exists("array_combine");');
     assert_eq!(out, "10:20:nz:ftd:v:7:8:1");
 }
 
+/// Verifies eval `array_column()` extracts present row columns and reindexes them.
+#[test]
+fn test_eval_dispatches_array_column_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$rows = [["name" => "Ada", "score" => 10], ["score" => 20], ["name" => "Lin", "score" => 30], 42];
+$names = array_column($rows, "name");
+echo count($names) . ":" . $names[0] . ":" . $names[1];
+$scores = array_column($rows, "score");
+echo ":" . count($scores) . ":" . $scores[0] . $scores[2];
+$numeric = array_column([[0 => "zero", 1 => "one"], [1 => "uno"]], 1);
+echo ":" . count($numeric) . ":" . $numeric[0] . ":" . $numeric[1];
+$named = array_column(array: $rows, column_key: "score");
+echo ":" . $named[1];
+$call = call_user_func("array_column", [["x" => 5], ["x" => 6]], "x");
+echo ":" . $call[1];
+$spread = call_user_func_array("array_column", [[["y" => 7], ["z" => 0], ["y" => 9]], "y"]);
+echo ":" . count($spread) . ":" . $spread[1] . ":";
+echo function_exists("array_column");');
+"#,
+    );
+    assert_eq!(out, "2:Ada:Lin:3:1030:2:one:uno:20:6:2:9:1");
+}
+
 /// Verifies eval `array_pad()` and `array_chunk()` build reindexed array shapes.
 #[test]
 fn test_eval_dispatches_array_shape_builtin_calls() {

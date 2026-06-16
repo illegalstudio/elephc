@@ -1193,6 +1193,7 @@ fn eval_positional_expr_call(
         }
         "array_combine" => eval_builtin_array_combine(args, context, scope, values),
         "array_chunk" => eval_builtin_array_chunk(args, context, scope, values),
+        "array_column" => eval_builtin_array_column(args, context, scope, values),
         "array_fill" => eval_builtin_array_fill(args, context, scope, values),
         "array_fill_keys" => eval_builtin_array_fill_keys(args, context, scope, values),
         "array_flip" => eval_builtin_array_flip(args, context, scope, values),
@@ -1603,6 +1604,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             "abs"
             | "addslashes"
             | "array_chunk"
+            | "array_column"
             | "array_combine"
             | "array_fill"
             | "array_fill_keys"
@@ -1876,6 +1878,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "abs" | "ceil" | "floor" | "sqrt" => Some(&["num"]),
         "array_chunk" => Some(&["array", "length"]),
+        "array_column" => Some(&["array", "column_key"]),
         "array_combine" => Some(&["keys", "values"]),
         "array_fill" => Some(&["start_index", "count", "value"]),
         "array_fill_keys" => Some(&["keys", "value"]),
@@ -2127,6 +2130,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_combine_result(*keys, *values_array, values)?
+        }
+        "array_column" => {
+            let [array, column_key] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_column_result(*array, *column_key, values)?
         }
         "array_chunk" => {
             let [array, length] = evaluated_args else {
@@ -2925,6 +2934,50 @@ fn eval_array_combine_result(
         let value_key = values.array_iter_key(values_array, position)?;
         let value = values.array_get(values_array, value_key)?;
         result = values.array_set(result, target_key, value)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `array_column()` over row-array and column-key expressions.
+fn eval_builtin_array_column(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array, column_key] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = eval_expr(array, context, scope, values)?;
+    let column_key = eval_expr(column_key, context, scope, values)?;
+    eval_array_column_result(array, column_key, values)
+}
+
+/// Builds `array_column()` by extracting present row columns into a reindexed array.
+fn eval_array_column_result(
+    array: RuntimeCellHandle,
+    column_key: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut result = values.array_new(len)?;
+    let mut output_index = 0_i64;
+    for position in 0..len {
+        let row_key = values.array_iter_key(array, position)?;
+        let row = values.array_get(array, row_key)?;
+        if !matches!(values.type_tag(row)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            continue;
+        }
+        let exists = values.array_key_exists(column_key, row)?;
+        if !values.truthy(exists)? {
+            continue;
+        }
+        let column = values.array_get(row, column_key)?;
+        let target_key = values.int(output_index)?;
+        output_index = output_index
+            .checked_add(1)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        result = values.array_set(result, target_key, column)?;
     }
     Ok(result)
 }
@@ -10778,6 +10831,34 @@ return function_exists("array_combine");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "10:20:nz:ftd:v:7:8:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_column()` extracts present row columns and reindexes them.
+    #[test]
+    fn execute_program_dispatches_array_column_builtin() {
+        let program = parse_fragment(
+            br#"$rows = [["name" => "Ada", "score" => 10], ["score" => 20], ["name" => "Lin", "score" => 30], 42];
+$names = array_column($rows, "name");
+echo count($names) . ":" . $names[0] . ":" . $names[1];
+$scores = array_column($rows, "score");
+echo ":" . count($scores) . ":" . $scores[0] . $scores[2];
+$numeric = array_column([[0 => "zero", 1 => "one"], [1 => "uno"]], 1);
+echo ":" . count($numeric) . ":" . $numeric[0] . ":" . $numeric[1];
+$named = array_column(array: $rows, column_key: "score");
+echo ":" . $named[1];
+$call = call_user_func("array_column", [["x" => 5], ["x" => 6]], "x");
+echo ":" . $call[1];
+$spread = call_user_func_array("array_column", [[["y" => 7], ["z" => 0], ["y" => 9]], "y"]);
+echo ":" . count($spread) . ":" . $spread[1] . ":";
+return function_exists("array_column");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "2:Ada:Lin:3:1030:2:one:uno:20:6:2:9:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
