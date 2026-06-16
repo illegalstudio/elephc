@@ -620,6 +620,19 @@ echo $items[0] . $items[1];
     assert_eq!(out, "ab");
 }
 
+/// Verifies eval mutates an existing native local array instead of replacing it with a fresh one.
+#[test]
+fn test_eval_mutates_existing_native_array_local() {
+    let out = compile_and_run(
+        r#"<?php
+$items = ["a", "b"];
+eval('$items[0] = "z"; $items[] = "c";');
+echo $items[0] . ":" . $items[1] . ":" . $items[2] . ":" . count($items);
+"#,
+    );
+    assert_eq!(out, "z:b:c:3");
+}
+
 /// Verifies eval indexed-array append syntax writes the next visible element.
 #[test]
 fn test_eval_indexed_array_append_is_visible_after_eval() {
