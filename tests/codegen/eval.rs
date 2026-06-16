@@ -1588,6 +1588,32 @@ echo function_exists("gethostbyaddr");');
     assert_eq!(out, "direct:named:false:call:spread:1");
 }
 
+/// Verifies eval protocol and service database lookups dispatch dynamically.
+#[test]
+fn test_eval_dispatches_protocol_service_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo getprotobyname("TCP") . ":";
+echo getprotobynumber(6) . ":";
+echo getprotobyname("no_such_protocol") === false ? "missing-proto" : "bad"; echo ":";
+echo getprotobynumber(999) === false ? "missing-number" : "bad"; echo ":";
+echo getservbyname("www", "tcp") . ":";
+echo getservbyport(80, "tcp") . ":";
+echo getservbyname("no_such_service", "tcp") === false ? "missing-service" : "bad"; echo ":";
+echo getservbyport(80, "no_such_proto") === false ? "missing-port" : "bad"; echo ":";
+echo call_user_func("getprotobyname", "udp") . ":";
+echo call_user_func_array("getprotobynumber", ["protocol" => 17]) . ":";
+echo call_user_func("getservbyname", "https", "tcp") . ":";
+echo call_user_func_array("getservbyport", ["port" => 443, "protocol" => "tcp"]) . ":";
+echo function_exists("getprotobyname"); echo function_exists("getprotobynumber"); echo function_exists("getservbyname"); echo function_exists("getservbyport");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "6:tcp:missing-proto:missing-number:80:http:missing-service:missing-port:17:udp:443:https:1111"
+    );
+}
+
 /// Verifies eval stream introspection builtins return native-compatible static lists.
 #[test]
 fn test_eval_dispatches_stream_introspection_builtin_calls() {
