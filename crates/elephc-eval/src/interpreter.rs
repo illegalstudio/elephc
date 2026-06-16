@@ -54,6 +54,12 @@ struct EvalSprintfSpec {
     specifier: u8,
 }
 
+/// Eval-visible predefined constant payloads that are not stored in the dynamic context.
+enum EvalPredefinedConstant {
+    Int(i64),
+    String(&'static str),
+}
+
 /// Hash algorithm names supported by eval `hash_algos()`, matching native runtime order.
 const EVAL_HASH_ALGOS: &[&str] = &[
     "md2",
@@ -1661,7 +1667,7 @@ fn eval_define_name(
     if name.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if eval_predefined_int_constant(&name).is_some() || context.has_constant(&name) {
+    if eval_predefined_constant_value(&name).is_some() || context.has_constant(&name) {
         values.warning(DEFINE_ALREADY_DEFINED_WARNING)?;
         return Ok(false);
     }
@@ -1681,7 +1687,7 @@ fn eval_defined_name(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let name = eval_constant_name(name, values)?;
-    Ok(eval_predefined_int_constant(&name).is_some() || context.has_constant(&name))
+    Ok(eval_predefined_constant_value(&name).is_some() || context.has_constant(&name))
 }
 
 /// Reads a PHP constant name from a runtime cell without changing case.
@@ -10209,8 +10215,8 @@ fn eval_const_fetch(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some(value) = eval_predefined_int_constant(name) {
-        return values.int(value);
+    if let Some(value) = eval_predefined_constant(name, values)? {
+        return Ok(value);
     }
     let Some(value) = context.constant(name) else {
         return Err(EvalStatus::RuntimeFatal);
@@ -10218,19 +10224,46 @@ fn eval_const_fetch(
     values.retain(value)
 }
 
-/// Returns eval-visible predefined integer constants that do not live in dynamic context.
-fn eval_predefined_int_constant(name: &str) -> Option<i64> {
-    match name {
-        "PATHINFO_DIRNAME" => Some(EVAL_PATHINFO_DIRNAME),
-        "PATHINFO_BASENAME" => Some(EVAL_PATHINFO_BASENAME),
-        "PATHINFO_EXTENSION" => Some(EVAL_PATHINFO_EXTENSION),
-        "PATHINFO_FILENAME" => Some(EVAL_PATHINFO_FILENAME),
-        "PATHINFO_ALL" => Some(EVAL_PATHINFO_ALL),
-        "FNM_NOESCAPE" => Some(EVAL_FNM_NOESCAPE),
-        "FNM_PATHNAME" => Some(EVAL_FNM_PATHNAME),
-        "FNM_PERIOD" => Some(EVAL_FNM_PERIOD),
-        "FNM_CASEFOLD" => Some(EVAL_FNM_CASEFOLD),
+/// Materializes one eval-visible predefined constant into a runtime cell.
+fn eval_predefined_constant(
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(value) = eval_predefined_constant_value(name) else {
+        return Ok(None);
+    };
+    match value {
+        EvalPredefinedConstant::Int(value) => values.int(value).map(Some),
+        EvalPredefinedConstant::String(value) => values.string(value).map(Some),
+    }
+}
+
+/// Returns eval-visible predefined constants that do not live in dynamic context.
+fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> {
+    match name.trim_start_matches('\\') {
+        "PATHINFO_DIRNAME" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_DIRNAME)),
+        "PATHINFO_BASENAME" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_BASENAME)),
+        "PATHINFO_EXTENSION" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_EXTENSION)),
+        "PATHINFO_FILENAME" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_FILENAME)),
+        "PATHINFO_ALL" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_ALL)),
+        "FNM_NOESCAPE" => Some(EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE)),
+        "FNM_PATHNAME" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME)),
+        "FNM_PERIOD" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PERIOD)),
+        "FNM_CASEFOLD" => Some(EvalPredefinedConstant::Int(EVAL_FNM_CASEFOLD)),
+        "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
+        "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
+        "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
+        "DIRECTORY_SEPARATOR" => Some(EvalPredefinedConstant::String("/")),
         _ => None,
+    }
+}
+
+/// Returns the PHP OS constant for the host platform running the eval bridge.
+fn eval_php_os_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Darwin"
+    } else {
+        "Linux"
     }
 }
 
@@ -15149,6 +15182,34 @@ echo call_user_func_array("defined", ["constant_name" => "\\DynEvalConst"]) ? "Y
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "YokokYYNNYY");
+        assert_eq!(
+            values.warnings,
+            vec![DEFINE_ALREADY_DEFINED_WARNING.to_string()]
+        );
+    }
+
+    /// Verifies eval predefined runtime constants are fetchable and cannot be redefined.
+    #[test]
+    fn execute_program_reads_predefined_runtime_constants() {
+        let program = parse_fragment(
+            br#"echo PHP_EOL === "\n" ? "eol" : "bad"; echo ":";
+echo (PHP_OS === "Darwin" || PHP_OS === "Linux") ? "os" : "bad"; echo ":";
+echo DIRECTORY_SEPARATOR; echo ":";
+echo PHP_INT_MAX > 9000000000000000000 ? "int" : "bad"; echo ":";
+echo defined("PHP_OS") ? "defined" : "bad"; echo ":";
+echo defined("\\PHP_OS") ? "root" : "bad"; echo ":";
+echo defined("php_os") ? "bad" : "case"; echo ":";
+echo define("PHP_OS", "x") ? "bad" : "locked"; echo ":";
+return PHP_INT_MAX;"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "eol:os:/:int:defined:root:case:locked:");
+        assert_eq!(values.get(result), FakeValue::Int(i64::MAX));
         assert_eq!(
             values.warnings,
             vec![DEFINE_ALREADY_DEFINED_WARNING.to_string()]
