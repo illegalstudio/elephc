@@ -1029,6 +1029,27 @@ echo ":"; echo function_exists("implode");');
     assert_eq!(out, "3:a:b::a|b|:x-2-1-:n:p/q:1:1");
 }
 
+/// Verifies eval `str_split()` builds indexed chunk arrays.
+#[test]
+fn test_eval_dispatches_str_split_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$letters = str_split("abc");
+echo count($letters) . ":" . $letters[0] . $letters[1] . $letters[2]; echo ":";
+$pairs = str_split(string: "abcd", length: 2);
+echo $pairs[0] . "-" . $pairs[1]; echo ":";
+$empty = str_split("");
+echo count($empty); echo ":";
+$call = call_user_func("str_split", "xyz", 2);
+echo $call[0] . "-" . $call[1]; echo ":";
+$named = call_user_func_array("str_split", ["string" => "pqrs", "length" => 3]);
+echo $named[0] . "-" . $named[1];
+echo ":"; echo function_exists("str_split");');
+"#,
+    );
+    assert_eq!(out, "3:abc:ab-cd:0:xy-z:pqr-s:1");
+}
+
 /// Verifies eval string replacement builtins support direct and callable dispatch.
 #[test]
 fn test_eval_dispatches_string_replace_builtin_calls() {

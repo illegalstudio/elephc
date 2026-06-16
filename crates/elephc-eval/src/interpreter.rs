@@ -1211,6 +1211,7 @@ fn eval_positional_expr_call(
         "str_replace" | "str_ireplace" => {
             eval_builtin_str_replace(name, args, context, scope, values)
         }
+        "str_split" => eval_builtin_str_split(args, context, scope, values),
         "strstr" => eval_builtin_strstr(args, context, scope, values),
         "substr" => eval_builtin_substr(args, context, scope, values),
         "substr_replace" => eval_builtin_substr_replace(args, context, scope, values),
@@ -1552,6 +1553,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strpos"
             | "strrpos"
             | "strrev"
+            | "str_split"
             | "strstr"
             | "substr"
             | "stripslashes"
@@ -1682,6 +1684,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "str_replace" | "str_ireplace" => Some(&["search", "replace", "subject"]),
         "strpos" | "strrpos" => Some(&["haystack", "needle", "offset"]),
         "str_repeat" => Some(&["string", "times"]),
+        "str_split" => Some(&["string", "length"]),
         "substr" => Some(&["string", "offset", "length"]),
         "substr_replace" => Some(&["string", "replace", "offset", "length"]),
         "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
@@ -1978,6 +1981,11 @@ fn eval_builtin_with_values(
             };
             eval_str_replace_result(name, *search, *replace, *subject, values)?
         }
+        "str_split" => match evaluated_args {
+            [value] => eval_str_split_result(*value, None, values)?,
+            [value, length] => eval_str_split_result(*value, Some(*length), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "substr" => match evaluated_args {
             [value, offset] => eval_substr_result(*value, *offset, None, values)?,
             [value, offset, length] => eval_substr_result(*value, *offset, Some(*length), values)?,
@@ -2780,6 +2788,52 @@ fn eval_find_replace_match(
             .map(|position| position + start)),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Evaluates PHP `str_split(...)` over one string and optional chunk length.
+fn eval_builtin_str_split(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [value] => {
+            let value = eval_expr(value, context, scope, values)?;
+            eval_str_split_result(value, None, values)
+        }
+        [value, length] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let length = eval_expr(length, context, scope, values)?;
+            eval_str_split_result(value, Some(length), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Splits one byte string into indexed string chunks using PHP `str_split()` rules.
+fn eval_str_split_result(
+    value: RuntimeCellHandle,
+    length: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let length = match length {
+        Some(length) => eval_int_value(length, values)?,
+        None => 1,
+    };
+    if length <= 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let length = usize::try_from(length).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let mut result = values.array_new(0)?;
+    for (index, chunk) in bytes.chunks(length).enumerate() {
+        let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let key = values.int(index)?;
+        let value = values.string_bytes_value(chunk)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }
 
 /// Evaluates PHP's `nl2br(...)` over one eval expression and optional XHTML flag.
@@ -6977,6 +7031,32 @@ return function_exists("implode");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "3:a:b::a|b|:x-2-1-:n:p/q:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `str_split()` builds indexed arrays of fixed-width chunks.
+    #[test]
+    fn execute_program_dispatches_str_split_builtin() {
+        let program = parse_fragment(
+            br#"$letters = str_split("abc");
+echo count($letters) . ":" . $letters[0] . $letters[1] . $letters[2]; echo ":";
+$pairs = str_split(string: "abcd", length: 2);
+echo $pairs[0] . "-" . $pairs[1]; echo ":";
+$empty = str_split("");
+echo count($empty); echo ":";
+$call = call_user_func("str_split", "xyz", 2);
+echo $call[0] . "-" . $call[1]; echo ":";
+$named = call_user_func_array("str_split", ["string" => "pqrs", "length" => 3]);
+echo $named[0] . "-" . $named[1]; echo ":";
+return function_exists("str_split");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "3:abc:ab-cd:0:xy-z:pqr-s:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
