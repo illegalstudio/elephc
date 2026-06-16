@@ -147,6 +147,7 @@ $string_chunks = eval('$chunks = str_split("eval", 2); return $chunks[0] . ":" .
 $replaced = eval('return str_replace("green", "lime", "red green blue");');
 $html_escaped = eval('return htmlspecialchars("<b>bold</b>");');
 $url_codec = eval('return urlencode("a b&=") . ":" . rawurldecode("a%20b%26%3D");');
+$checksum = eval('return crc32("hello");');
 $hexed = eval('return bin2hex("Az");');
 $unhexed = eval('return hex2bin("417a");');
 $base64 = eval('return base64_encode("Hello");');
@@ -240,6 +241,7 @@ echo "str-split=" . $string_chunks . "\n";
 echo "str-replace=" . $replaced . "\n";
 echo "htmlspecialchars=" . $html_escaped . "\n";
 echo "url-codec=" . $url_codec . "\n";
+echo "crc32=" . $checksum . "\n";
 echo "bin2hex=" . $hexed . "\n";
 echo "hex2bin=" . $unhexed . "\n";
 echo "base64=" . $base64 . "\n";
