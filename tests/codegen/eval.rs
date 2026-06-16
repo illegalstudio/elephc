@@ -809,6 +809,29 @@ echo function_exists("array_slice");');
     assert_eq!(out, "3:203040:30:3:3050:67:3:2040:2:8:10:1");
 }
 
+/// Verifies eval `array_merge()` appends numeric keys and overwrites string keys.
+#[test]
+fn test_eval_dispatches_array_merge_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$merged = array_merge([1, 2], [3, 4]);
+echo count($merged) . ":" . $merged[0] . $merged[1] . $merged[2] . $merged[3];
+$left = [1, 2];
+$right = [3];
+$copy = array_merge($left, $right);
+echo ":" . count($left) . ":" . $left[0] . ":" . $copy[2];
+$assoc = array_merge(["a" => 1, 2 => "x"], ["a" => 9, 5 => "y", "b" => 3]);
+echo ":" . $assoc["a"] . ":" . $assoc[0] . ":" . $assoc[1] . ":" . $assoc["b"];
+$call = call_user_func("array_merge", [6], [7, 8]);
+echo ":" . $call[2];
+$spread = call_user_func_array("array_merge", [[9], [10]]);
+echo ":" . $spread[1] . ":";
+echo function_exists("array_merge");');
+"#,
+    );
+    assert_eq!(out, "4:1234:2:1:3:9:x:y:3:8:10:1");
+}
+
 /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
 #[test]
 fn test_eval_dispatches_array_fill_builtin_calls() {
