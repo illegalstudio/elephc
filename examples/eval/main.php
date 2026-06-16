@@ -41,6 +41,14 @@ class EvalCounter {
     }
 }
 
+class EvalAotBox {
+    public int $value = 0;
+
+    public function __construct(int $value) {
+        $this->value = $value;
+    }
+}
+
 $x = 1;
 $profile = ["name" => "Ada"];
 $result = eval('$x = $x + 2; $created = "dynamic"; return $x + 4;');
@@ -122,6 +130,8 @@ $append_assoc = eval('$items = ["name" => "Ada"]; $items[] = "Grace"; return $it
 $array_key_probe = eval('$m = ["name" => null]; return (array_key_exists("name", $m) ? "present" : "missing") . ":" . (array_key_exists("age", $m) ? "bad" : "absent");');
 $array_search = eval('return (in_array("b", ["a", "b"]) ? "in" : "missing") . ":" . array_search("Grace", ["name" => "Grace"]);');
 $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" . (strcasecmp("Hello", "hello") === 0 ? "ci" : "bad") . ":" . (hash_equals("abc", "abc") ? "hash" : "bad");');
+$eval_class_probe = eval('return class_exists("EvalAotBox") ? "yes" : "no";');
+$eval_dynamic_new = eval('$box = new EvalAotBox(21); return $box->value;');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');
 
@@ -186,6 +196,8 @@ echo "append-assoc=" . $append_assoc . "\n";
 echo "array-key-exists=" . $array_key_probe . "\n";
 echo "array-search=" . $array_search . "\n";
 echo "string-compare=" . $string_compare . "\n";
+echo "eval-class-exists=" . $eval_class_probe . "\n";
+echo "eval-dynamic-new=" . $eval_dynamic_new . "\n";
 $counter = new EvalCounter();
 $counter->bump();
 echo "eval-this-property=" . $counter->value . "\n";
