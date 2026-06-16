@@ -575,6 +575,10 @@ SPL autoload and class-introspection helpers are documented in
 `spl_object_id()`, `spl_object_hash()`, `class_implements()`,
 `class_parents()`, and `class_uses()`.
 
+Inside `eval()`, `spl_classes()` is available through direct calls,
+`call_user_func()`, `call_user_func_array()`, and `function_exists()` and
+returns the same static registry snapshot as native code.
+
 ## Iterator Helper Functions
 
 The iterator helper functions cover the PHP SPL traversal helpers:

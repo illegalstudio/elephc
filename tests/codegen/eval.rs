@@ -966,6 +966,28 @@ echo function_exists("rand"); echo function_exists("mt_rand");');
     assert_eq!(out, "plain:range:same:swap:call:spread:11");
 }
 
+/// Verifies eval `spl_classes()` exposes the same static SPL class list as native code.
+#[test]
+fn test_eval_dispatches_spl_classes_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$names = spl_classes();
+echo count($names) . ":" . $names[0] . ":" . $names[55] . ":";
+echo (in_array("Exception", $names) ? "exception" : "bad") . ":";
+echo (in_array("SplDoublyLinkedList", $names) ? "list" : "bad") . ":";
+$call = call_user_func("spl_classes");
+echo (in_array("Throwable", $call) ? "call" : "bad") . ":";
+$spread = call_user_func_array("spl_classes", []);
+echo (count($spread) === count($names) ? "spread" : "bad") . ":";
+echo function_exists("spl_classes"); echo is_callable("spl_classes");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "61:AppendIterator:Throwable:exception:list:call:spread:11"
+    );
+}
+
 /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
 #[test]
 fn test_eval_dispatches_array_fill_builtin_calls() {

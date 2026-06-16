@@ -115,6 +115,74 @@ const EVAL_STREAM_FILTERS: &[&str] = &[
     "bzip2.decompress",
 ];
 
+/// SPL/core type names reported by eval `spl_classes()`.
+///
+/// Mirrors `src/codegen/builtins/spl/mod.rs::SPL_CLASS_NAMES` so dynamic eval
+/// exposes the same static registry snapshot as native code.
+const EVAL_SPL_CLASS_NAMES: &[&str] = &[
+    "AppendIterator",
+    "ArrayAccess",
+    "ArrayIterator",
+    "ArrayObject",
+    "BadFunctionCallException",
+    "BadMethodCallException",
+    "CachingIterator",
+    "CallbackFilterIterator",
+    "Countable",
+    "DomainException",
+    "DirectoryIterator",
+    "EmptyIterator",
+    "Error",
+    "Exception",
+    "FilterIterator",
+    "FilesystemIterator",
+    "GlobIterator",
+    "InfiniteIterator",
+    "InvalidArgumentException",
+    "Iterator",
+    "IteratorAggregate",
+    "IteratorIterator",
+    "JsonSerializable",
+    "LengthException",
+    "LimitIterator",
+    "LogicException",
+    "MultipleIterator",
+    "NoRewindIterator",
+    "OuterIterator",
+    "OutOfBoundsException",
+    "OutOfRangeException",
+    "OverflowException",
+    "ParentIterator",
+    "RangeException",
+    "RecursiveArrayIterator",
+    "RecursiveCachingIterator",
+    "RecursiveCallbackFilterIterator",
+    "RecursiveDirectoryIterator",
+    "RecursiveFilterIterator",
+    "RecursiveIterator",
+    "RecursiveIteratorIterator",
+    "RecursiveRegexIterator",
+    "RegexIterator",
+    "RuntimeException",
+    "SeekableIterator",
+    "SplDoublyLinkedList",
+    "SplFixedArray",
+    "SplFileInfo",
+    "SplFileObject",
+    "SplObserver",
+    "SplQueue",
+    "SplStack",
+    "SplSubject",
+    "SplTempFileObject",
+    "Stringable",
+    "Throwable",
+    "Traversable",
+    "TypeError",
+    "UnderflowException",
+    "UnexpectedValueException",
+    "ValueError",
+];
+
 /// Full English month names used by eval `date()`.
 const EVAL_MONTH_NAMES: &[&str; 12] = &[
     "January",
@@ -1454,6 +1522,7 @@ fn eval_positional_expr_call(
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sleep" => eval_builtin_sleep(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
+        "spl_classes" => eval_builtin_spl_classes(args, values),
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
         "tempnam" => eval_builtin_tempnam(args, context, scope, values),
         "time" => eval_builtin_time(args, values),
@@ -1907,6 +1976,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "sin"
             | "sinh"
             | "sqrt"
+            | "spl_classes"
             | "strcasecmp"
             | "stream_get_filters"
             | "stream_get_transports"
@@ -2121,6 +2191,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
         "round" => Some(&["num", "precision"]),
         "sleep" => Some(&["seconds"]),
+        "spl_classes" => Some(&[]),
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
@@ -2614,6 +2685,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.sqrt(*value)?
+        }
+        "spl_classes" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_spl_classes_result(values)?
         }
         "strrev" => {
             let [value] = evaluated_args else {
@@ -5205,6 +5282,24 @@ fn eval_static_string_array_result(
         result = values.array_set(result, key, value)?;
     }
     Ok(result)
+}
+
+/// Evaluates PHP `spl_classes()` with no arguments.
+fn eval_builtin_spl_classes(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_spl_classes_result(values)
+}
+
+/// Builds the static class-name list returned by eval `spl_classes()`.
+fn eval_spl_classes_result(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_static_string_array_result(EVAL_SPL_CLASS_NAMES, values)
 }
 
 /// Evaluates PHP stream introspection list builtins with no arguments.
@@ -12666,6 +12761,34 @@ return function_exists("stream_get_filters");"#,
         assert_eq!(
             values.output,
             "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:11"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `spl_classes()` returns the native-compatible SPL type snapshot.
+    #[test]
+    fn execute_program_dispatches_spl_classes_builtin() {
+        let program = parse_fragment(
+            br#"$names = spl_classes();
+echo count($names) . ":" . $names[0] . ":" . $names[55] . ":";
+echo (in_array("Exception", $names) ? "exception" : "bad") . ":";
+echo (in_array("SplDoublyLinkedList", $names) ? "list" : "bad") . ":";
+$call = call_user_func("spl_classes");
+echo (in_array("Throwable", $call) ? "call" : "bad") . ":";
+$spread = call_user_func_array("spl_classes", []);
+echo (count($spread) === count($names) ? "spread" : "bad") . ":";
+echo function_exists("spl_classes");
+return is_callable("spl_classes");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "61:AppendIterator:Throwable:exception:list:call:spread:1"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
