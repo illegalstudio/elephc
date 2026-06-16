@@ -1200,6 +1200,9 @@ fn eval_positional_expr_call(
             eval_builtin_array_projection(name, args, context, scope, values)
         }
         "array_key_exists" => eval_builtin_array_key_exists(args, context, scope, values),
+        "array_diff" | "array_intersect" => {
+            eval_builtin_array_value_set(name, args, context, scope, values)
+        }
         "array_merge" => eval_builtin_array_merge(args, context, scope, values),
         "array_product" | "array_sum" => {
             eval_builtin_array_aggregate(name, args, context, scope, values)
@@ -1602,6 +1605,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_flip"
             | "array_key_exists"
             | "array_keys"
+            | "array_diff"
+            | "array_intersect"
             | "array_merge"
             | "array_pad"
             | "array_product"
@@ -2162,6 +2167,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.array_key_exists(*key, *array)?
+        }
+        "array_diff" | "array_intersect" => {
+            let [left, right] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_value_set_result(name, *left, *right, values)?
         }
         "array_merge" => {
             let [left, right] = evaluated_args else {
@@ -3395,6 +3406,56 @@ fn eval_array_search_result(
         "array_search" => values.bool_value(false),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Evaluates PHP value-set array builtins over two eval array expressions.
+fn eval_builtin_array_value_set(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [left, right] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let left = eval_expr(left, context, scope, values)?;
+    let right = eval_expr(right, context, scope, values)?;
+    eval_array_value_set_result(name, left, right, values)
+}
+
+/// Builds `array_diff()` or `array_intersect()` using PHP's default string comparison mode.
+fn eval_array_value_set_result(
+    name: &str,
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let left_len = values.array_len(left)?;
+    let right_len = values.array_len(right)?;
+    let mut right_values = Vec::with_capacity(right_len);
+    for position in 0..right_len {
+        let key = values.array_iter_key(right, position)?;
+        let value = values.array_get(right, key)?;
+        right_values.push(values.string_bytes(value)?);
+    }
+
+    let mut result = values.assoc_new(left_len)?;
+    for position in 0..left_len {
+        let key = values.array_iter_key(left, position)?;
+        let value = values.array_get(left, key)?;
+        let comparable = values.string_bytes(value)?;
+        let found = right_values.iter().any(|right_value| right_value == &comparable);
+        let keep = match name {
+            "array_diff" => !found,
+            "array_intersect" => found,
+            _ => return Err(EvalStatus::UnsupportedConstruct),
+        };
+        if keep {
+            result = values.array_set(result, key, value)?;
+        }
+    }
+    Ok(result)
 }
 
 /// Evaluates PHP `array_merge()` over two array expressions.
@@ -10699,6 +10760,32 @@ return function_exists("array_merge");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "4:1234:2:1:3:9:x:y:3:8:10:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_diff()` and `array_intersect()` compare values as strings.
+    #[test]
+    fn execute_program_dispatches_array_value_set_builtins() {
+        let program = parse_fragment(
+            br#"$diff = array_diff(["a" => 1, "b" => 2, "c" => "2", "d" => 3], [2]);
+echo count($diff) . ":" . $diff["a"] . ":" . $diff["d"];
+echo ":" . (array_key_exists("b", $diff) ? "bad" : "no-b");
+echo ":" . (array_key_exists("c", $diff) ? "bad" : "no-c");
+$inter = array_intersect(["a" => 1, "b" => 2, "c" => "2", "d" => 3], ["2", 4]);
+echo ":" . count($inter) . ":" . $inter["b"] . ":" . $inter["c"];
+$call = call_user_func("array_diff", [1, 2, 3], [2]);
+echo ":" . count($call) . ":" . $call[0] . $call[2];
+$spread = call_user_func_array("array_intersect", [[1, 2, 3], [3]]);
+echo ":" . count($spread) . ":" . $spread[2] . ":";
+return function_exists("array_diff") && function_exists("array_intersect");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "2:1:3:no-b:no-c:2:2:2:2:13:1:3:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

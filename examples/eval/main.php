@@ -138,6 +138,7 @@ $array_fill = eval('$filled = array_fill(2, 2, "x"); $map = array_fill_keys(["a"
 $array_shapes = eval('$padded = array_pad([1, 2], 4, 0); $chunks = array_chunk([1, 2, 3], 2); return $padded[3] . ":" . count($chunks);');
 $array_slice = eval('$slice = array_slice([10, 20, 30], 1); return count($slice) . ":" . $slice[0];');
 $array_merge = eval('$merged = array_merge([1, 2], [3]); return count($merged) . ":" . $merged[2];');
+$array_sets = eval('$diff = array_diff(["a" => 1, "b" => 2, "c" => "2", "d" => 3], [2]); $inter = array_intersect(["a" => 1, "b" => 2, "c" => "2"], ["2"]); return count($diff) . ":" . count($inter) . ":" . $inter["b"];');
 $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" . (strcasecmp("Hello", "hello") === 0 ? "ci" : "bad") . ":" . (hash_equals("abc", "abc") ? "hash" : "bad");');
 $ctype_checks = eval('return (ctype_alpha("abc") ? "alpha" : "bad") . ":" . (ctype_digit("123") ? "digit" : "bad") . ":" . (ctype_space(" \t\n") ? "space" : "bad");');
 $slashes = eval('return addslashes("A\"B") . ":" . stripslashes(addslashes("A\"B"));');
@@ -255,6 +256,7 @@ echo "array-fill=" . $array_fill . "\n";
 echo "array-shapes=" . $array_shapes . "\n";
 echo "array-slice=" . $array_slice . "\n";
 echo "array-merge=" . $array_merge . "\n";
+echo "array-sets=" . $array_sets . "\n";
 echo "string-compare=" . $string_compare . "\n";
 echo "ctype=" . $ctype_checks . "\n";
 echo "slashes=" . $slashes . "\n";

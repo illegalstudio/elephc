@@ -832,6 +832,27 @@ echo function_exists("array_merge");');
     assert_eq!(out, "4:1234:2:1:3:9:x:y:3:8:10:1");
 }
 
+/// Verifies eval `array_diff()` and `array_intersect()` preserve left keys and compare by string value.
+#[test]
+fn test_eval_dispatches_array_value_set_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$diff = array_diff(["a" => 1, "b" => 2, "c" => "2", "d" => 3], [2]);
+echo count($diff) . ":" . $diff["a"] . ":" . $diff["d"];
+echo ":" . (array_key_exists("b", $diff) ? "bad" : "no-b");
+echo ":" . (array_key_exists("c", $diff) ? "bad" : "no-c");
+$inter = array_intersect(["a" => 1, "b" => 2, "c" => "2", "d" => 3], ["2", 4]);
+echo ":" . count($inter) . ":" . $inter["b"] . ":" . $inter["c"];
+$call = call_user_func("array_diff", [1, 2, 3], [2]);
+echo ":" . count($call) . ":" . $call[0] . $call[2];
+$spread = call_user_func_array("array_intersect", [[1, 2, 3], [3]]);
+echo ":" . count($spread) . ":" . $spread[2] . ":";
+echo function_exists("array_diff"); echo function_exists("array_intersect");');
+"#,
+    );
+    assert_eq!(out, "2:1:3:no-b:no-c:2:2:2:2:13:1:3:11");
+}
+
 /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
 #[test]
 fn test_eval_dispatches_array_fill_builtin_calls() {
@@ -1266,10 +1287,7 @@ echo ":"; echo function_exists("ctype_alnum");
 echo ":"; echo function_exists("ctype_space");');
 "#,
     );
-    assert_eq!(
-        out,
-        "A:D:N:S:empty:not-digit:not-space:1:1:1:1"
-    );
+    assert_eq!(out, "A:D:N:S:empty:not-digit:not-space:1:1:1:1");
 }
 
 /// Verifies eval `crc32()` returns PHP-compatible non-negative checksums.
@@ -1651,10 +1669,7 @@ echo function_exists("stat"); echo function_exists("lstat");
 ');
 "#,
     );
-    assert_eq!(
-        out,
-        "stat:mode:lstat:missing:callstat:calllstat:cleanup:11"
-    );
+    assert_eq!(out, "stat:mode:lstat:missing:callstat:calllstat:cleanup:11");
 }
 
 /// Verifies eval path operation builtins mutate local filesystem state.
