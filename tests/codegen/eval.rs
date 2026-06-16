@@ -1406,6 +1406,36 @@ echo ":"; echo function_exists("pathinfo"); echo defined("PATHINFO_ALL");');
     );
 }
 
+/// Verifies eval local filesystem builtins read, write, stat, delete, and dispatch.
+#[test]
+fn test_eval_dispatches_filesystem_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo file_put_contents("eval-fs.txt", "hello") . ":";
+echo file_get_contents("eval-fs.txt") . ":";
+echo file_exists("eval-fs.txt") ? "exists" : "missing"; echo ":";
+echo is_file(filename: "eval-fs.txt") ? "file" : "bad"; echo ":";
+echo is_dir(".") ? "dir" : "bad"; echo ":";
+echo is_readable("eval-fs.txt") ? "readable" : "bad"; echo ":";
+echo is_writable("eval-fs.txt") ? "writable" : "bad"; echo ":";
+echo is_writeable("eval-fs.txt") ? "writeable" : "bad"; echo ":";
+echo filesize("eval-fs.txt") . ":";
+echo call_user_func("file_exists", "eval-fs.txt") ? "call-exists" : "bad"; echo ":";
+echo call_user_func_array("filesize", ["filename" => "eval-fs.txt"]) . ":";
+echo unlink("eval-fs.txt") ? "unlinked" : "bad"; echo ":";
+echo file_exists("eval-fs.txt") ? "bad" : "gone"; echo ":";
+echo function_exists("file_get_contents"); echo function_exists("file_put_contents");
+echo function_exists("file_exists"); echo function_exists("is_file"); echo function_exists("is_dir");
+echo function_exists("is_readable"); echo function_exists("is_writable"); echo function_exists("is_writeable");
+echo function_exists("filesize"); echo function_exists("unlink");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "5:hello:exists:file:dir:readable:writable:writeable:5:call-exists:5:unlinked:gone:1111111111"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
