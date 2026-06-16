@@ -899,6 +899,7 @@ fn eval_positional_expr_call(
     match name {
         "abs" => eval_builtin_abs(args, context, scope, values),
         "array_combine" => eval_builtin_array_combine(args, context, scope, values),
+        "array_flip" => eval_builtin_array_flip(args, context, scope, values),
         "array_keys" | "array_values" => {
             eval_builtin_array_projection(name, args, context, scope, values)
         }
@@ -1048,6 +1049,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
         name,
         "abs"
             | "array_combine"
+            | "array_flip"
             | "array_key_exists"
             | "array_keys"
             | "array_product"
@@ -1186,7 +1188,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "abs" | "ceil" | "floor" | "sqrt" => Some(&["num"]),
         "array_combine" => Some(&["keys", "values"]),
-        "array_keys" | "array_product" | "array_sum" | "array_values" => Some(&["array"]),
+        "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_values" => {
+            Some(&["array"])
+        }
         "array_key_exists" => Some(&["key", "array"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
@@ -1351,6 +1355,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_combine_result(*keys, *values_array, values)?
+        }
+        "array_flip" => {
+            let [array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_flip_result(*array, values)?
         }
         "array_product" | "array_sum" => {
             let [array] = evaluated_args else {
@@ -1620,6 +1630,38 @@ fn eval_array_combine_result(
         let value_key = values.array_iter_key(values_array, position)?;
         let value = values.array_get(values_array, value_key)?;
         result = values.array_set(result, target_key, value)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `array_flip()` over one eval array expression.
+fn eval_builtin_array_flip(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = eval_expr(array, context, scope, values)?;
+    eval_array_flip_result(array, values)
+}
+
+/// Builds the associative result for `array_flip()` using PHP's valid value-key subset.
+fn eval_array_flip_result(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut result = values.assoc_new(len)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        if !matches!(values.type_tag(value)?, EVAL_TAG_INT | EVAL_TAG_STRING) {
+            continue;
+        }
+        result = values.array_set(result, value, key)?;
     }
     Ok(result)
 }
@@ -4826,6 +4868,29 @@ return function_exists("array_combine");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "10:20:nz:ftd:v:7:8:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_flip()` swaps valid values into PHP-normalized keys.
+    #[test]
+    fn execute_program_dispatches_array_flip_builtin() {
+        let program = parse_fragment(
+            br#"$flipped = array_flip(["a" => "x", "b" => "y", "c" => "x", "d" => 1, "e" => "01", "skip" => null, "truth" => true]);
+echo $flipped["x"] . ":" . $flipped["y"] . ":" . $flipped[1] . ":" . $flipped["01"] . ":" . count($flipped);
+$named = array_flip(array: ["k" => "v"]);
+echo ":" . $named["v"];
+$call = call_user_func("array_flip", ["left" => "right"]);
+echo ":" . $call["right"];
+$spread = call_user_func_array("array_flip", [["n" => 9]]);
+echo ":" . $spread[9] . ":";
+return function_exists("array_flip");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "c:b:d:e:4:k:left:n:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

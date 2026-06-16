@@ -757,6 +757,25 @@ echo function_exists("array_combine");');
     assert_eq!(out, "10:20:nz:ftd:v:7:8:1");
 }
 
+/// Verifies eval `array_flip()` supports PHP key rules and callable dispatch.
+#[test]
+fn test_eval_dispatches_array_flip_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$flipped = array_flip(["a" => "x", "b" => "y", "c" => "x", "d" => 1, "e" => "01", "skip" => null, "truth" => true]);
+echo $flipped["x"] . ":" . $flipped["y"] . ":" . $flipped[1] . ":" . $flipped["01"] . ":" . count($flipped);
+$named = array_flip(array: ["k" => "v"]);
+echo ":" . $named["v"];
+$call = call_user_func("array_flip", ["left" => "right"]);
+echo ":" . $call["right"];
+$spread = call_user_func_array("array_flip", [["n" => 9]]);
+echo ":" . $spread[9] . ":";
+echo function_exists("array_flip");');
+"#,
+    );
+    assert_eq!(out, "c:b:d:e:4:k:left:n:1");
+}
+
 /// Verifies eval array projection builtins return indexed key/value arrays.
 #[test]
 fn test_eval_dispatches_array_projection_builtin_calls() {
