@@ -1358,7 +1358,13 @@ fn eval_call(
     }
     if matches!(
         name,
-        "array_pop" | "array_push" | "array_shift" | "array_splice" | "array_unshift"
+        "array_pop"
+            | "array_push"
+            | "array_shift"
+            | "array_splice"
+            | "array_unshift"
+            | "rsort"
+            | "sort"
     ) {
         return eval_builtin_array_pop_shift_call(name, args, context, scope, values);
     }
@@ -2030,6 +2036,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "realpath_cache_get"
             | "realpath_cache_size"
             | "rename"
+            | "rsort"
             | "rtrim"
             | "round"
             | "rmdir"
@@ -2038,6 +2045,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "sha1"
             | "sin"
             | "sinh"
+            | "sort"
             | "sqrt"
             | "spl_classes"
             | "sprintf"
@@ -2176,7 +2184,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_reduce" => Some(&["array", "callback", "initial"]),
         "array_walk" => Some(&["array", "callback"]),
         "array_flip" | "array_keys" | "array_pop" | "array_product" | "array_shift"
-        | "array_sum" | "array_unique" | "array_rand" | "array_values" => Some(&["array"]),
+        | "array_sum" | "array_unique" | "array_rand" | "array_values" | "rsort" | "sort" => {
+            Some(&["array"])
+        }
         "array_push" | "array_unshift" => Some(&["array", "values"]),
         "array_key_exists" => Some(&["key", "array"]),
         "array_pad" => Some(&["array", "length", "value"]),
@@ -2541,6 +2551,15 @@ fn eval_builtin_with_values(
                 "array_splice(): Argument #1 ($array) must be passed by reference, value given",
             )?;
             result
+        }
+        "rsort" | "sort" => {
+            let [array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            values.warning(&format!(
+                "{name}(): Argument #1 ($array) must be passed by reference, value given"
+            ))?;
+            eval_array_sort_value_result(*array, values)?
         }
         "array_flip" => {
             let [array] = evaluated_args else {
@@ -3794,6 +3813,9 @@ fn eval_builtin_array_pop_shift_call(
     if name == "array_splice" {
         return eval_builtin_array_splice_call(args, context, scope, values);
     }
+    if matches!(name, "sort" | "rsort") {
+        return eval_builtin_array_sort_call(name, args, context, scope, values);
+    }
 
     let [arg] = args else {
         return Err(EvalStatus::RuntimeFatal);
@@ -3883,6 +3905,157 @@ fn eval_builtin_array_splice_call(
         values.release(replaced)?;
     }
     Ok(removed)
+}
+
+/// Evaluates direct by-reference `sort()` / `rsort()` calls and writes back the array.
+fn eval_builtin_array_sort_call(
+    name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let array_name = eval_array_sort_direct_arg(args)?;
+    let Some(entry) =
+        scope_entry(context, scope, &array_name).filter(|entry| entry.flags().is_visible())
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = entry.cell();
+    let ownership = entry.flags().ownership;
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+
+    let replacement = eval_array_sort_replacement(name, array, values)?;
+    let result = values.bool_value(true)?;
+    for replaced in set_scope_cell(context, scope, array_name, replacement, ownership)? {
+        values.release(replaced)?;
+    }
+    Ok(result)
+}
+
+/// Extracts the direct variable argument accepted by `sort()` / `rsort()`.
+fn eval_array_sort_direct_arg(args: &[EvalCallArg]) -> Result<String, EvalStatus> {
+    let [arg] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if arg.is_spread() || !matches!(arg.name(), None | Some("array")) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let EvalExpr::LoadVar(name) = arg.value() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    Ok(name.clone())
+}
+
+/// Returns the dynamic callable result for by-value `sort()` / `rsort()` calls.
+fn eval_array_sort_value_result(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    values.bool_value(true)
+}
+
+/// Sort key shape supported by eval's homogeneous `sort()` / `rsort()` implementation.
+#[derive(Clone)]
+enum EvalArraySortKey {
+    Numeric(f64),
+    String(Vec<u8>),
+}
+
+/// Builds the sorted, reindexed replacement array for `sort()` / `rsort()`.
+fn eval_array_sort_replacement(
+    name: &str,
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut entries = eval_array_sort_entries(array, values)?;
+    entries.sort_by(|left, right| {
+        let order = eval_array_sort_key_cmp(&left.0, &right.0);
+        if name == "rsort" {
+            order.reverse()
+        } else {
+            order
+        }
+    });
+
+    let mut result = values.array_new(entries.len())?;
+    for (index, (_, value)) in entries.into_iter().enumerate() {
+        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Collects values and comparable sort keys from one eval array.
+fn eval_array_sort_entries(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<(EvalArraySortKey, RuntimeCellHandle)>, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut entries = Vec::with_capacity(len);
+    let mut expects_numeric = None;
+
+    for position in 0..len {
+        let source_key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, source_key)?;
+        let sort_key = eval_array_sort_key(value, values)?;
+        let is_numeric = matches!(sort_key, EvalArraySortKey::Numeric(_));
+        match expects_numeric {
+            Some(expected) if expected != is_numeric => return Err(EvalStatus::RuntimeFatal),
+            Some(_) => {}
+            None => expects_numeric = Some(is_numeric),
+        }
+        entries.push((sort_key, value));
+    }
+
+    Ok(entries)
+}
+
+/// Converts one scalar eval value into a homogeneous sort key.
+fn eval_array_sort_key(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalArraySortKey, EvalStatus> {
+    match values.type_tag(value)? {
+        EVAL_TAG_INT | EVAL_TAG_FLOAT => Ok(EvalArraySortKey::Numeric(eval_float_value(
+            value, values,
+        )?)),
+        EVAL_TAG_STRING => {
+            let bytes = values.string_bytes(value)?;
+            match eval_array_numeric_string_sort_key(&bytes) {
+                Some(value) => Ok(EvalArraySortKey::Numeric(value)),
+                None => Ok(EvalArraySortKey::String(bytes)),
+            }
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Parses one PHP numeric string into the numeric sort domain when possible.
+fn eval_array_numeric_string_sort_key(bytes: &[u8]) -> Option<f64> {
+    if !eval_is_numeric_string(bytes) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()?.parse::<f64>().ok()
+}
+
+/// Compares two precomputed eval sort keys.
+fn eval_array_sort_key_cmp(
+    left: &EvalArraySortKey,
+    right: &EvalArraySortKey,
+) -> std::cmp::Ordering {
+    match (left, right) {
+        (EvalArraySortKey::Numeric(left), EvalArraySortKey::Numeric(right)) => {
+            left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+        }
+        (EvalArraySortKey::String(left), EvalArraySortKey::String(right)) => left.cmp(right),
+        _ => std::cmp::Ordering::Equal,
+    }
 }
 
 /// Evaluates and binds direct `array_splice()` arguments while preserving source order.
@@ -14617,6 +14790,40 @@ return function_exists("array_splice");"#,
             vec![
                 "array_splice(): Argument #1 ($array) must be passed by reference, value given",
                 "array_splice(): Argument #1 ($array) must be passed by reference, value given",
+            ]
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `sort()` and `rsort()` reindex direct variable arrays only.
+    #[test]
+    fn execute_program_dispatches_sort_builtins() {
+        let program = parse_fragment(
+            br#"$a = [3, 1, 2];
+echo sort($a) . ":" . $a[0] . $a[1] . $a[2] . ":";
+$b = ["banana", "apple", "cherry"];
+echo rsort(array: $b) . ":" . $b[0] . ":" . $b[2] . ":";
+$c = ["x" => 3, "y" => 1, "z" => 2];
+sort($c);
+echo $c[0] . $c[1] . $c[2] . ":";
+$d = [3, 1, 2];
+echo call_user_func("sort", $d) . ":" . $d[0] . $d[1] . $d[2] . ":";
+$e = [1, 2, 3];
+echo call_user_func_array("rsort", ["array" => $e]) . ":" . $e[0] . ":" . $e[2] . ":";
+return function_exists("sort") && function_exists("rsort");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "1:123:1:cherry:apple:123:1:312:1:1:3:");
+        assert_eq!(
+            values.warnings,
+            vec![
+                "sort(): Argument #1 ($array) must be passed by reference, value given",
+                "rsort(): Argument #1 ($array) must be passed by reference, value given",
             ]
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
