@@ -17,7 +17,7 @@ use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalCallArg, EvalCatch, EvalConst, EvalExpr, EvalFunction,
     EvalMagicConst, EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
-use crate::json_validate::{self, JsonParseError, JsonValue};
+use crate::json_validate::{self, JsonParseError, JsonParseErrorKind, JsonValue};
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
@@ -13248,7 +13248,7 @@ fn eval_json_decode_result(
     let decoded = match json_validate::decode_result(&bytes, depth as usize) {
         Ok(decoded) => decoded,
         Err(error) => {
-            eval_record_json_parse_error(context, error);
+            eval_record_json_parse_error(context, error, &bytes);
             return values.null();
         }
     };
@@ -13385,36 +13385,67 @@ fn eval_json_validate_result(
             values.bool_value(true)
         }
         Err(error) => {
-            eval_record_json_parse_error(context, error);
+            eval_record_json_parse_error(context, error, &bytes);
             values.bool_value(false)
         }
     }
 }
 
 /// Records one parser error into the eval-local PHP JSON error slots.
-fn eval_record_json_parse_error(context: &mut ElephcEvalContext, error: JsonParseError) {
-    let (code, message) = eval_json_parse_error_status(error);
+fn eval_record_json_parse_error(
+    context: &mut ElephcEvalContext,
+    error: JsonParseError,
+    bytes: &[u8],
+) {
+    let (code, message) = eval_json_parse_error_status(error.kind());
+    let message = eval_json_error_message_with_location(message, bytes, error.offset());
     context.set_json_error(code, message);
 }
 
 /// Maps eval JSON parser failures to PHP `JSON_ERROR_*` codes and messages.
-fn eval_json_parse_error_status(error: JsonParseError) -> (i64, &'static str) {
+fn eval_json_parse_error_status(error: JsonParseErrorKind) -> (i64, &'static str) {
     match error {
-        JsonParseError::Depth => (EVAL_JSON_ERROR_DEPTH, "Maximum stack depth exceeded"),
-        JsonParseError::Syntax => (EVAL_JSON_ERROR_SYNTAX, "Syntax error"),
-        JsonParseError::ControlChar => (
+        JsonParseErrorKind::Depth => (EVAL_JSON_ERROR_DEPTH, "Maximum stack depth exceeded"),
+        JsonParseErrorKind::Syntax => (EVAL_JSON_ERROR_SYNTAX, "Syntax error"),
+        JsonParseErrorKind::ControlChar => (
             EVAL_JSON_ERROR_CTRL_CHAR,
             "Control character error, possibly incorrectly encoded",
         ),
-        JsonParseError::Utf8 => (
+        JsonParseErrorKind::Utf8 => (
             EVAL_JSON_ERROR_UTF8,
             "Malformed UTF-8 characters, possibly incorrectly encoded",
         ),
-        JsonParseError::Utf16 => (
+        JsonParseErrorKind::Utf16 => (
             EVAL_JSON_ERROR_UTF16,
             "Single unpaired UTF-16 surrogate in unicode escape",
         ),
     }
+}
+
+/// Adds PHP's JSON line/column suffix to one base error message.
+fn eval_json_error_message_with_location(
+    message: &str,
+    bytes: &[u8],
+    offset: usize,
+) -> String {
+    let (line, column) = eval_json_error_location(bytes, offset);
+    format!("{message} near location {line}:{column}")
+}
+
+/// Converts a zero-based JSON byte offset into PHP-style one-based line and column.
+fn eval_json_error_location(bytes: &[u8], offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut column = 1;
+    let offset = offset.min(bytes.len());
+    for byte in &bytes[..offset] {
+        if *byte == b'\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
 }
 
 /// Appends one JSON value to the output buffer.
@@ -17381,7 +17412,7 @@ json_validate("\"a" . chr(10) . "b\"");
 echo json_last_error() . ":" . json_last_error_msg() . ":";
 json_decode("\"\\uD83D\"");
 echo json_last_error() . ":" . json_last_error_msg() . ":";
-json_decode("\"" . chr(128) . "\"");
+json_decode("\"a" . chr(128) . "b\"");
 echo json_last_error() . ":" . json_last_error_msg() . ":";
 json_validate("[0]");
 echo call_user_func("json_last_error") . ":" . call_user_func_array("json_last_error_msg", []) . ":";
@@ -17395,7 +17426,7 @@ return function_exists("json_last_error") && function_exists("json_last_error_ms
 
         assert_eq!(
             values.output,
-            "0:No error:4:syntax:Syntax error:1:Maximum stack depth exceeded:0:No error:3:Control character error, possibly incorrectly encoded:10:Single unpaired UTF-16 surrogate in unicode escape:5:Malformed UTF-8 characters, possibly incorrectly encoded:0:No error:"
+            "0:No error:4:syntax:Syntax error near location 1:1:1:Maximum stack depth exceeded near location 1:1:0:No error:3:Control character error, possibly incorrectly encoded near location 1:3:10:Single unpaired UTF-16 surrogate in unicode escape near location 1:8:5:Malformed UTF-8 characters, possibly incorrectly encoded near location 1:3:0:No error:"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
