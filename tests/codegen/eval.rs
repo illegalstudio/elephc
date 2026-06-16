@@ -681,10 +681,10 @@ fn test_eval_nested_eval_return_value_is_expression_result() {
 fn test_eval_dispatches_simple_builtin_calls() {
     let out = compile_and_run(
         r#"<?php
-eval('echo STRLEN("abcd") . ":" . count([1, 2, 3]);');
+eval('echo STRLEN("abcd") . ":" . \strlen("xy") . ":" . count([1, 2, 3]);');
 "#,
     );
-    assert_eq!(out, "4:3");
+    assert_eq!(out, "4:2:3");
 }
 
 /// Verifies eval direct builtin calls bind named arguments and spread arrays.
