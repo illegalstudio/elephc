@@ -602,6 +602,7 @@ const EVAL_JSON_FORCE_OBJECT: i64 = 16;
 const EVAL_JSON_NUMERIC_CHECK: i64 = 32;
 const EVAL_JSON_UNESCAPED_SLASHES: i64 = 64;
 const EVAL_JSON_PRETTY_PRINT: i64 = 128;
+const EVAL_JSON_UNESCAPED_UNICODE: i64 = 256;
 const EVAL_JSON_PRESERVE_ZERO_FRACTION: i64 = 1024;
 
 unsafe extern "C" {
@@ -13336,6 +13337,7 @@ fn eval_json_encode_result(
         | EVAL_JSON_HEX_APOS
         | EVAL_JSON_HEX_QUOT
         | EVAL_JSON_UNESCAPED_SLASHES
+        | EVAL_JSON_UNESCAPED_UNICODE
         | EVAL_JSON_FORCE_OBJECT
         | EVAL_JSON_PRETTY_PRINT
         | EVAL_JSON_PRESERVE_ZERO_FRACTION;
@@ -13880,31 +13882,76 @@ fn eval_json_encode_append_string(bytes: &[u8], flags: i64, output: &mut Vec<u8>
         }
     }
     output.push(b'"');
-    for byte in bytes {
-        match *byte {
-            b'"' if flags & EVAL_JSON_HEX_QUOT != 0 => output.extend_from_slice(b"\\u0022"),
-            b'"' => output.extend_from_slice(b"\\\""),
-            b'\\' => output.extend_from_slice(b"\\\\"),
-            b'/' if flags & EVAL_JSON_UNESCAPED_SLASHES == 0 => {
-                output.extend_from_slice(b"\\/");
-            }
-            b'/' => output.push(b'/'),
-            b'<' if flags & EVAL_JSON_HEX_TAG != 0 => output.extend_from_slice(b"\\u003C"),
-            b'>' if flags & EVAL_JSON_HEX_TAG != 0 => output.extend_from_slice(b"\\u003E"),
-            b'&' if flags & EVAL_JSON_HEX_AMP != 0 => output.extend_from_slice(b"\\u0026"),
-            b'\'' if flags & EVAL_JSON_HEX_APOS != 0 => output.extend_from_slice(b"\\u0027"),
-            b'\x08' => output.extend_from_slice(b"\\b"),
-            b'\x0c' => output.extend_from_slice(b"\\f"),
-            b'\n' => output.extend_from_slice(b"\\n"),
-            b'\r' => output.extend_from_slice(b"\\r"),
-            b'\t' => output.extend_from_slice(b"\\t"),
-            control @ 0x00..=0x1f => {
-                output.extend_from_slice(format!("\\u{control:04x}").as_bytes());
-            }
-            _ => output.push(*byte),
+    if let Ok(value) = std::str::from_utf8(bytes) {
+        for character in value.chars() {
+            eval_json_encode_append_char(character, flags, output);
         }
+    } else {
+        eval_json_encode_append_lossy_bytes(bytes, flags, output);
     }
     output.push(b'"');
+}
+
+/// Appends one valid UTF-8 character using PHP JSON string escaping rules.
+fn eval_json_encode_append_char(character: char, flags: i64, output: &mut Vec<u8>) {
+    if character.is_ascii() {
+        eval_json_encode_append_ascii_byte(character as u8, flags, output);
+    } else if flags & EVAL_JSON_UNESCAPED_UNICODE != 0 {
+        let mut buffer = [0_u8; 4];
+        output.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
+    } else {
+        eval_json_encode_append_unicode_escape(character as u32, output);
+    }
+}
+
+/// Appends one ASCII byte using JSON escaping rules shared by UTF-8 and fallback paths.
+fn eval_json_encode_append_ascii_byte(byte: u8, flags: i64, output: &mut Vec<u8>) {
+    match byte {
+        b'"' if flags & EVAL_JSON_HEX_QUOT != 0 => output.extend_from_slice(b"\\u0022"),
+        b'"' => output.extend_from_slice(b"\\\""),
+        b'\\' => output.extend_from_slice(b"\\\\"),
+        b'/' if flags & EVAL_JSON_UNESCAPED_SLASHES == 0 => {
+            output.extend_from_slice(b"\\/");
+        }
+        b'/' => output.push(b'/'),
+        b'<' if flags & EVAL_JSON_HEX_TAG != 0 => output.extend_from_slice(b"\\u003C"),
+        b'>' if flags & EVAL_JSON_HEX_TAG != 0 => output.extend_from_slice(b"\\u003E"),
+        b'&' if flags & EVAL_JSON_HEX_AMP != 0 => output.extend_from_slice(b"\\u0026"),
+        b'\'' if flags & EVAL_JSON_HEX_APOS != 0 => output.extend_from_slice(b"\\u0027"),
+        b'\x08' => output.extend_from_slice(b"\\b"),
+        b'\x0c' => output.extend_from_slice(b"\\f"),
+        b'\n' => output.extend_from_slice(b"\\n"),
+        b'\r' => output.extend_from_slice(b"\\r"),
+        b'\t' => output.extend_from_slice(b"\\t"),
+        control @ 0x00..=0x1f => {
+            output.extend_from_slice(format!("\\u{control:04x}").as_bytes());
+        }
+        _ => output.push(byte),
+    }
+}
+
+/// Appends valid scalar values as PHP JSON `\uXXXX` escapes, using surrogate pairs when needed.
+fn eval_json_encode_append_unicode_escape(codepoint: u32, output: &mut Vec<u8>) {
+    if codepoint <= 0xffff {
+        output.extend_from_slice(format!("\\u{codepoint:04x}").as_bytes());
+        return;
+    }
+
+    let codepoint = codepoint - 0x1_0000;
+    let high = 0xd800 + ((codepoint >> 10) & 0x3ff);
+    let low = 0xdc00 + (codepoint & 0x3ff);
+    output.extend_from_slice(format!("\\u{high:04x}\\u{low:04x}").as_bytes());
+}
+
+/// Preserves existing eval behavior for malformed byte strings while still escaping ASCII.
+fn eval_json_encode_append_lossy_bytes(bytes: &[u8], flags: i64, output: &mut Vec<u8>) {
+    for byte in bytes {
+        if byte.is_ascii() {
+            eval_json_encode_append_ascii_byte(*byte, flags, output);
+        } else {
+            output.push(*byte);
+        }
+    }
 }
 
 /// Returns the JSON number bytes for a PHP numeric string when `JSON_NUMERIC_CHECK` applies.
@@ -14698,6 +14745,7 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "JSON_FORCE_OBJECT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_FORCE_OBJECT)),
         "JSON_NUMERIC_CHECK" => Some(EvalPredefinedConstant::Int(EVAL_JSON_NUMERIC_CHECK)),
         "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
+        "JSON_UNESCAPED_UNICODE" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_UNICODE)),
         "JSON_PRETTY_PRINT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_PRETTY_PRINT)),
         "JSON_PRESERVE_ZERO_FRACTION" => {
             Some(EvalPredefinedConstant::Int(
@@ -17729,6 +17777,12 @@ echo call_user_func("json_encode", "a/b\"c") . ":";
 echo call_user_func_array("json_encode", ["value" => ["k" => false], "flags" => 0, "depth" => 4]) . ":";
 echo json_encode("a/b", JSON_UNESCAPED_SLASHES) . ":";
 echo call_user_func_array("json_encode", ["value" => "x/y", "flags" => JSON_UNESCAPED_SLASHES]) . ":";
+$accent = json_decode("\"\\u00e9\"");
+$emoji = json_decode("\"\\ud83d\\ude00\"");
+echo bin2hex(json_encode($accent . "/" . $emoji)) . ":";
+echo bin2hex(json_encode($accent . "/" . $emoji, JSON_UNESCAPED_UNICODE)) . ":";
+echo bin2hex(json_encode([$accent => $emoji])) . ":";
+echo bin2hex(json_encode([$accent => $emoji], JSON_UNESCAPED_UNICODE)) . ":";
 echo json_encode([1, 2], JSON_FORCE_OBJECT) . ":";
 echo json_encode([], JSON_FORCE_OBJECT) . ":";
 echo call_user_func_array("json_encode", ["value" => [1, 2], "flags" => JSON_FORCE_OBJECT]) . ":";
@@ -17736,7 +17790,7 @@ echo json_encode("<>&\"" . chr(39), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS 
 echo json_encode(["01", "+12", "1e3", " 7", "7x"], JSON_NUMERIC_CHECK) . ":";
 echo json_encode([1.0, 2.5, -3.0], JSON_PRESERVE_ZERO_FRACTION) . ":";
 echo str_replace("\n", "|", json_encode(["a" => [1, 2]], JSON_PRETTY_PRINT)) . ":";
-return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK") && defined("JSON_PRETTY_PRINT") && defined("JSON_PRESERVE_ZERO_FRACTION");"#,
+return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_UNESCAPED_UNICODE") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK") && defined("JSON_PRETTY_PRINT") && defined("JSON_PRESERVE_ZERO_FRACTION");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17746,7 +17800,7 @@ return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && de
 
         assert_eq!(
             values.output,
-            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:{|    "a": [|        1,|        2|    ]|}:"#
+            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":225c75303065395c2f5c75643833645c756465303022:22c3a95c2ff09f988022:7b225c7530306539223a225c75643833645c7564653030227d:7b22c3a9223a22f09f9880227d:{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:{|    "a": [|        1,|        2|    ]|}:"#
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
