@@ -2535,6 +2535,24 @@ echo ":"; echo function_exists("min"); echo function_exists("max");');
     assert_eq!(out, "1:3:1.5:2.5:4:8:11");
 }
 
+/// Verifies eval `clamp()` selects numeric values directly and through callables.
+#[test]
+fn test_eval_dispatches_clamp_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo clamp(5, 0, 10); echo ":";
+echo clamp(15, 0, 10); echo ":";
+echo clamp(-5, 0, 10); echo ":";
+echo clamp(2.75, 1.5, 2.5); echo ":";
+echo clamp(value: 8, min: 0, max: 5); echo ":";
+echo call_user_func("clamp", -1, 0, 10); echo ":";
+echo call_user_func_array("clamp", ["value" => 9, "min" => 0, "max" => 7]);
+echo ":"; echo function_exists("clamp"); echo is_callable("clamp");');
+"#,
+    );
+    assert_eq!(out, "5:10:0:2.5:5:0:7:11");
+}
+
 /// Verifies eval `pi()` returns the PHP math constant through direct and callable calls.
 #[test]
 fn test_eval_dispatches_pi_builtin_call() {

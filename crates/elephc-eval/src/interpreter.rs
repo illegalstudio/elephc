@@ -1307,6 +1307,7 @@ fn eval_positional_expr_call(
         }
         "chmod" => eval_builtin_chmod(args, context, scope, values),
         "chr" => eval_builtin_chr(args, context, scope, values),
+        "clamp" => eval_builtin_clamp(args, context, scope, values),
         "clearstatcache" => eval_builtin_clearstatcache(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
@@ -1726,6 +1727,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "boolval"
             | "chop"
             | "chr"
+            | "clamp"
             | "clearstatcache"
             | "count"
             | "copy"
@@ -2002,6 +2004,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "chdir" | "mkdir" | "rmdir" | "scandir" => Some(&["directory"]),
         "chmod" => Some(&["filename", "permissions"]),
         "chr" => Some(&["codepoint"]),
+        "clamp" => Some(&["value", "min", "max"]),
         "clearstatcache" => Some(&["clear_realpath_cache", "filename"]),
         "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
         "count" => Some(&["value", "mode"]),
@@ -2405,6 +2408,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             values.null()?
+        }
+        "clamp" => {
+            let [value, min, max] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_clamp_result(*value, *min, *max, values)?
         }
         "copy" | "link" | "rename" | "symlink" => {
             let [from, to] = evaluated_args else {
@@ -7891,6 +7900,58 @@ fn eval_float_binary_result(
         "fmod" => values.fmod(left, right),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Evaluates PHP `clamp($value, $min, $max)` over three eval expressions.
+fn eval_builtin_clamp(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value, min, max] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    let min = eval_expr(min, context, scope, values)?;
+    let max = eval_expr(max, context, scope, values)?;
+    eval_clamp_result(value, min, max, values)
+}
+
+/// Selects the inclusive clamp result after validating bound order and NaN bounds.
+fn eval_clamp_result(
+    value: RuntimeCellHandle,
+    min: RuntimeCellHandle,
+    max: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if eval_clamp_bound_is_nan(min, values)? || eval_clamp_bound_is_nan(max, values)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let invalid_bounds = values.compare(EvalBinOp::Gt, min, max)?;
+    if values.truthy(invalid_bounds)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let above_max = values.compare(EvalBinOp::Gt, value, max)?;
+    if values.truthy(above_max)? {
+        return Ok(max);
+    }
+    let below_min = values.compare(EvalBinOp::Lt, value, min)?;
+    if values.truthy(below_min)? {
+        return Ok(min);
+    }
+    Ok(value)
+}
+
+/// Returns whether a clamp bound is a floating-point NaN value.
+fn eval_clamp_bound_is_nan(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_FLOAT {
+        return Ok(false);
+    }
+    Ok(eval_float_value(value, values)?.is_nan())
 }
 
 /// Evaluates PHP numeric `min(...)` and `max(...)` over eval expressions.
@@ -13415,6 +13476,44 @@ return function_exists("max");"#,
 
         assert_eq!(values.output, "1:3:1.5:2.5:4:8:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `clamp()` selects numeric values through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_clamp_builtin() {
+        let program = parse_fragment(
+            br#"echo clamp(5, 0, 10); echo ":";
+echo clamp(15, 0, 10); echo ":";
+echo clamp(-5, 0, 10); echo ":";
+echo clamp(2.75, 1.5, 2.5); echo ":";
+echo clamp(value: 8, min: 0, max: 5); echo ":";
+echo call_user_func("clamp", -1, 0, 10); echo ":";
+echo call_user_func_array("clamp", ["value" => 9, "min" => 0, "max" => 7]); echo ":";
+echo function_exists("clamp");
+return is_callable("clamp");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "5:10:0:2.5:5:0:7:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `clamp()` rejects a lower bound greater than the upper bound.
+    #[test]
+    fn execute_program_rejects_clamp_invalid_bounds() {
+        let program =
+            parse_fragment(br#"return clamp(5, 10, 0);"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let err = execute_program(&program, &mut scope, &mut values)
+            .expect_err("invalid clamp bounds should fail");
+
+        assert_eq!(err, EvalStatus::RuntimeFatal);
     }
 
     /// Verifies eval `pi()` returns a double constant directly and through callable paths.
