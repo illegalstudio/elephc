@@ -125,6 +125,7 @@ $float_predicates = eval('return (is_nan(fdiv(0, 0)) ? "nan" : "bad") . ":" . (i
 $case = eval('return strtoupper("eval") . ":" . strtolower("LOUD") . ":" . ucfirst("eval") . ":" . lcfirst("LOUD");');
 $word_case = eval('return ucwords("hello eval");');
 $reversed = eval('return strrev("eval");');
+$json_encoded = eval('return json_encode(["name" => "Ada", "skills" => ["math", "code"]]);');
 $contains = eval('return str_contains("dynamic eval", "eval") ? "contains" : "missing";');
 $positions = eval('return strpos("banana", "na") . ":" . strrpos("banana", "na");');
 $substring_from = eval('return strstr("user@example.com", "@");');
@@ -262,6 +263,7 @@ echo "float-predicates=" . $float_predicates . "\n";
 echo "case=" . $case . "\n";
 echo "ucwords=" . $word_case . "\n";
 echo "reversed=" . $reversed . "\n";
+echo "json-encoded=" . $json_encoded . "\n";
 echo "contains=" . $contains . "\n";
 echo "positions=" . $positions . "\n";
 echo "strstr=" . $substring_from . "\n";
