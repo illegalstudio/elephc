@@ -754,6 +754,29 @@ echo ":"; echo function_exists("array_keys"); echo function_exists("array_values
     assert_eq!(out, "10:20:a:b:0:z:8:11");
 }
 
+/// Verifies eval `array_reverse()` supports key rules, named args, and callable dispatch.
+#[test]
+fn test_eval_dispatches_array_reverse_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$indexed = array_reverse([1, 2, 3]);
+echo $indexed[0]; echo $indexed[1]; echo $indexed[2]; echo ":";
+$mixed = array_reverse([2 => "a", "k" => "b", 5 => "c"]);
+echo $mixed[0]; echo $mixed["k"]; echo $mixed[1]; echo ":";
+$preserved = array_reverse([2 => "a", "k" => "b", 5 => "c"], true);
+echo $preserved[5]; echo $preserved["k"]; echo $preserved[2]; echo ":";
+$named = array_reverse(array: ["x", "y"], preserve_keys: true);
+echo $named[1]; echo $named[0]; echo ":";
+$call = call_user_func("array_reverse", [4, 5]);
+echo $call[0]; echo $call[1]; echo ":";
+$spread = call_user_func_array("array_reverse", [[6, 7]]);
+echo $spread[0]; echo $spread[1]; echo ":";
+echo function_exists("array_reverse");');
+"#,
+    );
+    assert_eq!(out, "321:cba:cba:yx:54:76:1");
+}
+
 /// Verifies eval `array_key_exists()` distinguishes present null values from missing keys.
 #[test]
 fn test_eval_dispatches_array_key_exists_builtin_calls() {

@@ -905,6 +905,7 @@ fn eval_positional_expr_call(
         "array_product" | "array_sum" => {
             eval_builtin_array_aggregate(name, args, context, scope, values)
         }
+        "array_reverse" => eval_builtin_array_reverse(args, context, scope, values),
         "array_search" | "in_array" => {
             eval_builtin_array_search(name, args, context, scope, values)
         }
@@ -1048,6 +1049,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_key_exists"
             | "array_keys"
             | "array_product"
+            | "array_reverse"
             | "array_search"
             | "array_sum"
             | "array_values"
@@ -1183,6 +1185,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "abs" | "ceil" | "floor" | "sqrt" => Some(&["num"]),
         "array_keys" | "array_product" | "array_sum" | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
+        "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
         | "is_float" | "is_int" | "is_integer" | "is_long" | "is_null" | "is_numeric"
@@ -1358,6 +1361,14 @@ fn eval_builtin_with_values(
             };
             values.array_key_exists(*key, *array)?
         }
+        "array_reverse" => match evaluated_args {
+            [array] => eval_array_reverse_result(*array, false, values)?,
+            [array, preserve_keys] => {
+                let preserve_keys = values.truthy(*preserve_keys)?;
+                eval_array_reverse_result(*array, preserve_keys, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "array_search" | "in_array" => {
             let [needle, array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -1598,6 +1609,64 @@ fn eval_array_projection_result(
         };
         let index = values.int(position as i64)?;
         result = values.array_set(result, index, value)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `array_reverse()` over an eval array expression.
+fn eval_builtin_array_reverse(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [array] => {
+            let array = eval_expr(array, context, scope, values)?;
+            eval_array_reverse_result(array, false, values)
+        }
+        [array, preserve_keys] => {
+            let array = eval_expr(array, context, scope, values)?;
+            let preserve_keys = eval_expr(preserve_keys, context, scope, values)?;
+            let preserve_keys = values.truthy(preserve_keys)?;
+            eval_array_reverse_result(array, preserve_keys, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Builds an `array_reverse()` result while preserving PHP key rules.
+fn eval_array_reverse_result(
+    array: RuntimeCellHandle,
+    preserve_keys: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut keys = Vec::with_capacity(len);
+    let mut has_string_key = false;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        has_string_key |= values.type_tag(key)? == EVAL_TAG_STRING;
+        keys.push(key);
+    }
+
+    let mut result = if preserve_keys || has_string_key {
+        values.assoc_new(len)?
+    } else {
+        values.array_new(len)?
+    };
+    let mut next_numeric_key = 0_i64;
+
+    for key in keys.into_iter().rev() {
+        let value = values.array_get(array, key)?;
+        let target_key = if preserve_keys || values.type_tag(key)? == EVAL_TAG_STRING {
+            key
+        } else {
+            let key = values.int(next_numeric_key)?;
+            next_numeric_key += 1;
+            key
+        };
+        result = values.array_set(result, target_key, value)?;
     }
     Ok(result)
 }
@@ -4709,6 +4778,34 @@ return function_exists("array_values");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "10:20:a:b:0:z:8:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_reverse()` handles PHP key preservation rules.
+    #[test]
+    fn execute_program_dispatches_array_reverse_builtin() {
+        let program = parse_fragment(
+            br#"$indexed = array_reverse([1, 2, 3]);
+echo $indexed[0]; echo $indexed[1]; echo $indexed[2]; echo ":";
+$mixed = array_reverse([2 => "a", "k" => "b", 5 => "c"]);
+echo $mixed[0]; echo $mixed["k"]; echo $mixed[1]; echo ":";
+$preserved = array_reverse([2 => "a", "k" => "b", 5 => "c"], true);
+echo $preserved[5]; echo $preserved["k"]; echo $preserved[2]; echo ":";
+$named = array_reverse(array: ["x", "y"], preserve_keys: true);
+echo $named[1]; echo $named[0]; echo ":";
+$call = call_user_func("array_reverse", [4, 5]);
+echo $call[0]; echo $call[1]; echo ":";
+$spread = call_user_func_array("array_reverse", [[6, 7]]);
+echo $spread[0]; echo $spread[1]; echo ":";
+return function_exists("array_reverse");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "321:cba:cba:yx:54:76:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
