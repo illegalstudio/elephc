@@ -17,6 +17,7 @@ pub mod context;
 pub mod errors;
 pub mod eval_ir;
 pub mod interpreter;
+mod json_validate;
 pub mod lower;
 pub mod parser;
 pub mod runtime_hooks;

@@ -778,6 +778,22 @@ echo function_exists("json_last_error") && function_exists("json_last_error_msg"
     assert_eq!(out, "0:No error:0:No error:1");
 }
 
+/// Verifies eval `json_validate()` validates JSON syntax, depth, and dynamic calls.
+#[test]
+fn test_eval_dispatches_json_validate_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo (json_validate("{\"a\":[1,true,null,\"caf\\u00e9\"]}") ? "Y" : "N") . ":";
+echo (json_validate("bad") ? "bad" : "N") . ":";
+echo (json_validate("[1]", 1) ? "bad" : "D") . ":";
+echo (call_user_func("json_validate", "\"x\"") ? "C" : "bad") . ":";
+echo (call_user_func_array("json_validate", ["json" => "[[1]]", "depth" => 3, "flags" => 0]) ? "A" : "bad") . ":";
+echo function_exists("json_validate");');
+"#,
+    );
+    assert_eq!(out, "Y:N:D:C:A:1");
+}
+
 /// Verifies eval direct builtin calls bind named arguments and spread arrays.
 #[test]
 fn test_eval_dispatches_named_and_spread_builtin_calls() {
