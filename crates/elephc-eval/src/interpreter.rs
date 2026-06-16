@@ -147,6 +147,9 @@ pub trait RuntimeValueOps {
     /// Creates a runtime string cell.
     fn string(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Creates a runtime byte-string cell from raw PHP string bytes.
+    fn string_bytes_value(&mut self, value: &[u8]) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Casts one runtime cell to a boxed PHP integer cell.
     fn cast_int(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -1145,6 +1148,7 @@ fn eval_positional_expr_call(
         }
         "array_unique" => eval_builtin_array_unique(args, context, scope, values),
         "base64_encode" => eval_builtin_base64_encode(args, context, scope, values),
+        "base64_decode" => eval_builtin_base64_decode(args, context, scope, values),
         "bin2hex" => eval_builtin_bin2hex(args, context, scope, values),
         "ceil" => eval_builtin_ceil(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
@@ -1445,6 +1449,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_sum"
             | "array_unique"
             | "array_values"
+            | "base64_decode"
             | "base64_encode"
             | "bin2hex"
             | "ceil"
@@ -1586,7 +1591,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_key_exists" => Some(&["key", "array"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
-        "base64_encode" | "bin2hex" => Some(&["string"]),
+        "base64_decode" | "base64_encode" | "bin2hex" => Some(&["string"]),
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
         | "is_float" | "is_int" | "is_integer" | "is_long" | "is_null" | "is_numeric"
         | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
@@ -1805,6 +1810,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_base64_encode_result(*value, values)?
+        }
+        "base64_decode" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_base64_decode_result(*value, values)?
         }
         "bin2hex" => {
             let [value] = evaluated_args else {
@@ -2447,6 +2458,81 @@ fn eval_base64_encode_result(
         }
     }
     values.string(&output)
+}
+
+/// Evaluates PHP's one-argument `base64_decode(...)` over one eval expression.
+fn eval_builtin_base64_decode(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_base64_decode_result(value, values)
+}
+
+/// Converts one eval value through PHP string conversion and decodes Base64 bytes.
+fn eval_base64_decode_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let input = values.string_bytes(value)?;
+    let mut output = Vec::with_capacity((input.len() / 4) * 3);
+    let mut quartet = Vec::with_capacity(4);
+    for byte in input {
+        if byte.is_ascii_whitespace() {
+            continue;
+        }
+        if byte == b'=' {
+            quartet.push(None);
+        } else if let Some(value) = eval_base64_decode_sextet(byte) {
+            quartet.push(Some(value));
+        } else {
+            continue;
+        }
+        if quartet.len() == 4 {
+            eval_push_base64_decoded_quartet(&quartet, &mut output);
+            quartet.clear();
+        }
+    }
+    if !quartet.is_empty() {
+        while quartet.len() < 4 {
+            quartet.push(None);
+        }
+        eval_push_base64_decoded_quartet(&quartet, &mut output);
+    }
+    values.string_bytes_value(&output)
+}
+
+/// Returns the six-bit Base64 value for one encoded byte.
+fn eval_base64_decode_sextet(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
+}
+
+/// Appends decoded bytes for one padded or unpadded Base64 quartet.
+fn eval_push_base64_decoded_quartet(quartet: &[Option<u8>], output: &mut Vec<u8>) {
+    let (Some(first), Some(second)) = (quartet[0], quartet[1]) else {
+        return;
+    };
+    output.push((first << 2) | (second >> 4));
+    let Some(third) = quartet[2] else {
+        return;
+    };
+    output.push(((second & 0x0f) << 4) | (third >> 2));
+    let Some(fourth) = quartet[3] else {
+        return;
+    };
+    output.push(((third & 0x03) << 6) | fourth);
 }
 
 /// Evaluates PHP floating-point binary math builtins over two eval expressions.
@@ -3875,6 +3961,12 @@ mod tests {
         /// Creates a fake string cell.
         fn string(&mut self, value: &str) -> Result<RuntimeCellHandle, EvalStatus> {
             Ok(self.alloc(FakeValue::String(value.to_string())))
+        }
+
+        /// Creates a fake string cell from UTF-8 bytes.
+        fn string_bytes_value(&mut self, value: &[u8]) -> Result<RuntimeCellHandle, EvalStatus> {
+            let value = std::str::from_utf8(value).map_err(|_| EvalStatus::RuntimeFatal)?;
+            self.string(value)
         }
 
         /// Casts a fake runtime cell to a fake integer cell.
@@ -6308,6 +6400,26 @@ return function_exists("base64_encode");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "SGVsbG8=:SGk=:VGVzdCAxMjMh::");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `base64_decode()` dispatches through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_base64_decode_builtin() {
+        let program = parse_fragment(
+            br#"echo base64_decode("SGVsbG8="); echo ":";
+echo base64_decode(string: "SGk="); echo ":";
+echo call_user_func("base64_decode", "VGVzdCAxMjMh"); echo ":";
+echo call_user_func_array("base64_decode", ["string" => ""]); echo ":";
+return function_exists("base64_decode");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "Hello:Hi:Test 123!::");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

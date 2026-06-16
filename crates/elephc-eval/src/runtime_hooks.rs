@@ -393,6 +393,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_string(value.as_ptr(), value.len() as u64) })
     }
 
+    /// Creates a boxed string Mixed cell from raw PHP bytes through the generated runtime wrapper.
+    fn string_bytes_value(&mut self, value: &[u8]) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_string(value.as_ptr(), value.len() as u64) })
+    }
+
     /// Casts a boxed Mixed cell to a boxed integer Mixed cell through the generated runtime wrapper.
     fn cast_int(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_cast_int(value.as_ptr()) })

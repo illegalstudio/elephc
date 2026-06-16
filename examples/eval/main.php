@@ -132,6 +132,7 @@ $array_search = eval('return (in_array("b", ["a", "b"]) ? "in" : "missing") . ":
 $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" . (strcasecmp("Hello", "hello") === 0 ? "ci" : "bad") . ":" . (hash_equals("abc", "abc") ? "hash" : "bad");');
 $hexed = eval('return bin2hex("Az");');
 $base64 = eval('return base64_encode("Hello");');
+$base64_decoded = eval('return base64_decode("SGVsbG8=");');
 $eval_class_probe = eval('return class_exists("EvalAotBox") ? "yes" : "no";');
 eval('class EvalDynamicEmptyClass {}');
 $eval_dynamic_class_probe = eval('return class_exists("evaldynamicemptyclass") ? "yes" : "no";');
@@ -206,6 +207,7 @@ echo "array-search=" . $array_search . "\n";
 echo "string-compare=" . $string_compare . "\n";
 echo "bin2hex=" . $hexed . "\n";
 echo "base64=" . $base64 . "\n";
+echo "base64-decode=" . $base64_decoded . "\n";
 echo "eval-class-exists=" . $eval_class_probe . "\n";
 echo "eval-dynamic-class-exists=" . $eval_dynamic_class_probe . "\n";
 echo "native-class-exists-eval-class=" . $eval_dynamic_class_native_probe . "\n";
