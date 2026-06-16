@@ -1144,6 +1144,7 @@ fn eval_positional_expr_call(
             eval_builtin_array_search(name, args, context, scope, values)
         }
         "array_unique" => eval_builtin_array_unique(args, context, scope, values),
+        "bin2hex" => eval_builtin_bin2hex(args, context, scope, values),
         "ceil" => eval_builtin_ceil(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
@@ -1443,6 +1444,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_sum"
             | "array_unique"
             | "array_values"
+            | "bin2hex"
             | "ceil"
             | "call_user_func"
             | "call_user_func_array"
@@ -1582,6 +1584,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_key_exists" => Some(&["key", "array"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
+        "bin2hex" => Some(&["string"]),
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
         | "is_float" | "is_int" | "is_integer" | "is_long" | "is_null" | "is_numeric"
         | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
@@ -1794,6 +1797,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_unique_result(*array, values)?
+        }
+        "bin2hex" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_bin2hex_result(*value, values)?
         }
         "ceil" => {
             let [value] = evaluated_args else {
@@ -2358,6 +2367,35 @@ fn eval_builtin_strrev(
     };
     let value = eval_expr(value, context, scope, values)?;
     values.strrev(value)
+}
+
+/// Evaluates PHP's `bin2hex(...)` over one eval expression.
+fn eval_builtin_bin2hex(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_bin2hex_result(value, values)
+}
+
+/// Converts one eval value through PHP string conversion and returns lowercase hex bytes.
+fn eval_bin2hex_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let mut output = String::with_capacity(bytes.len() * 2);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    values.string(&output)
 }
 
 /// Evaluates PHP floating-point binary math builtins over two eval expressions.
@@ -6179,6 +6217,26 @@ return function_exists("strrev");"#,
         let mut values = FakeOps::default();
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
         assert_eq!(values.output, "olleH:321:CBA:fed:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `bin2hex()` dispatches through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_bin2hex_builtin() {
+        let program = parse_fragment(
+            br#"echo bin2hex("Az"); echo ":";
+echo bin2hex(string: "A\n"); echo ":";
+echo call_user_func("bin2hex", "!?"); echo ":";
+echo call_user_func_array("bin2hex", ["string" => "ok"]); echo ":";
+return function_exists("bin2hex");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "417a:410a:213f:6f6b:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
