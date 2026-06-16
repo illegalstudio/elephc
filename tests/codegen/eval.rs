@@ -622,6 +622,21 @@ fn test_eval_indexed_array_literal_and_read() {
     assert_eq!(out, "2");
 }
 
+/// Verifies eval accepts PHP's legacy `array(...)` literal syntax.
+#[test]
+fn test_eval_legacy_array_literal_executes_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return array("a", "b",)[1];');
+echo ":";
+echo eval('return array("name" => "Ada",)["name"];');
+echo ":";
+eval('$items = array(2 => "two", "tail",); echo $items[3];');
+"#,
+    );
+    assert_eq!(out, "b:Ada:tail");
+}
+
 /// Verifies eval indexed-array writes mutate an array visible to native code.
 #[test]
 fn test_eval_indexed_array_write_is_visible_after_eval() {

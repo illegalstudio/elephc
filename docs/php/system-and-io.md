@@ -41,6 +41,8 @@ Eval namespace declarations support both `namespace Name;` and `namespace Name {
 
 Eval `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. Relative paths follow PHP's cwd-first lookup and then fall back to the eval call-site directory. Included PHP files may contain normal `<?php ... ?>` blocks, raw text outside PHP tags is echoed, a `return` inside the included file becomes the include expression value, successful includes without `return` evaluate to `1`, repeated `*_once` includes evaluate to `true`, missing `include` returns `false` with warnings, and missing `require` aborts the eval fragment.
 
+Eval array literals accept both the modern `[...]` syntax and PHP's legacy `array(...)` syntax, with both forms lowered to the same runtime array representation.
+
 The URL codec builtins `urlencode()`, `urldecode()`, `rawurlencode()`, and `rawurldecode()` are available through eval direct calls, named arguments, `call_user_func()`, `call_user_func_array()`, and `function_exists()`.
 
 Eval also supports ASCII character-class predicates `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, and `ctype_space()` with the same direct, named-argument, callable, and `function_exists()` dispatch paths.
