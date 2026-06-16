@@ -20,7 +20,7 @@ use crate::eval_ir::{
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::net::ToSocketAddrs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -121,6 +121,28 @@ unsafe extern "C" {
         len: libc::socklen_t,
         type_: libc::c_int,
     ) -> *mut libc::hostent;
+
+    /// Looks up one IP protocol entry by protocol name or alias.
+    #[link_name = "getprotobyname"]
+    fn libc_getprotobyname(name: *const libc::c_char) -> *mut libc::protoent;
+
+    /// Looks up one IP protocol entry by protocol number.
+    #[link_name = "getprotobynumber"]
+    fn libc_getprotobynumber(proto: libc::c_int) -> *mut libc::protoent;
+
+    /// Looks up one internet service entry by service name and protocol.
+    #[link_name = "getservbyname"]
+    fn libc_getservbyname(
+        name: *const libc::c_char,
+        proto: *const libc::c_char,
+    ) -> *mut libc::servent;
+
+    /// Looks up one internet service entry by port and protocol.
+    #[link_name = "getservbyport"]
+    fn libc_getservbyport(
+        port: libc::c_int,
+        proto: *const libc::c_char,
+    ) -> *mut libc::servent;
 }
 
 /// Runtime value hooks required by the EvalIR interpreter.
@@ -1325,6 +1347,10 @@ fn eval_positional_expr_call(
         "gethostbyaddr" => eval_builtin_gethostbyaddr(args, context, scope, values),
         "gethostbyname" => eval_builtin_gethostbyname(args, context, scope, values),
         "gethostname" => eval_builtin_gethostname(args, values),
+        "getprotobyname" => eval_builtin_getprotobyname(args, context, scope, values),
+        "getprotobynumber" => eval_builtin_getprotobynumber(args, context, scope, values),
+        "getservbyname" => eval_builtin_getservbyname(args, context, scope, values),
+        "getservbyport" => eval_builtin_getservbyport(args, context, scope, values),
         "getcwd" => eval_builtin_getcwd(args, values),
         "getenv" => eval_builtin_getenv(args, context, scope, values),
         "gettype" => eval_builtin_gettype(args, context, scope, values),
@@ -1737,6 +1763,10 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "gethostbyaddr"
             | "gethostbyname"
             | "gethostname"
+            | "getprotobyname"
+            | "getprotobynumber"
+            | "getservbyname"
+            | "getservbyport"
             | "getcwd"
             | "getenv"
             | "gettype"
@@ -1991,6 +2021,10 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "gethostbyaddr" => Some(&["ip"]),
         "gethostbyname" => Some(&["hostname"]),
         "gethostname" => Some(&[]),
+        "getprotobyname" => Some(&["protocol"]),
+        "getprotobynumber" => Some(&["protocol"]),
+        "getservbyname" => Some(&["service", "protocol"]),
+        "getservbyport" => Some(&["port", "protocol"]),
         "getcwd" => Some(&[]),
         "getenv" => Some(&["name"]),
         "glob" => Some(&["pattern"]),
@@ -2686,6 +2720,30 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_gethostname_result(values)?
+        }
+        "getprotobyname" => {
+            let [protocol] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_getprotobyname_result(*protocol, values)?
+        }
+        "getprotobynumber" => {
+            let [protocol] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_getprotobynumber_result(*protocol, values)?
+        }
+        "getservbyname" => {
+            let [service, protocol] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_getservbyname_result(*service, *protocol, values)?
+        }
+        "getservbyport" => {
+            let [port, protocol] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_getservbyport_result(*port, *protocol, values)?
         }
         "getcwd" => {
             if !evaluated_args.is_empty() {
@@ -6834,6 +6892,192 @@ fn eval_gethostname_result(
         .map(|byte| *byte as u8)
         .collect::<Vec<_>>();
     values.string_bytes_value(&hostname)
+}
+
+/// Evaluates PHP `getprotobyname($protocol)` over one eval expression.
+fn eval_builtin_getprotobyname(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [protocol] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let protocol = eval_expr(protocol, context, scope, values)?;
+    eval_getprotobyname_result(protocol, values)
+}
+
+/// Looks up an IP protocol number by name or alias.
+fn eval_getprotobyname_result(
+    protocol: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(protocol) = eval_lowercase_c_string(protocol, values)? else {
+        return values.bool_value(false);
+    };
+    let entry = unsafe {
+        // libc returns a process-global protoent; copy scalar fields before another lookup.
+        libc_getprotobyname(protocol.as_ptr())
+    };
+    if entry.is_null() {
+        return values.bool_value(false);
+    }
+    let number = unsafe { (*entry).p_proto };
+    values.int(i64::from(number))
+}
+
+/// Evaluates PHP `getprotobynumber($protocol)` over one eval expression.
+fn eval_builtin_getprotobynumber(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [protocol] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let protocol = eval_expr(protocol, context, scope, values)?;
+    eval_getprotobynumber_result(protocol, values)
+}
+
+/// Looks up an IP protocol name by numeric protocol id.
+fn eval_getprotobynumber_result(
+    protocol: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let protocol = eval_int_value(protocol, values)?;
+    let Ok(protocol) = libc::c_int::try_from(protocol) else {
+        return values.bool_value(false);
+    };
+    let entry = unsafe {
+        // libc returns a process-global protoent; copy the name before another lookup.
+        libc_getprotobynumber(protocol)
+    };
+    eval_protoent_name_or_false(entry, values)
+}
+
+/// Evaluates PHP `getservbyname($service, $protocol)` over two eval expressions.
+fn eval_builtin_getservbyname(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [service, protocol] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let service = eval_expr(service, context, scope, values)?;
+    let protocol = eval_expr(protocol, context, scope, values)?;
+    eval_getservbyname_result(service, protocol, values)
+}
+
+/// Looks up an internet service port by service name and protocol.
+fn eval_getservbyname_result(
+    service: RuntimeCellHandle,
+    protocol: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(service) = eval_lowercase_c_string(service, values)? else {
+        return values.bool_value(false);
+    };
+    let Some(protocol) = eval_lowercase_c_string(protocol, values)? else {
+        return values.bool_value(false);
+    };
+    let entry = unsafe {
+        // libc returns a process-global servent; copy scalar fields before another lookup.
+        libc_getservbyname(service.as_ptr(), protocol.as_ptr())
+    };
+    if entry.is_null() {
+        return values.bool_value(false);
+    }
+    let port = unsafe { u16::from_be((*entry).s_port as u16) };
+    values.int(i64::from(port))
+}
+
+/// Evaluates PHP `getservbyport($port, $protocol)` over two eval expressions.
+fn eval_builtin_getservbyport(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [port, protocol] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let port = eval_expr(port, context, scope, values)?;
+    let protocol = eval_expr(protocol, context, scope, values)?;
+    eval_getservbyport_result(port, protocol, values)
+}
+
+/// Looks up an internet service name by port and protocol.
+fn eval_getservbyport_result(
+    port: RuntimeCellHandle,
+    protocol: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let port = eval_int_value(port, values)?;
+    let Ok(port) = u16::try_from(port) else {
+        return values.bool_value(false);
+    };
+    let Some(protocol) = eval_lowercase_c_string(protocol, values)? else {
+        return values.bool_value(false);
+    };
+    let network_port = port.to_be() as libc::c_int;
+    let entry = unsafe {
+        // libc returns a process-global servent; copy the name before another lookup.
+        libc_getservbyport(network_port, protocol.as_ptr())
+    };
+    eval_servent_name_or_false(entry, values)
+}
+
+/// Converts a PHP value to a NUL-free lowercase C string for libc database lookups.
+fn eval_lowercase_c_string(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<CString>, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let bytes = bytes
+        .into_iter()
+        .map(|byte| byte.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    Ok(CString::new(bytes).ok())
+}
+
+/// Copies a protoent canonical name into a PHP string or returns PHP false.
+fn eval_protoent_name_or_false(
+    entry: *mut libc::protoent,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if entry.is_null() {
+        return values.bool_value(false);
+    }
+    let name = unsafe {
+        let name = (*entry).p_name;
+        if name.is_null() {
+            return values.bool_value(false);
+        }
+        CStr::from_ptr(name).to_bytes().to_vec()
+    };
+    values.string_bytes_value(&name)
+}
+
+/// Copies a servent canonical name into a PHP string or returns PHP false.
+fn eval_servent_name_or_false(
+    entry: *mut libc::servent,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if entry.is_null() {
+        return values.bool_value(false);
+    }
+    let name = unsafe {
+        let name = (*entry).s_name;
+        if name.is_null() {
+            return values.bool_value(false);
+        }
+        CStr::from_ptr(name).to_bytes().to_vec()
+    };
+    values.string_bytes_value(&name)
 }
 
 /// Evaluates PHP `long2ip($ip)` over one eval expression.
@@ -11953,6 +12197,38 @@ return function_exists("gethostbyaddr");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "direct:named:false:call:spread:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval protocol and service database lookups dispatch dynamically.
+    #[test]
+    fn execute_program_dispatches_protocol_service_builtins() {
+        let program = parse_fragment(
+            br#"echo getprotobyname("TCP") . ":";
+echo getprotobynumber(6) . ":";
+echo getprotobyname("no_such_protocol") === false ? "missing-proto" : "bad"; echo ":";
+echo getprotobynumber(999) === false ? "missing-number" : "bad"; echo ":";
+echo getservbyname("www", "tcp") . ":";
+echo getservbyport(80, "tcp") . ":";
+echo getservbyname("no_such_service", "tcp") === false ? "missing-service" : "bad"; echo ":";
+echo getservbyport(80, "no_such_proto") === false ? "missing-port" : "bad"; echo ":";
+echo call_user_func("getprotobyname", "udp") . ":";
+echo call_user_func_array("getprotobynumber", ["protocol" => 17]) . ":";
+echo call_user_func("getservbyname", "https", "tcp") . ":";
+echo call_user_func_array("getservbyport", ["port" => 443, "protocol" => "tcp"]) . ":";
+echo function_exists("getprotobyname"); echo function_exists("getprotobynumber"); echo function_exists("getservbyname");
+return function_exists("getservbyport");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "6:tcp:missing-proto:missing-number:80:http:missing-service:missing-port:17:udp:443:https:111"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

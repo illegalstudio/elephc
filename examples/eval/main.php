@@ -167,6 +167,7 @@ $realpath_cache = eval('return count(realpath_cache_get()) . ":" . realpath_cach
 $environment = eval('putenv("ELEPHC_EVAL_EXAMPLE=ok"); $value = getenv("ELEPHC_EVAL_EXAMPLE"); putenv("ELEPHC_EVAL_EXAMPLE"); return $value . ":" . (getenv("ELEPHC_EVAL_EXAMPLE") === "" ? "cleared" : "left");');
 $sleeping = eval('usleep(0); return sleep(0) . ":awake";');
 $host_lookup = eval('return (strlen(gethostname()) > 0 ? "host" : "empty") . ":" . gethostbyname("127.0.0.1") . ":" . gethostbyname("not a host") . ":" . (strlen(gethostbyaddr("127.0.0.1")) > 0 ? "reverse" : "empty") . ":" . (gethostbyaddr("not-an-ip-address") === false ? "bad-ip" : "bad");');
+$protocol_services = eval('return getprotobyname("tcp") . ":" . getprotobynumber(17) . ":" . getservbyname("http", "tcp") . ":" . getservbyport(443, "tcp");');
 $ip_conversion = eval('$packed = inet_pton("1.2.3.4"); return long2ip(ip2long("192.168.1.1")) . ":" . bin2hex($packed) . ":" . inet_ntop($packed);');
 $stream_introspection = eval('$wrappers = stream_get_wrappers(); $transports = stream_get_transports(); $filters = stream_get_filters(); return count($wrappers) . ":" . $wrappers[0] . ":" . count($transports) . ":" . (in_array("string.rot13", $filters) ? "rot13" : "missing");');
 $path_components = eval('return basename("/var/log/syslog.log", ".log") . ":" . dirname("/usr/local/bin/tool", 2);');
@@ -290,6 +291,7 @@ echo "realpath-cache=" . $realpath_cache . "\n";
 echo "environment=" . $environment . "\n";
 echo "sleep=" . $sleeping . "\n";
 echo "host-lookup=" . $host_lookup . "\n";
+echo "protocol-services=" . $protocol_services . "\n";
 echo "ip-conversion=" . $ip_conversion . "\n";
 echo "stream-introspection=" . $stream_introspection . "\n";
 echo "path-components=" . $path_components . "\n";
