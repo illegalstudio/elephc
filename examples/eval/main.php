@@ -126,6 +126,7 @@ $case = eval('return strtoupper("eval") . ":" . strtolower("LOUD") . ":" . ucfir
 $word_case = eval('return ucwords("hello eval");');
 $reversed = eval('return strrev("eval");');
 $json_encoded = eval('return json_encode(["name" => "Ada", "skills" => ["math", "code"]]);');
+$json_status = eval('return json_last_error() . ":" . json_last_error_msg();');
 $contains = eval('return str_contains("dynamic eval", "eval") ? "contains" : "missing";');
 $positions = eval('return strpos("banana", "na") . ":" . strrpos("banana", "na");');
 $substring_from = eval('return strstr("user@example.com", "@");');
@@ -264,6 +265,7 @@ echo "case=" . $case . "\n";
 echo "ucwords=" . $word_case . "\n";
 echo "reversed=" . $reversed . "\n";
 echo "json-encoded=" . $json_encoded . "\n";
+echo "json-status=" . $json_status . "\n";
 echo "contains=" . $contains . "\n";
 echo "positions=" . $positions . "\n";
 echo "strstr=" . $substring_from . "\n";
