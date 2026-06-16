@@ -333,6 +333,11 @@ const HEX2BIN_ODD_LENGTH_WARNING: &str =
     "Warning: hex2bin(): Hexadecimal input string must have an even length\n";
 const HEX2BIN_INVALID_WARNING: &str =
     "Warning: hex2bin(): Input string must be hexadecimal string\n";
+const EVAL_PATHINFO_DIRNAME: i64 = 1;
+const EVAL_PATHINFO_BASENAME: i64 = 2;
+const EVAL_PATHINFO_EXTENSION: i64 = 4;
+const EVAL_PATHINFO_FILENAME: i64 = 8;
+const EVAL_PATHINFO_ALL: i64 = 15;
 
 /// Executes an EvalIR program and returns the eval result cell.
 pub fn execute_program(
@@ -1243,6 +1248,7 @@ fn eval_positional_expr_call(
         "nl2br" => eval_builtin_nl2br(args, context, scope, values),
         "number_format" => eval_builtin_number_format(args, context, scope, values),
         "ord" => eval_builtin_ord(args, context, scope, values),
+        "pathinfo" => eval_builtin_pathinfo(args, context, scope, values),
         "pi" => eval_builtin_pi(args, values),
         "phpversion" => eval_builtin_phpversion(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
@@ -1375,7 +1381,7 @@ fn eval_define_name(
     if name.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if context.has_constant(&name) {
+    if eval_predefined_int_constant(&name).is_some() || context.has_constant(&name) {
         values.warning(DEFINE_ALREADY_DEFINED_WARNING)?;
         return Ok(false);
     }
@@ -1395,7 +1401,7 @@ fn eval_defined_name(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let name = eval_constant_name(name, values)?;
-    Ok(context.has_constant(&name))
+    Ok(eval_predefined_int_constant(&name).is_some() || context.has_constant(&name))
 }
 
 /// Reads a PHP constant name from a runtime cell without changing case.
@@ -1607,6 +1613,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "nl2br"
             | "number_format"
             | "ord"
+            | "pathinfo"
             | "pi"
             | "pow"
             | "phpversion"
@@ -1771,6 +1778,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "nl2br" => Some(&["string", "use_xhtml"]),
         "number_format" => Some(&["num", "decimals", "decimal_separator", "thousands_separator"]),
         "ord" => Some(&["character"]),
+        "pathinfo" => Some(&["path", "flags"]),
         "pi" => Some(&[]),
         "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
@@ -2308,6 +2316,11 @@ fn eval_builtin_with_values(
             }
             eval_phpversion_result(values)?
         }
+        "pathinfo" => match evaluated_args {
+            [path] => eval_pathinfo_result(*path, None, values)?,
+            [path, flags] => eval_pathinfo_result(*path, Some(*flags), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "putenv" => {
             let [assignment] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -4118,6 +4131,133 @@ fn eval_realpath_result(
     };
     let canonical = canonical.to_string_lossy();
     values.string(canonical.as_ref())
+}
+
+/// Evaluates PHP `pathinfo($path, $flags = PATHINFO_ALL)` over one eval expression.
+fn eval_builtin_pathinfo(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [path] => {
+            let path = eval_expr(path, context, scope, values)?;
+            eval_pathinfo_result(path, None, values)
+        }
+        [path, flags] => {
+            let path = eval_expr(path, context, scope, values)?;
+            let flags = eval_expr(flags, context, scope, values)?;
+            eval_pathinfo_result(path, Some(flags), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Computes PHP `pathinfo()` as either an associative array or one component string.
+fn eval_pathinfo_result(
+    path: RuntimeCellHandle,
+    flags: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = values.string_bytes(path)?;
+    let Some(flags) = flags else {
+        return eval_pathinfo_array_result(&path, values);
+    };
+    let flags = eval_int_value(flags, values)?;
+    if flags == EVAL_PATHINFO_ALL {
+        return eval_pathinfo_array_result(&path, values);
+    }
+    let component = eval_pathinfo_component_bytes(&path, flags);
+    values.string_bytes_value(&component)
+}
+
+/// Builds the PHP `pathinfo()` associative-array result for all components.
+fn eval_pathinfo_array_result(
+    path: &[u8],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.assoc_new(4)?;
+    if !path.is_empty() {
+        let dirname = eval_pathinfo_dirname_bytes(path);
+        result = eval_pathinfo_array_set(result, "dirname", &dirname, values)?;
+    }
+    let parts = eval_pathinfo_parts(path);
+    result = eval_pathinfo_array_set(result, "basename", &parts.basename, values)?;
+    if parts.has_extension {
+        result = eval_pathinfo_array_set(result, "extension", &parts.extension, values)?;
+    }
+    eval_pathinfo_array_set(result, "filename", &parts.filename, values)
+}
+
+/// Inserts one string component into a PHP `pathinfo()` associative result.
+fn eval_pathinfo_array_set(
+    array: RuntimeCellHandle,
+    key: &str,
+    value: &[u8],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = values.string(key)?;
+    let value = values.string_bytes_value(value)?;
+    values.array_set(array, key, value)
+}
+
+/// Returns one PHP `pathinfo()` component for a non-all bitmask.
+fn eval_pathinfo_component_bytes(path: &[u8], flags: i64) -> Vec<u8> {
+    if flags & EVAL_PATHINFO_DIRNAME != 0 {
+        return eval_pathinfo_dirname_bytes(path);
+    }
+    let parts = eval_pathinfo_parts(path);
+    if flags & EVAL_PATHINFO_BASENAME != 0 {
+        return parts.basename;
+    }
+    if flags & EVAL_PATHINFO_EXTENSION != 0 {
+        return parts.extension;
+    }
+    if flags & EVAL_PATHINFO_FILENAME != 0 {
+        return parts.filename;
+    }
+    Vec::new()
+}
+
+/// Computes the dirname component with `pathinfo("")`'s empty-string exception.
+fn eval_pathinfo_dirname_bytes(path: &[u8]) -> Vec<u8> {
+    if path.is_empty() {
+        Vec::new()
+    } else {
+        eval_dirname_once(path)
+    }
+}
+
+/// Splits pathinfo basename, extension, and filename components.
+fn eval_pathinfo_parts(path: &[u8]) -> EvalPathInfoParts {
+    let basename = eval_basename_bytes(path, None);
+    let Some(dot) = basename.iter().rposition(|byte| *byte == b'.') else {
+        return EvalPathInfoParts {
+            filename: basename.clone(),
+            basename,
+            extension: Vec::new(),
+            has_extension: false,
+        };
+    };
+    EvalPathInfoParts {
+        filename: basename[..dot].to_vec(),
+        extension: basename[dot + 1..].to_vec(),
+        basename,
+        has_extension: true,
+    }
+}
+
+/// Pathinfo components derived from a basename.
+struct EvalPathInfoParts {
+    /// Full basename component.
+    basename: Vec<u8>,
+    /// Extension component after the final dot, possibly empty for trailing-dot names.
+    extension: Vec<u8>,
+    /// Filename component before the final dot.
+    filename: Vec<u8>,
+    /// Whether the basename contained a dot and therefore has an extension key.
+    has_extension: bool,
 }
 
 /// Evaluates PHP `gethostbyname($hostname)` over one eval expression.
@@ -5948,10 +6088,25 @@ fn eval_const_fetch(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(value) = eval_predefined_int_constant(name) {
+        return values.int(value);
+    }
     let Some(value) = context.constant(name) else {
         return Err(EvalStatus::RuntimeFatal);
     };
     values.retain(value)
+}
+
+/// Returns eval-visible predefined integer constants that do not live in dynamic context.
+fn eval_predefined_int_constant(name: &str) -> Option<i64> {
+    match name {
+        "PATHINFO_DIRNAME" => Some(EVAL_PATHINFO_DIRNAME),
+        "PATHINFO_BASENAME" => Some(EVAL_PATHINFO_BASENAME),
+        "PATHINFO_EXTENSION" => Some(EVAL_PATHINFO_EXTENSION),
+        "PATHINFO_FILENAME" => Some(EVAL_PATHINFO_FILENAME),
+        "PATHINFO_ALL" => Some(EVAL_PATHINFO_ALL),
+        _ => None,
+    }
 }
 
 /// Resolves one eval magic constant against fragment and dynamic-call metadata.
@@ -8766,6 +8921,38 @@ return function_exists("realpath");"#,
 
         assert_eq!(values.output, "resolved:false:call:array-false:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `pathinfo()` handles arrays, component flags, constants, and callables.
+    #[test]
+    fn execute_program_dispatches_pathinfo_builtin() {
+        let program = parse_fragment(
+            br#"$info = pathinfo("/var/log/syslog.log");
+echo $info["dirname"] . "|" . $info["basename"] . "|" . $info["extension"] . "|" . $info["filename"] . ":";
+echo pathinfo("archive.tar.gz", PATHINFO_EXTENSION) . ":";
+echo pathinfo(".bashrc", PATHINFO_FILENAME) === "" ? "dotfile" : "bad"; echo ":";
+echo pathinfo("file.", PATHINFO_EXTENSION) === "" ? "trail" : "bad"; echo ":";
+echo pathinfo("", PATHINFO_DIRNAME) === "" ? "empty-dir" : "bad"; echo ":";
+$plain = pathinfo("/etc/hosts");
+echo array_key_exists("extension", $plain) ? "bad" : "no-ext"; echo ":";
+echo pathinfo("/a/b.php", PATHINFO_BASENAME | PATHINFO_FILENAME) . ":";
+$call = call_user_func("pathinfo", "foo.txt", PATHINFO_ALL);
+echo $call["basename"] . ":";
+echo call_user_func_array("pathinfo", ["path" => "foo.txt", "flags" => 0]) === "" ? "zero" : "bad";
+echo ":"; echo function_exists("pathinfo"); echo defined("PATHINFO_ALL");
+return PATHINFO_ALL;"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "/var/log|syslog.log|log|syslog:gz:dotfile:trail:empty-dir:no-ext:b.php:foo.txt:zero:11"
+        );
+        assert_eq!(values.get(result), FakeValue::Int(EVAL_PATHINFO_ALL));
     }
 
     /// Verifies eval ASCII string case builtins work directly and through callable dispatch.

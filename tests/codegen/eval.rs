@@ -1380,6 +1380,32 @@ echo ":"; echo function_exists("realpath");');
     assert_eq!(out, "resolved:false:call:array-false:1");
 }
 
+/// Verifies eval `pathinfo()` supports arrays, component flags, constants, and callables.
+#[test]
+fn test_eval_dispatches_pathinfo_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$info = pathinfo("/var/log/syslog.log");
+echo $info["dirname"] . "|" . $info["basename"] . "|" . $info["extension"] . "|" . $info["filename"] . ":";
+echo pathinfo("archive.tar.gz", PATHINFO_EXTENSION) . ":";
+echo pathinfo(".bashrc", PATHINFO_FILENAME) === "" ? "dotfile" : "bad"; echo ":";
+echo pathinfo("file.", PATHINFO_EXTENSION) === "" ? "trail" : "bad"; echo ":";
+echo pathinfo("", PATHINFO_DIRNAME) === "" ? "empty-dir" : "bad"; echo ":";
+$plain = pathinfo("/etc/hosts");
+echo array_key_exists("extension", $plain) ? "bad" : "no-ext"; echo ":";
+echo pathinfo("/a/b.php", PATHINFO_BASENAME | PATHINFO_FILENAME) . ":";
+$call = call_user_func("pathinfo", "foo.txt", PATHINFO_ALL);
+echo $call["basename"] . ":";
+echo call_user_func_array("pathinfo", ["path" => "foo.txt", "flags" => 0]) === "" ? "zero" : "bad";
+echo ":"; echo function_exists("pathinfo"); echo defined("PATHINFO_ALL");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "/var/log|syslog.log|log|syslog:gz:dotfile:trail:empty-dir:no-ext:b.php:foo.txt:zero:11"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
