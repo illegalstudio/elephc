@@ -601,6 +601,7 @@ const EVAL_JSON_BIGINT_AS_STRING: i64 = 2;
 const EVAL_JSON_FORCE_OBJECT: i64 = 16;
 const EVAL_JSON_NUMERIC_CHECK: i64 = 32;
 const EVAL_JSON_UNESCAPED_SLASHES: i64 = 64;
+const EVAL_JSON_PRESERVE_ZERO_FRACTION: i64 = 1024;
 
 unsafe extern "C" {
     /// Sets the process file-creation mask and returns the previous mask.
@@ -13170,7 +13171,8 @@ fn eval_json_encode_result(
         | EVAL_JSON_HEX_APOS
         | EVAL_JSON_HEX_QUOT
         | EVAL_JSON_UNESCAPED_SLASHES
-        | EVAL_JSON_FORCE_OBJECT;
+        | EVAL_JSON_FORCE_OBJECT
+        | EVAL_JSON_PRESERVE_ZERO_FRACTION;
     let supported_flags = supported_flags | EVAL_JSON_NUMERIC_CHECK;
     if flags & !supported_flags != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
@@ -13506,7 +13508,10 @@ fn eval_json_encode_append(
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
     match values.type_tag(value)? {
-        EVAL_TAG_INT | EVAL_TAG_FLOAT => output.extend_from_slice(&values.string_bytes(value)?),
+        EVAL_TAG_INT => output.extend_from_slice(&values.string_bytes(value)?),
+        EVAL_TAG_FLOAT => {
+            eval_json_encode_append_float(&values.string_bytes(value)?, flags, output);
+        }
         EVAL_TAG_STRING => eval_json_encode_append_string(&values.string_bytes(value)?, flags, output),
         EVAL_TAG_BOOL => {
             if values.truthy(value)? {
@@ -13541,6 +13546,18 @@ fn eval_json_encode_append(
         _ => return Err(EvalStatus::UnsupportedConstruct),
     }
     Ok(())
+}
+
+/// Appends one JSON float while preserving a `.0` suffix when requested.
+fn eval_json_encode_append_float(bytes: &[u8], flags: i64, output: &mut Vec<u8>) {
+    output.extend_from_slice(bytes);
+    if flags & EVAL_JSON_PRESERVE_ZERO_FRACTION != 0
+        && !bytes
+            .iter()
+            .any(|byte| matches!(*byte, b'.' | b'e' | b'E'))
+    {
+        output.extend_from_slice(b".0");
+    }
 }
 
 /// Appends one indexed eval array as a JSON array or forced JSON object.
@@ -14471,6 +14488,11 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "JSON_FORCE_OBJECT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_FORCE_OBJECT)),
         "JSON_NUMERIC_CHECK" => Some(EvalPredefinedConstant::Int(EVAL_JSON_NUMERIC_CHECK)),
         "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
+        "JSON_PRESERVE_ZERO_FRACTION" => {
+            Some(EvalPredefinedConstant::Int(
+                EVAL_JSON_PRESERVE_ZERO_FRACTION,
+            ))
+        }
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
         "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
@@ -17501,7 +17523,8 @@ echo json_encode([], JSON_FORCE_OBJECT) . ":";
 echo call_user_func_array("json_encode", ["value" => [1, 2], "flags" => JSON_FORCE_OBJECT]) . ":";
 echo json_encode("<>&\"" . chr(39), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ":";
 echo json_encode(["01", "+12", "1e3", " 7", "7x"], JSON_NUMERIC_CHECK) . ":";
-return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK");"#,
+echo json_encode([1.0, 2.5, -3.0], JSON_PRESERVE_ZERO_FRACTION) . ":";
+return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK") && defined("JSON_PRESERVE_ZERO_FRACTION");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17511,7 +17534,7 @@ return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && de
 
         assert_eq!(
             values.output,
-            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:"#
+            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:"#
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
