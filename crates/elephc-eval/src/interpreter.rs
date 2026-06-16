@@ -2460,12 +2460,16 @@ fn eval_builtin_with_values(
             };
             eval_array_map_result(*callback, *array, context, values)?
         }
-        "array_reduce" => {
-            let [array, callback, initial] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_array_reduce_result(*array, *callback, *initial, context, values)?
-        }
+        "array_reduce" => match evaluated_args {
+            [array, callback] => {
+                let initial = values.null()?;
+                eval_array_reduce_result(*array, *callback, initial, context, values)?
+            }
+            [array, callback, initial] => {
+                eval_array_reduce_result(*array, *callback, *initial, context, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "array_flip" => {
             let [array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -3529,12 +3533,20 @@ fn eval_builtin_array_reduce(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [array, callback, initial] = args else {
-        return Err(EvalStatus::RuntimeFatal);
+    let (array, callback, initial) = match args {
+        [array, callback] => {
+            let array = eval_expr(array, context, scope, values)?;
+            let callback = eval_expr(callback, context, scope, values)?;
+            (array, callback, values.null()?)
+        }
+        [array, callback, initial] => {
+            let array = eval_expr(array, context, scope, values)?;
+            let callback = eval_expr(callback, context, scope, values)?;
+            let initial = eval_expr(initial, context, scope, values)?;
+            (array, callback, initial)
+        }
+        _ => return Err(EvalStatus::RuntimeFatal),
     };
-    let array = eval_expr(array, context, scope, values)?;
-    let callback = eval_expr(callback, context, scope, values)?;
-    let initial = eval_expr(initial, context, scope, values)?;
     eval_array_reduce_result(array, callback, initial, context, values)
 }
 
@@ -13108,8 +13120,11 @@ return function_exists("array_map");"#,
             br#"function eval_reduce_sum($carry, $item) { return $carry + $item; }
 echo array_reduce([1, 2, 3], "eval_reduce_sum", 10) . ":";
 function eval_reduce_join($carry, $item) { return $carry . $item; }
+echo array_reduce([4, 5], "eval_reduce_sum") . ":";
 echo array_reduce(["a", "b"], "eval_reduce_join", "") . ":";
-$call = call_user_func("array_reduce", [4, 5], "eval_reduce_sum", 1);
+$named = array_reduce(array: [6, 7], callback: "eval_reduce_sum");
+echo $named . ":";
+$call = call_user_func("array_reduce", [4, 5], "eval_reduce_sum");
 echo $call . ":";
 $spread = call_user_func_array("array_reduce", ["array" => [2, 3], "callback" => "eval_reduce_sum", "initial" => 4]);
 echo $spread . ":";
@@ -13121,7 +13136,7 @@ return function_exists("array_reduce");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "16:ab:10:9:");
+        assert_eq!(values.output, "16:9:ab:13:9:9:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

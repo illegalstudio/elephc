@@ -57,7 +57,7 @@ Eval printf-family formatting supports `sprintf()`, `printf()`, `vsprintf()`, an
 
 Eval `array_map()` supports the one-array form with a string callback or `null` identity callback. String callbacks can target eval-declared functions, registered AOT callbacks, or supported builtins; result arrays preserve the source keys, matching PHP's one-array `array_map()` behavior.
 
-Eval `array_reduce()` supports the three-argument form with an explicit initial value and string callbacks. Callback resolution is shared with `call_user_func()`, so eval-declared functions, registered AOT callbacks, and supported builtins can fold the carry and current item.
+Eval `array_reduce()` supports the two- or three-argument form with string callbacks, using `null` as the initial carry when the initial value is omitted. Callback resolution is shared with `call_user_func()`, so eval-declared functions, registered AOT callbacks, and supported builtins can fold the carry and current item.
 
 Eval `array_filter()` supports the PHP default omitted/null callback form, filters falsey values, preserves source keys, and dispatches through direct, named-argument, `call_user_func()`, `call_user_func_array()`, and `function_exists()` paths. String callbacks can target eval-declared functions, registered AOT callbacks, or supported builtins, and the `ARRAY_FILTER_USE_VALUE`, `ARRAY_FILTER_USE_BOTH`, and `ARRAY_FILTER_USE_KEY` modes select value-only, value-and-key, or key-only callback arguments.
 

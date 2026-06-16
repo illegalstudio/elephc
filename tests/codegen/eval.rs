@@ -822,15 +822,18 @@ fn test_eval_dispatches_array_reduce_builtin_call() {
 eval('function eval_reduce_sum($carry, $item) { return $carry + $item; }
 echo array_reduce([1, 2, 3], "eval_reduce_sum", 10) . ":";
 function eval_reduce_join($carry, $item) { return $carry . $item; }
+echo array_reduce([4, 5], "eval_reduce_sum") . ":";
 echo array_reduce(["a", "b"], "eval_reduce_join", "") . ":";
-$call = call_user_func("array_reduce", [4, 5], "eval_reduce_sum", 1);
+$named = array_reduce(array: [6, 7], callback: "eval_reduce_sum");
+echo $named . ":";
+$call = call_user_func("array_reduce", [4, 5], "eval_reduce_sum");
 echo $call . ":";
 $spread = call_user_func_array("array_reduce", ["array" => [2, 3], "callback" => "eval_reduce_sum", "initial" => 4]);
 echo $spread . ":";
 echo function_exists("array_reduce");');
 "#,
     );
-    assert_eq!(out, "16:ab:10:9:1");
+    assert_eq!(out, "16:9:ab:13:9:9:1");
 }
 
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.

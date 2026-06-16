@@ -47,7 +47,7 @@ Eval printf-family dispatch formats `sprintf()` and `vsprintf()` inside the inte
 
 Eval `array_map()` iterates one source array through eval key/value hooks, invokes string callbacks through the shared eval callable dispatcher, and writes mapped results with the original keys. A null callback uses PHP's one-array identity behavior.
 
-Eval `array_reduce()` reads the initial carry once, walks the source array in PHP iteration order, and invokes the shared eval callable dispatcher with carry and current item cells for each entry. The resulting carry cell is returned directly to the eval caller.
+Eval `array_reduce()` reads the provided initial carry or creates a `null` carry when the argument is omitted, walks the source array in PHP iteration order, and invokes the shared eval callable dispatcher with carry and current item cells for each entry. The resulting carry cell is returned directly to the eval caller.
 
 Eval `array_filter()` implements PHP's omitted/null callback form by iterating source keys through the eval value hooks, testing each value with PHP truthiness, and inserting key/value pairs into an associative result so numeric and string keys are preserved. String callbacks route through the same eval callable dispatcher as `call_user_func()`, and `ARRAY_FILTER_USE_VALUE`, `ARRAY_FILTER_USE_BOTH`, and `ARRAY_FILTER_USE_KEY` select value-only, value/key, or key-only callback argument lists.
 
