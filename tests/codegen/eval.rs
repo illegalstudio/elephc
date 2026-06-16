@@ -853,6 +853,26 @@ echo function_exists("array_diff"); echo function_exists("array_intersect");');
     assert_eq!(out, "2:1:3:no-b:no-c:2:2:2:2:13:1:3:11");
 }
 
+/// Verifies eval `array_diff_key()` and `array_intersect_key()` preserve first-array keys.
+#[test]
+fn test_eval_dispatches_array_key_set_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$diff = array_diff_key(["a" => 1, "b" => 2, 4 => 3], ["a" => 0, 5 => 0]);
+echo count($diff) . ":" . $diff["b"] . ":" . $diff[4];
+echo ":" . (array_key_exists("a", $diff) ? "bad" : "no-a");
+$inter = array_intersect_key(["a" => 1, "b" => 2, 4 => 3], ["b" => 0, 4 => 0]);
+echo ":" . count($inter) . ":" . $inter["b"] . ":" . $inter[4];
+$call = call_user_func("array_diff_key", [10, 20, 30], [1 => 0]);
+echo ":" . count($call) . ":" . $call[0] . $call[2];
+$spread = call_user_func_array("array_intersect_key", [["x" => 7, "y" => 8], ["y" => 0]]);
+echo ":" . count($spread) . ":" . $spread["y"] . ":";
+echo function_exists("array_diff_key"); echo function_exists("array_intersect_key");');
+"#,
+    );
+    assert_eq!(out, "2:2:3:no-a:2:2:3:2:1030:1:8:11");
+}
+
 /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
 #[test]
 fn test_eval_dispatches_array_fill_builtin_calls() {
