@@ -1518,6 +1518,8 @@ fn eval_positional_expr_call(
         }
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
         "json_encode" => eval_builtin_json_encode(args, context, scope, values),
+        "json_last_error" => eval_builtin_json_last_error(args, values),
+        "json_last_error_msg" => eval_builtin_json_last_error_msg(args, values),
         "linkinfo" => eval_builtin_linkinfo(args, context, scope, values),
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
         "log" => eval_builtin_log(args, context, scope, values),
@@ -1976,6 +1978,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_resource"
             | "is_string"
             | "json_encode"
+            | "json_last_error"
+            | "json_last_error_msg"
             | "lcfirst"
             | "log"
             | "log2"
@@ -2224,6 +2228,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "intdiv" => Some(&["num1", "num2"]),
         "ip2long" => Some(&["ip"]),
         "json_encode" => Some(&["value", "flags", "depth"]),
+        "json_last_error" | "json_last_error_msg" => Some(&[]),
         "link" | "symlink" => Some(&["target", "link"]),
         "linkinfo" | "readlink" => Some(&["path"]),
         "log" => Some(&["num", "base"]),
@@ -2995,6 +3000,18 @@ fn eval_builtin_with_values(
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "json_last_error" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            values.int(0)?
+        }
+        "json_last_error_msg" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            values.string_bytes_value(b"No error")?
+        }
         "gethostbyaddr" => {
             let [ip] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -10282,6 +10299,28 @@ fn eval_json_encode_result(
     values.string_bytes_value(&output)
 }
 
+/// Evaluates PHP `json_last_error()` with the eval interpreter's current no-error state.
+fn eval_builtin_json_last_error(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    values.int(0)
+}
+
+/// Evaluates PHP `json_last_error_msg()` with the eval interpreter's current no-error state.
+fn eval_builtin_json_last_error_msg(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    values.string_bytes_value(b"No error")
+}
+
 /// Appends one JSON value to the output buffer.
 fn eval_json_encode_append(
     value: RuntimeCellHandle,
@@ -13397,6 +13436,25 @@ return function_exists("json_encode");"#,
             values.output,
             r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"#
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `json_last_error()` reports the no-error JSON status.
+    #[test]
+    fn execute_program_dispatches_json_last_error_builtins() {
+        let program = parse_fragment(
+            br#"echo json_last_error() . ":" . json_last_error_msg() . ":";
+echo call_user_func("json_last_error") . ":";
+echo call_user_func_array("json_last_error_msg", []) . ":";
+return function_exists("json_last_error") && function_exists("json_last_error_msg");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "0:No error:0:No error:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

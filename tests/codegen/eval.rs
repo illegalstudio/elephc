@@ -764,6 +764,20 @@ echo function_exists("json_encode");');
     assert_eq!(out, r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:1"#);
 }
 
+/// Verifies eval `json_last_error()` and `json_last_error_msg()` report no-error status.
+#[test]
+fn test_eval_dispatches_json_last_error_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo json_last_error() . ":" . json_last_error_msg() . ":";
+echo call_user_func("json_last_error") . ":";
+echo call_user_func_array("json_last_error_msg", []) . ":";
+echo function_exists("json_last_error") && function_exists("json_last_error_msg");');
+"#,
+    );
+    assert_eq!(out, "0:No error:0:No error:1");
+}
+
 /// Verifies eval direct builtin calls bind named arguments and spread arrays.
 #[test]
 fn test_eval_dispatches_named_and_spread_builtin_calls() {
