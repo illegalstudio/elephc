@@ -44,6 +44,17 @@ impl ScopeEntryFlags {
         }
     }
 
+    /// Builds flags for a present runtime cell shared by PHP references.
+    pub const fn reference(ownership: ScopeCellOwnership) -> Self {
+        Self {
+            present: true,
+            unset: false,
+            dirty: true,
+            by_ref: true,
+            ownership,
+        }
+    }
+
     /// Builds flags for a PHP variable that has been unset from the dynamic scope.
     pub const fn unset() -> Self {
         Self {
@@ -79,6 +90,19 @@ impl ScopeEntry {
         Self {
             cell,
             flags: ScopeEntryFlags::present(ownership),
+            generation,
+        }
+    }
+
+    /// Creates a present entry that participates in a PHP reference alias set.
+    pub const fn reference(
+        cell: RuntimeCellHandle,
+        ownership: ScopeCellOwnership,
+        generation: u64,
+    ) -> Self {
+        Self {
+            cell,
+            flags: ScopeEntryFlags::reference(ownership),
             generation,
         }
     }
@@ -150,6 +174,84 @@ impl ElephcEvalScope {
         owned_cell_except(previous, cell)
     }
 
+    /// Stores a variable while preserving existing PHP reference aliases.
+    pub fn set_respecting_references(
+        &mut self,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+        ownership: ScopeCellOwnership,
+    ) -> Vec<RuntimeCellHandle> {
+        let name = name.into();
+        let Some(entry) = self.entries.get(&name).copied() else {
+            return self.set(name, cell, ownership).into_iter().collect();
+        };
+        if !entry.flags().is_visible() || !entry.flags().by_ref {
+            return self.set(name, cell, ownership).into_iter().collect();
+        }
+
+        self.bump_generation();
+        let old_cell = entry.cell();
+        let mut replaced = Vec::new();
+        for (entry_name, entry) in &mut self.entries {
+            let flags = entry.flags();
+            if !flags.is_visible() || !flags.by_ref || entry.cell() != old_cell {
+                continue;
+            }
+            if flags.ownership == ScopeCellOwnership::Owned
+                && old_cell != cell
+                && !replaced.contains(&old_cell)
+            {
+                replaced.push(old_cell);
+            }
+            let next_ownership = if entry_name == &name {
+                ownership
+            } else {
+                ScopeCellOwnership::Borrowed
+            };
+            *entry = ScopeEntry::reference(cell, next_ownership, self.generation);
+        }
+        replaced
+    }
+
+    /// Binds a target variable name as a PHP reference to a source variable name.
+    pub fn set_reference(
+        &mut self,
+        target: impl Into<String>,
+        source: impl Into<String>,
+        default_cell: RuntimeCellHandle,
+        default_ownership: ScopeCellOwnership,
+    ) -> Vec<RuntimeCellHandle> {
+        let target = target.into();
+        let source = source.into();
+        self.bump_generation();
+        let source_entry = self
+            .entries
+            .get(&source)
+            .copied()
+            .filter(|entry| entry.flags().is_visible());
+        let (cell, source_ownership) = source_entry
+            .map_or((default_cell, default_ownership), |entry| {
+                (entry.cell(), entry.flags().ownership)
+            });
+        if target == source {
+            let previous = self.entries.insert(
+                source,
+                ScopeEntry::reference(cell, source_ownership, self.generation),
+            );
+            return owned_cell_except(previous, cell).into_iter().collect();
+        }
+
+        let previous_source = self.entries.insert(
+            source,
+            ScopeEntry::reference(cell, source_ownership, self.generation),
+        );
+        let previous_target = self.entries.insert(
+            target,
+            ScopeEntry::reference(cell, ScopeCellOwnership::Borrowed, self.generation),
+        );
+        owned_cells_except([previous_source, previous_target], cell)
+    }
+
     /// Marks a named variable as unset while preserving the fact that eval touched it.
     pub fn unset(&mut self, name: impl Into<String>) -> Option<RuntimeCellHandle> {
         self.bump_generation();
@@ -157,6 +259,48 @@ impl ElephcEvalScope {
             .entries
             .insert(name.into(), ScopeEntry::unset(self.generation));
         owned_cell(previous)
+    }
+
+    /// Marks a variable as unset while preserving ownership for remaining references.
+    pub fn unset_respecting_references(
+        &mut self,
+        name: impl Into<String>,
+    ) -> Option<RuntimeCellHandle> {
+        let name = name.into();
+        let Some(entry) = self.entries.get(&name).copied() else {
+            return self.unset(name);
+        };
+        if !entry.flags().is_visible() || !entry.flags().by_ref {
+            return self.unset(name);
+        }
+        let old_cell = entry.cell();
+        let should_transfer_ownership = entry.flags().ownership == ScopeCellOwnership::Owned;
+        self.bump_generation();
+        let mut transferred = false;
+        if should_transfer_ownership {
+            for (entry_name, entry) in &mut self.entries {
+                let flags = entry.flags();
+                if entry_name == &name
+                    || !flags.is_visible()
+                    || !flags.by_ref
+                    || entry.cell() != old_cell
+                {
+                    continue;
+                }
+                *entry =
+                    ScopeEntry::reference(old_cell, ScopeCellOwnership::Owned, self.generation);
+                transferred = true;
+                break;
+            }
+        }
+        let previous = self
+            .entries
+            .insert(name, ScopeEntry::unset(self.generation));
+        if transferred {
+            None
+        } else {
+            owned_cell(previous)
+        }
     }
 
     /// Returns the entry for a named variable, including unset markers.
@@ -235,6 +379,23 @@ fn owned_cell_except(
     owned_cell(entry).filter(|cell| *cell != replacement)
 }
 
+/// Returns owned cells from replaced entries unless they match the replacement.
+fn owned_cells_except(
+    entries: impl IntoIterator<Item = Option<ScopeEntry>>,
+    replacement: RuntimeCellHandle,
+) -> Vec<RuntimeCellHandle> {
+    let mut cells = Vec::new();
+    for entry in entries {
+        let Some(cell) = owned_cell_except(entry, replacement) else {
+            continue;
+        };
+        if !cells.contains(&cell) {
+            cells.push(cell);
+        }
+    }
+    cells
+}
+
 impl Default for ElephcEvalScope {
     /// Creates the default empty materialized activation scope.
     fn default() -> Self {
@@ -304,6 +465,85 @@ mod tests {
         let replaced = scope.set("x", cell, ScopeCellOwnership::Owned);
 
         assert_eq!(replaced, None);
+    }
+
+    /// Verifies reference binding points two variable names at one runtime cell.
+    #[test]
+    fn set_reference_binds_names_to_source_cell() {
+        let mut scope = ElephcEvalScope::new();
+        let cell = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+
+        scope.set("source", cell, ScopeCellOwnership::Owned);
+        let replaced = scope.set_reference(
+            "alias",
+            "source",
+            RuntimeCellHandle::from_raw(std::ptr::null_mut()),
+            ScopeCellOwnership::Owned,
+        );
+
+        let source = scope.entry("source").expect("source entry should exist");
+        let alias = scope.entry("alias").expect("alias entry should exist");
+        assert!(replaced.is_empty());
+        assert_eq!(source.cell(), cell);
+        assert_eq!(alias.cell(), cell);
+        assert!(source.flags().by_ref);
+        assert!(alias.flags().by_ref);
+        assert_eq!(source.flags().ownership, ScopeCellOwnership::Owned);
+        assert_eq!(alias.flags().ownership, ScopeCellOwnership::Borrowed);
+    }
+
+    /// Verifies writing through one reference alias updates every alias in the group.
+    #[test]
+    fn set_respecting_references_updates_alias_group() {
+        let mut scope = ElephcEvalScope::new();
+        let old_cell = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+        let new_cell = RuntimeCellHandle::from_raw(2usize as *mut crate::value::RuntimeCell);
+        scope.set("source", old_cell, ScopeCellOwnership::Owned);
+        scope.set_reference(
+            "alias",
+            "source",
+            RuntimeCellHandle::from_raw(std::ptr::null_mut()),
+            ScopeCellOwnership::Owned,
+        );
+
+        let replaced =
+            scope.set_respecting_references("alias", new_cell, ScopeCellOwnership::Owned);
+
+        assert_eq!(replaced, vec![old_cell]);
+        assert_eq!(scope.visible_cell("source"), Some(new_cell));
+        assert_eq!(scope.visible_cell("alias"), Some(new_cell));
+        assert_eq!(
+            scope.entry("alias").expect("alias").flags().ownership,
+            ScopeCellOwnership::Owned
+        );
+        assert_eq!(
+            scope.entry("source").expect("source").flags().ownership,
+            ScopeCellOwnership::Borrowed
+        );
+    }
+
+    /// Verifies unsetting an owned alias transfers ownership to a remaining reference.
+    #[test]
+    fn unset_respecting_references_transfers_owned_cell() {
+        let mut scope = ElephcEvalScope::new();
+        let cell = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+        scope.set("source", cell, ScopeCellOwnership::Owned);
+        scope.set_reference(
+            "alias",
+            "source",
+            RuntimeCellHandle::from_raw(std::ptr::null_mut()),
+            ScopeCellOwnership::Owned,
+        );
+        scope.set_respecting_references("alias", cell, ScopeCellOwnership::Owned);
+
+        let replaced = scope.unset_respecting_references("alias");
+
+        assert_eq!(replaced, None);
+        assert!(scope.entry("alias").expect("alias").flags().unset);
+        assert_eq!(
+            scope.entry("source").expect("source").flags().ownership,
+            ScopeCellOwnership::Owned
+        );
     }
 
     /// Verifies draining a scope returns only visible owned cells.

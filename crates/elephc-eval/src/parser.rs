@@ -846,7 +846,19 @@ impl Parser {
         };
         self.advance();
         if op.is_none() && matches!(self.current(), TokenKind::Ampersand) {
-            return Err(EvalParseError::UnsupportedConstruct);
+            self.advance();
+            let TokenKind::DollarIdent(source) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            let source = source.clone();
+            self.advance();
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return Ok(vec![EvalStmt::ReferenceAssign {
+                target: name,
+                source,
+            }]);
         }
         let value = self.parse_expr()?;
         if require_semicolon {
@@ -1747,6 +1759,19 @@ mod tests {
             &[EvalStmt::StoreVar {
                 name: "x".to_string(),
                 value: EvalExpr::Const(EvalConst::Int(1)),
+            }]
+        );
+    }
+
+    /// Verifies reference assignments lower to by-name ReferenceAssign statements.
+    #[test]
+    fn parse_fragment_accepts_reference_assignment_source() {
+        let program = parse_fragment(b"$left =& $right;").expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::ReferenceAssign {
+                target: "left".to_string(),
+                source: "right".to_string(),
             }]
         );
     }
@@ -2947,15 +2972,6 @@ mod tests {
                 Err(EvalParseError::UnsupportedConstruct)
             );
         }
-    }
-
-    /// Verifies unsupported reference assignments report the unsupported construct status.
-    #[test]
-    fn parse_fragment_rejects_reference_assignment_as_unsupported_construct() {
-        assert_eq!(
-            parse_fragment(b"$left =& $right;"),
-            Err(EvalParseError::UnsupportedConstruct)
-        );
     }
 
     /// Verifies malformed statements report parse errors instead of partial IR.

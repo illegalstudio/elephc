@@ -1902,14 +1902,17 @@ eval('return new EvalDynamicNewUnsupported();');
     );
 }
 
-/// Verifies unsupported eval reference assignments fail through the eval diagnostic path.
+/// Verifies eval reference assignments update the referenced caller local.
 #[test]
-fn test_eval_unsupported_reference_assignment_fails() {
-    let err = compile_and_run_expect_failure("<?php eval('$left =& $right;');");
-    assert!(
-        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-        "stderr did not contain eval unsupported diagnostic: {err}"
+fn test_eval_reference_assignment_updates_caller_local() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+eval('$alias =& $x; $alias = 5;');
+echo $x;
+"#,
     );
+    assert_eq!(out, "5");
 }
 
 /// Verifies `return` inside eval becomes the expression result of `eval(...)`.

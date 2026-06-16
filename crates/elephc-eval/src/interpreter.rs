@@ -386,7 +386,7 @@ fn set_scope_cell(
     name: impl Into<String>,
     cell: RuntimeCellHandle,
     ownership: ScopeCellOwnership,
-) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let name = name.into();
     if scope.is_global_alias(&name) {
         let Some(global_scope) = context.global_scope_ptr() else {
@@ -394,14 +394,35 @@ fn set_scope_cell(
         };
         let current_scope = scope as *mut ElephcEvalScope;
         if global_scope == current_scope {
-            return Ok(scope.set(name, cell, ownership));
+            return Ok(scope.set_respecting_references(name, cell, ownership));
         }
         let Some(global_scope) = (unsafe { global_scope.as_mut() }) else {
             return Err(EvalStatus::RuntimeFatal);
         };
-        return Ok(global_scope.set(name, cell, ownership));
+        return Ok(global_scope.set_respecting_references(name, cell, ownership));
     }
-    Ok(scope.set(name, cell, ownership))
+    Ok(scope.set_respecting_references(name, cell, ownership))
+}
+
+/// Creates a PHP reference alias between two eval-visible variable names.
+fn set_reference_alias(
+    context: &ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    target: &str,
+    source: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    if scope.is_global_alias(source) {
+        scope.mark_global_alias(target.to_string());
+        return Ok(Vec::new());
+    }
+    let (cell, ownership) = scope_entry(context, scope, source)
+        .filter(|entry| entry.flags().is_visible())
+        .map_or_else(
+            || values.null().map(|cell| (cell, ScopeCellOwnership::Owned)),
+            |entry| Ok((entry.cell(), entry.flags().ownership)),
+        )?;
+    Ok(scope.set_reference(target.to_string(), source.to_string(), cell, ownership))
 }
 
 /// Unsets a variable, removing only the local alias when the name is global.
@@ -413,7 +434,7 @@ fn unset_scope_cell(
     if scope.is_global_alias(&name) {
         scope.clear_global_alias(&name);
     }
-    scope.unset(name)
+    scope.unset_respecting_references(name)
 }
 
 /// Marks variables as aliases to the context global scope for later reads/writes.
@@ -460,9 +481,7 @@ fn execute_stmt(
             let index = eval_array_append_key(array, values)?;
             let value = eval_expr(value, context, scope, values)?;
             let array = values.array_set(array, index, value)?;
-            if let Some(replaced) =
-                set_scope_cell(context, scope, name.clone(), array, ownership)?
-            {
+            for replaced in set_scope_cell(context, scope, name.clone(), array, ownership)? {
                 values.release(replaced)?;
             }
             Ok(EvalControl::None)
@@ -484,9 +503,7 @@ fn execute_stmt(
             let index = eval_expr(index, context, scope, values)?;
             let value = eval_expr(value, context, scope, values)?;
             let array = values.array_set(array, index, value)?;
-            if let Some(replaced) =
-                set_scope_cell(context, scope, name.clone(), array, ownership)?
-            {
+            for replaced in set_scope_cell(context, scope, name.clone(), array, ownership)? {
                 values.release(replaced)?;
             }
             Ok(EvalControl::None)
@@ -559,6 +576,12 @@ fn execute_stmt(
             expr, context, scope, values,
         )?)),
         EvalStmt::Return(None) => Ok(EvalControl::Return(values.null()?)),
+        EvalStmt::ReferenceAssign { target, source } => {
+            for replaced in set_reference_alias(context, scope, target, source, values)? {
+                values.release(replaced)?;
+            }
+            Ok(EvalControl::None)
+        }
         EvalStmt::StaticVar { name, init } => {
             execute_static_var_stmt(name, init, context, scope, values)?;
             Ok(EvalControl::None)
@@ -575,9 +598,13 @@ fn execute_stmt(
         }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_expr(value, context, scope, values)?;
-            if let Some(replaced) =
-                set_scope_cell(context, scope, name.clone(), value, ScopeCellOwnership::Owned)?
-            {
+            for replaced in set_scope_cell(
+                context,
+                scope,
+                name.clone(),
+                value,
+                ScopeCellOwnership::Owned,
+            )? {
                 values.release(replaced)?;
             }
             Ok(EvalControl::None)
@@ -754,17 +781,25 @@ fn execute_foreach_stmt(
         let key = values.array_iter_key(array, index)?;
         let value = values.array_get(array, key)?;
         if let Some(key_name) = key_name {
-            if let Some(replaced) =
-                set_scope_cell(context, scope, key_name.to_string(), key, ScopeCellOwnership::Owned)?
-            {
+            for replaced in set_scope_cell(
+                context,
+                scope,
+                key_name.to_string(),
+                key,
+                ScopeCellOwnership::Owned,
+            )? {
                 values.release(replaced)?;
             }
         } else {
             values.release(key)?;
         }
-        if let Some(replaced) =
-            set_scope_cell(context, scope, value_name.to_string(), value, ScopeCellOwnership::Owned)?
-        {
+        for replaced in set_scope_cell(
+            context,
+            scope,
+            value_name.to_string(),
+            value,
+            ScopeCellOwnership::Owned,
+        )? {
             values.release(replaced)?;
         }
         match execute_statements(body, context, scope, values)? {
@@ -2849,8 +2884,13 @@ fn eval_dynamic_function_with_values(
     let static_names = static_var_names(function.body());
     context.push_function(function.name());
     let result = execute_statements(function.body(), context, &mut function_scope, values);
-    let persist_result =
-        persist_static_locals(context, function.name(), &static_names, &function_scope, values);
+    let persist_result = persist_static_locals(
+        context,
+        function.name(),
+        &static_names,
+        &function_scope,
+        values,
+    );
     context.pop_function();
     persist_result?;
     match result? {
@@ -2920,6 +2960,7 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
             | EvalStmt::Expr(_)
             | EvalStmt::Global { .. }
             | EvalStmt::PropertySet { .. }
+            | EvalStmt::ReferenceAssign { .. }
             | EvalStmt::Return(_)
             | EvalStmt::StoreVar { .. }
             | EvalStmt::UnsetVar { .. } => {}
@@ -3906,6 +3947,25 @@ mod tests {
         assert_eq!(values.get(result), FakeValue::Int(7));
     }
 
+    /// Verifies reference assignment aliases variable names and writes through the alias.
+    #[test]
+    fn execute_program_reference_assignment_updates_source_variable() {
+        let program = parse_fragment(b"$x = 1; $alias =& $x; $alias = 5; return $x;")
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let x = scope.visible_cell("x").expect("scope should contain x");
+        let alias = scope
+            .visible_cell("alias")
+            .expect("scope should contain alias");
+
+        assert_eq!(x, alias);
+        assert_eq!(values.get(x), FakeValue::Int(5));
+        assert_eq!(values.get(result), FakeValue::Int(5));
+    }
+
     /// Verifies simple variable compound assignments read, compute, and write the scope value.
     #[test]
     fn execute_program_evaluates_compound_assignments() {
@@ -4821,8 +4881,8 @@ return (dyn() * 10) + dyn();"#,
     /// Verifies `global` declarations read and write the context global scope.
     #[test]
     fn execute_program_global_alias_writes_context_global_scope() {
-        let program = parse_fragment(br#"global $g; $g = $g + 1; return $g;"#)
-            .expect("parse eval fragment");
+        let program =
+            parse_fragment(br#"global $g; $g = $g + 1; return $g;"#).expect("parse eval fragment");
         let mut context = ElephcEvalContext::new();
         let mut scope = ElephcEvalScope::new();
         let mut global_scope = ElephcEvalScope::new();

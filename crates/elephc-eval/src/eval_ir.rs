@@ -88,6 +88,10 @@ pub enum EvalStmt {
         else_branch: Vec<EvalStmt>,
     },
     Return(Option<EvalExpr>),
+    ReferenceAssign {
+        target: String,
+        source: String,
+    },
     PropertySet {
         object: EvalExpr,
         property: String,
