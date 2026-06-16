@@ -21,6 +21,8 @@ The bridge crate parses the fragment at runtime into a small EvalIR and interpre
 
 Eval `finally` bodies run inside the EvalIR interpreter before a fragment return or thrown `Throwable` escapes, and a control action produced by `finally` replaces the pending action from the protected body or catch.
 
+Eval `catch (Throwable)` may omit the variable binding; in that case the interpreter consumes the throwable and releases the unbound cell before executing the catch body.
+
 The eval callable dispatcher currently normalizes string callbacks and two-element object-method callable arrays such as `[$this, "method"]`. Object-method arrays are supported for direct `$cb(...)`, `call_user_func()`, `call_user_func_array()`, and `iterator_apply()` paths with positional arguments; static-method callable arrays and closure/descriptor callback values are still handled only by the native descriptor runtime outside eval fragments.
 
 Eval `match` expressions live entirely inside the interpreter: the subject is evaluated once, patterns are compared through the existing strict-comparison value hook, result arms are evaluated lazily, and a miss without `default` returns the eval runtime-fatal status.

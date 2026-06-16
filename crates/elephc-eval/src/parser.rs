@@ -1081,16 +1081,18 @@ impl Parser {
         }])
     }
 
-    /// Parses one supported `catch (Throwable $name) { ... }` clause.
+    /// Parses one supported `catch (Throwable [$name]) { ... }` clause.
     fn parse_catch_clause(&mut self) -> Result<EvalCatch, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LParen)?;
         let class_name = self.parse_supported_catch_type()?;
-        let TokenKind::DollarIdent(var_name) = self.current() else {
-            return Err(EvalParseError::ExpectedVariable);
+        let var_name = if let TokenKind::DollarIdent(var_name) = self.current() {
+            let var_name = var_name.clone();
+            self.advance();
+            Some(var_name)
+        } else {
+            None
         };
-        let var_name = var_name.clone();
-        self.advance();
         self.expect(TokenKind::RParen)?;
         let body = self.parse_block()?;
         Ok(EvalCatch {
@@ -3944,7 +3946,7 @@ function dyn() { return alias(); }"#,
                 })],
                 catches: vec![EvalCatch {
                     class_name: "Throwable".to_string(),
-                    var_name: "caught".to_string(),
+                    var_name: Some("caught".to_string()),
                     body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
                 }],
                 finally_body: Vec::new(),
@@ -3970,10 +3972,40 @@ try {
                 body: vec![EvalStmt::Throw(EvalExpr::LoadVar("e".to_string()))],
                 catches: vec![EvalCatch {
                     class_name: "Throwable".to_string(),
-                    var_name: "caught".to_string(),
+                    var_name: Some("caught".to_string()),
                     body: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
                         "caught".to_string()
                     )))],
+                }],
+                finally_body: Vec::new(),
+            }]
+        );
+    }
+
+    /// Verifies Throwable catch clauses can omit the catch variable like PHP.
+    #[test]
+    fn parse_fragment_accepts_try_catch_without_variable() {
+        let program = parse_fragment(
+            br#"try {
+    throw new Exception("eval boom");
+} catch (Throwable) {
+    return 1;
+}"#,
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Try {
+                body: vec![EvalStmt::Throw(EvalExpr::NewObject {
+                    class_name: "Exception".to_string(),
+                    args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                        "eval boom".to_string()
+                    )))],
+                })],
+                catches: vec![EvalCatch {
+                    class_name: "Throwable".to_string(),
+                    var_name: None,
+                    body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
                 }],
                 finally_body: Vec::new(),
             }]

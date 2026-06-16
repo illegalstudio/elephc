@@ -132,7 +132,7 @@ pub enum EvalStmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalCatch {
     pub class_name: String,
-    pub var_name: String,
+    pub var_name: Option<String>,
     pub body: Vec<EvalStmt>,
 }
 
