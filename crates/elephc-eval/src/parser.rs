@@ -2975,12 +2975,12 @@ mod tests {
         );
     }
 
-    /// Verifies unsupported dynamic object construction reports the unsupported construct status.
+    /// Verifies malformed object construction reports an unexpected token.
     #[test]
-    fn parse_fragment_rejects_new_as_unsupported_construct() {
+    fn parse_fragment_rejects_new_without_class_name() {
         assert_eq!(
-            parse_fragment(b"return new DynEvalUnsupported();"),
-            Err(EvalParseError::UnsupportedConstruct)
+            parse_fragment(b"return new ();"),
+            Err(EvalParseError::UnexpectedToken)
         );
     }
 
