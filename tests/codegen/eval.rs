@@ -1542,6 +1542,40 @@ echo function_exists("file"); echo function_exists("readfile"); echo function_ex
     );
 }
 
+/// Verifies eval file-modification builtins update modes, masks, temp files, and dispatch.
+#[test]
+fn test_eval_dispatches_file_modify_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('file_put_contents("eval-mod.txt", "x");
+echo chmod(filename: "eval-mod.txt", permissions: 384) ? "chmod" : "bad"; echo ":";
+echo (fileperms("eval-mod.txt") & 511) === 384 ? "mode" : "bad"; echo ":";
+echo chmod("eval-missing-mod.txt", 384) ? "bad" : "chmod-false"; echo ":";
+$tmp = tempnam(directory: ".", prefix: "evm");
+echo file_exists($tmp) && str_starts_with(basename($tmp), "evm") ? "tempnam" : "bad"; echo ":";
+unlink($tmp);
+$previous = umask(mask: 18);
+$set = umask($previous);
+echo $set === 18 ? "umask" : "bad"; echo ":";
+$before = umask(18);
+$probe = umask();
+$restore = umask($before);
+echo $probe === 18 && $restore === 18 ? "probe" : "bad"; echo ":";
+echo call_user_func("chmod", "eval-mod.txt", 420) ? "callchmod" : "bad"; echo ":";
+$call_tmp = call_user_func_array("tempnam", ["directory" => ".", "prefix" => "evc"]);
+echo file_exists($call_tmp) && str_starts_with(basename($call_tmp), "evc") ? "calltempnam" : "bad"; echo ":";
+unlink($call_tmp);
+echo unlink("eval-mod.txt") ? "cleanup" : "bad"; echo ":";
+echo function_exists("chmod"); echo function_exists("tempnam"); echo function_exists("umask");
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "chmod:mode:chmod-false:tempnam:umask:probe:callchmod:calltempnam:cleanup:111"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
