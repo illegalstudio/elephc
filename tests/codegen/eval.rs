@@ -734,6 +734,29 @@ echo ":"; echo function_exists("array_sum"); echo function_exists("array_product
     assert_eq!(out, "6:24:0:1:7:7:10:11");
 }
 
+/// Verifies eval `array_combine()` supports PHP key conversions and callable dispatch.
+#[test]
+fn test_eval_dispatches_array_combine_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$pairs = array_combine(["a", "b"], [10, 20]);
+echo $pairs["a"] . ":" . $pairs["b"];
+$numeric = array_combine(["1", "01"], ["n", "z"]);
+echo ":" . $numeric[1] . $numeric["01"];
+$scalar = array_combine([null, true, false, 2.8], ["n", "t", "f", "d"]);
+echo ":" . $scalar[""] . $scalar[1] . $scalar["2.8"];
+$named = array_combine(keys: ["k"], values: ["v"]);
+echo ":" . $named["k"];
+$call = call_user_func("array_combine", ["x"], [7]);
+echo ":" . $call["x"];
+$spread = call_user_func_array("array_combine", [["y"], [8]]);
+echo ":" . $spread["y"] . ":";
+echo function_exists("array_combine");');
+"#,
+    );
+    assert_eq!(out, "10:20:nz:ftd:v:7:8:1");
+}
+
 /// Verifies eval array projection builtins return indexed key/value arrays.
 #[test]
 fn test_eval_dispatches_array_projection_builtin_calls() {

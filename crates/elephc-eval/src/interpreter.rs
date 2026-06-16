@@ -898,6 +898,7 @@ fn eval_positional_expr_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "abs" => eval_builtin_abs(args, context, scope, values),
+        "array_combine" => eval_builtin_array_combine(args, context, scope, values),
         "array_keys" | "array_values" => {
             eval_builtin_array_projection(name, args, context, scope, values)
         }
@@ -1046,6 +1047,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
     matches!(
         name,
         "abs"
+            | "array_combine"
             | "array_key_exists"
             | "array_keys"
             | "array_product"
@@ -1183,6 +1185,7 @@ fn collect_contiguous_bound_args(
 fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "abs" | "ceil" | "floor" | "sqrt" => Some(&["num"]),
+        "array_combine" => Some(&["keys", "values"]),
         "array_keys" | "array_product" | "array_sum" | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
@@ -1342,6 +1345,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.abs(*value)?
+        }
+        "array_combine" => {
+            let [keys, values_array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_combine_result(*keys, *values_array, values)?
         }
         "array_product" | "array_sum" => {
             let [array] = evaluated_args else {
@@ -1573,6 +1582,44 @@ fn eval_array_aggregate_result(
             "array_product" => values.mul(result, value)?,
             _ => return Err(EvalStatus::UnsupportedConstruct),
         };
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `array_combine()` over key and value array expressions.
+fn eval_builtin_array_combine(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [keys, values_array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let keys = eval_expr(keys, context, scope, values)?;
+    let values_array = eval_expr(values_array, context, scope, values)?;
+    eval_array_combine_result(keys, values_array, values)
+}
+
+/// Builds the associative result for `array_combine()` from two eval arrays.
+fn eval_array_combine_result(
+    keys: RuntimeCellHandle,
+    values_array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(keys)?;
+    if len != values.array_len(values_array)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+
+    let mut result = values.assoc_new(len)?;
+    for position in 0..len {
+        let source_key = values.array_iter_key(keys, position)?;
+        let target_key = values.array_get(keys, source_key)?;
+        let target_key = values.cast_string(target_key)?;
+        let value_key = values.array_iter_key(values_array, position)?;
+        let value = values.array_get(values_array, value_key)?;
+        result = values.array_set(result, target_key, value)?;
     }
     Ok(result)
 }
@@ -4752,6 +4799,33 @@ return function_exists("array_product");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "6:24:0:1:7:7:10:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_combine()` converts key values through PHP string-key rules.
+    #[test]
+    fn execute_program_dispatches_array_combine_builtin() {
+        let program = parse_fragment(
+            br#"$pairs = array_combine(["a", "b"], [10, 20]);
+echo $pairs["a"] . ":" . $pairs["b"];
+$numeric = array_combine(["1", "01"], ["n", "z"]);
+echo ":" . $numeric[1] . $numeric["01"];
+$scalar = array_combine([null, true, false, 2.8], ["n", "t", "f", "d"]);
+echo ":" . $scalar[""] . $scalar[1] . $scalar["2.8"];
+$named = array_combine(keys: ["k"], values: ["v"]);
+echo ":" . $named["k"];
+$call = call_user_func("array_combine", ["x"], [7]);
+echo ":" . $call["x"];
+$spread = call_user_func_array("array_combine", [["y"], [8]]);
+echo ":" . $spread["y"] . ":";
+return function_exists("array_combine");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "10:20:nz:ftd:v:7:8:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
