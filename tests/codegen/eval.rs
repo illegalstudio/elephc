@@ -873,6 +873,29 @@ echo function_exists("array_diff_key"); echo function_exists("array_intersect_ke
     assert_eq!(out, "2:2:3:no-a:2:2:3:2:1030:1:8:11");
 }
 
+/// Verifies eval `range()` builds inclusive ascending and descending integer arrays.
+#[test]
+fn test_eval_dispatches_range_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$up = range(1, 4);
+echo count($up) . ":" . $up[0] . $up[3];
+$down = range(4, 1);
+echo ":" . count($down) . ":" . $down[0] . $down[3];
+$single = range(3, 3);
+echo ":" . count($single) . ":" . $single[0];
+$named = range(start: 2, end: 4);
+echo ":" . $named[0] . $named[2];
+$call = call_user_func("range", 5, 7);
+echo ":" . $call[2];
+$spread = call_user_func_array("range", [8, 6]);
+echo ":" . count($spread) . ":" . $spread[0] . $spread[2] . ":";
+echo function_exists("range");');
+"#,
+    );
+    assert_eq!(out, "4:14:4:41:1:3:24:7:3:86:1");
+}
+
 /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
 #[test]
 fn test_eval_dispatches_array_fill_builtin_calls() {

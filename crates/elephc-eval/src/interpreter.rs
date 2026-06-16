@@ -1308,6 +1308,7 @@ fn eval_positional_expr_call(
         "phpversion" => eval_builtin_phpversion(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
+        "range" => eval_builtin_range(args, context, scope, values),
         "rawurldecode" | "urldecode" => {
             eval_builtin_url_decode(name, args, context, scope, values)
         }
@@ -1738,6 +1739,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "pow"
             | "phpversion"
             | "putenv"
+            | "range"
             | "rad2deg"
             | "rawurldecode"
             | "rawurlencode"
@@ -1949,6 +1951,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
         "putenv" => Some(&["assignment"]),
+        "range" => Some(&["start", "end"]),
         "realpath" => Some(&["path"]),
         "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
         "round" => Some(&["num", "precision"]),
@@ -2217,6 +2220,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_unique_result(*array, values)?
+        }
+        "range" => {
+            let [start, end] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_range_result(*start, *end, values)?
         }
         "base64_encode" => {
             let [value] = evaluated_args else {
@@ -3506,6 +3515,52 @@ fn eval_array_key_set_result(
         };
         if keep {
             result = values.array_set(result, key, value)?;
+        }
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `range()` over integer-compatible start and end expressions.
+fn eval_builtin_range(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [start, end] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let start = eval_expr(start, context, scope, values)?;
+    let end = eval_expr(end, context, scope, values)?;
+    eval_range_result(start, end, values)
+}
+
+/// Builds an inclusive ascending or descending integer `range()` result.
+fn eval_range_result(
+    start: RuntimeCellHandle,
+    end: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let start = eval_int_value(start, values)?;
+    let end = eval_int_value(end, values)?;
+    let distance = if start <= end {
+        end.checked_sub(start).ok_or(EvalStatus::RuntimeFatal)?
+    } else {
+        start.checked_sub(end).ok_or(EvalStatus::RuntimeFatal)?
+    };
+    let count = distance.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+    let count = usize::try_from(count).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let step = if start <= end { 1_i64 } else { -1_i64 };
+    let mut current = start;
+    let mut result = values.array_new(count)?;
+
+    for index in 0..count {
+        let key = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let key = values.int(key)?;
+        let value = values.int(current)?;
+        result = values.array_set(result, key, value)?;
+        if index + 1 < count {
+            current = current.checked_add(step).ok_or(EvalStatus::RuntimeFatal)?;
         }
     }
     Ok(result)
@@ -10864,6 +10919,34 @@ return function_exists("array_diff_key") && function_exists("array_intersect_key
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "2:2:3:no-a:2:2:3:2:1030:1:8:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `range()` builds inclusive ascending and descending integer arrays.
+    #[test]
+    fn execute_program_dispatches_range_builtin() {
+        let program = parse_fragment(
+            br#"$up = range(1, 4);
+echo count($up) . ":" . $up[0] . $up[3];
+$down = range(4, 1);
+echo ":" . count($down) . ":" . $down[0] . $down[3];
+$single = range(3, 3);
+echo ":" . count($single) . ":" . $single[0];
+$named = range(start: 2, end: 4);
+echo ":" . $named[0] . $named[2];
+$call = call_user_func("range", 5, 7);
+echo ":" . $call[2];
+$spread = call_user_func_array("range", [8, 6]);
+echo ":" . count($spread) . ":" . $spread[0] . $spread[2] . ":";
+return function_exists("range");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "4:14:4:41:1:3:24:7:3:86:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
