@@ -15,8 +15,8 @@
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalMagicConst, EvalMatchArm,
-    EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalCatch, EvalConst, EvalExpr, EvalMagicConst,
+    EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
 use std::collections::HashMap;
 
@@ -677,6 +677,7 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "static") => self.parse_static_var_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "switch") => self.parse_switch_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "throw") => self.parse_throw_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "try") => self.parse_try_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "unset") => self.parse_unset_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "use") && self.allow_use_imports => {
                 self.parse_use_stmt()
@@ -1053,6 +1054,55 @@ impl Parser {
         let expr = self.parse_expr()?;
         self.expect_semicolon()?;
         Ok(vec![EvalStmt::Throw(expr)])
+    }
+
+    /// Parses `try { ... } catch (Throwable $name) { ... }` statements.
+    fn parse_try_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let body = self.parse_block()?;
+        let mut catches = Vec::new();
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "catch")) {
+            catches.push(self.parse_catch_clause()?);
+        }
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "finally")) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        if catches.is_empty() {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        Ok(vec![EvalStmt::Try { body, catches }])
+    }
+
+    /// Parses one supported `catch (Throwable $name) { ... }` clause.
+    fn parse_catch_clause(&mut self) -> Result<EvalCatch, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let class_name = self.parse_supported_catch_type()?;
+        let TokenKind::DollarIdent(var_name) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let var_name = var_name.clone();
+        self.advance();
+        self.expect(TokenKind::RParen)?;
+        let body = self.parse_block()?;
+        Ok(EvalCatch {
+            class_name,
+            var_name,
+            body,
+        })
+    }
+
+    /// Parses the catch type currently implemented by the EvalIR interpreter.
+    fn parse_supported_catch_type(&mut self) -> Result<String, EvalParseError> {
+        let class_name = self.parse_qualified_name()?;
+        if matches!(self.current(), TokenKind::Pipe) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        let class_name = self.resolve_class_name(class_name);
+        if !is_supported_catch_type(&class_name) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        Ok(class_name)
     }
 
     /// Parses a dynamic function declaration parameter list after `(`.
@@ -2275,9 +2325,14 @@ fn ident_eq(actual: &str, expected: &str) -> bool {
 
 /// Returns true for PHP statement forms that the eval subset intentionally does not parse yet.
 fn is_unsupported_statement_keyword(name: &str) -> bool {
-    ["enum", "interface", "trait", "try"]
+    ["enum", "interface", "trait"]
         .iter()
         .any(|keyword| ident_eq(name, keyword))
+}
+
+/// Returns true when an eval catch type can be matched without runtime class tests.
+fn is_supported_catch_type(class_name: &str) -> bool {
+    class_name.eq_ignore_ascii_case("Throwable")
 }
 
 /// Returns true when an identifier is an include/require expression construct.
@@ -3856,6 +3911,96 @@ function dyn() { return alias(); }"#,
                     "eval boom".to_string()
                 )))],
             })]
+        );
+    }
+
+    /// Verifies try/catch statements lower supported Throwable clauses into EvalIR.
+    #[test]
+    fn parse_fragment_accepts_try_catch_throwable_source() {
+        let program = parse_fragment(
+            br#"try {
+    throw new Exception("eval boom");
+} catch (Throwable $caught) {
+    return 1;
+}"#,
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Try {
+                body: vec![EvalStmt::Throw(EvalExpr::NewObject {
+                    class_name: "Exception".to_string(),
+                    args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                        "eval boom".to_string()
+                    )))],
+                })],
+                catches: vec![EvalCatch {
+                    class_name: "Throwable".to_string(),
+                    var_name: "caught".to_string(),
+                    body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
+                }],
+            }]
+        );
+    }
+
+    /// Verifies class imports can alias the supported Throwable catch type.
+    #[test]
+    fn parse_fragment_accepts_try_catch_imported_throwable_alias() {
+        let program = parse_fragment(
+            br#"use Throwable as T;
+try {
+    throw $e;
+} catch (T $caught) {
+    echo "caught";
+}"#,
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Try {
+                body: vec![EvalStmt::Throw(EvalExpr::LoadVar("e".to_string()))],
+                catches: vec![EvalCatch {
+                    class_name: "Throwable".to_string(),
+                    var_name: "caught".to_string(),
+                    body: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
+                        "caught".to_string()
+                    )))],
+                }],
+            }]
+        );
+    }
+
+    /// Verifies unsupported catch type narrowing stays explicit until runtime matching exists.
+    #[test]
+    fn parse_fragment_rejects_specific_eval_catch_type() {
+        assert_eq!(
+            parse_fragment(
+                br#"try {
+    throw new Exception("eval boom");
+} catch (Exception $caught) {
+    return 1;
+}"#,
+            ),
+            Err(EvalParseError::UnsupportedConstruct)
+        );
+        assert_eq!(
+            parse_fragment(
+                br#"try {
+    throw new Exception("eval boom");
+} catch (Throwable|Exception $caught) {
+    return 1;
+}"#,
+            ),
+            Err(EvalParseError::UnsupportedConstruct)
+        );
+    }
+
+    /// Verifies eval try/finally remains outside the supported EvalIR subset.
+    #[test]
+    fn parse_fragment_rejects_eval_finally_source() {
+        assert_eq!(
+            parse_fragment(br#"try { echo "try"; } finally { echo "finally"; }"#),
+            Err(EvalParseError::UnsupportedConstruct)
         );
     }
 
