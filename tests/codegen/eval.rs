@@ -1380,6 +1380,31 @@ echo ":"; echo function_exists("realpath");');
     assert_eq!(out, "resolved:false:call:array-false:1");
 }
 
+/// Verifies eval `fnmatch()` supports wildcards, classes, flags, constants, and callables.
+#[test]
+fn test_eval_dispatches_fnmatch_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo fnmatch("*.log", "system.log") ? "match" : "bad"; echo ":";
+echo fnmatch("*.log", "logs/system.log", FNM_PATHNAME) ? "bad" : "path"; echo ":";
+echo fnmatch("*.LOG", "system.log", FNM_CASEFOLD) ? "case" : "bad"; echo ":";
+echo fnmatch("*", ".env", FNM_PERIOD) ? "bad" : "period"; echo ":";
+echo fnmatch("[!abc]oo", "doo") && !fnmatch("[!abc]oo", "boo") ? "class" : "bad"; echo ":";
+echo fnmatch("a\\\\*b", "a*b") ? "escape" : "bad"; echo ":";
+echo fnmatch("a\\\\*b", "a\\\\xxb", FNM_NOESCAPE) ? "noescape" : "bad"; echo ":";
+$flags = FNM_PATHNAME | FNM_CASEFOLD;
+echo fnmatch("dir/*.TXT", "dir/file.txt", $flags) ? "flags" : "bad"; echo ":";
+echo call_user_func("fnmatch", "*.txt", "report.txt") ? "call" : "bad"; echo ":";
+echo call_user_func_array("fnmatch", ["pattern" => "*.TXT", "filename" => "report.txt", "flags" => FNM_CASEFOLD]) ? "callarray" : "bad"; echo ":";
+echo function_exists("fnmatch"); echo defined("FNM_CASEFOLD");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "match:path:case:period:class:escape:noescape:flags:call:callarray:11"
+    );
+}
+
 /// Verifies eval `pathinfo()` supports arrays, component flags, constants, and callables.
 #[test]
 fn test_eval_dispatches_pathinfo_builtin_call() {

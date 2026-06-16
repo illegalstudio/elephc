@@ -339,6 +339,10 @@ const EVAL_PATHINFO_BASENAME: i64 = 2;
 const EVAL_PATHINFO_EXTENSION: i64 = 4;
 const EVAL_PATHINFO_FILENAME: i64 = 8;
 const EVAL_PATHINFO_ALL: i64 = 15;
+const EVAL_FNM_NOESCAPE: i64 = 1;
+const EVAL_FNM_PATHNAME: i64 = 2;
+const EVAL_FNM_PERIOD: i64 = 4;
+const EVAL_FNM_CASEFOLD: i64 = 16;
 
 unsafe extern "C" {
     /// Sets the process file-creation mask and returns the previous mask.
@@ -1242,6 +1246,7 @@ fn eval_positional_expr_call(
         "file_put_contents" => eval_builtin_file_put_contents(args, context, scope, values),
         "filesize" => eval_builtin_filesize(args, context, scope, values),
         "filetype" => eval_builtin_filetype(args, context, scope, values),
+        "fnmatch" => eval_builtin_fnmatch(args, context, scope, values),
         "stat" | "lstat" => eval_builtin_stat_array(name, args, context, scope, values),
         "floor" => eval_builtin_floor(args, context, scope, values),
         "function_exists" | "is_callable" => {
@@ -1621,6 +1626,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "file_put_contents"
             | "filesize"
             | "filetype"
+            | "fnmatch"
             | "floor"
             | "floatval"
             | "fmod"
@@ -1838,6 +1844,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "dirname" => Some(&["path", "levels"]),
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
+        "fnmatch" => Some(&["pattern", "filename", "flags"]),
         "file" | "file_get_contents" | "file_exists" | "fileatime" | "filectime" | "filegroup"
         | "fileinode" | "filemtime" | "fileowner" | "fileperms" | "filesize" | "filetype"
         | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable" | "is_writable"
@@ -2196,6 +2203,13 @@ fn eval_builtin_with_values(
             };
             eval_filetype_result(*filename, values)?
         }
+        "fnmatch" => match evaluated_args {
+            [pattern, filename] => eval_fnmatch_result(*pattern, *filename, None, values)?,
+            [pattern, filename, flags] => {
+                eval_fnmatch_result(*pattern, *filename, Some(*flags), values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "stat" | "lstat" => {
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -5302,6 +5316,303 @@ struct EvalPathInfoParts {
     has_extension: bool,
 }
 
+/// Evaluates PHP `fnmatch($pattern, $filename, $flags = 0)` over eval expressions.
+fn eval_builtin_fnmatch(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [pattern, filename] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let filename = eval_expr(filename, context, scope, values)?;
+            eval_fnmatch_result(pattern, filename, None, values)
+        }
+        [pattern, filename, flags] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let filename = eval_expr(filename, context, scope, values)?;
+            let flags = eval_expr(flags, context, scope, values)?;
+            eval_fnmatch_result(pattern, filename, Some(flags), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Runs PHP-style shell glob matching for one pattern/name pair.
+fn eval_fnmatch_result(
+    pattern: RuntimeCellHandle,
+    filename: RuntimeCellHandle,
+    flags: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let pattern = values.string_bytes(pattern)?;
+    let filename = values.string_bytes(filename)?;
+    let flags = match flags {
+        Some(flags) => eval_int_value(flags, values)?,
+        None => 0,
+    };
+    values.bool_value(eval_fnmatch_bytes(&pattern, &filename, flags))
+}
+
+/// Matches byte strings using the eval-supported `fnmatch()` grammar and flags.
+fn eval_fnmatch_bytes(pattern: &[u8], filename: &[u8], flags: i64) -> bool {
+    let mut memo = vec![vec![None; filename.len() + 1]; pattern.len() + 1];
+    eval_fnmatch_at(pattern, filename, flags, 0, 0, &mut memo)
+}
+
+/// Recursively matches a pattern suffix against a filename suffix with memoization.
+fn eval_fnmatch_at(
+    pattern: &[u8],
+    filename: &[u8],
+    flags: i64,
+    pattern_index: usize,
+    filename_index: usize,
+    memo: &mut [Vec<Option<bool>>],
+) -> bool {
+    if let Some(result) = memo[pattern_index][filename_index] {
+        return result;
+    }
+    let result = if pattern_index == pattern.len() {
+        filename_index == filename.len()
+    } else {
+        match pattern[pattern_index] {
+            b'*' => eval_fnmatch_star(pattern, filename, flags, pattern_index, filename_index, memo),
+            b'?' => {
+                eval_fnmatch_single_wildcard(filename, flags, filename_index)
+                    && eval_fnmatch_at(
+                        pattern,
+                        filename,
+                        flags,
+                        pattern_index + 1,
+                        filename_index + 1,
+                        memo,
+                    )
+            }
+            b'[' => eval_fnmatch_class_or_literal(
+                pattern,
+                filename,
+                flags,
+                pattern_index,
+                filename_index,
+                memo,
+            ),
+            b'\\' if flags & EVAL_FNM_NOESCAPE == 0 => {
+                let (literal, next_pattern_index) =
+                    eval_fnmatch_escaped_literal(pattern, pattern_index);
+                eval_fnmatch_literal(filename, flags, filename_index, literal)
+                    && eval_fnmatch_at(
+                        pattern,
+                        filename,
+                        flags,
+                        next_pattern_index,
+                        filename_index + 1,
+                        memo,
+                    )
+            }
+            literal => {
+                eval_fnmatch_literal(filename, flags, filename_index, literal)
+                    && eval_fnmatch_at(
+                        pattern,
+                        filename,
+                        flags,
+                        pattern_index + 1,
+                        filename_index + 1,
+                        memo,
+                    )
+            }
+        }
+    };
+    memo[pattern_index][filename_index] = Some(result);
+    result
+}
+
+/// Handles `*`, including pathname and leading-period restrictions.
+fn eval_fnmatch_star(
+    pattern: &[u8],
+    filename: &[u8],
+    flags: i64,
+    pattern_index: usize,
+    filename_index: usize,
+    memo: &mut [Vec<Option<bool>>],
+) -> bool {
+    let mut next_pattern_index = pattern_index + 1;
+    while next_pattern_index < pattern.len() && pattern[next_pattern_index] == b'*' {
+        next_pattern_index += 1;
+    }
+    if eval_fnmatch_at(
+        pattern,
+        filename,
+        flags,
+        next_pattern_index,
+        filename_index,
+        memo,
+    ) {
+        return true;
+    }
+    let mut cursor = filename_index;
+    while cursor < filename.len() && eval_fnmatch_wildcard_can_consume(filename, flags, cursor) {
+        cursor += 1;
+        if eval_fnmatch_at(pattern, filename, flags, next_pattern_index, cursor, memo) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns whether `?` can consume the current filename byte.
+fn eval_fnmatch_single_wildcard(filename: &[u8], flags: i64, filename_index: usize) -> bool {
+    filename_index < filename.len()
+        && eval_fnmatch_wildcard_can_consume(filename, flags, filename_index)
+}
+
+/// Handles a bracket class, or falls back to a literal `[` when the class is malformed.
+fn eval_fnmatch_class_or_literal(
+    pattern: &[u8],
+    filename: &[u8],
+    flags: i64,
+    pattern_index: usize,
+    filename_index: usize,
+    memo: &mut [Vec<Option<bool>>],
+) -> bool {
+    if filename_index >= filename.len()
+        || !eval_fnmatch_wildcard_can_consume(filename, flags, filename_index)
+    {
+        return false;
+    }
+    let Some((matches, next_pattern_index)) =
+        eval_fnmatch_class_matches(pattern, pattern_index + 1, filename[filename_index], flags)
+    else {
+        return eval_fnmatch_literal(filename, flags, filename_index, b'[')
+            && eval_fnmatch_at(
+                pattern,
+                filename,
+                flags,
+                pattern_index + 1,
+                filename_index + 1,
+                memo,
+            );
+    };
+    matches
+        && eval_fnmatch_at(
+            pattern,
+            filename,
+            flags,
+            next_pattern_index,
+            filename_index + 1,
+            memo,
+        )
+}
+
+/// Matches one bracket class body against the current filename byte.
+fn eval_fnmatch_class_matches(
+    pattern: &[u8],
+    mut index: usize,
+    candidate: u8,
+    flags: i64,
+) -> Option<(bool, usize)> {
+    let negated = matches!(pattern.get(index).copied(), Some(b'!' | b'^'));
+    if negated {
+        index += 1;
+    }
+    let mut matched = false;
+    let mut closed = false;
+    while index < pattern.len() {
+        if pattern[index] == b']' {
+            closed = true;
+            index += 1;
+            break;
+        }
+        let start = eval_fnmatch_class_char(pattern, &mut index, flags)?;
+        if index + 1 < pattern.len() && pattern[index] == b'-' && pattern[index + 1] != b']' {
+            index += 1;
+            let end = eval_fnmatch_class_char(pattern, &mut index, flags)?;
+            if eval_fnmatch_byte_in_range(candidate, start, end, flags) {
+                matched = true;
+            }
+        } else if eval_fnmatch_byte_eq(candidate, start, flags) {
+            matched = true;
+        }
+    }
+    closed.then_some((if negated { !matched } else { matched }, index))
+}
+
+/// Reads one character from a bracket class, respecting escapes when enabled.
+fn eval_fnmatch_class_char(pattern: &[u8], index: &mut usize, flags: i64) -> Option<u8> {
+    if *index >= pattern.len() {
+        return None;
+    }
+    if pattern[*index] == b'\\' && flags & EVAL_FNM_NOESCAPE == 0 && *index + 1 < pattern.len() {
+        *index += 2;
+        return Some(pattern[*index - 1]);
+    }
+    let byte = pattern[*index];
+    *index += 1;
+    Some(byte)
+}
+
+/// Returns whether one candidate byte falls within a possibly case-folded range.
+fn eval_fnmatch_byte_in_range(candidate: u8, start: u8, end: u8, flags: i64) -> bool {
+    let candidate = eval_fnmatch_fold(candidate, flags);
+    let start = eval_fnmatch_fold(start, flags);
+    let end = eval_fnmatch_fold(end, flags);
+    if start <= end {
+        candidate >= start && candidate <= end
+    } else {
+        candidate >= end && candidate <= start
+    }
+}
+
+/// Reads an escaped literal token outside bracket classes.
+fn eval_fnmatch_escaped_literal(pattern: &[u8], pattern_index: usize) -> (u8, usize) {
+    if pattern_index + 1 < pattern.len() {
+        (pattern[pattern_index + 1], pattern_index + 2)
+    } else {
+        (b'\\', pattern_index + 1)
+    }
+}
+
+/// Returns whether one literal pattern byte matches the current filename byte.
+fn eval_fnmatch_literal(filename: &[u8], flags: i64, filename_index: usize, literal: u8) -> bool {
+    filename_index < filename.len()
+        && eval_fnmatch_byte_eq(filename[filename_index], literal, flags)
+}
+
+/// Returns whether a wildcard token may consume the current filename byte.
+fn eval_fnmatch_wildcard_can_consume(filename: &[u8], flags: i64, filename_index: usize) -> bool {
+    if filename_index >= filename.len() {
+        return false;
+    }
+    if flags & EVAL_FNM_PATHNAME != 0 && filename[filename_index] == b'/' {
+        return false;
+    }
+    if flags & EVAL_FNM_PERIOD != 0 && eval_fnmatch_is_leading_period(filename, flags, filename_index) {
+        return false;
+    }
+    true
+}
+
+/// Returns whether the current byte is a leading period for `FNM_PERIOD`.
+fn eval_fnmatch_is_leading_period(filename: &[u8], flags: i64, filename_index: usize) -> bool {
+    filename[filename_index] == b'.'
+        && (filename_index == 0
+            || (flags & EVAL_FNM_PATHNAME != 0 && filename[filename_index - 1] == b'/'))
+}
+
+/// Compares bytes using ASCII case folding when `FNM_CASEFOLD` is present.
+fn eval_fnmatch_byte_eq(left: u8, right: u8, flags: i64) -> bool {
+    eval_fnmatch_fold(left, flags) == eval_fnmatch_fold(right, flags)
+}
+
+/// Applies eval fnmatch's ASCII case folding.
+fn eval_fnmatch_fold(byte: u8, flags: i64) -> u8 {
+    if flags & EVAL_FNM_CASEFOLD != 0 {
+        byte.to_ascii_lowercase()
+    } else {
+        byte
+    }
+}
+
 /// Evaluates PHP `gethostbyname($hostname)` over one eval expression.
 fn eval_builtin_gethostbyname(
     args: &[EvalExpr],
@@ -7147,6 +7458,10 @@ fn eval_predefined_int_constant(name: &str) -> Option<i64> {
         "PATHINFO_EXTENSION" => Some(EVAL_PATHINFO_EXTENSION),
         "PATHINFO_FILENAME" => Some(EVAL_PATHINFO_FILENAME),
         "PATHINFO_ALL" => Some(EVAL_PATHINFO_ALL),
+        "FNM_NOESCAPE" => Some(EVAL_FNM_NOESCAPE),
+        "FNM_PATHNAME" => Some(EVAL_FNM_PATHNAME),
+        "FNM_PERIOD" => Some(EVAL_FNM_PERIOD),
+        "FNM_CASEFOLD" => Some(EVAL_FNM_CASEFOLD),
         _ => None,
     }
 }
@@ -9963,6 +10278,37 @@ return function_exists("realpath");"#,
 
         assert_eq!(values.output, "resolved:false:call:array-false:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `fnmatch()` supports wildcards, classes, flags, constants, and callables.
+    #[test]
+    fn execute_program_dispatches_fnmatch_builtin() {
+        let program = parse_fragment(
+            br#"echo fnmatch("*.log", "system.log") ? "match" : "bad"; echo ":";
+echo fnmatch("*.log", "logs/system.log", FNM_PATHNAME) ? "bad" : "path"; echo ":";
+echo fnmatch("*.LOG", "system.log", FNM_CASEFOLD) ? "case" : "bad"; echo ":";
+echo fnmatch("*", ".env", FNM_PERIOD) ? "bad" : "period"; echo ":";
+echo fnmatch("[!abc]oo", "doo") && !fnmatch("[!abc]oo", "boo") ? "class" : "bad"; echo ":";
+echo fnmatch('a\\*b', 'a*b') ? "escape" : "bad"; echo ":";
+echo fnmatch('a\\*b', 'a\\xxb', FNM_NOESCAPE) ? "noescape" : "bad"; echo ":";
+$flags = FNM_PATHNAME | FNM_CASEFOLD;
+echo fnmatch("dir/*.TXT", "dir/file.txt", $flags) ? "flags" : "bad"; echo ":";
+echo call_user_func("fnmatch", "*.txt", "report.txt") ? "call" : "bad"; echo ":";
+echo call_user_func_array("fnmatch", ["pattern" => "*.TXT", "filename" => "report.txt", "flags" => FNM_CASEFOLD]) ? "callarray" : "bad"; echo ":";
+echo function_exists("fnmatch"); echo defined("FNM_CASEFOLD");
+return FNM_CASEFOLD;"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "match:path:case:period:class:escape:noescape:flags:call:callarray:11"
+        );
+        assert_eq!(values.get(result), FakeValue::Int(EVAL_FNM_CASEFOLD));
     }
 
     /// Verifies eval `pathinfo()` handles arrays, component flags, constants, and callables.
