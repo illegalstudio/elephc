@@ -823,6 +823,12 @@ echo call_user_func("json_encode", "a/b\"c") . ":";
 echo call_user_func_array("json_encode", ["value" => ["k" => false], "flags" => 0, "depth" => 4]) . ":";
 echo json_encode("a/b", JSON_UNESCAPED_SLASHES) . ":";
 echo call_user_func_array("json_encode", ["value" => "x/y", "flags" => JSON_UNESCAPED_SLASHES]) . ":";
+$accent = json_decode("\"\\u00e9\"");
+$emoji = json_decode("\"\\ud83d\\ude00\"");
+echo bin2hex(json_encode($accent . "/" . $emoji)) . ":";
+echo bin2hex(json_encode($accent . "/" . $emoji, JSON_UNESCAPED_UNICODE)) . ":";
+echo bin2hex(json_encode([$accent => $emoji])) . ":";
+echo bin2hex(json_encode([$accent => $emoji], JSON_UNESCAPED_UNICODE)) . ":";
 echo json_encode([1, 2], JSON_FORCE_OBJECT) . ":";
 echo json_encode([], JSON_FORCE_OBJECT) . ":";
 echo call_user_func_array("json_encode", ["value" => [1, 2], "flags" => JSON_FORCE_OBJECT]) . ":";
@@ -835,7 +841,7 @@ echo function_exists("json_encode");');
     );
     assert_eq!(
         out,
-        r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:{|    "a": [|        1,|        2|    ]|}:1"#
+        r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":225c75303065395c2f5c75643833645c756465303022:22c3a95c2ff09f988022:7b225c7530306539223a225c75643833645c7564653030227d:7b22c3a9223a22f09f9880227d:{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:{|    "a": [|        1,|        2|    ]|}:1"#
     );
 }
 
