@@ -599,6 +599,7 @@ const EVAL_JSON_HEX_APOS: i64 = 4;
 const EVAL_JSON_HEX_QUOT: i64 = 8;
 const EVAL_JSON_BIGINT_AS_STRING: i64 = 2;
 const EVAL_JSON_FORCE_OBJECT: i64 = 16;
+const EVAL_JSON_NUMERIC_CHECK: i64 = 32;
 const EVAL_JSON_UNESCAPED_SLASHES: i64 = 64;
 
 unsafe extern "C" {
@@ -13170,6 +13171,7 @@ fn eval_json_encode_result(
         | EVAL_JSON_HEX_QUOT
         | EVAL_JSON_UNESCAPED_SLASHES
         | EVAL_JSON_FORCE_OBJECT;
+    let supported_flags = supported_flags | EVAL_JSON_NUMERIC_CHECK;
     if flags & !supported_flags != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
     }
@@ -13561,7 +13563,11 @@ fn eval_json_encode_append_indexed_array(
         }
         let key = values.array_iter_key(value, position)?;
         if force_object {
-            eval_json_encode_append_string(&values.string_bytes(key)?, flags, output);
+            eval_json_encode_append_string(
+                &values.string_bytes(key)?,
+                flags & !EVAL_JSON_NUMERIC_CHECK,
+                output,
+            );
             output.push(b':');
         }
         let element = values.array_get(value, key)?;
@@ -13598,7 +13604,11 @@ fn eval_json_encode_append_assoc(
             output.push(b',');
         }
         let key = values.array_iter_key(value, position)?;
-        eval_json_encode_append_string(&values.string_bytes(key)?, flags, output);
+        eval_json_encode_append_string(
+            &values.string_bytes(key)?,
+            flags & !EVAL_JSON_NUMERIC_CHECK,
+            output,
+        );
         output.push(b':');
         let element = values.array_get(value, key)?;
         eval_json_encode_append(
@@ -13636,6 +13646,12 @@ fn eval_json_encode_enter_array(
 
 /// Appends one JSON string with eval-supported PHP flag handling.
 fn eval_json_encode_append_string(bytes: &[u8], flags: i64, output: &mut Vec<u8>) {
+    if flags & EVAL_JSON_NUMERIC_CHECK != 0 {
+        if let Some(number) = eval_json_numeric_check_bytes(bytes) {
+            output.extend_from_slice(&number);
+            return;
+        }
+    }
     output.push(b'"');
     for byte in bytes {
         match *byte {
@@ -13662,6 +13678,28 @@ fn eval_json_encode_append_string(bytes: &[u8], flags: i64, output: &mut Vec<u8>
         }
     }
     output.push(b'"');
+}
+
+/// Returns the JSON number bytes for a PHP numeric string when `JSON_NUMERIC_CHECK` applies.
+fn eval_json_numeric_check_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let value = std::str::from_utf8(bytes).ok()?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let integer_grammar = value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'+' | b'-'));
+    if integer_grammar {
+        if let Ok(integer) = value.parse::<i64>() {
+            return Some(integer.to_string().into_bytes());
+        }
+    }
+    let number = value.parse::<f64>().ok()?;
+    if number.is_finite() {
+        Some(number.to_string().into_bytes())
+    } else {
+        None
+    }
 }
 
 /// Evaluates PHP `print_r()` over one eval expression.
@@ -14431,6 +14469,7 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "JSON_HEX_QUOT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_QUOT)),
         "JSON_BIGINT_AS_STRING" => Some(EvalPredefinedConstant::Int(EVAL_JSON_BIGINT_AS_STRING)),
         "JSON_FORCE_OBJECT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_FORCE_OBJECT)),
+        "JSON_NUMERIC_CHECK" => Some(EvalPredefinedConstant::Int(EVAL_JSON_NUMERIC_CHECK)),
         "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
@@ -17461,7 +17500,8 @@ echo json_encode([1, 2], JSON_FORCE_OBJECT) . ":";
 echo json_encode([], JSON_FORCE_OBJECT) . ":";
 echo call_user_func_array("json_encode", ["value" => [1, 2], "flags" => JSON_FORCE_OBJECT]) . ":";
 echo json_encode("<>&\"" . chr(39), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ":";
-return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT");"#,
+echo json_encode(["01", "+12", "1e3", " 7", "7x"], JSON_NUMERIC_CHECK) . ":";
+return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17471,7 +17511,7 @@ return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && de
 
         assert_eq!(
             values.output,
-            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":"#
+            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:"#
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
