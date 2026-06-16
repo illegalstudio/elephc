@@ -1171,6 +1171,7 @@ fn eval_positional_expr_call(
         "defined" => eval_builtin_defined(args, context, scope, values),
         "empty" => eval_builtin_empty(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
+        "explode" => eval_builtin_explode(args, context, scope, values),
         "fdiv" | "fmod" => eval_builtin_float_binary(name, args, context, scope, values),
         "floor" => eval_builtin_floor(args, context, scope, values),
         "function_exists" | "is_callable" => {
@@ -1179,6 +1180,7 @@ fn eval_positional_expr_call(
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
         "hex2bin" => eval_builtin_hex2bin(args, context, scope, values),
+        "implode" => eval_builtin_implode(args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
@@ -1475,6 +1477,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "count"
             | "define"
             | "defined"
+            | "explode"
             | "fdiv"
             | "floor"
             | "floatval"
@@ -1483,6 +1486,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "gettype"
             | "hash_equals"
             | "hex2bin"
+            | "implode"
             | "in_array"
             | "intval"
             | "ltrim"
@@ -1623,9 +1627,11 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "count" => Some(&["value", "mode"]),
         "define" => Some(&["constant_name", "value"]),
         "defined" => Some(&["constant_name"]),
+        "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "function_exists" => Some(&["function"]),
         "hash_equals" => Some(&["known_string", "user_string"]),
+        "implode" => Some(&["separator", "array"]),
         "max" | "min" => Some(&["value"]),
         "nl2br" => Some(&["string", "use_xhtml"]),
         "ord" => Some(&["character"]),
@@ -1944,11 +1950,23 @@ fn eval_builtin_with_values(
         }
         "define" => eval_define_result(evaluated_args, context, values)?,
         "defined" => eval_defined_result(evaluated_args, context, values)?,
+        "explode" => {
+            let [separator, string] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_explode_result(*separator, *string, values)?
+        }
         "ord" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_ord_result(*value, values)?
+        }
+        "implode" => {
+            let [separator, array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_implode_result(*separator, *array, values)?
         }
         "max" | "min" => eval_min_max_result(name, evaluated_args, values)?,
         "nl2br" => match evaluated_args {
@@ -2344,6 +2362,103 @@ fn eval_array_search_result(
         "array_search" => values.bool_value(false),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Evaluates PHP `explode()` over separator and string expressions.
+fn eval_builtin_explode(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [separator, string] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let separator = eval_expr(separator, context, scope, values)?;
+    let string = eval_expr(string, context, scope, values)?;
+    eval_explode_result(separator, string, values)
+}
+
+/// Splits one PHP byte string into an indexed array using a non-empty separator.
+fn eval_explode_result(
+    separator: RuntimeCellHandle,
+    string: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let separator = values.string_bytes(separator)?;
+    if separator.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let string = values.string_bytes(string)?;
+    let mut result = values.array_new(0)?;
+    let mut start = 0;
+    let mut index = 0_i64;
+    while let Some(found) = eval_find_subslice(&string, &separator, start) {
+        result = eval_push_explode_segment(result, index, &string[start..found], values)?;
+        start = found + separator.len();
+        index += 1;
+    }
+    eval_push_explode_segment(result, index, &string[start..], values)
+}
+
+/// Appends one split segment to an indexed `explode()` result array.
+fn eval_push_explode_segment(
+    array: RuntimeCellHandle,
+    index: i64,
+    segment: &[u8],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = values.int(index)?;
+    let value = values.string_bytes_value(segment)?;
+    values.array_set(array, key, value)
+}
+
+/// Finds `needle` inside `haystack` starting from one byte offset.
+fn eval_find_subslice(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+    haystack
+        .get(start..)?
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|position| position + start)
+}
+
+/// Evaluates PHP `implode()` over separator and array expressions.
+fn eval_builtin_implode(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [separator, array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let separator = eval_expr(separator, context, scope, values)?;
+    let array = eval_expr(array, context, scope, values)?;
+    eval_implode_result(separator, array, values)
+}
+
+/// Joins array values in eval iteration order using PHP string conversion.
+fn eval_implode_result(
+    separator: RuntimeCellHandle,
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !values.is_array_like(array)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let separator = values.string_bytes(separator)?;
+    let len = values.array_len(array)?;
+    let mut output = Vec::new();
+    for position in 0..len {
+        if position > 0 {
+            output.extend_from_slice(&separator);
+        }
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        let value = values.string_bytes(value)?;
+        output.extend_from_slice(&value);
+    }
+    values.string_bytes_value(&output)
 }
 
 /// Evaluates PHP's `ceil(...)` over one eval expression.
@@ -6293,6 +6408,30 @@ return function_exists("array_search");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "Y:N:1:name:F:C:k:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `explode()` and `implode()` bridge byte strings and arrays.
+    #[test]
+    fn execute_program_dispatches_explode_implode_builtins() {
+        let program = parse_fragment(
+            br#"$parts = explode(",", "a,b,");
+echo count($parts); echo ":" . $parts[0] . ":" . $parts[1] . ":" . $parts[2];
+echo ":" . implode("|", $parts);
+echo ":" . implode(separator: "-", array: ["x", 2, true, null]);
+$call_parts = call_user_func("explode", ":", "m:n");
+echo ":" . $call_parts[1];
+echo ":" . call_user_func_array("implode", ["separator" => "/", "array" => ["p", "q"]]);
+echo ":"; echo function_exists("explode");
+return function_exists("implode");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "3:a:b::a|b|:x-2-1-:n:p/q:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

@@ -978,6 +978,25 @@ echo ":"; echo function_exists("nl2br");');
     );
 }
 
+/// Verifies eval `explode()` and `implode()` bridge byte strings and arrays.
+#[test]
+fn test_eval_dispatches_explode_implode_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$parts = explode(",", "a,b,");
+echo count($parts); echo ":" . $parts[0] . ":" . $parts[1] . ":" . $parts[2];
+echo ":" . implode("|", $parts);
+echo ":" . implode(separator: "-", array: ["x", 2, true, null]);
+$call_parts = call_user_func("explode", ":", "m:n");
+echo ":" . $call_parts[1];
+echo ":" . call_user_func_array("implode", ["separator" => "/", "array" => ["p", "q"]]);
+echo ":"; echo function_exists("explode");
+echo ":"; echo function_exists("implode");');
+"#,
+    );
+    assert_eq!(out, "3:a:b::a|b|:x-2-1-:n:p/q:1:1");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
