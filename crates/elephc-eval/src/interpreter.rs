@@ -17,7 +17,7 @@ use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalCallArg, EvalCatch, EvalConst, EvalExpr, EvalFunction,
     EvalMagicConst, EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
-use crate::json_validate::{self, JsonValue};
+use crate::json_validate::{self, JsonParseError, JsonValue};
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
@@ -582,6 +582,17 @@ const EVAL_PREG_PATTERN_ORDER: i64 = 1;
 const EVAL_PREG_SET_ORDER: i64 = 2;
 const EVAL_PREG_OFFSET_CAPTURE: i64 = 256;
 const EVAL_PREG_UNMATCHED_AS_NULL: i64 = 512;
+const EVAL_JSON_ERROR_NONE: i64 = 0;
+const EVAL_JSON_ERROR_DEPTH: i64 = 1;
+const EVAL_JSON_ERROR_STATE_MISMATCH: i64 = 2;
+const EVAL_JSON_ERROR_CTRL_CHAR: i64 = 3;
+const EVAL_JSON_ERROR_SYNTAX: i64 = 4;
+const EVAL_JSON_ERROR_UTF8: i64 = 5;
+const EVAL_JSON_ERROR_RECURSION: i64 = 6;
+const EVAL_JSON_ERROR_INF_OR_NAN: i64 = 7;
+const EVAL_JSON_ERROR_UNSUPPORTED_TYPE: i64 = 8;
+const EVAL_JSON_ERROR_INVALID_PROPERTY_NAME: i64 = 9;
+const EVAL_JSON_ERROR_UTF16: i64 = 10;
 
 unsafe extern "C" {
     /// Sets the process file-creation mask and returns the previous mask.
@@ -1820,8 +1831,8 @@ fn eval_positional_expr_call(
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
         "json_decode" => eval_builtin_json_decode(args, context, scope, values),
         "json_encode" => eval_builtin_json_encode(args, context, scope, values),
-        "json_last_error" => eval_builtin_json_last_error(args, values),
-        "json_last_error_msg" => eval_builtin_json_last_error_msg(args, values),
+        "json_last_error" => eval_builtin_json_last_error(args, context, values),
+        "json_last_error_msg" => eval_builtin_json_last_error_msg(args, context, values),
         "json_validate" => eval_builtin_json_validate(args, context, scope, values),
         "linkinfo" => eval_builtin_linkinfo(args, context, scope, values),
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
@@ -3514,27 +3525,37 @@ fn eval_builtin_with_values(
         }
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
         "json_decode" => match evaluated_args {
-            [json] => eval_json_decode_result(*json, None, None, None, values)?,
+            [json] => eval_json_decode_result(*json, None, None, None, context, values)?,
             [json, associative] => {
-                eval_json_decode_result(*json, Some(*associative), None, None, values)?
+                eval_json_decode_result(*json, Some(*associative), None, None, context, values)?
             }
             [json, associative, depth] => {
-                eval_json_decode_result(*json, Some(*associative), Some(*depth), None, values)?
+                eval_json_decode_result(
+                    *json,
+                    Some(*associative),
+                    Some(*depth),
+                    None,
+                    context,
+                    values,
+                )?
             }
             [json, associative, depth, flags] => eval_json_decode_result(
                 *json,
                 Some(*associative),
                 Some(*depth),
                 Some(*flags),
+                context,
                 values,
             )?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "json_encode" => match evaluated_args {
-            [value] => eval_json_encode_result(*value, None, None, values)?,
-            [value, flags] => eval_json_encode_result(*value, Some(*flags), None, values)?,
+            [value] => eval_json_encode_result(*value, None, None, context, values)?,
+            [value, flags] => {
+                eval_json_encode_result(*value, Some(*flags), None, context, values)?
+            }
             [value, flags, depth] => {
-                eval_json_encode_result(*value, Some(*flags), Some(*depth), values)?
+                eval_json_encode_result(*value, Some(*flags), Some(*depth), context, values)?
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
@@ -3542,19 +3563,19 @@ fn eval_builtin_with_values(
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            values.int(0)?
+            values.int(context.json_last_error())?
         }
         "json_last_error_msg" => {
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            values.string_bytes_value(b"No error")?
+            values.string(context.json_last_error_msg())?
         }
         "json_validate" => match evaluated_args {
-            [json] => eval_json_validate_result(*json, None, None, values)?,
-            [json, depth] => eval_json_validate_result(*json, Some(*depth), None, values)?,
+            [json] => eval_json_validate_result(*json, None, None, context, values)?,
+            [json, depth] => eval_json_validate_result(*json, Some(*depth), None, context, values)?,
             [json, depth, flags] => {
-                eval_json_validate_result(*json, Some(*depth), Some(*flags), values)?
+                eval_json_validate_result(*json, Some(*depth), Some(*flags), context, values)?
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
@@ -13046,18 +13067,18 @@ fn eval_builtin_json_encode(
     match args {
         [value] => {
             let value = eval_expr(value, context, scope, values)?;
-            eval_json_encode_result(value, None, None, values)
+            eval_json_encode_result(value, None, None, context, values)
         }
         [value, flags] => {
             let value = eval_expr(value, context, scope, values)?;
             let flags = eval_expr(flags, context, scope, values)?;
-            eval_json_encode_result(value, Some(flags), None, values)
+            eval_json_encode_result(value, Some(flags), None, context, values)
         }
         [value, flags, depth] => {
             let value = eval_expr(value, context, scope, values)?;
             let flags = eval_expr(flags, context, scope, values)?;
             let depth = eval_expr(depth, context, scope, values)?;
-            eval_json_encode_result(value, Some(flags), Some(depth), values)
+            eval_json_encode_result(value, Some(flags), Some(depth), context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -13068,6 +13089,7 @@ fn eval_json_encode_result(
     value: RuntimeCellHandle,
     flags: Option<RuntimeCellHandle>,
     depth: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if flags
@@ -13088,6 +13110,7 @@ fn eval_json_encode_result(
 
     let mut output = Vec::new();
     eval_json_encode_append(value, values, depth as usize, 0, &mut Vec::new(), &mut output)?;
+    context.clear_json_error();
     values.string_bytes_value(&output)
 }
 
@@ -13101,36 +13124,44 @@ fn eval_builtin_json_decode(
     match args {
         [json] => {
             let json = eval_expr(json, context, scope, values)?;
-            eval_json_decode_result(json, None, None, None, values)
+            eval_json_decode_result(json, None, None, None, context, values)
         }
         [json, associative] => {
             let json = eval_expr(json, context, scope, values)?;
             let associative = eval_expr(associative, context, scope, values)?;
-            eval_json_decode_result(json, Some(associative), None, None, values)
+            eval_json_decode_result(json, Some(associative), None, None, context, values)
         }
         [json, associative, depth] => {
             let json = eval_expr(json, context, scope, values)?;
             let associative = eval_expr(associative, context, scope, values)?;
             let depth = eval_expr(depth, context, scope, values)?;
-            eval_json_decode_result(json, Some(associative), Some(depth), None, values)
+            eval_json_decode_result(json, Some(associative), Some(depth), None, context, values)
         }
         [json, associative, depth, flags] => {
             let json = eval_expr(json, context, scope, values)?;
             let associative = eval_expr(associative, context, scope, values)?;
             let depth = eval_expr(depth, context, scope, values)?;
             let flags = eval_expr(flags, context, scope, values)?;
-            eval_json_decode_result(json, Some(associative), Some(depth), Some(flags), values)
+            eval_json_decode_result(
+                json,
+                Some(associative),
+                Some(depth),
+                Some(flags),
+                context,
+                values,
+            )
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 
-/// Decodes one JSON string into eval runtime cells, returning null on syntax/depth failure.
+/// Decodes one JSON string into eval runtime cells and records PHP JSON parse state.
 fn eval_json_decode_result(
     json: RuntimeCellHandle,
     associative: Option<RuntimeCellHandle>,
     depth: Option<RuntimeCellHandle>,
     flags: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if flags
@@ -13153,9 +13184,14 @@ fn eval_json_decode_result(
     }
 
     let bytes = values.string_bytes(json)?;
-    let Some(decoded) = json_validate::decode(&bytes, depth as usize) else {
-        return values.null();
+    let decoded = match json_validate::decode_result(&bytes, depth as usize) {
+        Ok(decoded) => decoded,
+        Err(error) => {
+            eval_record_json_parse_error(context, error);
+            return values.null();
+        }
     };
+    context.clear_json_error();
     eval_json_decode_to_cell(decoded, values)
 }
 
@@ -13206,26 +13242,28 @@ fn eval_json_decode_number_to_cell(
     values.float(float)
 }
 
-/// Evaluates PHP `json_last_error()` with the eval interpreter's current no-error state.
+/// Evaluates PHP `json_last_error()` from the eval interpreter's current JSON state.
 fn eval_builtin_json_last_error(
     args: &[EvalExpr],
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    values.int(0)
+    values.int(context.json_last_error())
 }
 
-/// Evaluates PHP `json_last_error_msg()` with the eval interpreter's current no-error state.
+/// Evaluates PHP `json_last_error_msg()` from the eval interpreter's current JSON state.
 fn eval_builtin_json_last_error_msg(
     args: &[EvalExpr],
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    values.string_bytes_value(b"No error")
+    values.string(context.json_last_error_msg())
 }
 
 /// Evaluates PHP `json_validate()` for zero-flag JSON text validation.
@@ -13238,28 +13276,29 @@ fn eval_builtin_json_validate(
     match args {
         [json] => {
             let json = eval_expr(json, context, scope, values)?;
-            eval_json_validate_result(json, None, None, values)
+            eval_json_validate_result(json, None, None, context, values)
         }
         [json, depth] => {
             let json = eval_expr(json, context, scope, values)?;
             let depth = eval_expr(depth, context, scope, values)?;
-            eval_json_validate_result(json, Some(depth), None, values)
+            eval_json_validate_result(json, Some(depth), None, context, values)
         }
         [json, depth, flags] => {
             let json = eval_expr(json, context, scope, values)?;
             let depth = eval_expr(depth, context, scope, values)?;
             let flags = eval_expr(flags, context, scope, values)?;
-            eval_json_validate_result(json, Some(depth), Some(flags), values)
+            eval_json_validate_result(json, Some(depth), Some(flags), context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 
-/// Validates JSON text with eval's current zero-flag JSON subset.
+/// Validates JSON text with eval's current zero-flag JSON subset and records JSON state.
 fn eval_json_validate_result(
     json: RuntimeCellHandle,
     depth: Option<RuntimeCellHandle>,
     flags: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if flags
@@ -13279,7 +13318,42 @@ fn eval_json_validate_result(
     }
 
     let bytes = values.string_bytes(json)?;
-    values.bool_value(json_validate::bytes(&bytes, depth as usize))
+    match json_validate::decode_result(&bytes, depth as usize) {
+        Ok(_) => {
+            context.clear_json_error();
+            values.bool_value(true)
+        }
+        Err(error) => {
+            eval_record_json_parse_error(context, error);
+            values.bool_value(false)
+        }
+    }
+}
+
+/// Records one parser error into the eval-local PHP JSON error slots.
+fn eval_record_json_parse_error(context: &mut ElephcEvalContext, error: JsonParseError) {
+    let (code, message) = eval_json_parse_error_status(error);
+    context.set_json_error(code, message);
+}
+
+/// Maps eval JSON parser failures to PHP `JSON_ERROR_*` codes and messages.
+fn eval_json_parse_error_status(error: JsonParseError) -> (i64, &'static str) {
+    match error {
+        JsonParseError::Depth => (EVAL_JSON_ERROR_DEPTH, "Maximum stack depth exceeded"),
+        JsonParseError::Syntax => (EVAL_JSON_ERROR_SYNTAX, "Syntax error"),
+        JsonParseError::ControlChar => (
+            EVAL_JSON_ERROR_CTRL_CHAR,
+            "Control character error, possibly incorrectly encoded",
+        ),
+        JsonParseError::Utf8 => (
+            EVAL_JSON_ERROR_UTF8,
+            "Malformed UTF-8 characters, possibly incorrectly encoded",
+        ),
+        JsonParseError::Utf16 => (
+            EVAL_JSON_ERROR_UTF16,
+            "Single unpaired UTF-16 surrogate in unicode escape",
+        ),
+    }
 }
 
 /// Appends one JSON value to the output buffer.
@@ -14147,6 +14221,25 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "PREG_UNMATCHED_AS_NULL" => {
             Some(EvalPredefinedConstant::Int(EVAL_PREG_UNMATCHED_AS_NULL))
         }
+        "JSON_ERROR_NONE" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_NONE)),
+        "JSON_ERROR_DEPTH" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_DEPTH)),
+        "JSON_ERROR_STATE_MISMATCH" => {
+            Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_STATE_MISMATCH))
+        }
+        "JSON_ERROR_CTRL_CHAR" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_CTRL_CHAR)),
+        "JSON_ERROR_SYNTAX" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_SYNTAX)),
+        "JSON_ERROR_UTF8" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF8)),
+        "JSON_ERROR_RECURSION" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_RECURSION)),
+        "JSON_ERROR_INF_OR_NAN" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_INF_OR_NAN)),
+        "JSON_ERROR_UNSUPPORTED_TYPE" => {
+            Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UNSUPPORTED_TYPE))
+        }
+        "JSON_ERROR_INVALID_PROPERTY_NAME" => {
+            Some(EvalPredefinedConstant::Int(
+                EVAL_JSON_ERROR_INVALID_PROPERTY_NAME,
+            ))
+        }
+        "JSON_ERROR_UTF16" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF16)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
         "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
@@ -17212,14 +17305,26 @@ return function_exists("json_decode");"#,
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
-    /// Verifies eval `json_last_error()` reports the no-error JSON status.
+    /// Verifies eval `json_last_error*()` track JSON parse failures and success resets.
     #[test]
     fn execute_program_dispatches_json_last_error_builtins() {
         let program = parse_fragment(
             br#"echo json_last_error() . ":" . json_last_error_msg() . ":";
-echo call_user_func("json_last_error") . ":";
-echo call_user_func_array("json_last_error_msg", []) . ":";
-return function_exists("json_last_error") && function_exists("json_last_error_msg");"#,
+json_decode("bad");
+echo json_last_error() . ":" . (json_last_error() === JSON_ERROR_SYNTAX ? "syntax" : "bad") . ":" . json_last_error_msg() . ":";
+json_validate("[1]", 1);
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_validate("\"ok\"");
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_validate("\"a" . chr(10) . "b\"");
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_decode("\"\\uD83D\"");
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_decode("\"" . chr(128) . "\"");
+echo json_last_error() . ":" . json_last_error_msg() . ":";
+json_validate("[0]");
+echo call_user_func("json_last_error") . ":" . call_user_func_array("json_last_error_msg", []) . ":";
+return function_exists("json_last_error") && function_exists("json_last_error_msg") && defined("JSON_ERROR_SYNTAX");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17227,7 +17332,10 @@ return function_exists("json_last_error") && function_exists("json_last_error_ms
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "0:No error:0:No error:");
+        assert_eq!(
+            values.output,
+            "0:No error:4:syntax:Syntax error:1:Maximum stack depth exceeded:0:No error:3:Control character error, possibly incorrectly encoded:10:Single unpaired UTF-16 surrogate in unicode escape:5:Malformed UTF-8 characters, possibly incorrectly encoded:0:No error:"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
