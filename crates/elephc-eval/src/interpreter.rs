@@ -606,6 +606,7 @@ const EVAL_JSON_PRETTY_PRINT: i64 = 128;
 const EVAL_JSON_UNESCAPED_UNICODE: i64 = 256;
 const EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR: i64 = 512;
 const EVAL_JSON_PRESERVE_ZERO_FRACTION: i64 = 1024;
+const EVAL_JSON_INVALID_UTF8_IGNORE: i64 = 1_048_576;
 const EVAL_JSON_INF_OR_NAN_MESSAGE: &str = "Inf and NaN cannot be JSON encoded";
 
 unsafe extern "C" {
@@ -13592,12 +13593,11 @@ fn eval_json_validate_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if flags
+    let flags = flags
         .map(|flags| eval_int_value(flags, values))
         .transpose()?
-        .unwrap_or(0)
-        != 0
-    {
+        .unwrap_or(0);
+    if flags & !EVAL_JSON_INVALID_UTF8_IGNORE != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
     }
     let depth = depth
@@ -13609,7 +13609,12 @@ fn eval_json_validate_result(
     }
 
     let bytes = values.string_bytes(json)?;
-    match json_validate::decode_result(&bytes, depth as usize) {
+    let result = if flags & EVAL_JSON_INVALID_UTF8_IGNORE != 0 {
+        json_validate::decode_result_ignoring_invalid_utf8(&bytes, depth as usize)
+    } else {
+        json_validate::decode_result(&bytes, depth as usize)
+    };
+    match result {
         Ok(_) => {
             context.clear_json_error();
             values.bool_value(true)
@@ -14799,6 +14804,11 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "JSON_PRESERVE_ZERO_FRACTION" => {
             Some(EvalPredefinedConstant::Int(
                 EVAL_JSON_PRESERVE_ZERO_FRACTION,
+            ))
+        }
+        "JSON_INVALID_UTF8_IGNORE" => {
+            Some(EvalPredefinedConstant::Int(
+                EVAL_JSON_INVALID_UTF8_IGNORE,
             ))
         }
         "INF" => Some(EvalPredefinedConstant::Float(f64::INFINITY)),
@@ -17940,7 +17950,11 @@ echo (json_validate("bad") ? "bad" : "N") . ":";
 echo (json_validate("[1]", 1) ? "bad" : "D") . ":";
 echo (call_user_func("json_validate", "\"x\"") ? "C" : "bad") . ":";
 echo (call_user_func_array("json_validate", ["json" => "[[1]]", "depth" => 3, "flags" => 0]) ? "A" : "bad") . ":";
-return function_exists("json_validate");"#,
+echo (json_validate("\"a" . chr(128) . "b\"", 512, JSON_INVALID_UTF8_IGNORE) ? "I" : "bad") . ":";
+echo json_last_error() . ":";
+echo (json_validate("bad", 512, JSON_INVALID_UTF8_IGNORE) ? "bad" : "S") . ":";
+echo json_last_error() . ":";
+return function_exists("json_validate") && defined("JSON_INVALID_UTF8_IGNORE");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17948,7 +17962,7 @@ return function_exists("json_validate");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "Y:N:D:C:A:");
+        assert_eq!(values.output, "Y:N:D:C:A:I:0:S:4:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

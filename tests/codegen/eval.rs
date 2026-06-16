@@ -920,10 +920,14 @@ echo (json_validate("bad") ? "bad" : "N") . ":";
 echo (json_validate("[1]", 1) ? "bad" : "D") . ":";
 echo (call_user_func("json_validate", "\"x\"") ? "C" : "bad") . ":";
 echo (call_user_func_array("json_validate", ["json" => "[[1]]", "depth" => 3, "flags" => 0]) ? "A" : "bad") . ":";
+echo (json_validate("\"a" . chr(128) . "b\"", 512, JSON_INVALID_UTF8_IGNORE) ? "I" : "bad") . ":";
+echo json_last_error() . ":";
+echo (json_validate("bad", 512, JSON_INVALID_UTF8_IGNORE) ? "bad" : "S") . ":";
+echo json_last_error() . ":";
 echo function_exists("json_validate");');
 "#,
     );
-    assert_eq!(out, "Y:N:D:C:A:1");
+    assert_eq!(out, "Y:N:D:C:A:I:0:S:4:1");
 }
 
 /// Verifies eval direct builtin calls bind named arguments and spread arrays.

@@ -9,7 +9,8 @@
 //! - Container depth follows PHP decode/validate semantics: entering a container
 //!   is rejected when the active depth would reach the requested limit.
 //! - String parsing accepts JSON escapes, paired UTF-16 surrogate escapes, and raw
-//!   UTF-8 bytes while rejecting control bytes and malformed UTF-8.
+//!   UTF-8 bytes while rejecting control bytes; malformed UTF-8 is rejected by
+//!   default and can be ignored for PHP's `JSON_INVALID_UTF8_IGNORE` validate flag.
 
 /// Parsed JSON value used by eval JSON builtins before runtime-cell allocation.
 pub(crate) enum JsonValue {
@@ -64,11 +65,21 @@ pub(crate) fn decode_result(
     parser.parse_document()
 }
 
+/// Parses one complete JSON document while ignoring malformed raw UTF-8 string bytes.
+pub(crate) fn decode_result_ignoring_invalid_utf8(
+    bytes: &[u8],
+    depth_limit: usize,
+) -> Result<JsonValue, JsonParseError> {
+    let mut parser = Parser::new_with_invalid_utf8_ignore(bytes, depth_limit);
+    parser.parse_document()
+}
+
 /// Cursor-based JSON parser for eval JSON builtin calls.
 struct Parser<'a> {
     bytes: &'a [u8],
     cursor: usize,
     depth_limit: usize,
+    ignore_invalid_utf8: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -78,6 +89,17 @@ impl<'a> Parser<'a> {
             bytes,
             cursor: 0,
             depth_limit,
+            ignore_invalid_utf8: false,
+        }
+    }
+
+    /// Creates a JSON parser that drops malformed raw UTF-8 bytes inside strings.
+    fn new_with_invalid_utf8_ignore(bytes: &'a [u8], depth_limit: usize) -> Self {
+        Self {
+            bytes,
+            cursor: 0,
+            depth_limit,
+            ignore_invalid_utf8: true,
         }
     }
 
@@ -198,8 +220,13 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let start = self.cursor;
-                    self.consume_utf8_char()?;
-                    output.extend_from_slice(&self.bytes[start..self.cursor]);
+                    match self.consume_utf8_char() {
+                        Ok(()) => output.extend_from_slice(&self.bytes[start..self.cursor]),
+                        Err(_) if self.ignore_invalid_utf8 => {
+                            self.cursor = start + 1;
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
             }
         }
