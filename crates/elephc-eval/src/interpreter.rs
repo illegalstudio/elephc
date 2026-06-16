@@ -594,6 +594,7 @@ const EVAL_JSON_ERROR_UNSUPPORTED_TYPE: i64 = 8;
 const EVAL_JSON_ERROR_INVALID_PROPERTY_NAME: i64 = 9;
 const EVAL_JSON_ERROR_UTF16: i64 = 10;
 const EVAL_JSON_BIGINT_AS_STRING: i64 = 2;
+const EVAL_JSON_FORCE_OBJECT: i64 = 16;
 const EVAL_JSON_UNESCAPED_SLASHES: i64 = 64;
 
 unsafe extern "C" {
@@ -13159,7 +13160,7 @@ fn eval_json_encode_result(
         .map(|flags| eval_int_value(flags, values))
         .transpose()?
         .unwrap_or(0);
-    if flags & !EVAL_JSON_UNESCAPED_SLASHES != 0 {
+    if flags & !(EVAL_JSON_UNESCAPED_SLASHES | EVAL_JSON_FORCE_OBJECT) != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
     }
     let depth = depth
@@ -13530,7 +13531,7 @@ fn eval_json_encode_append(
     Ok(())
 }
 
-/// Appends one indexed eval array as a JSON array.
+/// Appends one indexed eval array as a JSON array or forced JSON object.
 fn eval_json_encode_append_indexed_array(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -13541,13 +13542,18 @@ fn eval_json_encode_append_indexed_array(
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
-    output.push(b'[');
+    let force_object = flags & EVAL_JSON_FORCE_OBJECT != 0;
+    output.push(if force_object { b'{' } else { b'[' });
     let len = values.array_len(value)?;
     for position in 0..len {
         if position > 0 {
             output.push(b',');
         }
         let key = values.array_iter_key(value, position)?;
+        if force_object {
+            eval_json_encode_append_string(&values.string_bytes(key)?, flags, output);
+            output.push(b':');
+        }
         let element = values.array_get(value, key)?;
         eval_json_encode_append(
             element,
@@ -13559,7 +13565,7 @@ fn eval_json_encode_append_indexed_array(
             output,
         )?;
     }
-    output.push(b']');
+    output.push(if force_object { b'}' } else { b']' });
     arrays_seen.pop();
     Ok(())
 }
@@ -14405,6 +14411,7 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         }
         "JSON_ERROR_UTF16" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF16)),
         "JSON_BIGINT_AS_STRING" => Some(EvalPredefinedConstant::Int(EVAL_JSON_BIGINT_AS_STRING)),
+        "JSON_FORCE_OBJECT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_FORCE_OBJECT)),
         "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
@@ -17431,7 +17438,10 @@ echo call_user_func("json_encode", "a/b\"c") . ":";
 echo call_user_func_array("json_encode", ["value" => ["k" => false], "flags" => 0, "depth" => 4]) . ":";
 echo json_encode("a/b", JSON_UNESCAPED_SLASHES) . ":";
 echo call_user_func_array("json_encode", ["value" => "x/y", "flags" => JSON_UNESCAPED_SLASHES]) . ":";
-return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES");"#,
+echo json_encode([1, 2], JSON_FORCE_OBJECT) . ":";
+echo json_encode([], JSON_FORCE_OBJECT) . ":";
+echo call_user_func_array("json_encode", ["value" => [1, 2], "flags" => JSON_FORCE_OBJECT]) . ":";
+return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_FORCE_OBJECT");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17441,7 +17451,7 @@ return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES");"#,
 
         assert_eq!(
             values.output,
-            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":"#
+            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"#
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }

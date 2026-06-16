@@ -823,12 +823,15 @@ echo call_user_func("json_encode", "a/b\"c") . ":";
 echo call_user_func_array("json_encode", ["value" => ["k" => false], "flags" => 0, "depth" => 4]) . ":";
 echo json_encode("a/b", JSON_UNESCAPED_SLASHES) . ":";
 echo call_user_func_array("json_encode", ["value" => "x/y", "flags" => JSON_UNESCAPED_SLASHES]) . ":";
+echo json_encode([1, 2], JSON_FORCE_OBJECT) . ":";
+echo json_encode([], JSON_FORCE_OBJECT) . ":";
+echo call_user_func_array("json_encode", ["value" => [1, 2], "flags" => JSON_FORCE_OBJECT]) . ":";
 echo function_exists("json_encode");');
 "#,
     );
     assert_eq!(
         out,
-        r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":1"#
+        r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:1"#
     );
 }
 
