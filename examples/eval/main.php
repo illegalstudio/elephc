@@ -116,7 +116,7 @@ $formatted_number = eval('return number_format(1234567.89, 2, ",", ".");');
 $formatted_text = eval('return sprintf("%s:%04d:%s", "item", 7, vsprintf("%.1f", [3]));');
 $runtime_constants = eval('return PHP_OS . ":" . DIRECTORY_SEPARATOR . ":" . (PHP_INT_MAX > 0 ? "int" : "bad") . ":" . (defined("PHP_EOL") ? "eol" : "bad");');
 $minmax = eval('return min(3, 1, 2) . ":" . max(1.5, 2.5) . ":" . clamp(15, 0, 10);');
-$random_range = eval('$r = rand(1, 3); return ($r >= 1 && $r <= 3) ? "bounded" : "bad";');
+$random_range = eval('$r = rand(1, 3); $secure = random_int(4, 4); return (($r >= 1 && $r <= 3) ? "bounded" : "bad") . ":" . ($secure === 4 ? "secure" : "bad");');
 $circle = eval('return round(pi(), 2);');
 $extended_math = eval('return round(sin(pi() / 2), 0) . ":" . log(8, 2) . ":" . hypot(3, 4) . ":" . intdiv(7, 2);');
 $float_predicates = eval('return (is_nan(fdiv(0, 0)) ? "nan" : "bad") . ":" . (is_infinite(fdiv(1, 0)) ? "inf" : "bad") . ":" . (is_finite(3.14) ? "finite" : "bad");');

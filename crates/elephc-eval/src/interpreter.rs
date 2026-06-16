@@ -1525,6 +1525,7 @@ fn eval_positional_expr_call(
         "pow" => eval_builtin_pow(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
         "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
+        "random_int" => eval_builtin_random_int(args, context, scope, values),
         "range" => eval_builtin_range(args, context, scope, values),
         "rawurldecode" | "urldecode" => {
             eval_builtin_url_decode(name, args, context, scope, values)
@@ -1982,6 +1983,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "phpversion"
             | "putenv"
             | "rand"
+            | "random_int"
             | "range"
             | "rad2deg"
             | "rawurldecode"
@@ -2217,7 +2219,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
         "putenv" => Some(&["assignment"]),
-        "rand" | "mt_rand" => Some(&["min", "max"]),
+        "rand" | "mt_rand" | "random_int" => Some(&["min", "max"]),
         "range" => Some(&["start", "end"]),
         "realpath" => Some(&["path"]),
         "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
@@ -2700,6 +2702,12 @@ fn eval_builtin_with_values(
             [min, max] => eval_rand_result(Some(*min), Some(*max), values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "random_int" => {
+            let [min, max] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_random_int_result(*min, *max, values)?
+        }
         "rawurldecode" | "urldecode" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -4066,6 +4074,21 @@ fn eval_builtin_rand(
     }
 }
 
+/// Evaluates PHP `random_int()` over an inclusive integer range.
+fn eval_builtin_random_int(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [min, max] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let min = eval_expr(min, context, scope, values)?;
+    let max = eval_expr(max, context, scope, values)?;
+    eval_random_int_result(min, max, values)
+}
+
 /// Returns one non-cryptographic random integer using PHP's inclusive range rules.
 fn eval_rand_result(
     min: Option<RuntimeCellHandle>,
@@ -4082,6 +4105,24 @@ fn eval_rand_result(
     let width = (i128::from(high) - i128::from(low) + 1) as u128;
     let offset = (eval_random_u128() % width) as i128;
     let sampled = i128::from(low) + offset;
+    let sampled = i64::try_from(sampled).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.int(sampled)
+}
+
+/// Returns one eval `random_int()` value in the inclusive range `[min, max]`.
+fn eval_random_int_result(
+    min: RuntimeCellHandle,
+    max: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let min = eval_int_value(min, values)?;
+    let max = eval_int_value(max, values)?;
+    if min > max {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let width = (i128::from(max) - i128::from(min) + 1) as u128;
+    let offset = (eval_random_u128() % width) as i128;
+    let sampled = i128::from(min) + offset;
     let sampled = i64::try_from(sampled).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.int(sampled)
 }
@@ -12883,7 +12924,7 @@ return function_exists("array_rand");"#,
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
-    /// Verifies eval `rand()` and `mt_rand()` return values inside PHP inclusive ranges.
+    /// Verifies eval random builtins return values inside PHP inclusive ranges.
     #[test]
     fn execute_program_dispatches_rand_builtins() {
         let program = parse_fragment(
@@ -12899,8 +12940,15 @@ $call = call_user_func("mt_rand", 1, 1);
 echo ":" . ($call === 1 ? "call" : "bad");
 $spread = call_user_func_array("rand", ["min" => 3, "max" => 3]);
 echo ":" . ($spread === 3 ? "spread" : "bad") . ":";
+$secure = random_int(max: 4, min: 4);
+echo ($secure === 4 ? "random" : "bad") . ":";
+$secureCall = call_user_func("random_int", 5, 5);
+echo ($secureCall === 5 ? "random-call" : "bad") . ":";
+$secureSpread = call_user_func_array("random_int", ["min" => 6, "max" => 6]);
+echo ($secureSpread === 6 ? "random-spread" : "bad") . ":";
 echo function_exists("rand");
-return function_exists("mt_rand");"#,
+echo function_exists("mt_rand");
+return function_exists("random_int");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -12908,7 +12956,10 @@ return function_exists("mt_rand");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "plain:range:same:swap:call:spread:1");
+        assert_eq!(
+            values.output,
+            "plain:range:same:swap:call:spread:random:random-call:random-spread:11"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

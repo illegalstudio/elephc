@@ -964,7 +964,7 @@ echo function_exists("array_rand");');
     assert_eq!(out, "idx:assoc:named:call:spread:1");
 }
 
-/// Verifies eval `rand()` and `mt_rand()` produce values in their PHP-visible ranges.
+/// Verifies eval random builtins produce values in their PHP-visible ranges.
 #[test]
 fn test_eval_dispatches_rand_builtin_calls() {
     let out = compile_and_run(
@@ -981,10 +981,19 @@ $call = call_user_func("mt_rand", 1, 1);
 echo ":" . ($call === 1 ? "call" : "bad");
 $spread = call_user_func_array("rand", ["min" => 3, "max" => 3]);
 echo ":" . ($spread === 3 ? "spread" : "bad") . ":";
-echo function_exists("rand"); echo function_exists("mt_rand");');
+$secure = random_int(max: 4, min: 4);
+echo ($secure === 4 ? "random" : "bad") . ":";
+$secureCall = call_user_func("random_int", 5, 5);
+echo ($secureCall === 5 ? "random-call" : "bad") . ":";
+$secureSpread = call_user_func_array("random_int", ["min" => 6, "max" => 6]);
+echo ($secureSpread === 6 ? "random-spread" : "bad") . ":";
+echo function_exists("rand"); echo function_exists("mt_rand"); echo function_exists("random_int");');
 "#,
     );
-    assert_eq!(out, "plain:range:same:swap:call:spread:11");
+    assert_eq!(
+        out,
+        "plain:range:same:swap:call:spread:random:random-call:random-spread:111"
+    );
 }
 
 /// Verifies eval `spl_classes()` exposes the same static SPL class list as native code.
