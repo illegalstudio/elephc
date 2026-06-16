@@ -1588,6 +1588,32 @@ echo function_exists("gethostbyaddr");');
     assert_eq!(out, "direct:named:false:call:spread:1");
 }
 
+/// Verifies eval stream introspection builtins return native-compatible static lists.
+#[test]
+fn test_eval_dispatches_stream_introspection_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$wrappers = stream_get_wrappers();
+$transports = stream_get_transports();
+$filters = stream_get_filters();
+echo count($wrappers) . ":" . $wrappers[0] . ":" . $wrappers[5] . ":";
+echo count($transports) . ":" . $transports[0] . ":" . $transports[8] . ":";
+echo count($filters) . ":" . $filters[2] . ":";
+$call_wrappers = call_user_func("stream_get_wrappers");
+echo $call_wrappers[10] . ":";
+$call_transports = call_user_func_array("stream_get_transports", []);
+echo $call_transports[11] . ":";
+$call_filters = call_user_func_array("stream_get_filters", []);
+echo $call_filters[13] . ":";
+echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_transports"); echo function_exists("stream_get_filters");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:111"
+    );
+}
+
 /// Verifies eval IPv4 conversion builtins handle integer, string, and raw-byte forms.
 #[test]
 fn test_eval_dispatches_ip_conversion_builtin_calls() {

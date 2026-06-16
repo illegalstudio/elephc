@@ -168,6 +168,7 @@ $environment = eval('putenv("ELEPHC_EVAL_EXAMPLE=ok"); $value = getenv("ELEPHC_E
 $sleeping = eval('usleep(0); return sleep(0) . ":awake";');
 $host_lookup = eval('return (strlen(gethostname()) > 0 ? "host" : "empty") . ":" . gethostbyname("127.0.0.1") . ":" . gethostbyname("not a host") . ":" . (strlen(gethostbyaddr("127.0.0.1")) > 0 ? "reverse" : "empty") . ":" . (gethostbyaddr("not-an-ip-address") === false ? "bad-ip" : "bad");');
 $ip_conversion = eval('$packed = inet_pton("1.2.3.4"); return long2ip(ip2long("192.168.1.1")) . ":" . bin2hex($packed) . ":" . inet_ntop($packed);');
+$stream_introspection = eval('$wrappers = stream_get_wrappers(); $transports = stream_get_transports(); $filters = stream_get_filters(); return count($wrappers) . ":" . $wrappers[0] . ":" . count($transports) . ":" . (in_array("string.rot13", $filters) ? "rot13" : "missing");');
 $path_components = eval('return basename("/var/log/syslog.log", ".log") . ":" . dirname("/usr/local/bin/tool", 2);');
 $resolved_path = eval('return realpath(".") !== false ? "resolved" : "missing";');
 $path_info = eval('$info = pathinfo("/var/log/syslog.log"); $match = fnmatch("*.LOG", "system.log", FNM_CASEFOLD); return $info["basename"] . ":" . pathinfo("archive.tar.gz", PATHINFO_EXTENSION) . ":" . ($match ? "match" : "bad");');
@@ -290,6 +291,7 @@ echo "environment=" . $environment . "\n";
 echo "sleep=" . $sleeping . "\n";
 echo "host-lookup=" . $host_lookup . "\n";
 echo "ip-conversion=" . $ip_conversion . "\n";
+echo "stream-introspection=" . $stream_introspection . "\n";
 echo "path-components=" . $path_components . "\n";
 echo "realpath=" . $resolved_path . "\n";
 echo "pathinfo=" . $path_info . "\n";
