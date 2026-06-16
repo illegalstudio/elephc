@@ -429,6 +429,7 @@ impl<'a> FunctionContext<'a> {
                 | Op::FunctionVariantCall
                 | Op::BuiltinCall
                 | Op::EvalFunctionCall
+                | Op::EvalFunctionCallArray
                 | Op::RuntimeCall
                 | Op::ExternCall
                 | Op::MethodCall

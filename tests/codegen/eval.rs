@@ -1431,6 +1431,20 @@ echo call_user_func('dyn_eval_cuf', 4);
     assert_eq!(out, "5");
 }
 
+/// Verifies post-barrier `call_user_func_array()` can dispatch to eval-declared functions.
+#[test]
+fn test_eval_declared_function_can_be_called_with_call_user_func_array() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_cufa($x, $y) { return ($x * 10) + $y; }');
+echo call_user_func_array('dyn_eval_cufa', ['y' => 2, 'x' => 1]);
+$args = ['y' => 3, 'x' => 2];
+echo ":" . call_user_func_array('dyn_eval_cufa', $args);
+"#,
+    );
+    assert_eq!(out, "12:23");
+}
+
 /// Verifies `call_user_func()` inside eval can dispatch to an eval-declared function.
 #[test]
 fn test_eval_fragment_call_user_func_dispatches_eval_declared_function() {

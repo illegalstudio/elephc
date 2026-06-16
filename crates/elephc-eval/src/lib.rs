@@ -330,6 +330,27 @@ pub unsafe extern "C" fn __elephc_eval_call_function(
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Calls a function previously declared through `eval()` with an argument array/hash.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `name_ptr` must be readable for
+/// `name_len` bytes when `name_len > 0`. `arg_array` must be a boxed Mixed
+/// indexed or associative array cell, and `out` may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_call_function_array(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    arg_array: *mut RuntimeCell,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        call_eval_function_array_inner(ctx, name_ptr, name_len, arg_array, out)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Runs the eval function-exists ABI body after installing a panic boundary.
 ///
 /// # Safety
@@ -500,6 +521,53 @@ unsafe fn call_eval_function_inner(
         context,
         &name.to_ascii_lowercase(),
         args,
+        &mut values,
+    ) {
+        Ok(result) => {
+            if !out.is_null() {
+                (*out).kind = 0;
+                (*out).value_cell = result.as_ptr();
+                (*out).error = std::ptr::null_mut();
+            }
+            EvalStatus::Ok.code()
+        }
+        Err(status) => status.code(),
+    }
+}
+
+/// Runs the dynamic function-call-array ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_call_function_array`; callers must provide a valid
+/// context, readable function-name bytes, and a boxed array/hash argument cell.
+#[cfg(not(test))]
+unsafe fn call_eval_function_array_inner(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    arg_array: *mut RuntimeCell,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if arg_array.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    if !out.is_null() {
+        (*out).clear();
+    }
+    let mut values = ElephcRuntimeOps::new();
+    match interpreter::execute_context_function_call_array(
+        context,
+        &name.to_ascii_lowercase(),
+        RuntimeCellHandle::from_raw(arg_array),
         &mut values,
     ) {
         Ok(result) => {

@@ -319,6 +319,20 @@ pub fn execute_context_function(
         })
 }
 
+/// Executes a named eval-context callable with arguments from a PHP array container.
+pub fn execute_context_function_call_array(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    arg_array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !values.is_array_like(arg_array)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let evaluated_args = eval_array_call_arg_values(arg_array, values)?;
+    eval_callable_with_call_array_args(name, evaluated_args, context, values)
+}
+
 /// Executes statements in source order and propagates the first eval `return`.
 fn execute_statements(
     statements: &[EvalStmt],
@@ -4713,6 +4727,35 @@ return call_user_func_array("dyn", ["y" => 2, "x" => 1]);"#,
         let mut values = FakeOps::default();
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(12));
+    }
+
+    /// Verifies context-level `call_user_func_array` dispatch binds eval-declared named args.
+    #[test]
+    fn execute_context_function_call_array_binds_declared_named_args() {
+        let program = parse_fragment(br#"function dyn($x, $y) { return ($x * 10) + $y; }"#)
+            .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let _ = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+        let arg_array = values.assoc_new(2).expect("allocate argument array");
+        let key_y = values.string("y").expect("allocate y key");
+        let value_y = values.int(2).expect("allocate y value");
+        let _ = values
+            .array_set(arg_array, key_y, value_y)
+            .expect("store y argument");
+        let key_x = values.string("x").expect("allocate x key");
+        let value_x = values.int(1).expect("allocate x value");
+        let _ = values
+            .array_set(arg_array, key_x, value_x)
+            .expect("store x argument");
+
+        let result =
+            execute_context_function_call_array(&mut context, "dyn", arg_array, &mut values)
+                .expect("execute context function call array");
 
         assert_eq!(values.get(result), FakeValue::Int(12));
     }

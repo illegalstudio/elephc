@@ -1802,18 +1802,21 @@ fn lower_static_call_user_func(
             {
                 return None;
             }
-            let callback_args = static_call_user_func_array_args(arg_array)?;
-            if let Some(callback) = instance_call_user_func_callback(ctx, callback_arg) {
-                return lower_instance_callable_call_user_func(
-                    ctx,
-                    callback_arg,
-                    callback,
-                    &callback_args,
-                    expr,
-                );
+            if let Some(callback_args) = static_call_user_func_array_args(arg_array) {
+                if let Some(callback) = instance_call_user_func_callback(ctx, callback_arg) {
+                    return lower_instance_callable_call_user_func(
+                        ctx,
+                        callback_arg,
+                        callback,
+                        &callback_args,
+                        expr,
+                    );
+                }
+                if let Some(callback) = static_call_user_func_callback(ctx, callback_arg) {
+                    return lower_static_callable_call(ctx, callback, &callback_args, expr);
+                }
             }
-            let callback = static_call_user_func_callback(ctx, callback_arg)?;
-            lower_static_callable_call(ctx, callback, &callback_args, expr)
+            lower_eval_call_user_func_array_fallback(ctx, callback_arg, arg_array, expr)
         }
         _ => None,
     }
@@ -1848,6 +1851,60 @@ fn lower_eval_call_user_func_fallback(
         Op::EvalFunctionCall.default_effects(),
         Some(expr.span),
     ))
+}
+
+/// Lowers unresolved `call_user_func_array()` string callbacks through the eval table.
+fn lower_eval_call_user_func_array_fallback(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback_expr: &Expr,
+    arg_array: &Expr,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !ctx.has_eval_barrier() {
+        return None;
+    }
+    let ExprKind::StringLiteral(callback_name) = &callback_expr.kind else {
+        return None;
+    };
+    if callback_name.contains("::")
+        || resolve_static_string_callable(ctx, callback_name).is_some()
+    {
+        return None;
+    }
+    let dynamic_name = php_symbol_key(callback_name.trim_start_matches('\\'));
+    let data = ctx.intern_function_name(&dynamic_name);
+    let arg_array = lower_expr(ctx, arg_array);
+    let arg_array = coerce_eval_function_arg_array(ctx, arg_array, expr.span);
+    Some(ctx.emit_value(
+        Op::EvalFunctionCallArray,
+        vec![arg_array.value],
+        Some(Immediate::Data(data)),
+        PhpType::Mixed,
+        Op::EvalFunctionCallArray.default_effects(),
+        Some(expr.span),
+    ))
+}
+
+/// Boxes a post-barrier dynamic-call argument container for the eval bridge ABI.
+fn coerce_eval_function_arg_array(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return value;
+    }
+    ctx.emit_value(
+        Op::MixedBox,
+        vec![value.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
+    )
 }
 
 /// Lowers `call_user_func*` for receiver-bound first-class callables through `expr_call`.

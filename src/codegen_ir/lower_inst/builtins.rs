@@ -528,6 +528,14 @@ pub(super) fn lower_eval_function_call(
     eval::lower_eval_function_call(ctx, inst)
 }
 
+/// Lowers a post-eval function call whose arguments are packed in an array/hash container.
+pub(super) fn lower_eval_function_call_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_function_call_array(ctx, inst)
+}
+
 /// Lowers post-eval dynamic function existence probes to the optional eval bridge.
 pub(super) fn lower_eval_function_exists(
     ctx: &mut FunctionContext<'_>,

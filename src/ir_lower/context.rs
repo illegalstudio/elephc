@@ -856,6 +856,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::Call
                     | Op::FunctionVariantCall
                     | Op::EvalFunctionCall
+                    | Op::EvalFunctionCallArray
                     | Op::RuntimeCall
                     | Op::ExternCall
                     | Op::MethodCall
