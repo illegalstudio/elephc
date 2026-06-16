@@ -2115,6 +2115,40 @@ echo ":"; echo function_exists("fdiv"); echo function_exists("fmod");');
     assert_eq!(out, "2.5:double:INF:NAN:0.9:4.5:0.9:11");
 }
 
+/// Verifies eval extended scalar math builtins through direct, named, callable, and probe paths.
+#[test]
+fn test_eval_dispatches_extended_math_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo sin(0); echo ":";
+echo cos(0); echo ":";
+echo tan(0); echo ":";
+echo round(asin(1), 2); echo ":";
+echo acos(1); echo ":";
+echo round(atan(1), 2); echo ":";
+echo sinh(0); echo ":";
+echo cosh(0); echo ":";
+echo tanh(0); echo ":";
+echo log2(8); echo ":";
+echo log10(100); echo ":";
+echo exp(0); echo ":";
+echo round(deg2rad(180), 2); echo ":";
+echo round(rad2deg(pi()), 0); echo ":";
+echo log(num: 8, base: 2); echo ":";
+echo atan2(y: 0, x: 1); echo ":";
+echo hypot(3, 4); echo ":";
+echo intdiv(7, 2); echo ":";
+echo round(call_user_func("sin", pi() / 2), 0); echo ":";
+echo call_user_func_array("intdiv", ["num1" => 9, "num2" => 2]); echo ":";
+echo function_exists("sin"); echo function_exists("log"); echo function_exists("intdiv"); echo function_exists("hypot");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "0:1:0:1.57:0:0.79:0:1:0:3:2:1:3.14:180:3:0:5:3:1:4:1111"
+    );
+}
+
 /// Verifies eval `pow()` reuses exponentiation runtime hooks through direct and callable calls.
 #[test]
 fn test_eval_dispatches_pow_builtin_call() {
