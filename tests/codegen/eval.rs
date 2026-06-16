@@ -1887,6 +1887,21 @@ fn test_eval_unsupported_class_declaration_fails() {
     );
 }
 
+/// Verifies unsupported eval object construction fails through the eval diagnostic path.
+#[test]
+fn test_eval_unsupported_dynamic_new_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalDynamicNewUnsupported {}
+eval('return new EvalDynamicNewUnsupported();');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+        "stderr did not contain eval unsupported diagnostic: {err}"
+    );
+}
+
 /// Verifies unsupported eval reference assignments fail through the eval diagnostic path.
 #[test]
 fn test_eval_unsupported_reference_assignment_fails() {
