@@ -914,6 +914,21 @@ echo ":"; echo function_exists("strrev");');
     assert_eq!(out, "olleH:321:CBA:fed:1");
 }
 
+/// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
+#[test]
+fn test_eval_dispatches_bin2hex_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo bin2hex("Az"); echo ":";
+echo bin2hex(string: "A\n"); echo ":";
+echo call_user_func("bin2hex", "!?"); echo ":";
+echo call_user_func_array("bin2hex", ["string" => "ok"]);
+echo ":"; echo function_exists("bin2hex");');
+"#,
+    );
+    assert_eq!(out, "417a:410a:213f:6f6b:1");
+}
+
 /// Verifies eval `str_contains()` supports direct and callable byte-string search.
 #[test]
 fn test_eval_dispatches_str_contains_builtin_call() {

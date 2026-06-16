@@ -130,6 +130,7 @@ $append_assoc = eval('$items = ["name" => "Ada"]; $items[] = "Grace"; return $it
 $array_key_probe = eval('$m = ["name" => null]; return (array_key_exists("name", $m) ? "present" : "missing") . ":" . (array_key_exists("age", $m) ? "bad" : "absent");');
 $array_search = eval('return (in_array("b", ["a", "b"]) ? "in" : "missing") . ":" . array_search("Grace", ["name" => "Grace"]);');
 $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" . (strcasecmp("Hello", "hello") === 0 ? "ci" : "bad") . ":" . (hash_equals("abc", "abc") ? "hash" : "bad");');
+$hexed = eval('return bin2hex("Az");');
 $eval_class_probe = eval('return class_exists("EvalAotBox") ? "yes" : "no";');
 eval('class EvalDynamicEmptyClass {}');
 $eval_dynamic_class_probe = eval('return class_exists("evaldynamicemptyclass") ? "yes" : "no";');
@@ -202,6 +203,7 @@ echo "append-assoc=" . $append_assoc . "\n";
 echo "array-key-exists=" . $array_key_probe . "\n";
 echo "array-search=" . $array_search . "\n";
 echo "string-compare=" . $string_compare . "\n";
+echo "bin2hex=" . $hexed . "\n";
 echo "eval-class-exists=" . $eval_class_probe . "\n";
 echo "eval-dynamic-class-exists=" . $eval_dynamic_class_probe . "\n";
 echo "native-class-exists-eval-class=" . $eval_dynamic_class_native_probe . "\n";
