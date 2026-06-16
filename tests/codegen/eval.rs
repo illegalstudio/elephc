@@ -920,6 +920,29 @@ echo function_exists("range");');
     assert_eq!(out, "4:14:4:41:1:3:24:7:3:86:1");
 }
 
+/// Verifies eval `array_rand()` returns a key that exists in the source array.
+#[test]
+fn test_eval_dispatches_array_rand_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$nums = [10, 20, 30];
+$idx = array_rand($nums);
+echo ($idx >= 0 && $idx < 3 && array_key_exists($idx, $nums)) ? "idx" : "bad";
+$assoc = ["a" => 1, "b" => 2];
+$key = array_rand($assoc);
+echo ":" . (array_key_exists($key, $assoc) ? "assoc" : "bad");
+$named = array_rand(array: [5, 6]);
+echo ":" . (($named >= 0 && $named < 2) ? "named" : "bad");
+$call = call_user_func("array_rand", [7, 8]);
+echo ":" . (($call >= 0 && $call < 2) ? "call" : "bad");
+$spread = call_user_func_array("array_rand", [["x" => 1, "y" => 2]]);
+echo ":" . (array_key_exists($spread, ["x" => 1, "y" => 2]) ? "spread" : "bad") . ":";
+echo function_exists("array_rand");');
+"#,
+    );
+    assert_eq!(out, "idx:assoc:named:call:spread:1");
+}
+
 /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
 #[test]
 fn test_eval_dispatches_array_fill_builtin_calls() {

@@ -22,6 +22,7 @@ use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
 use std::net::ToSocketAddrs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Internal statement-control result used to propagate eval returns and loops.
 enum EvalControl {
@@ -1212,6 +1213,7 @@ fn eval_positional_expr_call(
             eval_builtin_array_aggregate(name, args, context, scope, values)
         }
         "array_pad" => eval_builtin_array_pad(args, context, scope, values),
+        "array_rand" => eval_builtin_array_rand(args, context, scope, values),
         "array_reverse" => eval_builtin_array_reverse(args, context, scope, values),
         "array_search" | "in_array" => {
             eval_builtin_array_search(name, args, context, scope, values)
@@ -1618,6 +1620,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_merge"
             | "array_pad"
             | "array_product"
+            | "array_rand"
             | "array_reverse"
             | "array_search"
             | "array_slice"
@@ -1883,7 +1886,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_fill" => Some(&["start_index", "count", "value"]),
         "array_fill_keys" => Some(&["keys", "value"]),
         "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_unique"
-        | "array_values" => Some(&["array"]),
+        | "array_rand" | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
         "array_pad" => Some(&["array", "length", "value"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
@@ -2202,6 +2205,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_merge_result(*left, *right, values)?
+        }
+        "array_rand" => {
+            let [array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_rand_result(*array, values)?
         }
         "array_reverse" => match evaluated_args {
             [array] => eval_array_reverse_result(*array, false, values)?,
@@ -3571,6 +3580,42 @@ fn eval_array_key_set_result(
         }
     }
     Ok(result)
+}
+
+/// Evaluates PHP `array_rand()` over one eval array expression.
+fn eval_builtin_array_rand(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = eval_expr(array, context, scope, values)?;
+    eval_array_rand_result(array, values)
+}
+
+/// Returns a valid random key from a non-empty eval array.
+fn eval_array_rand_result(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    if len == 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let position = eval_random_position(len);
+    values.array_iter_key(array, position)
+}
+
+/// Chooses a pseudo-random array position within `[0, len)`.
+fn eval_random_position(len: usize) -> usize {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    (nanos % (len as u128)) as usize
 }
 
 /// Evaluates PHP `range()` over integer-compatible start and end expressions.
@@ -11028,6 +11073,34 @@ return function_exists("range");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "4:14:4:41:1:3:24:7:3:86:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_rand()` returns a key that exists in the source array.
+    #[test]
+    fn execute_program_dispatches_array_rand_builtin() {
+        let program = parse_fragment(
+            br#"$nums = [10, 20, 30];
+$idx = array_rand($nums);
+echo ($idx >= 0 && $idx < 3 && array_key_exists($idx, $nums)) ? "idx" : "bad";
+$assoc = ["a" => 1, "b" => 2];
+$key = array_rand($assoc);
+echo ":" . (array_key_exists($key, $assoc) ? "assoc" : "bad");
+$named = array_rand(array: [5, 6]);
+echo ":" . (($named >= 0 && $named < 2) ? "named" : "bad");
+$call = call_user_func("array_rand", [7, 8]);
+echo ":" . (($call >= 0 && $call < 2) ? "call" : "bad");
+$spread = call_user_func_array("array_rand", [["x" => 1, "y" => 2]]);
+echo ":" . (array_key_exists($spread, ["x" => 1, "y" => 2]) ? "spread" : "bad") . ":";
+return function_exists("array_rand");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "idx:assoc:named:call:spread:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
