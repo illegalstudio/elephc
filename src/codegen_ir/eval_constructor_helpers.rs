@@ -21,6 +21,27 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, FunctionSig, PhpType};
 
 const MAX_EVAL_CONSTRUCTOR_ARGS: usize = 2;
+const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
+    "Error",
+    "TypeError",
+    "ValueError",
+    "Exception",
+    "LogicException",
+    "BadFunctionCallException",
+    "BadMethodCallException",
+    "DomainException",
+    "InvalidArgumentException",
+    "LengthException",
+    "OutOfRangeException",
+    "RuntimeException",
+    "OutOfBoundsException",
+    "OverflowException",
+    "RangeException",
+    "UnderflowException",
+    "UnexpectedValueException",
+    "JsonException",
+    "FiberError",
+];
 
 /// Constructor metadata needed by the eval constructor bridge.
 #[derive(Clone)]
@@ -38,7 +59,8 @@ pub(super) fn emit_eval_constructor_helpers(module: &Module, emitter: &mut Emitt
         return;
     }
     let slots = collect_eval_constructor_slots(module);
-    emit_constructor_helper(module, emitter, &slots);
+    let builtin_throwable_class_ids = collect_builtin_throwable_constructor_class_ids(module);
+    emit_constructor_helper(module, emitter, &slots, &builtin_throwable_class_ids);
 }
 
 /// Returns true when the EIR module contains a function that can call eval.
@@ -82,6 +104,18 @@ fn collect_eval_constructor_slots(module: &Module) -> Vec<EvalConstructorSlot> {
         collect_class_constructor_slot(class_name, class_info, &emitted_methods, &mut slots);
     }
     slots
+}
+
+/// Collects compact builtin Throwable class ids that eval can initialize directly.
+fn collect_builtin_throwable_constructor_class_ids(module: &Module) -> Vec<u64> {
+    let mut class_ids = BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES
+        .iter()
+        .filter_map(|class_name| module.class_infos.get(*class_name))
+        .map(|class_info| class_info.class_id)
+        .collect::<Vec<_>>();
+    class_ids.sort_unstable();
+    class_ids.dedup();
+    class_ids
 }
 
 /// Adds one constructor slot for a class when the constructor has emitted code.
@@ -154,13 +188,16 @@ fn emit_constructor_helper(
     module: &Module,
     emitter: &mut Emitter,
     slots: &[EvalConstructorSlot],
+    builtin_throwable_class_ids: &[u64],
 ) {
     emitter.blank();
     emitter.comment("--- eval bridge: user constructor call ---");
     label_c_global(module, emitter, "__elephc_eval_value_construct_object");
     match module.target.arch {
-        Arch::AArch64 => emit_constructor_aarch64(module, emitter, slots),
-        Arch::X86_64 => emit_constructor_x86_64(module, emitter, slots),
+        Arch::AArch64 => {
+            emit_constructor_aarch64(module, emitter, slots, builtin_throwable_class_ids)
+        }
+        Arch::X86_64 => emit_constructor_x86_64(module, emitter, slots, builtin_throwable_class_ids),
     }
 }
 
@@ -169,6 +206,7 @@ fn emit_constructor_aarch64(
     module: &Module,
     emitter: &mut Emitter,
     slots: &[EvalConstructorSlot],
+    builtin_throwable_class_ids: &[u64],
 ) {
     let success_label = "__elephc_eval_value_construct_success";
     let fail_label = "__elephc_eval_value_construct_fail";
@@ -182,6 +220,13 @@ fn emit_constructor_aarch64(
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("b.ne {}", success_label));                    // non-object values have no constructor to run
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for constructor calls
+    emit_aarch64_builtin_throwable_constructor_dispatch(
+        module,
+        emitter,
+        builtin_throwable_class_ids,
+        fail_label,
+        success_label,
+    );
     emit_aarch64_constructor_dispatch(module, emitter, slots, fail_label, success_label);
     emitter.instruction(&format!("b {}", success_label));                       // no constructor metadata matched this class id
     emitter.label(fail_label);
@@ -200,6 +245,7 @@ fn emit_constructor_x86_64(
     module: &Module,
     emitter: &mut Emitter,
     slots: &[EvalConstructorSlot],
+    builtin_throwable_class_ids: &[u64],
 ) {
     let success_label = "__elephc_eval_value_construct_success_x";
     let fail_label = "__elephc_eval_value_construct_fail_x";
@@ -215,6 +261,13 @@ fn emit_constructor_x86_64(
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("jne {}", success_label));                     // non-object values have no constructor to run
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for constructor calls
+    emit_x86_64_builtin_throwable_constructor_dispatch(
+        module,
+        emitter,
+        builtin_throwable_class_ids,
+        fail_label,
+        success_label,
+    );
     emit_x86_64_constructor_dispatch(module, emitter, slots, fail_label, success_label);
     emitter.instruction(&format!("jmp {}", success_label));                     // no constructor metadata matched this class id
     emitter.label(fail_label);
@@ -226,6 +279,144 @@ fn emit_constructor_x86_64(
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
+}
+
+/// Emits ARM64 dispatch for compact builtin Throwable constructors.
+fn emit_aarch64_builtin_throwable_constructor_dispatch(
+    module: &Module,
+    emitter: &mut Emitter,
+    class_ids: &[u64],
+    fail_label: &str,
+    success_label: &str,
+) {
+    for class_id in class_ids {
+        let next_label = format!("__elephc_eval_builtin_throwable_next_{}", class_id);
+        emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this builtin class test
+        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for builtin constructor dispatch
+        abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
+        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this builtin Throwable class
+        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next builtin Throwable class when ids differ
+        emit_aarch64_builtin_throwable_constructor_body(module, emitter, fail_label, success_label);
+        emitter.label(&next_label);
+    }
+}
+
+/// Emits x86_64 dispatch for compact builtin Throwable constructors.
+fn emit_x86_64_builtin_throwable_constructor_dispatch(
+    module: &Module,
+    emitter: &mut Emitter,
+    class_ids: &[u64],
+    fail_label: &str,
+    success_label: &str,
+) {
+    for class_id in class_ids {
+        let next_label = format!("__elephc_eval_builtin_throwable_next_{}_x", class_id);
+        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this builtin class test
+        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for builtin constructor dispatch
+        abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
+        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this builtin Throwable class
+        emitter.instruction(&format!("jne {}", next_label));                    // try the next builtin Throwable class when ids differ
+        emit_x86_64_builtin_throwable_constructor_body(module, emitter, fail_label, success_label);
+        emitter.label(&next_label);
+    }
+}
+
+/// Initializes the compact Throwable payload for eval-created ARM64 builtin exceptions.
+fn emit_aarch64_builtin_throwable_constructor_body(
+    module: &Module,
+    emitter: &mut Emitter,
+    fail_label: &str,
+    success_label: &str,
+) {
+    emit_aarch64_validate_builtin_throwable_arg_count(module, emitter, fail_label);
+    emit_aarch64_default_builtin_throwable_fields(emitter);
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload constructor argc before testing the message argument
+    emitter.instruction("cmp x9, #0");                                          // did the eval call pass a message argument?
+    emitter.instruction(&format!("b.eq {}", success_label));                    // keep the empty Throwable defaults when no message was supplied
+    emit_aarch64_load_eval_arg(module, emitter, 0);
+    emit_aarch64_cast_eval_arg(emitter, &PhpType::Str);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
+    emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
+    emitter.instruction("str x2, [x9, #16]");                                   // store the message length in the compact Throwable payload
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload constructor argc before testing the code argument
+    emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
+    emitter.instruction(&format!("b.le {}", success_label));                    // keep code zero when only the message was supplied
+    emit_aarch64_load_eval_arg(module, emitter, 1);
+    emit_aarch64_cast_eval_arg(emitter, &PhpType::Int);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for code initialization
+    emitter.instruction("str x0, [x9, #24]");                                   // store the integer exception code
+    emitter.instruction(&format!("b {}", success_label));                       // builtin Throwable construction completed
+}
+
+/// Initializes the compact Throwable payload for eval-created x86_64 builtin exceptions.
+fn emit_x86_64_builtin_throwable_constructor_body(
+    module: &Module,
+    emitter: &mut Emitter,
+    fail_label: &str,
+    success_label: &str,
+) {
+    emit_x86_64_validate_builtin_throwable_arg_count(module, emitter, fail_label);
+    emit_x86_64_default_builtin_throwable_fields(emitter);
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the message argument
+    emitter.instruction("cmp r11, 0");                                          // did the eval call pass a message argument?
+    emitter.instruction(&format!("je {}", success_label));                      // keep the empty Throwable defaults when no message was supplied
+    emit_x86_64_load_eval_arg(module, emitter, 0);
+    emit_x86_64_cast_eval_arg(emitter, &PhpType::Str);
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
+    emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the message pointer in the compact Throwable payload
+    emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                       // store the message length in the compact Throwable payload
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload constructor argc before testing the code argument
+    emitter.instruction("cmp r11, 1");                                          // did the eval call pass a code argument?
+    emitter.instruction(&format!("jle {}", success_label));                     // keep code zero when only the message was supplied
+    emit_x86_64_load_eval_arg(module, emitter, 1);
+    emit_x86_64_cast_eval_arg(emitter, &PhpType::Int);
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for code initialization
+    emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // store the integer exception code
+    emitter.instruction(&format!("jmp {}", success_label));                     // builtin Throwable construction completed
+}
+
+/// Emits ARM64 arity validation for compact builtin Throwable constructors.
+fn emit_aarch64_validate_builtin_throwable_arg_count(
+    module: &Module,
+    emitter: &mut Emitter,
+    fail_label: &str,
+) {
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for builtin Throwable arity validation
+    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    abi::emit_call_label(emitter, &array_len_symbol);
+    emitter.instruction("str x0, [sp, #32]");                                   // save constructor argc for message/code initialization
+    emitter.instruction("cmp x0, #2");                                          // compact Throwable initialization supports message and code arguments
+    emitter.instruction(&format!("b.gt {}", fail_label));                       // reject unsupported previous-Throwable arguments from eval
+}
+
+/// Emits x86_64 arity validation for compact builtin Throwable constructors.
+fn emit_x86_64_validate_builtin_throwable_arg_count(
+    module: &Module,
+    emitter: &mut Emitter,
+    fail_label: &str,
+) {
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the eval argument array for builtin Throwable arity validation
+    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    abi::emit_call_label(emitter, &array_len_symbol);
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save constructor argc for message/code initialization
+    emitter.instruction("cmp rax, 2");                                          // compact Throwable initialization supports message and code arguments
+    emitter.instruction(&format!("jg {}", fail_label));                         // reject unsupported previous-Throwable arguments from eval
+}
+
+/// Writes ARM64 empty-message and zero-code defaults into the compact Throwable payload.
+fn emit_aarch64_default_builtin_throwable_fields(emitter: &mut Emitter) {
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for default initialization
+    emitter.instruction("str xzr, [x9, #8]");                                   // default the message pointer to an empty string payload
+    emitter.instruction("str xzr, [x9, #16]");                                  // default the message length to zero
+    emitter.instruction("str xzr, [x9, #24]");                                  // default the exception code to zero
+}
+
+/// Writes x86_64 empty-message and zero-code defaults into the compact Throwable payload.
+fn emit_x86_64_default_builtin_throwable_fields(emitter: &mut Emitter) {
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for default initialization
+    emitter.instruction("mov QWORD PTR [r11 + 8], 0");                          // default the message pointer to an empty string payload
+    emitter.instruction("mov QWORD PTR [r11 + 16], 0");                         // default the message length to zero
+    emitter.instruction("mov QWORD PTR [r11 + 24], 0");                         // default the exception code to zero
 }
 
 /// Emits ARM64 class-id dispatch for supported constructor bodies.

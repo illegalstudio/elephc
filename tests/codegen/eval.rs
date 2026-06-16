@@ -936,6 +936,39 @@ echo function_exists("json_last_error") && function_exists("json_last_error_msg"
     );
 }
 
+/// Verifies eval JSON throw flags raise catchable `JsonException` objects.
+#[test]
+fn test_eval_dispatches_json_throw_on_error() {
+    let out = compile_and_run(
+        r#"<?php
+eval('try {
+    json_decode("bad", true, 512, JSON_THROW_ON_ERROR);
+    echo "bad";
+} catch (Throwable) {
+    echo "inner:";
+}');
+try {
+    eval('json_decode("bad", true, 512, JSON_THROW_ON_ERROR);');
+    echo "bad";
+} catch (Throwable $e) {
+    echo "outer:" . get_class($e) . ":" . $e->getCode() . ":" . (str_contains($e->getMessage(), "Syntax error") ? "syntax" : "bad") . ":";
+}
+try {
+    eval('json_encode(INF, JSON_THROW_ON_ERROR);');
+    echo "bad";
+} catch (Throwable $e) {
+    echo "encode:" . get_class($e) . ":" . $e->getCode() . ":" . $e->getMessage() . ":";
+}
+eval('echo json_encode(INF, JSON_THROW_ON_ERROR | JSON_PARTIAL_OUTPUT_ON_ERROR) . ":";');
+eval('$json = chr(34) . "a" . chr(128) . "b" . chr(34); echo json_decode($json, true, 512, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_IGNORE) . ":";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "inner:outer:JsonException:4:syntax:encode:JsonException:7:Inf and NaN cannot be JSON encoded:0:ab:"
+    );
+}
+
 /// Verifies eval `json_validate()` validates JSON syntax, depth, and dynamic calls.
 #[test]
 fn test_eval_dispatches_json_validate_builtin_call() {

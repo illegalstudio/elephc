@@ -608,6 +608,7 @@ const EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR: i64 = 512;
 const EVAL_JSON_PRESERVE_ZERO_FRACTION: i64 = 1024;
 const EVAL_JSON_INVALID_UTF8_IGNORE: i64 = 1_048_576;
 const EVAL_JSON_INVALID_UTF8_SUBSTITUTE: i64 = 2_097_152;
+const EVAL_JSON_THROW_ON_ERROR: i64 = 4_194_304;
 const EVAL_JSON_INF_OR_NAN_MESSAGE: &str = "Inf and NaN cannot be JSON encoded";
 const EVAL_JSON_UTF8_MESSAGE: &str = "Malformed UTF-8 characters, possibly incorrectly encoded";
 
@@ -1081,11 +1082,18 @@ fn execute_try_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let control = match execute_statements(body, context, scope, values)? {
-        EvalControl::Throw(thrown) => {
+    let control = match execute_statements(body, context, scope, values) {
+        Ok(EvalControl::Throw(thrown)) => {
             execute_matching_catch(thrown, catches, context, scope, values)?
         }
-        control => control,
+        Err(EvalStatus::UncaughtThrowable) => {
+            let Some(thrown) = context.take_pending_throw() else {
+                return Err(EvalStatus::UncaughtThrowable);
+            };
+            execute_matching_catch(thrown, catches, context, scope, values)?
+        }
+        Ok(control) => control,
+        Err(status) => return Err(status),
     };
     if finally_body.is_empty() {
         return Ok(control);
@@ -13349,7 +13357,8 @@ fn eval_json_encode_result(
         | EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR
         | EVAL_JSON_PRESERVE_ZERO_FRACTION
         | EVAL_JSON_INVALID_UTF8_IGNORE
-        | EVAL_JSON_INVALID_UTF8_SUBSTITUTE;
+        | EVAL_JSON_INVALID_UTF8_SUBSTITUTE
+        | EVAL_JSON_THROW_ON_ERROR;
     let supported_flags = supported_flags | EVAL_JSON_NUMERIC_CHECK;
     if flags & !supported_flags != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
@@ -13377,6 +13386,9 @@ fn eval_json_encode_result(
     if let Some(error) = error {
         context.set_json_error(error.code, error.message);
         if flags & EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR == 0 {
+            if flags & EVAL_JSON_THROW_ON_ERROR != 0 {
+                return eval_throw_json_exception(error.code, error.message, context, values);
+            }
             return values.bool_value(false);
         }
     } else {
@@ -13441,7 +13453,8 @@ fn eval_json_decode_result(
         .unwrap_or(0);
     let supported_flags = EVAL_JSON_BIGINT_AS_STRING
         | EVAL_JSON_INVALID_UTF8_IGNORE
-        | EVAL_JSON_INVALID_UTF8_SUBSTITUTE;
+        | EVAL_JSON_INVALID_UTF8_SUBSTITUTE
+        | EVAL_JSON_THROW_ON_ERROR;
     if flags & !supported_flags != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
     }
@@ -13467,7 +13480,11 @@ fn eval_json_decode_result(
     let decoded = match decoded_result {
         Ok(decoded) => decoded,
         Err(error) => {
-            eval_record_json_parse_error(context, error, &bytes);
+            let (code, message) = eval_json_parse_error_details(error, &bytes);
+            if flags & EVAL_JSON_THROW_ON_ERROR != 0 {
+                return eval_throw_json_exception(code, &message, context, values);
+            }
+            context.set_json_error(code, message);
             return values.null();
         }
     };
@@ -13646,9 +13663,31 @@ fn eval_record_json_parse_error(
     error: JsonParseError,
     bytes: &[u8],
 ) {
+    let (code, message) = eval_json_parse_error_details(error, bytes);
+    context.set_json_error(code, message);
+}
+
+/// Builds the PHP JSON error code and message for one parser failure.
+fn eval_json_parse_error_details(error: JsonParseError, bytes: &[u8]) -> (i64, String) {
     let (code, message) = eval_json_parse_error_status(error.kind());
     let message = eval_json_error_message_with_location(message, bytes, error.offset());
-    context.set_json_error(code, message);
+    (code, message)
+}
+
+/// Creates and schedules a `JsonException` through eval's normal Throwable channel.
+fn eval_throw_json_exception(
+    code: i64,
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    context.set_json_error(code, message.to_string());
+    let exception = values.new_object("JsonException")?;
+    let message = values.string(message)?;
+    let code = values.int(code)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
 }
 
 /// Maps eval JSON parser failures to PHP `JSON_ERROR_*` codes and messages.
@@ -14888,6 +14927,7 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
                 EVAL_JSON_INVALID_UTF8_SUBSTITUTE,
             ))
         }
+        "JSON_THROW_ON_ERROR" => Some(EvalPredefinedConstant::Int(EVAL_JSON_THROW_ON_ERROR)),
         "INF" => Some(EvalPredefinedConstant::Float(f64::INFINITY)),
         "NAN" => Some(EvalPredefinedConstant::Float(f64::NAN)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
@@ -18041,6 +18081,35 @@ return function_exists("json_last_error") && function_exists("json_last_error_ms
             values.output,
             "0:No error:4:syntax:Syntax error near location 1:1:1:Maximum stack depth exceeded near location 1:1:0:No error:3:Control character error, possibly incorrectly encoded near location 1:3:10:Single unpaired UTF-16 surrogate in unicode escape near location 1:8:5:Malformed UTF-8 characters, possibly incorrectly encoded near location 1:3:0:No error:"
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval JSON throw flags raise catchable Throwable objects.
+    #[test]
+    fn execute_program_dispatches_json_throw_on_error() {
+        let program = parse_fragment(
+            br#"try {
+    json_decode("bad", true, 512, JSON_THROW_ON_ERROR);
+    echo "bad";
+} catch (Throwable) {
+    echo "decode:";
+}
+try {
+    json_encode(INF, JSON_THROW_ON_ERROR);
+    echo "bad";
+} catch (Throwable) {
+    echo "encode:";
+}
+echo json_encode(INF, JSON_THROW_ON_ERROR | JSON_PARTIAL_OUTPUT_ON_ERROR) . ":";
+return defined("JSON_THROW_ON_ERROR");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "decode:encode:0:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
