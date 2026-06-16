@@ -1016,6 +1016,40 @@ echo function_exists("sort") && function_exists("rsort");');
     assert_eq!(out, "1:123:1:cherry:apple:123:1:312:1:1:3:1");
 }
 
+/// Verifies eval key-preserving sort builtins mutate direct variable arguments only.
+#[test]
+fn test_eval_dispatches_key_preserving_sort_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = ["x" => 3, "y" => 1, "z" => 2];
+echo asort($a) . ":";
+foreach ($a as $key => $value) { echo $key . $value; }
+echo ":";
+$b = ["x" => 1, "y" => 3, "z" => 2];
+echo arsort(array: $b) . ":";
+foreach ($b as $key => $value) { echo $key . $value; }
+echo ":";
+$c = ["b" => 1, "a" => 2, 3 => 4];
+echo ksort($c) . ":";
+foreach ($c as $key => $value) { echo $key . $value; }
+echo ":";
+$d = ["b" => 1, "a" => 2, 3 => 4];
+echo krsort($d) . ":";
+foreach ($d as $key => $value) { echo $key . $value; }
+echo ":";
+$e = ["x" => 2, "y" => 1];
+echo call_user_func("asort", $e) . ":" . $e["x"] . $e["y"] . ":";
+$f = ["b" => 1, "a" => 2];
+echo call_user_func_array("krsort", ["array" => $f]) . ":" . $f["b"] . $f["a"] . ":";
+echo function_exists("asort") && function_exists("arsort") && function_exists("ksort") && function_exists("krsort");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:y1z2x3:1:y3z2x1:1:34a2b1:1:b1a234:1:21:1:12:1"
+    );
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {
