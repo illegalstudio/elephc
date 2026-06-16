@@ -17,7 +17,7 @@ use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalFunction, EvalMagicConst,
     EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
-use crate::json_validate;
+use crate::json_validate::{self, JsonValue};
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
@@ -1518,6 +1518,7 @@ fn eval_positional_expr_call(
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
+        "json_decode" => eval_builtin_json_decode(args, context, scope, values),
         "json_encode" => eval_builtin_json_encode(args, context, scope, values),
         "json_last_error" => eval_builtin_json_last_error(args, values),
         "json_last_error_msg" => eval_builtin_json_last_error_msg(args, values),
@@ -1979,6 +1980,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_real"
             | "is_resource"
             | "is_string"
+            | "json_decode"
             | "json_encode"
             | "json_last_error"
             | "json_last_error_msg"
@@ -2230,6 +2232,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "inet_pton" => Some(&["ip"]),
         "intdiv" => Some(&["num1", "num2"]),
         "ip2long" => Some(&["ip"]),
+        "json_decode" => Some(&["json", "associative", "depth", "flags"]),
         "json_encode" => Some(&["value", "flags", "depth"]),
         "json_last_error" | "json_last_error_msg" => Some(&[]),
         "json_validate" => Some(&["json", "depth", "flags"]),
@@ -2996,6 +2999,23 @@ fn eval_builtin_with_values(
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
+        "json_decode" => match evaluated_args {
+            [json] => eval_json_decode_result(*json, None, None, None, values)?,
+            [json, associative] => {
+                eval_json_decode_result(*json, Some(*associative), None, None, values)?
+            }
+            [json, associative, depth] => {
+                eval_json_decode_result(*json, Some(*associative), Some(*depth), None, values)?
+            }
+            [json, associative, depth, flags] => eval_json_decode_result(
+                *json,
+                Some(*associative),
+                Some(*depth),
+                Some(*flags),
+                values,
+            )?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "json_encode" => match evaluated_args {
             [value] => eval_json_encode_result(*value, None, None, values)?,
             [value, flags] => eval_json_encode_result(*value, Some(*flags), None, values)?,
@@ -10311,6 +10331,121 @@ fn eval_json_encode_result(
     values.string_bytes_value(&output)
 }
 
+/// Evaluates PHP `json_decode()` for zero-flag scalar, array, and object JSON text.
+fn eval_builtin_json_decode(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [json] => {
+            let json = eval_expr(json, context, scope, values)?;
+            eval_json_decode_result(json, None, None, None, values)
+        }
+        [json, associative] => {
+            let json = eval_expr(json, context, scope, values)?;
+            let associative = eval_expr(associative, context, scope, values)?;
+            eval_json_decode_result(json, Some(associative), None, None, values)
+        }
+        [json, associative, depth] => {
+            let json = eval_expr(json, context, scope, values)?;
+            let associative = eval_expr(associative, context, scope, values)?;
+            let depth = eval_expr(depth, context, scope, values)?;
+            eval_json_decode_result(json, Some(associative), Some(depth), None, values)
+        }
+        [json, associative, depth, flags] => {
+            let json = eval_expr(json, context, scope, values)?;
+            let associative = eval_expr(associative, context, scope, values)?;
+            let depth = eval_expr(depth, context, scope, values)?;
+            let flags = eval_expr(flags, context, scope, values)?;
+            eval_json_decode_result(json, Some(associative), Some(depth), Some(flags), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Decodes one JSON string into eval runtime cells, returning null on syntax/depth failure.
+fn eval_json_decode_result(
+    json: RuntimeCellHandle,
+    associative: Option<RuntimeCellHandle>,
+    depth: Option<RuntimeCellHandle>,
+    flags: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if flags
+        .map(|flags| eval_int_value(flags, values))
+        .transpose()?
+        .unwrap_or(0)
+        != 0
+    {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    if let Some(associative) = associative {
+        let _ = values.truthy(associative)?;
+    }
+    let depth = depth
+        .map(|depth| eval_int_value(depth, values))
+        .transpose()?
+        .unwrap_or(512);
+    if depth <= 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+
+    let bytes = values.string_bytes(json)?;
+    let Some(decoded) = json_validate::decode(&bytes, depth as usize) else {
+        return values.null();
+    };
+    eval_json_decode_to_cell(decoded, values)
+}
+
+/// Materializes one parsed JSON value as an eval runtime cell.
+fn eval_json_decode_to_cell(
+    value: JsonValue,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match value {
+        JsonValue::Null => values.null(),
+        JsonValue::Bool(value) => values.bool_value(value),
+        JsonValue::Number(value) => eval_json_decode_number_to_cell(&value, values),
+        JsonValue::String(value) => values.string_bytes_value(&value),
+        JsonValue::Array(elements) => {
+            let mut result = values.array_new(elements.len())?;
+            for (index, element) in elements.into_iter().enumerate() {
+                let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+                let key = values.int(index)?;
+                let element = eval_json_decode_to_cell(element, values)?;
+                result = values.array_set(result, key, element)?;
+            }
+            Ok(result)
+        }
+        JsonValue::Object(entries) => {
+            let mut result = values.assoc_new(entries.len())?;
+            for (key, value) in entries {
+                let key = values.string_bytes_value(&key)?;
+                let value = eval_json_decode_to_cell(value, values)?;
+                result = values.array_set(result, key, value)?;
+            }
+            Ok(result)
+        }
+    }
+}
+
+/// Materializes one JSON number as an int when possible and as a float otherwise.
+fn eval_json_decode_number_to_cell(
+    value: &[u8],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = std::str::from_utf8(value).map_err(|_| EvalStatus::RuntimeFatal)?;
+    if !value.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E')) {
+        if let Ok(integer) = value.parse::<i64>() {
+            return values.int(integer);
+        }
+    }
+    let float = value.parse::<f64>().map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.float(float)
+}
+
 /// Evaluates PHP `json_last_error()` with the eval interpreter's current no-error state.
 fn eval_builtin_json_last_error(
     args: &[EvalExpr],
@@ -13502,6 +13637,33 @@ return function_exists("json_encode");"#,
             values.output,
             r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"#
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `json_decode()` materializes scalars, arrays, and associative arrays.
+    #[test]
+    fn execute_program_dispatches_json_decode_builtin() {
+        let program = parse_fragment(
+            br#"echo json_decode("\"hello\"") . ":";
+echo json_decode("42") . ":";
+echo (json_decode("true") ? "T" : "bad") . ":";
+echo (is_null(json_decode("null")) ? "NULL" : "bad") . ":";
+$decoded = json_decode("{\"a\":1,\"b\":[\"x\",false]}", true);
+echo $decoded["a"] . ":" . $decoded["b"][0] . ":" . ($decoded["b"][1] ? "bad" : "F") . ":";
+$call = call_user_func("json_decode", "[3,4]");
+echo $call[1] . ":";
+$named = call_user_func_array("json_decode", ["json" => "{\"k\":\"v\"}", "associative" => true, "depth" => 4, "flags" => 0]);
+echo $named["k"] . ":";
+echo (is_null(json_decode("bad")) ? "BAD" : "wrong") . ":";
+return function_exists("json_decode");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "hello:42:T:NULL:1:x:F:4:v:BAD:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

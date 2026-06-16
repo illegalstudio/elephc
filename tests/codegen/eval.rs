@@ -764,6 +764,28 @@ echo function_exists("json_encode");');
     assert_eq!(out, r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:1"#);
 }
 
+/// Verifies eval `json_decode()` materializes scalar, indexed, and associative values.
+#[test]
+fn test_eval_dispatches_json_decode_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo json_decode("\"hello\"") . ":";
+echo json_decode("42") . ":";
+echo (json_decode("true") ? "T" : "bad") . ":";
+echo (is_null(json_decode("null")) ? "NULL" : "bad") . ":";
+$decoded = json_decode("{\"a\":1,\"b\":[\"x\",false]}", true);
+echo $decoded["a"] . ":" . $decoded["b"][0] . ":" . ($decoded["b"][1] ? "bad" : "F") . ":";
+$call = call_user_func("json_decode", "[3,4]");
+echo $call[1] . ":";
+$named = call_user_func_array("json_decode", ["json" => "{\"k\":\"v\"}", "associative" => true, "depth" => 4, "flags" => 0]);
+echo $named["k"] . ":";
+echo (is_null(json_decode("bad")) ? "BAD" : "wrong") . ":";
+echo function_exists("json_decode");');
+"#,
+    );
+    assert_eq!(out, "hello:42:T:NULL:1:x:F:4:v:BAD:1");
+}
+
 /// Verifies eval `json_last_error()` and `json_last_error_msg()` report no-error status.
 #[test]
 fn test_eval_dispatches_json_last_error_builtin_calls() {
