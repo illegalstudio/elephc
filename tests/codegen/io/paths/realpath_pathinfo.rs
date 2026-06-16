@@ -53,6 +53,22 @@ echo $value === false ? "false" : "string";
     assert_eq!(out, "false");
 }
 
+/// Verifies realpath cache helpers expose elephc's intentionally empty cache state.
+/// Fixture: a resolved file still leaves cache_get empty and cache_size at zero.
+#[test]
+fn test_realpath_cache_helpers_report_empty_cache() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("anchor.txt", "");
+realpath("anchor.txt");
+echo function_exists("REALPATH_CACHE_GET") ? "exists" : "missing";
+echo "|" . count(REALPATH_CACHE_GET());
+echo "|" . RealPath_Cache_Size();
+"#,
+    );
+    assert_eq!(out, "exists|0|0");
+}
+
 /// Verifies the success path of `realpath()` can be echoed directly without crashing.
 /// Regression: codegen previously assumed union-typed `Str|Bool` results were unboxed scalars,
 /// causing a crash when directly echoing the resolved path.

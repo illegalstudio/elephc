@@ -218,7 +218,7 @@ pub fn emit_load_temporary_stack_slot(emitter: &mut Emitter, reg: &str, offset: 
 ///
 /// - `reg`: Source register to store (e.g., `"x0"`, `"d0"`, `"rdi"`).
 /// - `offset`: Byte offset of the destination slot in the outgoing stack area.
-pub(super) fn emit_store_to_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
+pub fn emit_store_to_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
             if offset == 0 {

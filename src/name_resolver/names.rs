@@ -59,6 +59,12 @@ pub(super) fn resolve_type_expr(
                 .map(|member| resolve_type_expr(member, current_namespace, imports, symbols))
                 .collect(),
         ),
+        TypeExpr::Intersection(members) => TypeExpr::Intersection(
+            members
+                .iter()
+                .map(|member| resolve_type_expr(member, current_namespace, imports, symbols))
+                .collect(),
+        ),
         TypeExpr::Ptr(None) => TypeExpr::Ptr(None),
         TypeExpr::Ptr(Some(name)) => {
             let raw = name.as_str();

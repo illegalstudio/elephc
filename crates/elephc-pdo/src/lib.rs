@@ -13,9 +13,11 @@
 //!
 //! Key details:
 //! - Two global handle tables index live connections / statements by `i64` IDs,
-//!   each wrapped in a driver-tagged enum (`Conn`, `Stmt`). The C ABI never
-//!   exposes raw pointers. elephc programs are effectively single-threaded, so
-//!   the table mutexes are simplicity, not contention management.
+//!   each wrapped in a driver-tagged enum (`Conn`, `Stmt`). A small persistent
+//!   DSN pool can keep selected connections open for process-local reuse. The C
+//!   ABI never exposes raw pointers. elephc programs are effectively
+//!   single-threaded, so the table mutexes are simplicity, not contention
+//!   management.
 //! - Fallible entry points collapse failure to a `-1`/`0` sentinel. String
 //!   results return `*const c_char` into a per-result static buffer that elephc
 //!   copies into an owned PHP string immediately on return.
@@ -26,7 +28,7 @@ mod my;
 mod pg;
 mod sqlite;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -56,6 +58,20 @@ fn conns() -> &'static Mutex<HashMap<i64, Conn>> {
 fn stmts() -> &'static Mutex<HashMap<i64, Stmt>> {
     static STMTS: OnceLock<Mutex<HashMap<i64, Stmt>>> = OnceLock::new();
     STMTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Process-local persistent connection pool, keyed by the fully materialized
+/// DSN passed into the bridge after constructor credentials have been folded in.
+fn persistent_conns() -> &'static Mutex<HashMap<String, i64>> {
+    static PERSISTENT_CONNS: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+    PERSISTENT_CONNS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Set of connection handles owned by the persistent pool. `elephc_pdo_close`
+/// leaves these handles open so later persistent opens can reuse them.
+fn persistent_ids() -> &'static Mutex<HashSet<i64>> {
+    static PERSISTENT_IDS: OnceLock<Mutex<HashSet<i64>>> = OnceLock::new();
+    PERSISTENT_IDS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 /// Returns a fresh, never-reused handle ID. IDs start at 1 so `0` and `-1`
@@ -89,6 +105,12 @@ fn coltext_cell() -> &'static Mutex<CString> {
     C.get_or_init(|| Mutex::new(CString::default()))
 }
 
+/// Static byte buffer for the most recent `elephc_pdo_column_data_ptr` result.
+fn coldata_cell() -> &'static Mutex<Vec<u8>> {
+    static C: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 /// Static buffer for the most recent `elephc_pdo_driver_name` result.
 fn drivername_cell() -> &'static Mutex<CString> {
     static C: OnceLock<Mutex<CString>> = OnceLock::new();
@@ -106,6 +128,19 @@ fn store_cstr(cell: &'static Mutex<CString>, s: &str) -> *const c_char {
     guard.as_ptr()
 }
 
+/// Stores raw bytes into the per-result static data buffer and returns a pointer
+/// to the first byte, or null for an empty buffer. Valid until the next column
+/// data pointer call; elephc copies it immediately through `ptr_read_string`.
+fn store_bytes(bytes: Vec<u8>) -> *const c_char {
+    let mut guard = coldata_cell().lock().unwrap();
+    *guard = bytes;
+    if guard.is_empty() {
+        std::ptr::null()
+    } else {
+        guard.as_ptr() as *const c_char
+    }
+}
+
 /// Reads a null-terminated C string argument as a `&str` (the shape elephc's
 /// `extern …` string parameters marshal to). Returns `None` for a null pointer
 /// or invalid UTF-8.
@@ -119,10 +154,69 @@ unsafe fn cstr_arg<'a>(p: *const c_char) -> Option<&'a str> {
     CStr::from_ptr(p).to_str().ok()
 }
 
+/// Opens the driver connection for a validated DSN string.
+fn open_conn_for_dsn(dsn: &str) -> Result<Conn, String> {
+    if let Some(path) = dsn.strip_prefix("sqlite:") {
+        sqlite::SqliteConn::open(path).map(Conn::Sqlite)
+    } else if dsn.starts_with("pgsql:") {
+        pg::PgConn::open(dsn).map(Conn::Postgres)
+    } else if dsn.starts_with("mysql:") {
+        my::MyConn::open(dsn).map(Conn::Mysql)
+    } else {
+        Err(
+            "could not find driver (only sqlite:, pgsql:, and mysql: DSNs are supported)"
+                .to_string(),
+        )
+    }
+}
+
+/// Registers a newly opened connection and returns the public handle ID.
+fn register_conn(conn: Conn) -> i64 {
+    let id = next_id();
+    conns().lock().unwrap().insert(id, conn);
+    id
+}
+
+/// Opens a non-persistent connection and stores any failure message for the PDO
+/// constructor's `elephc_pdo_last_open_error()` call.
+fn open_nonpersistent_dsn(dsn: &str) -> i64 {
+    match open_conn_for_dsn(dsn) {
+        Ok(conn) => register_conn(conn),
+        Err(msg) => {
+            store_cstr(open_error_cell(), &msg);
+            -1
+        }
+    }
+}
+
+/// Opens or reuses a process-local persistent connection for the full DSN.
+fn open_persistent_dsn(dsn: &str) -> i64 {
+    if let Some(id) = persistent_conns().lock().unwrap().get(dsn).copied() {
+        if conns().lock().unwrap().contains_key(&id) {
+            return id;
+        }
+    }
+    match open_conn_for_dsn(dsn) {
+        Ok(conn) => {
+            let id = register_conn(conn);
+            persistent_conns()
+                .lock()
+                .unwrap()
+                .insert(dsn.to_string(), id);
+            persistent_ids().lock().unwrap().insert(id);
+            id
+        }
+        Err(msg) => {
+            store_cstr(open_error_cell(), &msg);
+            -1
+        }
+    }
+}
+
 /// Returns the bridge ABI version. Bumped when the C ABI shape changes.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_version() -> i32 {
-    3
+    6
 }
 
 /// Returns a pointer to the lowercase PDO driver name for a connection
@@ -140,10 +234,9 @@ pub extern "C" fn elephc_pdo_driver_name(conn_id: i64) -> *const c_char {
     store_cstr(drivername_cell(), name)
 }
 
-/// Opens a database for a PDO DSN, dispatching on the driver prefix: `sqlite:`
-/// (file / `:memory:` / private temp DB) or `pgsql:` (host=…;dbname=…;…). Returns
-/// an `i64` connection handle, or `-1` on failure with the message stashed for
-/// `elephc_pdo_last_open_error`.
+/// Opens a non-persistent database for a PDO DSN, dispatching on the driver
+/// prefix. Returns an `i64` connection handle, or `-1` on failure with the
+/// message stashed for `elephc_pdo_last_open_error`.
 ///
 /// # Safety
 /// `dsn` must point to a NUL-terminated string valid for the duration of the call.
@@ -153,28 +246,28 @@ pub unsafe extern "C" fn elephc_pdo_open(dsn: *const c_char) -> i64 {
         store_cstr(open_error_cell(), "invalid DSN");
         return -1;
     };
-    let opened = if let Some(path) = dsn.strip_prefix("sqlite:") {
-        sqlite::SqliteConn::open(path).map(Conn::Sqlite)
-    } else if dsn.starts_with("pgsql:") {
-        pg::PgConn::open(dsn).map(Conn::Postgres)
-    } else if dsn.starts_with("mysql:") {
-        my::MyConn::open(dsn).map(Conn::Mysql)
-    } else {
-        Err(
-            "could not find driver (only sqlite:, pgsql:, and mysql: DSNs are supported)"
-                .to_string(),
-        )
+    open_nonpersistent_dsn(dsn)
+}
+
+/// Opens a database for a PDO DSN, reusing a process-local pooled connection when
+/// `persistent` is non-zero. Persistent handles stay registered until process
+/// exit; `elephc_pdo_close` is a no-op for them.
+///
+/// # Safety
+/// `dsn` must point to a NUL-terminated string valid for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_open_persistent(
+    dsn: *const c_char,
+    persistent: i64,
+) -> i64 {
+    let Some(dsn) = cstr_arg(dsn) else {
+        store_cstr(open_error_cell(), "invalid DSN");
+        return -1;
     };
-    match opened {
-        Ok(conn) => {
-            let id = next_id();
-            conns().lock().unwrap().insert(id, conn);
-            id
-        }
-        Err(msg) => {
-            store_cstr(open_error_cell(), &msg);
-            -1
-        }
+    if persistent == 0 {
+        open_nonpersistent_dsn(dsn)
+    } else {
+        open_persistent_dsn(dsn)
     }
 }
 
@@ -189,6 +282,9 @@ pub extern "C" fn elephc_pdo_last_open_error() -> *const c_char {
 /// it) and removes it from the table. Unknown handles are ignored.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_close(conn_id: i64) {
+    if persistent_ids().lock().unwrap().contains(&conn_id) {
+        return;
+    }
     // The SQLite db pointer of the connection being closed, so only *its*
     // statements are finalized (statements from other open SQLite connections
     // must be left alone). `None` when the connection is PostgreSQL or unknown.
@@ -388,10 +484,7 @@ pub unsafe extern "C" fn elephc_pdo_prepare(conn_id: i64, sql: *const c_char) ->
 /// # Safety
 /// `name` must point to a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
-pub unsafe extern "C" fn elephc_pdo_bind_parameter_index(
-    stmt_id: i64,
-    name: *const c_char,
-) -> i64 {
+pub unsafe extern "C" fn elephc_pdo_bind_parameter_index(stmt_id: i64, name: *const c_char) -> i64 {
     let guard = stmts().lock().unwrap();
     let Some(name) = cstr_arg(name) else {
         return 0;
@@ -547,7 +640,7 @@ pub extern "C" fn elephc_pdo_column_name(stmt_id: i64, i: i64) -> *const c_char 
 }
 
 /// Returns the SQLite-compatible type code for the current row's column `i`
-/// (0-based): 1=int, 2=float, 3=text, 4=blob (SQLite only), 5=null.
+/// (0-based): 1=int, 2=float, 3=text, 4=blob/bytea, 5=null.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_column_type(stmt_id: i64, i: i64) -> i64 {
     let guard = stmts().lock().unwrap();
@@ -598,6 +691,55 @@ pub extern "C" fn elephc_pdo_column_text(stmt_id: i64, i: i64) -> *const c_char 
     store_cstr(coltext_cell(), &text)
 }
 
+/// Returns the byte length of the current row's column `i` rendered as PDO text
+/// or BLOB bytes. Unlike `elephc_pdo_column_text`, this path preserves embedded
+/// NUL bytes when paired with `elephc_pdo_column_data_ptr`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_column_data_len(stmt_id: i64, i: i64) -> i64 {
+    let guard = stmts().lock().unwrap();
+    match guard.get(&stmt_id) {
+        Some(Stmt::Sqlite(s)) => s.column_data(i).len() as i64,
+        Some(Stmt::Postgres(s)) => s.column_data(i).len() as i64,
+        Some(Stmt::Mysql(s)) => s.column_data(i).len() as i64,
+        None => 0,
+    }
+}
+
+/// Returns a pointer to the current row's column `i` rendered as raw bytes.
+/// The pointer remains valid until the next `elephc_pdo_column_data_ptr` call.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_column_data_ptr(stmt_id: i64, i: i64) -> *const c_char {
+    let bytes = {
+        let guard = stmts().lock().unwrap();
+        match guard.get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.column_data(i),
+            Some(Stmt::Postgres(s)) => s.column_data(i),
+            Some(Stmt::Mysql(s)) => s.column_data(i),
+            None => Vec::new(),
+        }
+    };
+    store_bytes(bytes)
+}
+
+/// Returns one byte from the current row's column `i` rendered as raw data.
+/// Out-of-range handles, columns, and offsets return `0`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_column_data_byte(stmt_id: i64, i: i64, offset: i64) -> i64 {
+    let Ok(offset) = usize::try_from(offset) else {
+        return 0;
+    };
+    let bytes = {
+        let guard = stmts().lock().unwrap();
+        match guard.get(&stmt_id) {
+            Some(Stmt::Sqlite(s)) => s.column_data(i),
+            Some(Stmt::Postgres(s)) => s.column_data(i),
+            Some(Stmt::Mysql(s)) => s.column_data(i),
+            None => Vec::new(),
+        }
+    };
+    bytes.get(offset).copied().unwrap_or(0) as i64
+}
+
 /// Finalizes a statement and removes it from the table. Unknown handles return
 /// `0`; success returns `1`.
 #[no_mangle]
@@ -630,10 +772,19 @@ mod tests {
         CString::new(s).unwrap()
     }
 
-    /// The ABI version constant is the v3 (sqlite + pgsql + mysql) surface.
+    /// Reads a bridge raw-data pointer and length into owned bytes.
+    unsafe fn read_bytes(p: *const c_char, len: i64) -> Vec<u8> {
+        if p.is_null() || len <= 0 {
+            return Vec::new();
+        }
+        std::slice::from_raw_parts(p as *const u8, len as usize).to_vec()
+    }
+
+    /// The ABI version constant is the v6 (sqlite + pgsql + mysql + raw data +
+    /// persistent open) surface.
     #[test]
-    fn version_is_v3() {
-        assert_eq!(elephc_pdo_version(), 3);
+    fn version_is_v6() {
+        assert_eq!(elephc_pdo_version(), 6);
     }
 
     /// A DSN for an unsupported driver is rejected with a driver error.
@@ -667,7 +818,10 @@ mod tests {
 
         let ins = cs("INSERT INTO users (name, score) VALUES ('Alice', 9.5)");
         assert_eq!(unsafe { elephc_pdo_exec(conn, ins.as_ptr()) }, 1);
-        assert_eq!(unsafe { elephc_pdo_last_insert_id(conn, std::ptr::null()) }, 1);
+        assert_eq!(
+            unsafe { elephc_pdo_last_insert_id(conn, std::ptr::null()) },
+            1
+        );
 
         let sql = cs("SELECT id, name, score FROM users WHERE id = ?");
         let stmt = unsafe { elephc_pdo_prepare(conn, sql.as_ptr()) };
@@ -684,6 +838,61 @@ mod tests {
 
         assert_eq!(elephc_pdo_finalize(stmt), 1);
         elephc_pdo_close(conn);
+    }
+
+    /// SQLite BLOB data returned through the raw data API preserves embedded NUL
+    /// bytes instead of truncating through the legacy C-string bridge.
+    #[test]
+    fn sqlite_blob_round_trip_preserves_embedded_nul() {
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+        assert!(conn > 0, "open failed");
+
+        let ddl = cs("CREATE TABLE blobs (data BLOB)");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) }, 0);
+
+        let ins = cs("INSERT INTO blobs (data) VALUES (x'410042')");
+        assert_eq!(unsafe { elephc_pdo_exec(conn, ins.as_ptr()) }, 1);
+
+        let sql = cs("SELECT data FROM blobs");
+        let stmt = unsafe { elephc_pdo_prepare(conn, sql.as_ptr()) };
+        assert!(stmt > 0, "prepare failed");
+        assert_eq!(elephc_pdo_step(stmt), 1);
+        assert_eq!(elephc_pdo_column_type(stmt, 0), 4);
+        assert_eq!(elephc_pdo_column_data_len(stmt, 0), 3);
+        let ptr = elephc_pdo_column_data_ptr(stmt, 0);
+        assert_eq!(unsafe { read_bytes(ptr, 3) }, b"A\0B");
+        assert_eq!(elephc_pdo_column_data_byte(stmt, 0, 0), 65);
+        assert_eq!(elephc_pdo_column_data_byte(stmt, 0, 1), 0);
+        assert_eq!(elephc_pdo_column_data_byte(stmt, 0, 2), 66);
+        assert_eq!(elephc_pdo_column_data_byte(stmt, 0, 3), 0);
+
+        assert_eq!(elephc_pdo_finalize(stmt), 1);
+        elephc_pdo_close(conn);
+    }
+
+    /// SQLite persistent opens reuse a process-local connection by DSN and a
+    /// close call leaves that pooled connection available to the next open.
+    #[test]
+    fn sqlite_persistent_pool_reuses_connection_after_close() {
+        let dsn = cs("sqlite::memory:");
+        let first = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1) };
+        assert!(first > 0, "open failed");
+
+        let ddl = cs("CREATE TABLE persistent_pool (n INTEGER)");
+        assert_eq!(unsafe { elephc_pdo_exec(first, ddl.as_ptr()) }, 0);
+        let ins = cs("INSERT INTO persistent_pool VALUES (77)");
+        assert_eq!(unsafe { elephc_pdo_exec(first, ins.as_ptr()) }, 1);
+        elephc_pdo_close(first);
+
+        let second = unsafe { elephc_pdo_open_persistent(dsn.as_ptr(), 1) };
+        assert_eq!(second, first);
+        let sql = cs("SELECT n FROM persistent_pool");
+        let stmt = unsafe { elephc_pdo_prepare(second, sql.as_ptr()) };
+        assert!(stmt > 0, "prepare failed");
+        assert_eq!(elephc_pdo_step(stmt), 1);
+        assert_eq!(elephc_pdo_column_int(stmt, 0), 77);
+        assert_eq!(elephc_pdo_finalize(stmt), 1);
     }
 
     /// Placeholder translation: `?` → `$1`, `:name` → `$N` (deduped), with

@@ -88,6 +88,12 @@ pub fn emit_fread(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: negative read result means failure
     }
     emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fread_read_ok")); // continue only when the read syscall succeeded
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction(&format!("cmn x0, #{}", emitter.platform.would_block_errno())); // Linux: is this -EAGAIN/-EWOULDBLOCK from a nonblocking fd?
+    } else {
+        emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); // macOS: is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
+    }
+    emitter.instruction("b.eq __rt_fread_would_block");                         // a transient nonblocking miss is not EOF
     emitter.instruction("str xzr, [sp, #24]");                                  // failed reads return an empty result
     emitter.instruction("b __rt_fread_mark_eof");                               // mark the stream as exhausted after a read failure
     emitter.label("__rt_fread_read_ok");
@@ -107,6 +113,9 @@ pub fn emit_fread(emitter: &mut Emitter) {
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // eof marker value
     emitter.instruction("strb w10, [x9, x0]");                                  // set _eof_flags[fd] = 1
+
+    emitter.label("__rt_fread_would_block");
+    emitter.instruction("str xzr, [sp, #24]");                                  // return an empty read without setting EOF for EAGAIN/EWOULDBLOCK
 
     // -- return pointer and length --
     emitter.label("__rt_fread_done");
@@ -174,16 +183,20 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // len
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_read_fn", 0);      // prepare SysV call argument
     emitter.instruction("call r9");                                             // rax = bytes read (>=0) or -1
-    emitter.instruction("jmp __rt_fread_after_io_x86");                         // continue at target label
+    emitter.instruction("cmp rax, 0");                                          // did the TLS bridge return bytes?
+    emitter.instruction("jle __rt_fread_eof_x86");                              // TLS errors and EOF still mark the stream as exhausted
+    emitter.instruction("jmp __rt_fread_read_ok_x86");                          // publish the successful TLS read
     emitter.label("__rt_fread_do_syscall_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the file descriptor as the first libc read() argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the concat-buffer write pointer as the second libc read() argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // pass the requested byte count as the third libc read() argument
     emitter.instruction("call read");                                           // read the requested bytes into the concat-buffer append window through libc read()
-    emitter.label("__rt_fread_after_io_x86");
-    emitter.instruction("cmp rax, 0");                                          // unified non-negative check (covers both libc read and elephc_tls_read)
-    emitter.instruction("jle __rt_fread_eof_x86");                              // treat EOF or read failure as an empty result and mark the stream as exhausted
+    emitter.instruction("cmp rax, 0");                                          // classify libc read() as bytes, EOF, or failure
+    emitter.instruction("jg __rt_fread_read_ok_x86");                           // positive byte count: publish the successful read
+    emitter.instruction("jl __rt_fread_read_failed_x86");                       // negative result: inspect errno before treating it as EOF
+    emitter.instruction("jmp __rt_fread_eof_x86");                              // zero-byte read means real EOF
 
+    emitter.label("__rt_fread_read_ok_x86");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the previous concat-buffer absolute offset before publishing the fread() append
     emitter.instruction("add r10, rax");                                        // advance the concat-buffer offset by the number of bytes libc read() returned
     abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat-buffer offset for later string appenders
@@ -208,6 +221,20 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the successful string slice
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the successful fread() path
     emitter.instruction("ret");                                                 // return the borrowed concat-buffer string slice to the caller
+
+    emitter.label("__rt_fread_read_failed_x86");
+    emitter.instruction("call __errno_location");                               // fetch errno after libc read() failed
+    emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the thread-local errno value
+    emitter.instruction("cmp r10d, 11");                                        // is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
+    emitter.instruction("je __rt_fread_would_block_x86");                       // transient nonblocking miss returns empty without EOF
+    emitter.instruction("jmp __rt_fread_eof_x86");                              // other read failures behave like an exhausted stream
+
+    emitter.label("__rt_fread_would_block_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer for an empty transient read
+    emitter.instruction("xor edx, edx");                                        // return a zero-length read result without setting EOF
+    emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the empty string
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the would-block fread() path
+    emitter.instruction("ret");                                                 // return the empty non-EOF read result
 
     emitter.label("__rt_fread_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted

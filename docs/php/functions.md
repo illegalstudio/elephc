@@ -34,7 +34,7 @@ function repeat(string $label, int $count): string {
 - Typed parameters can use default values
 - Function, method, constructor, closure, and arrow-function parameter hints are checked
 - Function, method, closure, and arrow-function return type hints are checked
-- Variadic parameters are supported only without a parameter type hint for now; `function f(int ...$xs)`, typed variadic methods, typed variadic closures, and typed variadic arrow functions are rejected.
+- Variadic parameters may carry a type hint (`function f(int ...$xs)`), including on methods, closures, and arrow functions; every argument collected into the variadic is checked against the declared element type, just like a regular typed parameter. An untyped variadic accepts heterogeneous arguments.
 - Non-`void` declared return types must return a value on every reachable path; `throw`, `exit()`/`die()`, and infinite loops count as non-returning paths
 - Bare `return;` is valid only for `void` returns; use `return null;` for nullable return types
 - Named arguments are supported for known-signature calls: user-defined functions, methods, closures, built-ins, and extern functions
@@ -244,8 +244,20 @@ echo sum(1, 2, 3); // 6
 ```
 
 Variadic parameters can appear on functions, methods, closures, and arrow
-functions, but the variadic parameter itself cannot carry a type hint yet. Use
-`function sum(...$nums)` instead of `function sum(int ...$nums)`.
+functions, and may carry a type hint:
+
+```php
+<?php
+function join_with(string $sep, string ...$parts): string {
+    return implode($sep, $parts);
+}
+echo join_with("-", "a", "b", "c"); // a-b-c
+```
+
+A type hint on the variadic constrains its elements: `function sum(int ...$nums)`
+collects integers into `$nums`, and every argument passed to the variadic is checked
+against the declared element type, so passing an argument of the wrong type is
+rejected. An untyped variadic (`...$nums`) accepts heterogeneous arguments.
 
 ## Spread operator
 

@@ -9,6 +9,7 @@
 //! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
 
 use crate::errors::CompileError;
+use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::Expr;
 use crate::span::Span;
 use crate::types::{
@@ -224,7 +225,7 @@ fn check_object_property_write(
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
-        validate_object_property_access(checker, class_name, property, span)?;
+        validate_object_property_access(checker, class_name, property, true, span)?;
         let expected_ty = class_info
             .properties
             .iter()
@@ -250,6 +251,32 @@ fn check_object_property_write(
                 ),
             ));
         }
+        // A property with a `get` hook but no `set` hook is read-only: external writes are an error
+        // (PHP rejects writing a virtual/get-only hooked property). Writes from inside the property's
+        // own accessor target the raw backing slot and are allowed.
+        let has_get_hook = class_info
+            .methods
+            .contains_key(&php_symbol_key(&property_hook_get_method(property)));
+        let has_set_hook = class_info
+            .methods
+            .contains_key(&php_symbol_key(&property_hook_set_method(property)));
+        // `current_method` is stored as a lowercased symbol key, so compare against the lowercased
+        // accessor names too — otherwise a mixed-case property (e.g. `$Total`) spuriously trips
+        // the read-only check from inside its own accessor.
+        let in_own_accessor = checker.current_class.as_deref() == Some(class_name)
+            && checker.current_method.as_deref().is_some_and(|method| {
+                method == php_symbol_key(&property_hook_get_method(property))
+                    || method == php_symbol_key(&property_hook_set_method(property))
+            });
+        if has_get_hook && !has_set_hook && !in_own_accessor {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Cannot write to read-only hooked property {}::{} (it declares a get hook but no set hook)",
+                    class_name, property
+                ),
+            ));
+        }
         if class_info.declared_properties.contains(property) {
             checker.require_compatible_arg_type(
                 &expected_ty,
@@ -270,12 +297,22 @@ fn validate_object_property_access(
     checker: &Checker,
     class_name: &str,
     property: &str,
+    is_write: bool,
     span: Span,
 ) -> Result<(), CompileError> {
     let class_info = checker.classes.get(class_name).ok_or_else(|| {
         CompileError::new(span, &format!("Undefined class: {}", class_name))
     })?;
-    if let Some(visibility) = class_info.property_visibilities.get(property) {
+    // A write to a property with PHP 8.4 asymmetric visibility uses its `set` visibility; reads
+    // and ordinary properties fall back to the regular (read) visibility.
+    let asymmetric_write = if is_write {
+        class_info.property_set_visibilities.get(property)
+    } else {
+        None
+    };
+    if let Some(visibility) =
+        asymmetric_write.or_else(|| class_info.property_visibilities.get(property))
+    {
         let declaring_class = class_info
             .property_declaring_classes
             .get(property)
@@ -411,7 +448,9 @@ fn resolve_object_array_property(
             &format!("Undefined property: {}::{}", class_name, property),
         ));
     }
-    validate_object_property_access(checker, class_name, property, span)?;
+    // Indirect array modification (`$obj->prop[] = x` / `$obj->prop[$k] = x`) is a write, so it
+    // must honor PHP 8.4 asymmetric `set` visibility — not the read visibility.
+    validate_object_property_access(checker, class_name, property, true, span)?;
     let property_has_declared_type = class_info.declared_properties.contains(property);
     let prop_ty = class_info
         .properties

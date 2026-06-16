@@ -66,6 +66,28 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return predicate
 
     // ================================================================
+    // __rt_lchown: lchown(path, uid, gid=-1)  (lchgrp uses -1 for uid)
+    // Input:  x1/x2 = path, x3 = uid, x4 = gid (use -1 for "leave alone")
+    // Output: x0 = 1 on success, 0 on failure
+    // ================================================================
+    emitter.blank();
+    emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for the next runtime helper
+    emitter.comment("--- runtime: lchown ---");
+    emitter.label_global("__rt_lchown");
+    emitter.instruction("sub sp, sp, #32");                                     // allocate frame + spill slots for uid/gid
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish new frame pointer
+    emitter.instruction("stp x3, x4, [sp, #0]");                                // preserve uid/gid across the cstr call
+    emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore uid/gid into the libc argument registers
+    emitter.bl_c("lchown");                                                     // libc lchown(path, uid, gid) without following symlinks
+    emitter.instruction("cmp x0, #0");                                          // success?
+    emitter.instruction("cset x0, eq");                                         // x0 = 1 if lchown succeeded
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // deallocate frame
+    emitter.instruction("ret");                                                 // return predicate
+
+    // ================================================================
     // __rt_chown_user: resolve a user name via getpwnam(), then chown(path, uid, -1)
     // Input:  x1/x2 = path, x3/x4 = user name
     // Output: x0 = 1 on success, 0 on failure
@@ -99,6 +121,39 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return predicate
 
     // ================================================================
+    // __rt_lchown_user: resolve a user name via getpwnam(), then lchown(path, uid, -1)
+    // Input:  x1/x2 = path, x3/x4 = user name
+    // Output: x0 = 1 on success, 0 on failure
+    // ================================================================
+    emitter.blank();
+    emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for the next runtime helper
+    emitter.comment("--- runtime: lchown user name ---");
+    emitter.label_global("__rt_lchown_user");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate frame + spill slots for path and user strings
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
+    emitter.instruction("stp x3, x4, [sp, #16]");                               // preserve user-name ptr/len across path conversion
+    emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
+    emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
+    emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload user-name ptr/len
+    emitter.instruction("bl __rt_cstr2");                                       // user name → secondary C string in x0
+    emitter.bl_c("getpwnam");                                                   // libc getpwnam(name)
+    emitter.instruction("cbz x0, __rt_lchown_user_fail");                       // unknown user name → false
+    emitter.instruction("ldr w1, [x0, #16]");                                   // load passwd.pw_uid
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer
+    emitter.instruction("mov x2, #-1");                                         // gid = -1 (leave group unchanged)
+    emitter.bl_c("lchown");                                                     // libc lchown(path, uid, -1) without following symlinks
+    emitter.instruction("cmp x0, #0");                                          // success?
+    emitter.instruction("cset x0, eq");                                         // x0 = 1 if lchown succeeded
+    emitter.instruction("b __rt_lchown_user_done");                             // skip failure return
+    emitter.label("__rt_lchown_user_fail");
+    emitter.instruction("mov x0, #0");                                          // unknown name returns false
+    emitter.label("__rt_lchown_user_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // deallocate frame
+    emitter.instruction("ret");                                                 // return predicate
+
+    // ================================================================
     // __rt_chgrp_group: resolve a group name via getgrnam(), then chown(path, -1, gid)
     // Input:  x1/x2 = path, x3/x4 = group name
     // Output: x0 = 1 on success, 0 on failure
@@ -127,6 +182,39 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.label("__rt_chgrp_group_fail");
     emitter.instruction("mov x0, #0");                                          // unknown name returns false
     emitter.label("__rt_chgrp_group_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // deallocate frame
+    emitter.instruction("ret");                                                 // return predicate
+
+    // ================================================================
+    // __rt_lchgrp_group: resolve a group name via getgrnam(), then lchown(path, -1, gid)
+    // Input:  x1/x2 = path, x3/x4 = group name
+    // Output: x0 = 1 on success, 0 on failure
+    // ================================================================
+    emitter.blank();
+    emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for the next runtime helper
+    emitter.comment("--- runtime: lchgrp group name ---");
+    emitter.label_global("__rt_lchgrp_group");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate frame + spill slots for path and group strings
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
+    emitter.instruction("stp x3, x4, [sp, #16]");                               // preserve group-name ptr/len across path conversion
+    emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
+    emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
+    emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload group-name ptr/len
+    emitter.instruction("bl __rt_cstr2");                                       // group name → secondary C string in x0
+    emitter.bl_c("getgrnam");                                                   // libc getgrnam(name)
+    emitter.instruction("cbz x0, __rt_lchgrp_group_fail");                      // unknown group name → false
+    emitter.instruction("ldr w2, [x0, #16]");                                   // load group.gr_gid
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer
+    emitter.instruction("mov x1, #-1");                                         // uid = -1 (leave owner unchanged)
+    emitter.bl_c("lchown");                                                     // libc lchown(path, -1, gid) without following symlinks
+    emitter.instruction("cmp x0, #0");                                          // success?
+    emitter.instruction("cset x0, eq");                                         // x0 = 1 if lchown succeeded
+    emitter.instruction("b __rt_lchgrp_group_done");                            // skip failure return
+    emitter.label("__rt_lchgrp_group_fail");
+    emitter.instruction("mov x0, #0");                                          // unknown name returns false
+    emitter.label("__rt_lchgrp_group_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate frame
     emitter.instruction("ret");                                                 // return predicate

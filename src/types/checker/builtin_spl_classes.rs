@@ -1,12 +1,12 @@
 //! Purpose:
-//! Orchestrates injection of SPL container and iterator class metadata into the checker.
-//! Delegates each SPL family to focused submodules to keep declarations small and cohesive.
+//! Orchestrates injection of SPL-style builtin class metadata into the checker.
+//! Delegates each builtin family to focused submodules to keep declarations small and cohesive.
 //!
 //! Called from:
 //! - `crate::types::checker::driver`
 //!
 //! Key details:
-//! - Public SPL names are checked for redeclaration before synthetic classes are inserted.
+//! - Public builtin names are checked for redeclaration before synthetic classes are inserted.
 //! - Signature/storage refinements run after class flattening through `patch_builtin_spl_storage_signatures`.
 
 use std::collections::HashMap;
@@ -29,6 +29,7 @@ mod heaps;
 mod multiple;
 mod object_storage;
 mod patch;
+mod phar;
 mod recursive;
 mod recursive_array;
 mod recursive_iterator_iterator;
@@ -58,6 +59,7 @@ pub(crate) fn inject_builtin_spl_classes(
     multiple::insert_class(class_map);
     heaps::insert_classes(class_map);
     object_storage::insert_class(class_map);
+    phar::insert_classes(class_map);
 
     Ok(())
 }

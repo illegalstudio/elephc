@@ -13,8 +13,11 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Program, StmtKind};
-use crate::types::{traits::flatten_classes, TypeEnv};
+use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind};
+use crate::types::{
+    traits::{flatten_classes, FlattenedClass},
+    TypeEnv,
+};
 
 use super::builtin_types::{
     inject_builtin_reflection, inject_builtin_throwables, patch_builtin_exception_signatures,
@@ -32,6 +35,7 @@ use super::builtin_spl_classes::{
 };
 use super::builtin_spl_exceptions::inject_builtin_spl_exceptions;
 use super::builtin_stdclass::inject_builtin_stdclass;
+use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
 };
@@ -70,8 +74,13 @@ pub(super) fn check_types_impl(
 
     checker.collect_function_decls(program, &mut errors);
 
-    let (flattened_classes, flatten_errors) = flatten_classes(program);
+    let (mut flattened_classes, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
+    // Resolve the relative class types `self`/`static`/`parent` in every member type annotation
+    // now that inheritance and trait flattening have settled the concrete enclosing class. This
+    // single pass feeds the schema signatures, the body-check pass, and codegen (which all read
+    // the flattened method/property declarations), so no later stage sees a symbolic `self`.
+    substitute_relative_class_types_in_flattened(&mut flattened_classes);
     let declared_traits: HashSet<String> = program
         .iter()
         .filter_map(|stmt| match &stmt.kind {
@@ -117,6 +126,10 @@ pub(super) fn check_types_impl(
                 ));
                 continue;
             }
+            // An interface has no single parent class, so `self`/`static` resolve to the interface
+            // itself; `parent` is left untouched (it is meaningless in an interface contract).
+            let mut interface_methods = methods.clone();
+            substitute_relative_class_types_in_methods(&mut interface_methods, name, None);
             interface_map.insert(
                 name.clone(),
                 InterfaceDeclInfo {
@@ -126,7 +139,7 @@ pub(super) fn check_types_impl(
                         .map(|name| name.as_str().to_string())
                         .collect(),
                     properties: properties.clone(),
-                    methods: methods.clone(),
+                    methods: interface_methods,
                     span: stmt.span,
                     constants: constants.clone(),
                 },
@@ -152,6 +165,9 @@ pub(super) fn check_types_impl(
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_stdclass(&mut class_map) {
+        errors.extend(error.flatten());
+    }
+    if let Err(error) = inject_builtin_user_filter(&mut class_map) {
         errors.extend(error.flatten());
     }
     if let Err(error) =
@@ -200,12 +216,18 @@ pub(super) fn check_types_impl(
             name,
             backing_type,
             cases,
+            implements,
+            methods,
+            constants,
         } = &stmt.kind
         {
             if let Err(error) = build_enum_info(
                 name,
                 backing_type.as_ref(),
                 cases,
+                implements,
+                methods,
+                constants,
                 stmt.span,
                 &mut checker,
                 &mut next_class_id,
@@ -227,7 +249,12 @@ pub(super) fn check_types_impl(
     let (global_env, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
-    checker.type_check_methods_until_stable(&flattened_classes, &global_env, &mut errors)?;
+    // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
+    // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
+    // into method-checkable units here — their signatures already live in `checker.classes`.
+    let mut methods_to_check = flattened_classes.clone();
+    methods_to_check.extend(flatten_enum_methods(program));
+    checker.type_check_methods_until_stable(&methods_to_check, &global_env, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
 
@@ -250,4 +277,80 @@ pub(super) fn check_types_impl(
     }
 
     Ok((checker, final_global_env))
+}
+
+/// Resolves the relative class types `self`/`static`/`parent` to concrete class names across
+/// every flattened class's method parameter, method return, and property type annotations.
+///
+/// `self`/`static` resolve to the flattened class itself and `parent` to its `extends` target.
+/// Because trait methods are already merged into the using class at this point, a trait method's
+/// `self` correctly resolves to the using class rather than the trait. Annotations with no
+/// relative type are left untouched.
+/// Builds method-checkable `FlattenedClass` units for every `enum` in the program so their method
+/// bodies go through the same validation as class methods. Enum signatures are already registered
+/// in `checker.classes` by the enum schema pass; these units only carry the names and method
+/// bodies the method-check pass needs. The relative types `self`/`static` resolve to the enum
+/// itself (enums have no parent).
+fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
+    let mut units = Vec::new();
+    for stmt in program {
+        if let StmtKind::EnumDecl {
+            name,
+            implements,
+            methods,
+            constants,
+            ..
+        } = &stmt.kind
+        {
+            let mut flattened = FlattenedClass {
+                name: name.clone(),
+                extends: None,
+                implements: implements.iter().map(|name| name.as_str().to_string()).collect(),
+                is_abstract: false,
+                is_final: true,
+                is_readonly_class: false,
+                properties: Vec::new(),
+                methods: methods.clone(),
+                attributes: stmt.attributes.clone(),
+                constants: constants.clone(),
+                used_traits: Vec::new(),
+            };
+            substitute_relative_class_types_in_methods(&mut flattened.methods, name, None);
+            units.push(flattened);
+        }
+    }
+    units
+}
+
+fn substitute_relative_class_types_in_flattened(classes: &mut [FlattenedClass]) {
+    for class in classes.iter_mut() {
+        let self_class = class.name.clone();
+        let parent = class.extends.clone();
+        let parent_ref = parent.as_deref();
+        substitute_relative_class_types_in_methods(&mut class.methods, &self_class, parent_ref);
+        for property in class.properties.iter_mut() {
+            if let Some(ty) = property.type_expr.as_mut() {
+                *ty = ty.substitute_relative_class_types(&self_class, parent_ref);
+            }
+        }
+    }
+}
+
+/// Rewrites the relative class types `self`/`static`/`parent` in each method's parameter and
+/// return type annotations to `self_class`/`parent`. Shared by class and interface processing.
+fn substitute_relative_class_types_in_methods(
+    methods: &mut [ClassMethod],
+    self_class: &str,
+    parent: Option<&str>,
+) {
+    for method in methods.iter_mut() {
+        for (_, type_ann, _, _) in method.params.iter_mut() {
+            if let Some(ty) = type_ann.as_mut() {
+                *ty = ty.substitute_relative_class_types(self_class, parent);
+            }
+        }
+        if let Some(ret) = method.return_type.as_mut() {
+            *ret = ret.substitute_relative_class_types(self_class, parent);
+        }
+    }
 }

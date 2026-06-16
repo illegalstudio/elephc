@@ -58,9 +58,10 @@ pub(super) fn check_builtin(
                     // BZ2_bzBuffToBuffDecompress at fopen time.
                     checker.require_builtin_library("bz2");
                 }
-                // phar:// write mode computes a SHA1 signature in
-                // __rt_phar_write_finalize via the elephc-crypto staticlib.
-                // crc32 is pure asm, so reading phar:// needs no crypto lib.
+                // phar:// write mode uses the elephc-phar read-modify-write
+                // bridge when available and keeps the elephc-crypto SHA1 path
+                // as the assembly fallback. Reads need neither write bridge nor
+                // crypto here.
                 if s.starts_with("phar://") {
                     let write_mode = matches!(
                         args.get(1).map(|a| &a.kind),
@@ -68,9 +69,17 @@ pub(super) fn check_builtin(
                             if matches!(m.as_bytes().first(), Some(b'w') | Some(b'a') | Some(b'c') | Some(b'x'))
                     );
                     if write_mode {
+                        checker.require_builtin_library("elephc_phar");
                         checker.require_builtin_library("elephc_crypto");
                     }
                 }
+            } else {
+                // Non-literal paths can route to a phar:// entry at run time
+                // for reads or write-mode opens. Reads may use tar/zip and
+                // compressed entries through the elephc-phar/zlib/bz2 bridge.
+                checker.require_builtin_library("elephc_phar");
+                checker.require_builtin_library("z");
+                checker.require_builtin_library("bz2");
             }
             for arg in args {
                 checker.infer_type(arg, env)?;

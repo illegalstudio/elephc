@@ -10,7 +10,7 @@
 use super::*;
 
 /// Verifies that function_exists() recognizes all file-modify builtins: touch,
-/// chmod, chown, chgrp, umask, ftruncate, fflush, fsync, and fdatasync.
+/// chmod, chown, chgrp, lchown, lchgrp, umask, ftruncate, fflush, fsync, and fdatasync.
 #[test]
 fn test_function_exists_recognizes_file_modify_builtins() {
     let out = compile_and_run(
@@ -19,6 +19,8 @@ echo (function_exists("touch") ? "1" : "0")
    . (function_exists("ChMoD") ? "1" : "0")
    . (function_exists("chown") ? "1" : "0")
    . (function_exists("chgrp") ? "1" : "0")
+   . (function_exists("LcHoWn") ? "1" : "0")
+   . (function_exists("LcHgRp") ? "1" : "0")
    . (function_exists("umask") ? "1" : "0")
    . (function_exists("ftruncate") ? "1" : "0")
    . (function_exists("fflush") ? "1" : "0")
@@ -26,7 +28,7 @@ echo (function_exists("touch") ? "1" : "0")
    . (function_exists("FdAtAsYnC") ? "1" : "0");
 "#,
     );
-    assert_eq!(out, "111111111");
+    assert_eq!(out, "11111111111");
 }
 
 /// Verifies file-modify builtins are case-insensitive and resolve correctly
@@ -100,6 +102,52 @@ fn test_chgrp_missing_path_returns_false() {
         r#"<?php echo chgrp("/nonexistent/xyz/abc.txt", 1000) ? "y" : "n";"#,
     );
     assert_eq!(out, "n");
+}
+
+/// Verifies lchown()/lchgrp() succeed on an existing symlink when asked to leave ownership unchanged.
+/// The namespaced, mixed-case calls also verify PHP-style builtin fallback and case-insensitive lookup.
+#[test]
+fn test_lchown_lchgrp_symlink_noop_succeeds() {
+    let out = compile_and_run(
+        r#"<?php
+namespace FsModifyLinks;
+file_put_contents("target.txt", "x");
+symlink("target.txt", "link.txt");
+echo LcHoWn("link.txt", -1) ? "o" : "O";
+echo LcHgRp("link.txt", -1) ? "g" : "G";
+unlink("link.txt");
+unlink("target.txt");
+"#,
+    );
+    assert_eq!(out, "og");
+}
+
+/// Verifies lchown()/lchgrp() return false when the path does not exist.
+#[test]
+fn test_lchown_lchgrp_missing_path_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+echo lchown("/nonexistent/xyz/abc-link.txt", 1000) ? "y" : "n";
+echo lchgrp("/nonexistent/xyz/abc-link.txt", 1000) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "nn");
+}
+
+/// Verifies lchown()/lchgrp() return false for unknown user/group names.
+#[test]
+fn test_lchown_lchgrp_unknown_principal_strings_return_false() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("target.txt", "x");
+symlink("target.txt", "link.txt");
+echo lchown("link.txt", "elephc_user_that_should_not_exist") ? "y" : "n";
+echo lchgrp("link.txt", "elephc_group_that_should_not_exist") ? "y" : "n";
+unlink("link.txt");
+unlink("target.txt");
+"#,
+    );
+    assert_eq!(out, "nn");
 }
 
 /// Verifies chown() returns false when the owner string does not correspond to

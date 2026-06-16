@@ -33,6 +33,7 @@ fn test_program_static_method_effects_recognize_pure_static_methods() {
                 has_body: true,
                 params: Vec::new(),
                 variadic: None,
+                variadic_type: None,
                 return_type: None,
                 body: vec![Stmt::new(
                     StmtKind::Return(Some(Expr::new(
@@ -84,6 +85,7 @@ fn test_program_static_method_effects_resolve_self_receiver() {
                     has_body: true,
                     params: Vec::new(),
                     variadic: None,
+                    variadic_type: None,
                     return_type: None,
                     body: vec![Stmt::new(
                         StmtKind::Return(Some(Expr::new(
@@ -107,6 +109,7 @@ fn test_program_static_method_effects_resolve_self_receiver() {
                     has_body: true,
                     params: Vec::new(),
                     variadic: None,
+                    variadic_type: None,
                     return_type: None,
                     body: vec![Stmt::new(
                         StmtKind::Return(Some(Expr::new(
@@ -161,6 +164,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
                     has_body: true,
                     params: Vec::new(),
                     variadic: None,
+                    variadic_type: None,
                     return_type: None,
                     body: vec![Stmt::new(
                         StmtKind::Return(Some(Expr::new(
@@ -198,6 +202,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
                     has_body: true,
                     params: Vec::new(),
                     variadic: None,
+                    variadic_type: None,
                     return_type: None,
                     body: vec![Stmt::new(
                         StmtKind::Return(Some(Expr::new(
@@ -250,6 +255,7 @@ fn test_program_private_instance_method_effects_recognize_private_methods() {
                 has_body: true,
                 params: Vec::new(),
                 variadic: None,
+                variadic_type: None,
                 return_type: None,
                 body: vec![Stmt::new(
                     StmtKind::Return(Some(Expr::new(

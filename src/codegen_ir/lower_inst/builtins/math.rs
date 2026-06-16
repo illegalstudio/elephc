@@ -144,6 +144,10 @@ pub(super) fn lower_is_infinite(
             ctx.emitter.instruction("cset x0, eq");                             // materialize true only when the value is infinite
         }
         Arch::X86_64 => {
+            let not_inf_label = ctx.next_label("is_infinite_false");
+            let done_label = ctx.next_label("is_infinite_done");
+            ctx.emitter.instruction("ucomisd xmm0, xmm0");                      // compare the value against itself so NaN sets the parity flag
+            ctx.emitter.instruction(&format!("jp {}", not_inf_label));          // NaN is unordered against everything, so it is not infinite
             load_float_literal_to_reg(ctx, "xmm1", f64::INFINITY);
             ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the value against positive infinity
             ctx.emitter.instruction("sete al");                                 // remember whether the value equals positive infinity
@@ -152,6 +156,10 @@ pub(super) fn lower_is_infinite(
             ctx.emitter.instruction("sete cl");                                 // remember whether the value equals negative infinity
             ctx.emitter.instruction("or al, cl");                               // combine the positive and negative infinity checks
             ctx.emitter.instruction("movzx rax, al");                           // widen the infinity boolean into the integer result register
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the NaN false path after checking real infinities
+            ctx.emitter.label(&not_inf_label);
+            ctx.emitter.instruction("mov rax, 0");                              // NaN is not infinite
+            ctx.emitter.label(&done_label);
         }
     }
     store_if_result(ctx, inst)

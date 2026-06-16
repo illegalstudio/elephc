@@ -18,6 +18,7 @@ mod builtin_spl_exceptions;
 /// builtin_stdclass
 pub(crate) mod builtin_stdclass;
 mod builtin_types;
+mod builtin_user_filter;
 mod callables;
 /// yield_validation
 pub(crate) mod yield_validation;
@@ -147,6 +148,8 @@ pub(crate) struct FnDecl {
     pub defaults: Vec<Option<Expr>>,
     pub ref_params: Vec<bool>,
     pub variadic: Option<String>,
+    /// Declared element type hint on the variadic parameter (`int ...$xs`), if any.
+    pub variadic_type: Option<TypeExpr>,
     pub return_type: Option<TypeExpr>,
     pub span: crate::span::Span,
     pub body: Vec<crate::parser::ast::Stmt>,

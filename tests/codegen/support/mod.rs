@@ -24,6 +24,7 @@ pub(crate) static SDK_VERSION: OnceLock<String> = OnceLock::new();
 pub(crate) static RUNTIME_OBJ: OnceLock<std::path::PathBuf> = OnceLock::new();
 pub(crate) static RUNTIME_OBJS_BY_ASM: OnceLock<Mutex<HashMap<u64, std::path::PathBuf>>> =
     OnceLock::new();
+pub(crate) static BRIDGE_STATICLIB_BUILD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 pub(crate) static QEMU_SYSROOT: OnceLock<Option<String>> = OnceLock::new();
 pub(crate) static TEST_TARGET: OnceLock<Target> = OnceLock::new();
 

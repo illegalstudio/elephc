@@ -51,8 +51,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Run tests with the project mounted as a volume. Build the bridge staticlib
-# crates first so libelephc_tls.a / libelephc_pdo.a / libelephc_crypto.a exist
-# in the target dir — `cargo test` alone never emits the staticlib crate-type.
+# crates first so libelephc_tls.a / libelephc_pdo.a / libelephc_crypto.a /
+# libelephc_phar.a exist in the target dir — `cargo test` alone never emits the
+# staticlib crate-type.
 # Cached after the first run, so it is a no-op for unrelated test runs.
 if [ ${#TEST_ARGS[@]} -eq 0 ]; then
     echo "Running all tests on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS..."
@@ -67,7 +68,7 @@ if [ ${#TEST_ARGS[@]} -eq 0 ]; then
         -v "$TARGET_VOLUME:/cargo-target" \
         -w /app \
         "$IMAGE" \
-        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto && cargo test'
+        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar && cargo test'
 else
     echo "Running tests matching '${TEST_ARGS[*]}' on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS..."
     docker run \
@@ -81,5 +82,5 @@ else
         -v "$TARGET_VOLUME:/cargo-target" \
         -w /app \
         "$IMAGE" \
-        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto && cargo test "$@"' sh "${TEST_ARGS[@]}"
+        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar && cargo test "$@"' sh "${TEST_ARGS[@]}"
 fi

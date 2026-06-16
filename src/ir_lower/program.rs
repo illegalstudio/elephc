@@ -18,6 +18,7 @@ use crate::ir::{
     validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType, Module, Op,
 };
 use crate::ir_lower::{function, LoweringError};
+use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, ExprKind, Program, Stmt, StmtKind};
 use crate::types::{CheckResult, ClassInfo, InterfaceInfo, PhpType};
 
@@ -87,6 +88,7 @@ fn populate_metadata(module: &mut Module, program: &Program, check_result: &Chec
 fn include_lowered_runtime_features(module: &mut Module) {
     let features = lowered_runtime_features(module);
     module.required_runtime_features.regex |= features.regex;
+    module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
 }
 
@@ -99,6 +101,9 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 Op::BuiltinCall => {
                     if builtin_call_requires_regex(module, inst) {
                         features.regex = true;
+                    }
+                    if builtin_call_requires_phar_archive(module, function, inst) {
+                        features.phar_archive = true;
                     }
                     if builtin_call_requires_descriptor_invoker(module, function, inst) {
                         features.descriptor_invoker = true;
@@ -136,6 +141,26 @@ fn builtin_call_requires_regex(module: &Module, inst: &crate::ir::Instruction) -
         return false;
     };
     is_regex_builtin_name(name)
+}
+
+/// Returns true when a lowered builtin call emits PHAR bridge pointer publishing.
+fn builtin_call_requires_phar_archive(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    let Some(name) = builtin_call_name(module, inst) else {
+        return false;
+    };
+    is_phar_archive_builtin_name(name) && function_belongs_to_phar_archive_helper_class(function)
+}
+
+/// Returns true when a class method belongs to a stream/archive helper class.
+fn function_belongs_to_phar_archive_helper_class(function: &Function) -> bool {
+    let Some((class_name, _)) = function.name.split_once("::") else {
+        return false;
+    };
+    is_phar_archive_helper_class_name(class_name)
 }
 
 /// Returns true when a lowered builtin call emits runtime string-callable dispatch.
@@ -185,6 +210,22 @@ fn is_regex_builtin_name(name: &str) -> bool {
     matches!(
         crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
         "preg_match" | "preg_match_all" | "preg_replace" | "preg_replace_callback" | "preg_split"
+    )
+}
+
+/// Returns true when an EIR builtin lowerer can publish PHAR bridge symbols.
+fn is_phar_archive_builtin_name(name: &str) -> bool {
+    matches!(
+        crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        "__elephc_phar_list_entries" | "file_get_contents" | "file_put_contents" | "fopen"
+    )
+}
+
+/// Returns true when a class has generated methods that can route paths through PHAR helpers.
+fn is_phar_archive_helper_class_name(name: &str) -> bool {
+    matches!(
+        crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        "phar" | "phardata" | "splfileobject" | "spltempfileobject"
     )
 }
 
@@ -373,6 +414,7 @@ fn lower_function_declarations(
                 name,
                 params,
                 variadic: _,
+                variadic_type: _,
                 return_type,
                 body,
             } => function::lower_user_function(
@@ -466,6 +508,16 @@ fn lower_class_like_methods(
             }
             StmtKind::TraitDecl { .. } => {}
             StmtKind::InterfaceDecl { name, methods, .. } => {
+                lower_methods_for_class_like(name, methods, module, check_result, constants, fiber_return_sigs);
+            }
+            StmtKind::EnumDecl { name, methods, .. } => {
+                // Enum methods are lowered like class methods on the case singleton; prefer the
+                // checker's flattened declarations (with `self` types resolved to the enum).
+                let methods = check_result
+                    .classes
+                    .get(name)
+                    .map(|class_info| class_info.method_decls.as_slice())
+                    .unwrap_or(methods.as_slice());
                 lower_methods_for_class_like(name, methods, module, check_result, constants, fiber_return_sigs);
             }
             StmtKind::NamespaceBlock { body, .. }
@@ -692,6 +744,9 @@ fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
                 Op::DynamicObjectNewMixed => {
                     let construct_key = php_method_key("__construct");
                     for class_name in module.class_infos.keys() {
+                        if !is_dynamic_new_mixed_metadata_candidate(class_name) {
+                            continue;
+                        }
                         push_supported_builtin_spl_method_for_receiver(
                             &mut methods,
                             module,
@@ -731,6 +786,129 @@ fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
         }
     }
     methods
+}
+
+/// Returns true when generic `new $class` can emit static metadata for this class.
+fn is_dynamic_new_mixed_metadata_candidate(class_name: &str) -> bool {
+    if class_name.starts_with("__Elephc") {
+        return false;
+    }
+    if supported_dynamic_new_builtin_class_name(class_name) {
+        return true;
+    }
+    !known_dynamic_new_builtin_class_name(class_name)
+}
+
+/// Returns true for builtin classes with safe static allocation paths in generic dynamic new.
+fn supported_dynamic_new_builtin_class_name(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "arrayiterator"
+            | "arrayobject"
+            | "badfunctioncallexception"
+            | "badmethodcallexception"
+            | "callbackfilteriterator"
+            | "domainexception"
+            | "error"
+            | "exception"
+            | "fiber"
+            | "fibererror"
+            | "invalidargumentexception"
+            | "iteratoriterator"
+            | "jsonexception"
+            | "lengthexception"
+            | "logicexception"
+            | "outofboundsexception"
+            | "outofrangeexception"
+            | "overflowexception"
+            | "rangeexception"
+            | "recursivecallbackfilteriterator"
+            | "reflectionclass"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "runtimeexception"
+            | "spldoublylinkedlist"
+            | "splfixedarray"
+            | "splqueue"
+            | "splstack"
+            | "typeerror"
+            | "underflowexception"
+            | "unexpectedvalueexception"
+            | "valueerror"
+            | "stdclass"
+    )
+}
+
+/// Returns true for builtin classes that generic dynamic new must not treat as user classes.
+fn known_dynamic_new_builtin_class_name(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "appenditerator"
+            | "arrayiterator"
+            | "arrayobject"
+            | "badfunctioncallexception"
+            | "badmethodcallexception"
+            | "cachingiterator"
+            | "callbackfilteriterator"
+            | "directoryiterator"
+            | "domainexception"
+            | "emptyiterator"
+            | "error"
+            | "exception"
+            | "fiber"
+            | "fibererror"
+            | "filesystemiterator"
+            | "filteriterator"
+            | "generator"
+            | "globiterator"
+            | "infiniteiterator"
+            | "internaliterator"
+            | "invalidargumentexception"
+            | "iteratoriterator"
+            | "jsonexception"
+            | "lengthexception"
+            | "limititerator"
+            | "logicexception"
+            | "multipleiterator"
+            | "norewinditerator"
+            | "outofboundsexception"
+            | "outofrangeexception"
+            | "overflowexception"
+            | "parentiterator"
+            | "phar"
+            | "phardata"
+            | "rangeexception"
+            | "recursivearrayiterator"
+            | "recursivecachingiterator"
+            | "recursivecallbackfilteriterator"
+            | "recursivedirectoryiterator"
+            | "recursivefilteriterator"
+            | "recursiveiteratoriterator"
+            | "recursiveregexiterator"
+            | "reflectionattribute"
+            | "reflectionclass"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "regexiterator"
+            | "runtimeexception"
+            | "spldoublylinkedlist"
+            | "splfileinfo"
+            | "splfileobject"
+            | "splfixedarray"
+            | "splheap"
+            | "splmaxheap"
+            | "splminheap"
+            | "splobjectstorage"
+            | "splpriorityqueue"
+            | "splqueue"
+            | "splstack"
+            | "spltempfileobject"
+            | "typeerror"
+            | "underflowexception"
+            | "unexpectedvalueexception"
+            | "valueerror"
+            | "stdclass"
+    )
 }
 
 /// Adds the supported builtin SPL method owner for a receiver class or one of its parents.
@@ -1287,6 +1465,63 @@ fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
                 | "__unserialize"
                 | "__debuginfo"
                 | "__elephcindexof"
+        ),
+        "Phar" | "PharData" => matches!(
+            method_key,
+            "__construct"
+                | "offsetexists"
+                | "offsetget"
+                | "offsetset"
+                | "offsetunset"
+                | "addfromstring"
+                | "__tostring"
+                | "getpath"
+                | "getpathname"
+                | "getfilename"
+                | "setmetadata"
+                | "getmetadata"
+                | "hasmetadata"
+                | "delmetadata"
+                | "setstub"
+                | "getstub"
+                | "rewind"
+                | "next"
+                | "valid"
+                | "key"
+                | "current"
+                | "count"
+                | "compressfiles"
+                | "decompressfiles"
+                | "delete"
+        ),
+        "PharFileInfo" => matches!(
+            method_key,
+            "__construct"
+                | "getcontent"
+                | "__tostring"
+                | "getpath"
+                | "getfilename"
+                | "getextension"
+                | "getbasename"
+                | "getpathname"
+                | "getperms"
+                | "getinode"
+                | "getsize"
+                | "getowner"
+                | "getgroup"
+                | "getatime"
+                | "getmtime"
+                | "getctime"
+                | "gettype"
+                | "iswritable"
+                | "iswriteable"
+                | "isreadable"
+                | "isexecutable"
+                | "isfile"
+                | "isdir"
+                | "islink"
+                | "getlinktarget"
+                | "getrealpath"
         ),
         "IteratorIterator" => matches!(
             method_key,

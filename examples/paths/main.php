@@ -40,6 +40,8 @@ echo (fnmatch("*.log", "logs/system.log", FNM_PATHNAME) ? "y" : "n") . "\n";
 file_put_contents("./local.txt", "");
 $resolved = realpath("./local.txt");
 echo "resolved: " . $resolved . "\n";
+echo "realpath cache entries: " . count(realpath_cache_get()) . "\n";
+echo "realpath cache bytes: " . realpath_cache_size() . "\n";
 
 unlink("./local.txt");
 echo "done\n";

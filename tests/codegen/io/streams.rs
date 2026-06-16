@@ -1611,6 +1611,18 @@ struct TestPharEntry<'a> {
     flags: u32,
 }
 
+// Precomputed bzip2 blob for `"bzip2-compressed phar entry. "` repeated eight
+// times. bzip2-rs is decode-only, so tests keep this stable fixture inline.
+const BZIP2_PHAR_BLOB: &[u8] = &[
+    0x42, 0x5a, 0x68, 0x39, 0x31, 0x41, 0x59, 0x26, 0x53, 0x59, 0x61, 0x39,
+    0xa6, 0xe8, 0x00, 0x00, 0x1f, 0x99, 0x80, 0x40, 0x03, 0x10, 0x00, 0x3e,
+    0x63, 0xdc, 0x30, 0x20, 0x00, 0x70, 0x53, 0x09, 0xa6, 0x80, 0xd3, 0x10,
+    0x2a, 0xa8, 0x0c, 0x43, 0x46, 0x1a, 0x9b, 0x0b, 0x0a, 0x0e, 0x46, 0x45,
+    0xc5, 0x44, 0xc5, 0x05, 0x46, 0x06, 0xe3, 0xa1, 0x21, 0x03, 0x22, 0x42,
+    0xc2, 0xe2, 0x63, 0x02, 0xe2, 0x82, 0x07, 0x82, 0x82, 0x05, 0x44, 0x0f,
+    0xc5, 0xdc, 0x91, 0x4e, 0x14, 0x24, 0x18, 0x4e, 0x69, 0xba, 0x00,
+];
+
 /// Builds a native-format PHAR (PHP stub + manifest + data section) from
 /// explicit per-entry stored bytes and flags, matching the byte layout PHP's
 /// `Phar` class produces. crc32 and signature are omitted because the reader
@@ -1655,6 +1667,93 @@ fn build_minimal_phar(entries: &[(&str, &[u8])]) -> Vec<u8> {
         })
         .collect();
     build_phar(&raw)
+}
+
+/// Builds a minimal POSIX tar archive with regular-file entries.
+fn build_tar_phar_container(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (name, content) in entries {
+        let mut header = [0u8; 512];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        let size = format!("{:011o}\0", content.len());
+        header[124..124 + size.len()].copy_from_slice(size.as_bytes());
+        header[156] = b'0';
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        for byte in &mut header[148..156] {
+            *byte = b' ';
+        }
+        let checksum: u32 = header.iter().map(|&b| b as u32).sum();
+        let checksum = format!("{:06o}\0 ", checksum);
+        header[148..156].copy_from_slice(checksum.as_bytes());
+        out.extend_from_slice(&header);
+        out.extend_from_slice(content);
+        let padded_len = ((content.len() + 511) / 512) * 512;
+        out.resize(out.len() + padded_len - content.len(), 0);
+    }
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
+/// Builds a ZIP archive with ordinary store/deflate entries and a central directory.
+fn build_zip_phar_container(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    for (name, content, deflate) in entries {
+        let local_offset = out.len() as u32;
+        let stored = if *deflate {
+            let mut encoder =
+                flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+            std::io::Write::write_all(&mut encoder, content).unwrap();
+            encoder.finish().unwrap()
+        } else {
+            content.to_vec()
+        };
+        let method = if *deflate { 8u16 } else { 0u16 };
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&20u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&method.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(stored.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(content.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&stored);
+
+        central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&method.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u32.to_le_bytes());
+        central.extend_from_slice(&(stored.len() as u32).to_le_bytes());
+        central.extend_from_slice(&(content.len() as u32).to_le_bytes());
+        central.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u32.to_le_bytes());
+        central.extend_from_slice(&local_offset.to_le_bytes());
+        central.extend_from_slice(name.as_bytes());
+    }
+    let central_offset = out.len() as u32;
+    out.extend_from_slice(&central);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(central.len() as u32).to_le_bytes());
+    out.extend_from_slice(&central_offset.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
 }
 
 /// Verifies compiled PHP output for fopen phar reads uncompressed entry.
@@ -1776,6 +1875,421 @@ echo file_put_contents("phar://out.phar/note.txt", "via fpc");
     assert_eq!(&tail[4..8], b"GBMB", "phar magic missing");
 }
 
+/// EIR phar:// write streams seed the runtime PHAR writer instead of falling
+/// through to a literal filesystem path named `phar://...`.
+#[test]
+fn test_fopen_phar_write_runtime_readback() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fopen("phar://streamed.phar/hello.txt", "w");
+echo fwrite($f, "streamed") . "|";
+echo (fclose($f) ? "closed" : "failed") . "|";
+$archive = "streamed.phar";
+echo file_get_contents("phar://" . $archive . "/hello.txt");
+"#,
+    );
+    assert_eq!(out, "8|closed|streamed");
+}
+
+/// EIR one-shot phar:// writes use the same signed archive runtime as
+/// `fopen()` + `fwrite()` + `fclose()` and are readable through a runtime URL.
+#[test]
+fn test_file_put_contents_phar_runtime_readback() {
+    let out = compile_and_run(
+        r#"<?php
+echo file_put_contents("phar://single.phar/note.txt", "via fpc") . "|";
+$archive = "single.phar";
+echo file_get_contents("phar://" . $archive . "/note.txt");
+"#,
+    );
+    assert_eq!(out, "7|via fpc");
+}
+
+/// Repeated phar:// file_put_contents() calls update a native PHAR in place,
+/// preserving previously written entries instead of rewriting a single-entry archive.
+#[test]
+fn test_file_put_contents_phar_preserves_existing_entries() {
+    let out = compile_and_run(
+        r#"<?php
+echo file_put_contents("phar://multi.phar/one.txt", "alpha") . "|";
+echo file_put_contents("phar://multi.phar/dir/two.txt", "bravo") . "|";
+echo file_put_contents("phar://multi.phar/one.txt", "updated") . "|";
+$archive = "multi.phar";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/dir/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|5|7|updated|bravo");
+}
+
+/// fopen()+fwrite()+fclose() phar:// writes also use the native PHAR
+/// read-modify-write bridge, so stream writes preserve earlier entries.
+#[test]
+fn test_fopen_phar_write_preserves_existing_entries() {
+    let out = compile_and_run(
+        r#"<?php
+echo file_put_contents("phar://stream_multi.phar/one.txt", "alpha") . "|";
+$f = fopen("phar://stream_multi.phar/two.txt", "w");
+echo fwrite($f, "stream") . "|";
+echo (fclose($f) ? "closed" : "failed") . "|";
+$archive = "stream_multi.phar";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|6|closed|alpha|stream");
+}
+
+/// Runtime-built phar:// URLs passed to file_put_contents() route through the
+/// native PHAR URL bridge instead of writing a literal filesystem path.
+#[test]
+fn test_file_put_contents_dynamic_phar_url_preserves_existing_entries() {
+    let out = compile_and_run(
+        r#"<?php
+$archive = "dynamic_multi.phar";
+echo file_put_contents("phar://" . $archive . "/one.txt", "alpha") . "|";
+echo file_put_contents("phar://" . $archive . "/dir/two.txt", "bravo") . "|";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/dir/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|5|alpha|bravo");
+}
+
+/// Runtime-built phar:// URLs passed to write-mode fopen() preserve the full URL
+/// until fclose(), then update the native PHAR through the URL bridge.
+#[test]
+fn test_fopen_dynamic_phar_write_preserves_existing_entries() {
+    let out = compile_and_run(
+        r#"<?php
+$archive = "dynamic_stream.phar";
+echo file_put_contents("phar://" . $archive . "/one.txt", "alpha") . "|";
+$f = fopen("phar://" . $archive . "/dir/two.txt", "w");
+echo fwrite($f, "stream") . "|";
+echo (fclose($f) ? "closed" : "failed") . "|";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/dir/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|6|closed|alpha|stream");
+}
+
+/// Concurrent phar:// write streams keep independent payload buffers and
+/// finalize through their own descriptors, including mixed literal/dynamic URLs.
+#[test]
+fn test_fopen_concurrent_phar_write_streams_preserve_entries() {
+    let out = compile_and_run(
+        r#"<?php
+$archive = "concurrent_streams.phar";
+$one = fopen("phar://concurrent_streams.phar/one.txt", "w");
+$two = fopen("phar://" . $archive . "/two.txt", "w");
+echo fwrite($two, "bravo") . "|";
+echo fwrite($one, "alpha") . "|";
+echo (fclose($one) ? "one" : "fail-one") . "|";
+echo (fclose($two) ? "two" : "fail-two") . "|";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|5|one|two|alpha|bravo");
+}
+
+/// `phar://` writes to a `.tar` archive create/update a tar container through
+/// the Rust bridge, and the runtime reader can read both entries back.
+#[test]
+fn test_file_put_contents_phar_tar_archive_runtime_readback() {
+    let out = compile_and_run(
+        r#"<?php
+echo file_put_contents("phar://out.tar/one.txt", "alpha") . "|";
+echo file_put_contents("phar://out.tar/dir/two.txt", "bravo") . "|";
+$archive = "out.tar";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/dir/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|5|alpha|bravo");
+}
+
+/// `phar://` writes to a `.zip` archive create/update a ZIP container through
+/// the Rust bridge, and the runtime reader can read both entries back.
+#[test]
+fn test_file_put_contents_phar_zip_archive_runtime_readback() {
+    let out = compile_and_run(
+        r#"<?php
+echo file_put_contents("phar://out.zip/one.txt", "alpha") . "|";
+echo file_put_contents("phar://out.zip/dir/two.txt", "bravo") . "|";
+$archive = "out.zip";
+echo file_get_contents("phar://" . $archive . "/one.txt") . "|";
+echo file_get_contents("phar://" . $archive . "/dir/two.txt");
+"#,
+    );
+    assert_eq!(out, "5|5|alpha|bravo");
+}
+
+/// `unlink("phar://...")` removes one archive entry while preserving sibling
+/// entries across native PHAR, tar, and ZIP containers.
+#[test]
+fn test_unlink_phar_entries_preserves_siblings() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("phar://delete.phar/one.txt", "alpha");
+file_put_contents("phar://delete.phar/two.txt", "bravo");
+echo (unlink("phar://delete.phar/one.txt") ? "u|" : "bad|");
+$phar = "delete.phar";
+echo (file_get_contents("phar://" . $phar . "/one.txt") === false ? "missing|" : "bad|");
+echo file_get_contents("phar://" . $phar . "/two.txt") . "|";
+file_put_contents("phar://delete.tar/one.txt", "tar-one");
+file_put_contents("phar://delete.tar/two.txt", "tar-two");
+echo (unlink("phar://delete.tar/one.txt") ? "u|" : "bad|");
+$tar = "delete.tar";
+echo file_get_contents("phar://" . $tar . "/two.txt") . "|";
+file_put_contents("phar://delete.zip/one.txt", "zip-one");
+file_put_contents("phar://delete.zip/two.txt", "zip-two");
+echo (unlink("phar://delete.zip/one.txt") ? "u|" : "bad|");
+$zip = "delete.zip";
+echo file_get_contents("phar://" . $zip . "/two.txt") . "|";
+echo (unlink("phar://delete.zip/missing.txt") ? "bad" : "missing");
+"#,
+    );
+    assert_eq!(
+        out,
+        "u|missing|bravo|u|tar-two|u|zip-two|missing"
+    );
+}
+
+/// `Phar` and `PharData` expose a minimal OOP ArrayAccess surface that maps
+/// bracket reads/writes/isset to the existing runtime `phar://` reader/writer.
+#[test]
+fn test_phar_oop_array_access_read_write() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("oop.phar");
+$p["one.txt"] = "alpha";
+$p["dir/two.txt"] = "bravo";
+echo class_exists("phar") ? "class|" : "missing|";
+echo class_exists("pharfileinfo") ? "info-class|" : "missing-info|";
+echo ($p instanceof ArrayAccess) ? "aa|" : "no-aa|";
+$info = $p["one.txt"];
+echo ($info instanceof SplFileInfo) ? "spl-info|" : "bad-info|";
+echo get_class($info) . "|";
+echo $info->getContent() . "|";
+echo $info->getFilename() . "|";
+echo $info->getPathname() . "|";
+echo $p["dir/two.txt"]->getContent() . "|";
+echo ($p["missing.txt"]->getContent() === false ? "missing|" : "bad|");
+echo (isset($p["one.txt"]) ? "yes|" : "no|");
+echo (isset($p["missing.txt"]) ? "bad|" : "no|");
+$pd = new PharData("oop.tar");
+$pd["note.txt"] = "tar";
+echo $pd["note.txt"]->getContent() . "|";
+echo Phar::GZ . "|" . PharData::TAR;
+"#,
+    );
+    assert_eq!(
+        out,
+        "class|info-class|aa|spl-info|PharFileInfo|alpha|one.txt|phar://oop.phar/one.txt|bravo|missing|yes|no|tar|4096|2"
+    );
+}
+
+/// `Phar::addFromString()` and `PharData::addFromString()` use the same runtime
+/// writer as ArrayAccess assignment for native PHAR and tar containers.
+#[test]
+fn test_phar_oop_add_from_string_writes_entries() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("add.phar");
+$p->addFromString("one.txt", "alpha");
+$p->addFromString("dir/two.txt", "bravo");
+echo $p["one.txt"]->getContent() . "|";
+echo $p["dir/two.txt"]->getContent() . "|";
+$pd = new PharData("add.tar");
+$pd->addFromString("note.txt", "tar");
+echo $pd["note.txt"]->getContent();
+"#,
+    );
+    assert_eq!(out, "alpha|bravo|tar");
+}
+
+/// `Phar` and `PharData` expose object-level metadata, stub, and path helpers.
+#[test]
+fn test_phar_oop_metadata_stub_and_path_helpers() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("meta.phar");
+echo ($p->hasMetadata() ? "bad|" : "no-meta|");
+echo ($p->getMetadata() === null ? "null|" : "bad|");
+$p->setMetadata("app:3");
+echo ($p->hasMetadata() ? "has-meta|" : "bad|");
+echo $p->getMetadata() . "|";
+$p->setMetadata(["kind" => "app", "version" => 3]);
+$meta = $p->getMetadata();
+echo $meta["kind"] . ":" . $meta["version"] . "|";
+$p->setMetadata(42);
+echo $p->getMetadata() . "|";
+$p->setMetadata(null);
+echo ($p->hasMetadata() ? "has-null|" : "bad|");
+echo ($p->getMetadata() === null ? "null-meta|" : "bad|");
+echo ($p->delMetadata() ? "cleared|" : "bad|");
+echo ($p->hasMetadata() ? "bad|" : "no-meta|");
+$p->setStub("<?php echo 'stub'; __HALT_COMPILER(); ?>");
+echo $p->getStub() . "|";
+echo $p->getPath() . "|" . $p->getPathname() . "|" . $p->getFilename() . "|";
+$pd = new PharData("meta.tar");
+$pd->setMetadata("tar-meta");
+echo $pd->getMetadata() . "|" . $pd->__toString();
+"#,
+    );
+    assert_eq!(
+        out,
+        "no-meta|null|has-meta|app:3|app:3|42|has-null|null-meta|cleared|no-meta|<?php echo 'stub'; __HALT_COMPILER(); ?>|meta.phar|meta.phar|meta.phar|tar-meta|meta.tar"
+    );
+}
+
+/// `Phar` and `PharData` iterate over entries written through the OOP surface.
+#[test]
+fn test_phar_oop_iteration_tracks_written_entries() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("iter.phar");
+$p->addFromString("one.txt", "alpha");
+$p["two.txt"] = "bravo";
+$p->addFromString("one.txt", "alpha2");
+echo ($p instanceof Iterator) ? "iter|" : "no-iter|";
+echo ($p instanceof Countable) ? "countable|" : "no-count|";
+echo $p->count() . "|";
+foreach ($p as $name => $info) {
+    echo $name . "=" . $info->getContent() . "|";
+}
+$p->rewind();
+echo get_class($p->current()) . "|";
+unset($p["two.txt"]);
+echo $p->count() . "|";
+foreach ($p as $name => $info) {
+    echo $name . "=" . $info->getContent() . "|";
+}
+$pd = new PharData("iter.tar");
+$pd->addFromString("tar.txt", "tar");
+foreach ($pd as $name => $info) {
+    echo $name . "=" . $info->getContent();
+}
+unlink("iter.phar");
+unlink("iter.tar");
+"#,
+    );
+    assert_eq!(
+        out,
+        "iter|countable|2|one.txt=alpha2|two.txt=bravo|PharFileInfo|1|one.txt=alpha2|tar.txt=tar"
+    );
+}
+
+/// `Phar` and `PharData` seed iteration from archives that already exist.
+#[test]
+fn test_phar_oop_iteration_scans_existing_archives() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("phar://scan.phar/one.txt", "alpha");
+file_put_contents("phar://scan.phar/two.txt", "bravo");
+$p = new Phar("scan.phar");
+echo $p->count() . "|";
+foreach ($p as $name => $info) {
+    echo $name . "=" . $info->getContent() . "|";
+}
+file_put_contents("phar://scan.tar/tar.txt", "tar");
+$tar = new PharData("scan.tar");
+echo $tar->count() . "|";
+foreach ($tar as $name => $info) {
+    echo $name . "=" . $info->getContent() . "|";
+}
+file_put_contents("phar://scan.zip/zip.txt", "zip");
+$zip = new PharData("scan.zip");
+echo $zip->count() . "|";
+foreach ($zip as $name => $info) {
+    echo $name . "=" . $info->getContent();
+}
+unlink("scan.phar");
+unlink("scan.tar");
+unlink("scan.zip");
+"#,
+    );
+    assert_eq!(
+        out,
+        "2|one.txt=alpha|two.txt=bravo|1|tar.txt=tar|1|zip.txt=zip"
+    );
+}
+
+/// `Phar::compressFiles()` and `decompressFiles()` rewrite native PHAR entry
+/// compression while preserving readable payloads.
+#[test]
+fn test_phar_oop_compress_and_decompress_files() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("compress.phar");
+$p->addFromString("one.txt", "alpha alpha alpha");
+$p->addFromString("two.txt", "bravo bravo bravo");
+$p->compressFiles(Phar::GZ);
+echo $p["one.txt"]->getContent() . "|";
+echo ($p->decompressFiles() ? "plain|" : "bad|");
+echo $p["two.txt"]->getContent() . "|";
+$zip = new PharData("compress.zip");
+$zip->addFromString("zip.txt", "zip zip zip");
+$zip->compressFiles(Phar::GZ);
+echo $zip["zip.txt"]->getContent() . "|";
+echo ($zip->decompressFiles() ? "zip-plain|" : "zip-bad|");
+echo $zip["zip.txt"]->getContent() . "|";
+echo (function_exists("__elephc_phar_set_compression") ? "visible" : "hidden");
+"#,
+    );
+    assert_eq!(
+        out,
+        "alpha alpha alpha|plain|bravo bravo bravo|zip zip zip|zip-plain|zip zip zip|hidden"
+    );
+}
+
+/// `Phar::delete()` and `PharData::delete()` remove archive entries through the
+/// same PHAR-aware unlink path as ArrayAccess unset.
+#[test]
+fn test_phar_oop_delete_method_removes_entries() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("delete-method.phar");
+$p->addFromString("one.txt", "alpha");
+$p->addFromString("two.txt", "bravo");
+echo ($p->delete("one.txt") ? "deleted|" : "bad|");
+echo (isset($p["one.txt"]) ? "bad|" : "missing|");
+echo $p["two.txt"]->getContent() . "|";
+$pd = new PharData("delete-method.tar");
+$pd->addFromString("one.txt", "tar-one");
+$pd->addFromString("two.txt", "tar-two");
+echo ($pd->delete("one.txt") ? "deleted|" : "bad|");
+echo $pd["two.txt"]->getContent();
+"#,
+    );
+    assert_eq!(out, "deleted|missing|bravo|deleted|tar-two");
+}
+
+/// ArrayAccess `unset()` on `Phar` and `PharData` deletes the archive entry and
+/// leaves other entries readable.
+#[test]
+fn test_phar_oop_array_access_unset_deletes_entry() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("unset.phar");
+$p["one.txt"] = "alpha";
+$p["two.txt"] = "bravo";
+unset($p["one.txt"]);
+echo (isset($p["one.txt"]) ? "bad|" : "missing|");
+echo $p["two.txt"]->getContent() . "|";
+$pd = new PharData("unset.tar");
+$pd["one.txt"] = "tar-one";
+$pd["two.txt"] = "tar-two";
+unset($pd["one.txt"]);
+echo (isset($pd["one.txt"]) ? "bad|" : "missing|");
+echo $pd["two.txt"]->getContent();
+"#,
+    );
+    assert_eq!(out, "missing|bravo|missing|tar-two");
+}
+
 /// `file_get_contents()` of a literal `phar://` URL decodes the entry at compile
 /// time (like the fopen read fast path) and returns its bytes as a string; a
 /// missing entry returns `false`.
@@ -1859,6 +2373,35 @@ fn test_fopen_phar_reads_gzip_entry() {
     assert_eq!(out, format!("{}|gzip", content.len()));
 }
 
+/// Verifies compiled PHP output for dynamic fopen phar reads gzip entry.
+#[test]
+fn test_fopen_phar_runtime_path_reads_gzip_entry() {
+    // The runtime phar reader must inflate gzip entries when the archive path
+    // arrives through string concatenation instead of the compile-time literal
+    // fast path.
+    let content = b"gzip-compressed phar entry payload, repeated for ratio. ".repeat(8);
+    let mut encoder =
+        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, &content).unwrap();
+    let stored = encoder.finish().unwrap();
+    assert!(stored.len() < content.len(), "fixture should actually compress");
+    let phar = build_phar(&[TestPharEntry {
+        name: "z.txt",
+        uncompressed_size: content.len() as u32,
+        stored: &stored,
+        flags: 0x0000_11a4, // gzip (0x1000) | 0644
+    }]);
+    let path = std::env::temp_dir().join(format!("elephc_phar_rt_gz_{}.phar", std::process::id()));
+    std::fs::write(&path, &phar).unwrap();
+    let src = format!(
+        r#"<?php $p = "{p}"; $f = fopen("phar://" . $p . "/z.txt", "r"); $s = fread($f, 8192); fclose($f); echo strlen($s) . "|" . substr($s, 0, 4);"#,
+        p = path.display()
+    );
+    let out = compile_and_run(&src);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(out, format!("{}|gzip", content.len()));
+}
+
 /// Verifies compiled PHP output for fopen phar reads bzip2 entry.
 #[test]
 fn test_fopen_phar_reads_bzip2_entry() {
@@ -1890,6 +2433,100 @@ fn test_fopen_phar_reads_bzip2_entry() {
     let out = compile_and_run(&src);
     std::fs::remove_file(&path).ok();
     assert_eq!(out, "232|bzip2-compressed phar entr");
+}
+
+/// Verifies compiled PHP output for dynamic file_get_contents phar reads bzip2 entry.
+#[test]
+fn test_file_get_contents_phar_runtime_path_reads_bzip2_entry() {
+    // Dynamic file_get_contents() routes through the runtime phar reader, so it
+    // must publish libbz2 and decompress bzip2-compressed entry payloads there.
+    let phar = build_phar(&[TestPharEntry {
+        name: "b.txt",
+        uncompressed_size: 232,
+        stored: BZIP2_PHAR_BLOB,
+        flags: 0x0000_21a4, // bzip2 (0x2000) | 0644
+    }]);
+    let path = std::env::temp_dir().join(format!("elephc_phar_rt_bz_{}.phar", std::process::id()));
+    std::fs::write(&path, &phar).unwrap();
+    let src = format!(
+        r#"<?php $p = "{p}"; $s = file_get_contents("phar://" . $p . "/b.txt"); echo strlen($s) . "|" . substr($s, 0, 26);"#,
+        p = path.display()
+    );
+    let out = compile_and_run(&src);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(out, "232|bzip2-compressed phar entr");
+}
+
+/// Verifies a literal `fopen("phar://...")` URL can read a tar-based PHAR container.
+#[test]
+fn test_fopen_phar_literal_tar_entry() {
+    let archive = build_tar_phar_container(&[
+        ("plain.txt", b"plain"),
+        ("dir/tar.txt", b"tar payload"),
+    ]);
+    let path = std::env::temp_dir().join(format!("elephc_phar_tar_lit_{}.tar", std::process::id()));
+    std::fs::write(&path, &archive).unwrap();
+    let src = format!(
+        r#"<?php $f = fopen("phar://{p}/dir/tar.txt", "r"); echo fread($f, 64); fclose($f);"#,
+        p = path.display()
+    );
+    let out = compile_and_run(&src);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(out, "tar payload");
+}
+
+/// Verifies a literal `file_get_contents("phar://...")` URL can read a deflated ZIP PHAR entry.
+#[test]
+fn test_file_get_contents_phar_literal_zip_deflate_entry() {
+    let archive = build_zip_phar_container(&[
+        ("plain.txt", b"stored", false),
+        ("deflated.txt", b"deflated zip payload", true),
+    ]);
+    let path = std::env::temp_dir().join(format!("elephc_phar_zip_lit_{}.zip", std::process::id()));
+    std::fs::write(&path, &archive).unwrap();
+    let src = format!(
+        r#"<?php echo file_get_contents("phar://{p}/deflated.txt");"#,
+        p = path.display()
+    );
+    let out = compile_and_run(&src);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(out, "deflated zip payload");
+}
+
+/// Verifies a dynamic `file_get_contents()` PHAR URL uses the runtime bridge for tar containers.
+#[test]
+fn test_file_get_contents_phar_runtime_tar_entry() {
+    let archive = build_tar_phar_container(&[
+        ("plain.txt", b"plain"),
+        ("dir/runtime.txt", b"runtime tar payload"),
+    ]);
+    let path = std::env::temp_dir().join(format!("elephc_phar_tar_rt_{}.tar", std::process::id()));
+    std::fs::write(&path, &archive).unwrap();
+    let src = format!(
+        r#"<?php $p = "{p}"; echo file_get_contents("phar://" . $p . "/dir/runtime.txt");"#,
+        p = path.display()
+    );
+    let out = compile_and_run(&src);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(out, "runtime tar payload");
+}
+
+/// Verifies a dynamic `fopen()` PHAR URL uses the runtime bridge for deflated ZIP entries.
+#[test]
+fn test_fopen_phar_runtime_zip_deflate_entry() {
+    let archive = build_zip_phar_container(&[
+        ("plain.txt", b"stored", false),
+        ("dir/deflated.txt", b"runtime zip payload", true),
+    ]);
+    let path = std::env::temp_dir().join(format!("elephc_phar_zip_rt_{}.zip", std::process::id()));
+    std::fs::write(&path, &archive).unwrap();
+    let src = format!(
+        r#"<?php $p = "{p}"; $f = fopen("phar://" . $p . "/dir/deflated.txt", "r"); echo fread($f, 64); fclose($f);"#,
+        p = path.display()
+    );
+    let out = compile_and_run(&src);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(out, "runtime zip payload");
 }
 
 /// Verifies compiled PHP output for stream socket server creates listening socket.
@@ -2251,6 +2888,55 @@ echo stream_set_blocking(STDIN, true) ? "b" : "B";
 "#,
     );
     assert_eq!(out, "nb");
+}
+
+/// Verifies nonblocking fread/fgets misses do not mark the stream EOF.
+#[test]
+fn test_nonblocking_socket_reads_do_not_mark_eof() {
+    let out = compile_and_run(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($pair[0], false);
+$first = fread($pair[0], 5);
+echo $first === "" ? "empty" : "data";
+echo "|";
+echo feof($pair[0]) ? "eof" : "open";
+echo "|";
+$line = fgets($pair[0]);
+echo $line === false ? "false" : "line";
+echo "|";
+echo feof($pair[0]) ? "eof" : "open";
+echo "|";
+$char = fgetc($pair[0]);
+echo $char === false ? "false" : "char";
+echo "|";
+echo feof($pair[0]) ? "eof" : "open";
+echo "|";
+fwrite($pair[1], "hi\n");
+echo fgets($pair[0]);
+echo feof($pair[0]) ? "eof" : "open";
+"#,
+    );
+    assert_eq!(out, "empty|open|false|open|false|open|hi\nopen");
+}
+
+/// Verifies `stream_get_line()` treats a nonblocking miss as transient instead of EOF.
+#[test]
+fn test_nonblocking_stream_get_line_does_not_mark_eof() {
+    let out = compile_and_run(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($pair[0], false);
+$miss = stream_get_line($pair[0], 8);
+echo $miss === "" ? "empty" : "data";
+echo "|";
+echo feof($pair[0]) ? "eof" : "open";
+echo "|";
+fwrite($pair[1], "ready\n");
+echo stream_get_line($pair[0], 8, "\n");
+"#,
+    );
+    assert_eq!(out, "empty|open|ready");
 }
 
 /// Verifies compiled PHP output for stream socket shutdown on connection.
@@ -4046,6 +4732,26 @@ echo $out;
     assert_eq!(out, "wrappers:2|http:2|ssl:1");
 }
 
+/// Verifies compiled PHP output for TLS cipher/security-level options accepted as no-ops.
+#[test]
+fn test_stream_context_ssl_cipher_options_are_accepted_noops() {
+    let out = compile_and_run(
+        r#"<?php
+$ctx = stream_context_create();
+$a = stream_context_set_option($ctx, "ssl", "ciphers", "DEFAULT@SECLEVEL=1");
+$b = stream_context_set_option($ctx, "ssl", "security_level", "1");
+$count = 0;
+foreach (stream_context_get_options($ctx) as $wrapper => $sub) {
+    if ($wrapper === "ssl") {
+        $count = count($sub);
+    }
+}
+echo ($a && $b ? "ok" : "FAIL") . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "ok|2");
+}
+
 /// Verifies compiled PHP output for stream context set option two arg replaces options.
 #[test]
 fn test_stream_context_set_option_two_arg_replaces_options() {
@@ -4186,6 +4892,32 @@ echo fread($f, 64);
 "#,
     );
     assert_eq!(out, "hello world");
+}
+
+/// Verifies compiled PHP output for user stream filter params exposed on `$this`.
+#[test]
+fn test_user_stream_filter_params_are_exposed_on_this() {
+    let out = compile_and_run(
+        r#"<?php
+class ParamFilter extends php_user_filter {
+    public function onCreate(): bool {
+        echo $this->params["prefix"];
+        return true;
+    }
+
+    public function filter(string $data): string {
+        return $data . $this->params["suffix"];
+    }
+}
+stream_filter_register("user.params", "ParamFilter");
+$f = fopen("php://memory", "r+");
+stream_filter_append($f, "user.params", STREAM_FILTER_WRITE, ["prefix" => "<", "suffix" => ">"]);
+fwrite($f, "hello");
+rewind($f);
+echo "|" . fread($f, 64);
+"#,
+    );
+    assert_eq!(out, "<|hello>");
 }
 
 /// Verifies compiled PHP output for user stream filter unknown name returns false.

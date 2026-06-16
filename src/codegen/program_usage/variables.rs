@@ -184,6 +184,11 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
 /// Checks the expression and all sub-expressions. Returns `true` on the first match.
 fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::Variable(name) => name == needle,
         ExprKind::BinaryOp { left, right, .. } => {
             expr_uses_variable(left, needle) || expr_uses_variable(right, needle)

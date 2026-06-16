@@ -24,6 +24,7 @@ pub(super) fn builtin_exception_message_property() -> ClassProperty {
     ClassProperty {
         name: "message".to_string(),
         visibility: Visibility::Public,
+        set_visibility: None,
         type_expr: Some(TypeExpr::Str),
         hooks: PropertyHooks::none(),
         readonly: false,
@@ -71,6 +72,7 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
             ),
         ],
         variadic: None,
+        variadic_type: None,
         return_type: None,
         body: vec![
             Stmt::new(
@@ -107,6 +109,7 @@ pub(super) fn builtin_exception_code_property() -> ClassProperty {
     ClassProperty {
         name: "code".to_string(),
         visibility: Visibility::Protected,
+        set_visibility: None,
         type_expr: Some(TypeExpr::Int),
         hooks: PropertyHooks::none(),
         readonly: false,
@@ -253,6 +256,7 @@ fn concrete_throwable_method(name: &str, return_type: TypeExpr, value: Expr) -> 
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: Some(return_type),
         body: vec![Stmt::new(
             StmtKind::Return(Some(value)),
@@ -274,6 +278,7 @@ fn abstract_throwable_method(name: &str, return_type: TypeExpr) -> ClassMethod {
         has_body: false,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: Some(return_type),
         body: Vec::new(),
         span: crate::span::Span::dummy(),

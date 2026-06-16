@@ -376,3 +376,47 @@ fn test_example_typed_properties_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/typed-properties/main.php"));
     assert_eq!(out, "Ada:42\nmissing email\n");
 }
+
+/// Verifies PHP 8.4 asymmetric visibility at runtime: a `public private(set)` property is
+/// writable from inside the class and readable from outside.
+#[test]
+fn test_asymmetric_visibility_internal_write_external_read() {
+    let out = compile_and_run(
+        "<?php
+        class Counter {
+            public private(set) int $value = 0;
+            public function increment(): void { $this->value = $this->value + 1; }
+        }
+        $c = new Counter();
+        $c->increment();
+        $c->increment();
+        echo $c->value;
+        ",
+    );
+    assert_eq!(out, "2");
+}
+
+/// Verifies that a subclass may write a `protected(set)` property inherited from its parent.
+#[test]
+fn test_asymmetric_visibility_protected_set_subclass_write() {
+    let out = compile_and_run(
+        "<?php
+        class Base { public protected(set) string $name = \"base\"; }
+        class Derived extends Base {
+            public function rename(string $n): void { $this->name = $n; }
+        }
+        $d = new Derived();
+        $d->rename(\"derived\");
+        echo $d->name;
+        ",
+    );
+    assert_eq!(out, "derived");
+}
+
+/// Compiles and runs the checked-in `examples/asymmetric-visibility/main.php` fixture, which
+/// models an account whose balance is publicly readable but only privately writable.
+#[test]
+fn test_example_asymmetric_visibility_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../../../examples/asymmetric-visibility/main.php"));
+    assert_eq!(out, "balance: 120\ninsufficient funds\nbalance: 120\n");
+}

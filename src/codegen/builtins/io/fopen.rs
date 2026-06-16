@@ -66,9 +66,9 @@ pub fn emit(
             return super::data_stream::emit(args, emitter, ctx, data);
         }
         if path.starts_with("phar://") {
-            // A phar:// entry is read from the archive at compile time and
-            // lowered to a readable stream over its (uncompressed) bytes,
-            // like data://. Milestone-1: read-only, uncompressed entries.
+            // A read-mode phar:// entry is read from the archive at compile
+            // time and lowered to a readable stream over its decoded bytes;
+            // write modes route to the PHAR write bridge.
             return super::phar_stream::emit(args, emitter, ctx, data);
         }
         if path.starts_with("ftp://") {

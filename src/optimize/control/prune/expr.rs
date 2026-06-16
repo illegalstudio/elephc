@@ -18,6 +18,11 @@ use super::statements::{prune_block, prune_stmt};
 pub(crate) fn prune_expr(expr: Expr) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
         ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
         ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
@@ -118,6 +123,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
             is_arrow,
@@ -127,6 +133,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         } => ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body: prune_block(body),
             is_arrow,

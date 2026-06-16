@@ -412,11 +412,11 @@ fn emit_x86_64_float_equality_result(ctx: &mut FunctionContext<'_>, is_equal: bo
     if is_equal {
         ctx.emitter.instruction("sete al");                                     // materialize ordered float equality in the low byte
         ctx.emitter.instruction("setnp r10b");                                  // materialize whether the comparison was ordered
-        ctx.emitter.instruction("and al, r10b");                                 // clear equality for unordered NaN comparisons
+        ctx.emitter.instruction("and al, r10b");                                // clear equality for unordered NaN comparisons
     } else {
         ctx.emitter.instruction("setne al");                                    // materialize ordered float inequality in the low byte
         ctx.emitter.instruction("setp r10b");                                   // materialize unordered NaN comparison as true for !=
-        ctx.emitter.instruction("or al, r10b");                                  // merge ordered inequality with unordered inequality
+        ctx.emitter.instruction("or al, r10b");                                 // merge ordered inequality with unordered inequality
     }
 }
 

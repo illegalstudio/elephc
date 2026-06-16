@@ -31,6 +31,15 @@ function read_file(): string {
     );
 }
 
+/// Verifies `hash_file()` rejects too few arguments with arity error.
+#[test]
+fn test_error_hash_file_wrong_args() {
+    expect_error(
+        r#"<?php hash_file("sha256");"#,
+        "hash_file() takes 2 or 3 arguments",
+    );
+}
+
 /// Verifies `readfile()` rejects zero arguments with arity error.
 #[test]
 fn test_error_readfile_wrong_args() {

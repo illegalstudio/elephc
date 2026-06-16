@@ -135,6 +135,27 @@ fn test_error_flock_would_block_requires_variable() {
     );
 }
 
+/// Verifies formatted stream I/O builtins reject invalid argument counts.
+#[test]
+fn test_error_formatted_stream_io_wrong_args() {
+    for (source, message) in [
+        (
+            "<?php fprintf(STDOUT);",
+            "fprintf() takes at least 2 arguments",
+        ),
+        (
+            r#"<?php vfprintf(STDOUT, "%s");"#,
+            "vfprintf() takes exactly 3 arguments (stream, format, values)",
+        ),
+        (
+            "<?php fscanf(STDIN);",
+            "fscanf() takes at least 2 arguments",
+        ),
+    ] {
+        expect_error(source, message);
+    }
+}
+
 /// Verifies tmpfile() produces correct error when called with an argument.
 #[test]
 fn test_error_tmpfile_wrong_args() {
@@ -346,6 +367,55 @@ fn test_error_stream_introspection_lists_take_no_args() {
         (
             "<?php stream_get_filters(1);",
             "stream_get_filters() takes no arguments",
+        ),
+    ] {
+        expect_error(source, message);
+    }
+}
+
+/// Verifies stream context and bucket helpers reject invalid argument counts.
+#[test]
+fn test_error_stream_context_and_bucket_wrong_args() {
+    for (source, message) in [
+        (
+            "<?php stream_context_create([], [], []);",
+            "stream_context_create() takes at most 2 arguments",
+        ),
+        (
+            "<?php stream_context_get_default([], []);",
+            "stream_context_get_default() takes at most 1 argument",
+        ),
+        (
+            "<?php stream_context_set_default();",
+            "stream_context_set_default() takes exactly 1 argument",
+        ),
+        (
+            "<?php stream_context_set_option(STDIN);",
+            "stream_context_set_option() takes 2 to 4 arguments",
+        ),
+        (
+            "<?php stream_context_set_params(STDIN);",
+            "stream_context_set_params() takes exactly 2 arguments",
+        ),
+        (
+            "<?php stream_context_get_options();",
+            "stream_context_get_options() takes exactly 1 argument",
+        ),
+        (
+            "<?php stream_context_get_params();",
+            "stream_context_get_params() takes exactly 1 argument",
+        ),
+        (
+            "<?php stream_resolve_include_path();",
+            "stream_resolve_include_path() takes exactly 1 argument",
+        ),
+        (
+            "<?php stream_bucket_new(STDIN);",
+            "stream_bucket_new() takes exactly 2 arguments",
+        ),
+        (
+            "<?php stream_bucket_make_writeable();",
+            "stream_bucket_make_writeable() takes exactly 1 argument",
         ),
     ] {
         expect_error(source, message);

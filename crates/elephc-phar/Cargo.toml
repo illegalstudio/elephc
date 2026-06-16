@@ -1,0 +1,16 @@
+[package]
+name = "elephc-phar"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pure-Rust PHAR/TAR/ZIP archive bridge for elephc phar:// runtime paths"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+flate2 = "1"
+bzip2 = "0.6"
+bzip2-rs = "0.1"
+sha1 = "0.10"

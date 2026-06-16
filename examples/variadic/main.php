@@ -15,6 +15,23 @@ echo "sum(1, 2, 3) = " . sum(1, 2, 3) . "\n";
 echo "sum(10, 20, 30, 40, 50) = " . sum(10, 20, 30, 40, 50) . "\n";
 echo "sum() = " . sum() . "\n";
 
+// A typed variadic: the element type documents the accepted arguments.
+function average(int ...$nums): int {
+    $count = count($nums);
+    if ($count === 0) {
+        return 0;
+    }
+    return intdiv(array_sum($nums), $count);
+}
+
+echo "average(2, 4, 6) = " . average(2, 4, 6) . "\n";
+
+// Typed variadic on a closure.
+$concat = function (string ...$parts): string {
+    return implode("", $parts);
+};
+echo "concat = " . $concat("el", "eph", "c") . "\n";
+
 // Variadic with regular parameters
 function log_message($level, ...$parts) {
     echo "[" . $level . "] ";

@@ -162,6 +162,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, &inst),
         Op::DynamicPropGet => objects::lower_dynamic_prop_get(ctx, &inst),
         Op::PropSet => objects::lower_prop_set(ctx, &inst),
+        Op::DynamicPropSet => objects::lower_dynamic_prop_set(ctx, &inst),
         Op::InstanceOf => objects::lower_instanceof(ctx, &inst),
         Op::InstanceOfDynamic => objects::lower_instanceof_dynamic(ctx, &inst),
         Op::ScopedConstantGet => scoped_constants::lower_scoped_constant_get(ctx, &inst),
@@ -838,7 +839,6 @@ fn emit_static_late_bound_descriptor_entry_wrapper(
     dynamic_slot: Option<usize>,
 ) -> Result<String> {
     let visible_arg_types = descriptor_visible_arg_types(sig);
-    require_static_late_bound_descriptor_wrapper_arg_types(ctx, method_key, &visible_arg_types)?;
     let wrapper_label = ctx.next_label("static_late_bound_descriptor_entry");
     let done_label = ctx.next_label("static_late_bound_descriptor_entry_done");
     abi::emit_jump(ctx.emitter, &done_label);
@@ -862,7 +862,6 @@ fn emit_instance_method_descriptor_entry_wrapper(
     sig: &FunctionSig,
 ) -> Result<String> {
     let visible_arg_types = descriptor_visible_arg_types(sig);
-    require_instance_descriptor_wrapper_arg_types(ctx, class_name, method_key, &visible_arg_types)?;
     let wrapper_label = ctx.next_label("callable_instance_method");
     let done_label = ctx.next_label("callable_instance_method_done");
     abi::emit_jump(ctx.emitter, &done_label);
@@ -880,55 +879,6 @@ fn descriptor_visible_arg_types(sig: &FunctionSig) -> Vec<PhpType> {
         .collect()
 }
 
-/// Verifies the descriptor entry wrapper can forward this method's visible ABI shape.
-fn require_instance_descriptor_wrapper_arg_types(
-    ctx: &FunctionContext<'_>,
-    class_name: &str,
-    method_key: &str,
-    visible_arg_types: &[PhpType],
-) -> Result<()> {
-    let receiver_ty = descriptor_receiver_type(class_name);
-    let incoming_types = descriptor_entry_incoming_types(visible_arg_types, &receiver_ty);
-    let actual_types = descriptor_entry_actual_types(visible_arg_types, &receiver_ty);
-    let incoming_assignments =
-        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &incoming_types, 0);
-    let actual_assignments =
-        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &actual_types, 0);
-    if incoming_assignments.iter().all(|assignment| assignment.in_register())
-        && actual_assignments.iter().all(|assignment| assignment.in_register())
-    {
-        return Ok(());
-    }
-    Err(CodegenIrError::unsupported(format!(
-        "first-class instance method {}::{} descriptor wrapper stack-passed args",
-        class_name, method_key
-    )))
-}
-
-/// Verifies the late-bound static descriptor wrapper can forward this ABI shape.
-fn require_static_late_bound_descriptor_wrapper_arg_types(
-    ctx: &FunctionContext<'_>,
-    method_key: &str,
-    visible_arg_types: &[PhpType],
-) -> Result<()> {
-    let called_class_ty = PhpType::Int;
-    let incoming_types = descriptor_entry_incoming_types(visible_arg_types, &called_class_ty);
-    let actual_types = descriptor_entry_actual_types(visible_arg_types, &called_class_ty);
-    let incoming_assignments =
-        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &incoming_types, 0);
-    let actual_assignments =
-        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &actual_types, 0);
-    if incoming_assignments.iter().all(|assignment| assignment.in_register())
-        && actual_assignments.iter().all(|assignment| assignment.in_register())
-    {
-        return Ok(());
-    }
-    Err(CodegenIrError::unsupported(format!(
-        "late-bound first-class static method {} descriptor wrapper stack-passed args",
-        method_key
-    )))
-}
-
 /// Emits a descriptor entry wrapper body by reordering visible args after the receiver.
 fn emit_instance_method_descriptor_entry_wrapper_body(
     ctx: &mut FunctionContext<'_>,
@@ -943,17 +893,38 @@ fn emit_instance_method_descriptor_entry_wrapper_body(
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &incoming_types, 0);
     let actual_assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &actual_types, 0);
+    let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
+    let (actual_stack_offsets, actual_overflow_bytes) =
+        descriptor_entry_stack_offsets(&actual_assignments);
     let frame_size = descriptor_entry_frame_size(incoming_types.len());
 
     abi::emit_frame_prologue(ctx.emitter, frame_size);
     for (idx, (ty, assignment)) in incoming_types.iter().zip(incoming_assignments.iter()).enumerate() {
-        store_descriptor_entry_incoming_arg(ctx.emitter, ty, assignment, descriptor_entry_slot_offset(idx));
+        store_descriptor_entry_incoming_arg(
+            ctx.emitter,
+            ty,
+            assignment,
+            descriptor_entry_slot_offset(idx),
+            incoming_stack_offsets[idx],
+        );
+    }
+    if actual_overflow_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, actual_overflow_bytes);
     }
     for (idx, (ty, assignment)) in actual_types.iter().zip(actual_assignments.iter()).enumerate() {
         let source_idx = if idx == 0 { visible_arg_types.len() } else { idx - 1 };
-        load_descriptor_entry_actual_arg(ctx.emitter, ty, assignment, descriptor_entry_slot_offset(source_idx));
+        load_descriptor_entry_actual_arg(
+            ctx.emitter,
+            ty,
+            assignment,
+            descriptor_entry_slot_offset(source_idx),
+            actual_stack_offsets[idx],
+        );
     }
     abi::emit_call_label(ctx.emitter, &method_symbol(class_name, method_key));
+    if actual_overflow_bytes > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
+    }
     abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
 }
@@ -973,20 +944,41 @@ fn emit_static_late_bound_descriptor_entry_wrapper_body(
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &incoming_types, 0);
     let actual_assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &actual_types, 0);
+    let (incoming_stack_offsets, _) = descriptor_entry_stack_offsets(&incoming_assignments);
+    let (actual_stack_offsets, actual_overflow_bytes) =
+        descriptor_entry_stack_offsets(&actual_assignments);
     let frame_size = descriptor_entry_frame_size(incoming_types.len());
 
     abi::emit_frame_prologue(ctx.emitter, frame_size);
     for (idx, (ty, assignment)) in incoming_types.iter().zip(incoming_assignments.iter()).enumerate() {
-        store_descriptor_entry_incoming_arg(ctx.emitter, ty, assignment, descriptor_entry_slot_offset(idx));
+        store_descriptor_entry_incoming_arg(
+            ctx.emitter,
+            ty,
+            assignment,
+            descriptor_entry_slot_offset(idx),
+            incoming_stack_offsets[idx],
+        );
+    }
+    if actual_overflow_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, actual_overflow_bytes);
     }
     for (idx, (ty, assignment)) in actual_types.iter().zip(actual_assignments.iter()).enumerate() {
         let source_idx = if idx == 0 { visible_arg_types.len() } else { idx - 1 };
-        load_descriptor_entry_actual_arg(ctx.emitter, ty, assignment, descriptor_entry_slot_offset(source_idx));
+        load_descriptor_entry_actual_arg(
+            ctx.emitter,
+            ty,
+            assignment,
+            descriptor_entry_slot_offset(source_idx),
+            actual_stack_offsets[idx],
+        );
     }
     if let Some(slot) = dynamic_slot {
         emit_dynamic_static_method_call(ctx, slot);
     } else {
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, method_key));
+    }
+    if actual_overflow_bytes > 0 {
+        abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
     }
     abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
@@ -1022,27 +1014,118 @@ fn descriptor_entry_slot_offset(idx: usize) -> usize {
     (idx + 1) * 16
 }
 
+/// Returns the local/outgoing byte size used for one descriptor wrapper argument.
+fn descriptor_entry_arg_slot_size(ty: &PhpType) -> usize {
+    match ty.codegen_repr() {
+        PhpType::Void | PhpType::Never => 0,
+        _ => 16,
+    }
+}
+
+/// Returns stack offsets for ABI assignments that overflow their target registers.
+fn descriptor_entry_stack_offsets(assignments: &[abi::OutgoingArgAssignment]) -> (Vec<Option<usize>>, usize) {
+    let mut offsets = vec![None; assignments.len()];
+    let mut next_offset = 0usize;
+    for (idx, assignment) in assignments.iter().enumerate() {
+        if assignment.in_register() {
+            continue;
+        }
+        offsets[idx] = Some(next_offset);
+        next_offset += descriptor_entry_arg_slot_size(&assignment.ty);
+    }
+    (offsets, next_offset)
+}
+
+/// Converts a descriptor overflow offset into a caller-stack frame offset.
+fn descriptor_entry_caller_stack_offset(
+    emitter: &crate::codegen::emit::Emitter,
+    stack_offset: usize,
+) -> usize {
+    let cursor = abi::IncomingArgCursor::for_target(emitter.target, 0);
+    cursor.caller_stack_offset + stack_offset
+}
+
+/// Returns integer scratch registers that cannot overlap live descriptor argument registers.
+fn descriptor_entry_int_spill_pair(
+    emitter: &crate::codegen::emit::Emitter,
+) -> (&'static str, &'static str) {
+    let lo_reg = abi::secondary_scratch_reg(emitter);
+    let hi_reg = match emitter.target.arch {
+        Arch::AArch64 => abi::tertiary_scratch_reg(emitter),
+        Arch::X86_64 => "r11",
+    };
+    (lo_reg, hi_reg)
+}
+
 /// Stores one incoming descriptor entry argument into its spill slot.
 fn store_descriptor_entry_incoming_arg(
     emitter: &mut crate::codegen::emit::Emitter,
     ty: &PhpType,
     assignment: &abi::OutgoingArgAssignment,
     offset: usize,
+    stack_offset: Option<usize>,
 ) {
     match ty.codegen_repr() {
         PhpType::Float => {
-            let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
+            let reg = if assignment.in_register() {
+                abi::float_arg_reg_name(emitter.target, assignment.start_reg)
+            } else {
+                let caller_offset =
+                    descriptor_entry_caller_stack_offset(emitter, stack_offset.expect("stack offset"));
+                let spill_reg = match emitter.target.arch {
+                    Arch::AArch64 => "d15",
+                    Arch::X86_64 => "xmm15",
+                };
+                abi::load_from_caller_stack(emitter, spill_reg, caller_offset);
+                spill_reg
+            };
             abi::store_at_offset(emitter, reg, offset);
         }
         PhpType::Str => {
-            let ptr_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
-            let len_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1);
+            let (ptr_reg, len_reg) = if assignment.in_register() {
+                (
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg),
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1),
+                )
+            } else {
+                let caller_offset =
+                    descriptor_entry_caller_stack_offset(emitter, stack_offset.expect("stack offset"));
+                let (ptr_spill_reg, len_spill_reg) = descriptor_entry_int_spill_pair(emitter);
+                abi::load_from_caller_stack(emitter, ptr_spill_reg, caller_offset);
+                abi::load_from_caller_stack(emitter, len_spill_reg, caller_offset + 8);
+                (ptr_spill_reg, len_spill_reg)
+            };
             abi::store_at_offset(emitter, ptr_reg, offset);
             abi::store_at_offset(emitter, len_reg, offset - 8);
         }
+        PhpType::TaggedScalar => {
+            let (payload_reg, tag_reg) = if assignment.in_register() {
+                (
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg),
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1),
+                )
+            } else {
+                let caller_offset =
+                    descriptor_entry_caller_stack_offset(emitter, stack_offset.expect("stack offset"));
+                let (payload_spill_reg, tag_spill_reg) = descriptor_entry_int_spill_pair(emitter);
+                abi::load_from_caller_stack(emitter, payload_spill_reg, caller_offset);
+                abi::load_from_caller_stack(emitter, tag_spill_reg, caller_offset + 8);
+                (payload_spill_reg, tag_spill_reg)
+            };
+            abi::store_at_offset(emitter, payload_reg, offset);
+            abi::store_at_offset(emitter, tag_reg, offset - 8);
+        }
         PhpType::Void | PhpType::Never => {}
         _ => {
-            let reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
+            let reg = if assignment.in_register() {
+                abi::int_arg_reg_name(emitter.target, assignment.start_reg)
+            } else {
+                let caller_offset =
+                    descriptor_entry_caller_stack_offset(emitter, stack_offset.expect("stack offset"));
+                let spill_reg = abi::secondary_scratch_reg(emitter);
+                abi::load_from_caller_stack(emitter, spill_reg, caller_offset);
+                spill_reg
+            };
             abi::store_at_offset(emitter, reg, offset);
         }
     }
@@ -1054,22 +1137,66 @@ fn load_descriptor_entry_actual_arg(
     ty: &PhpType,
     assignment: &abi::OutgoingArgAssignment,
     offset: usize,
+    stack_offset: Option<usize>,
 ) {
     match ty.codegen_repr() {
         PhpType::Float => {
-            let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
+            let reg = if assignment.in_register() {
+                abi::float_arg_reg_name(emitter.target, assignment.start_reg)
+            } else {
+                match emitter.target.arch {
+                    Arch::AArch64 => "d15",
+                    Arch::X86_64 => "xmm15",
+                }
+            };
             abi::load_at_offset(emitter, reg, offset);
+            if let Some(out_offset) = stack_offset {
+                abi::emit_store_to_sp(emitter, reg, out_offset);
+            }
         }
         PhpType::Str => {
-            let ptr_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
-            let len_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1);
+            let (ptr_reg, len_reg) = if assignment.in_register() {
+                (
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg),
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1),
+                )
+            } else {
+                descriptor_entry_int_spill_pair(emitter)
+            };
             abi::load_at_offset(emitter, ptr_reg, offset);
             abi::load_at_offset(emitter, len_reg, offset - 8);
+            if let Some(out_offset) = stack_offset {
+                abi::emit_store_to_sp(emitter, ptr_reg, out_offset);
+                abi::emit_store_to_sp(emitter, len_reg, out_offset + 8);
+            }
+        }
+        PhpType::TaggedScalar => {
+            let (payload_reg, tag_reg) = if assignment.in_register() {
+                (
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg),
+                    abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1),
+                )
+            } else {
+                descriptor_entry_int_spill_pair(emitter)
+            };
+            abi::load_at_offset(emitter, payload_reg, offset);
+            abi::load_at_offset(emitter, tag_reg, offset - 8);
+            if let Some(out_offset) = stack_offset {
+                abi::emit_store_to_sp(emitter, payload_reg, out_offset);
+                abi::emit_store_to_sp(emitter, tag_reg, out_offset + 8);
+            }
         }
         PhpType::Void | PhpType::Never => {}
         _ => {
-            let reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
+            let reg = if assignment.in_register() {
+                abi::int_arg_reg_name(emitter.target, assignment.start_reg)
+            } else {
+                abi::secondary_scratch_reg(emitter)
+            };
             abi::load_at_offset(emitter, reg, offset);
+            if let Some(out_offset) = stack_offset {
+                abi::emit_store_to_sp(emitter, reg, out_offset);
+            }
         }
     }
 }

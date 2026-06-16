@@ -1,6 +1,6 @@
 [package]
 name = "elephc"
-version = "0.23.10"
+version = "0.23.13"
 edition = "2021"
 description = "A PHP-to-native AOT compiler"
 license = "MIT"
@@ -12,12 +12,13 @@ categories = ["compilers", "command-line-utilities"]
 
 # The bridge staticlibs are default workspace members so plain `cargo build` /
 # `cargo test` materialize libelephc_tls.a (https:// wrapper),
-# libelephc_pdo.a (PDO: SQLite + PostgreSQL), and libelephc_crypto.a
-# (hash/HMAC family) into target/<profile>/, where linker.rs locates them for
-# programs that use those features.
+# libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_crypto.a
+# (hash/HMAC family), and libelephc_phar.a (runtime phar:// archive reads) into
+# target/<profile>/, where linker.rs locates them for programs that use those
+# features.
 [workspace]
-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto"]
-default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto"]
+members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar"]
+default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar"]
 resolver = "2"
 
 [[bin]]
@@ -33,6 +34,7 @@ flate2 = "1"
 # bzip2-rs is a PURE-RUST bzip2 decoder (no system libbz2, no C toolchain) used by
 # the compiler to decompress bzip2 phar:// entries at compile time. Decompress-only.
 bzip2-rs = "0.1"
+elephc-phar = { path = "crates/elephc-phar" }
 
 # elephc-tls / elephc-pdo are runtime staticlibs, not used by the Rust compiler
 # itself — but the codegen test runner links libelephc_tls.a (https:// wrapper)
@@ -45,6 +47,7 @@ bzip2-rs = "0.1"
 elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
 elephc-crypto = { path = "crates/elephc-crypto" }
+elephc-phar = { path = "crates/elephc-phar" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.

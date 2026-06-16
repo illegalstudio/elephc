@@ -223,6 +223,7 @@ pub(super) fn resolve_expr(
         ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
             is_arrow,
@@ -232,6 +233,7 @@ pub(super) fn resolve_expr(
         } => ExprKind::Closure {
             params: resolve_params(params, base_dir, declared_once, include_chain, state, function_variants)?,
             variadic,
+            variadic_type,
             return_type,
             body: resolve_isolated(
                 body,

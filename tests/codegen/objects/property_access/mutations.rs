@@ -138,6 +138,204 @@ echo $r->headers["Host"];
     assert_eq!(out, "example.com");
 }
 
+/// Verifies dynamic property writes through a `mixed` receiver can assign
+/// method-computed names and values into declared mixed object properties.
+#[test]
+fn test_dynamic_property_set_on_mixed_receiver_from_method_values() {
+    let out = compile_and_run(
+        r#"<?php
+class Row {
+    public mixed $id;
+    public mixed $name;
+}
+
+class Hydrator {
+    private function value(int $i): mixed {
+        if ($i == 0) {
+            return 1;
+        }
+        return "Ada";
+    }
+
+    private function column(int $i): string {
+        if ($i == 0) {
+            return "id";
+        }
+        return "name";
+    }
+
+    public function fill(mixed $object): mixed {
+        $_name = $this->column(0);
+        $object->{$_name} = $this->value(0);
+        $_name = $this->column(1);
+        $object->{$_name} = $this->value(1);
+        return $object;
+    }
+}
+
+$row = (new Hydrator())->fill(new Row());
+echo (($row instanceof Row) ? "Row" : "not-row") . ":" . $row->id . ":" . $row->name;
+"#,
+    );
+    assert_eq!(out, "Row:1:Ada");
+}
+
+/// Verifies dynamic property writes through a `mixed` receiver preserve mixed
+/// string values built by repeated concatenation before assignment.
+#[test]
+fn test_dynamic_property_set_on_mixed_receiver_with_concat_built_string() {
+    let out = compile_and_run(
+        r#"<?php
+class Row {
+    public mixed $id;
+    public mixed $name;
+}
+
+class Hydrator {
+    private function value(int $i): mixed {
+        if ($i == 0) {
+            return 1;
+        }
+        $_out = "";
+        $_out = $_out . chr(65);
+        $_out = $_out . chr(100);
+        $_out = $_out . chr(97);
+        return $_out;
+    }
+
+    private function column(int $i): string {
+        if ($i == 0) {
+            return "id";
+        }
+        return "name";
+    }
+
+    public function fill(mixed $object): mixed {
+        $_name = $this->column(0);
+        $object->{$_name} = $this->value(0);
+        $_name = $this->column(1);
+        $object->{$_name} = $this->value(1);
+        return $object;
+    }
+}
+
+$row = (new Hydrator())->fill(new Row());
+echo (($row instanceof Row) ? "Row" : "not-row") . ":" . $row->id . ":" . $row->name;
+"#,
+    );
+    assert_eq!(out, "Row:1:Ada");
+}
+
+/// Verifies dynamic property writes accept runtime-built property names and
+/// runtime-built mixed string values when hydrating a declared object.
+#[test]
+fn test_dynamic_property_set_on_mixed_receiver_with_runtime_name_and_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Row {
+    public mixed $id;
+    public mixed $name;
+}
+
+class Hydrator {
+    private function value(int $i): mixed {
+        if ($i == 0) {
+            return 1;
+        }
+        $_out = "";
+        $_out = $_out . chr(65);
+        $_out = $_out . chr(100);
+        $_out = $_out . chr(97);
+        return $_out;
+    }
+
+    private function column(int $i): string {
+        $_name = "";
+        if ($i == 0) {
+            $_name = $_name . chr(105);
+            $_name = $_name . chr(100);
+            return $_name;
+        }
+        $_name = $_name . chr(110);
+        $_name = $_name . chr(97);
+        $_name = $_name . chr(109);
+        $_name = $_name . chr(101);
+        return $_name;
+    }
+
+    public function fill(mixed $object): mixed {
+        $_name = $this->column(0);
+        $object->{$_name} = $this->value(0);
+        $_name = $this->column(1);
+        $object->{$_name} = $this->value(1);
+        return $object;
+    }
+}
+
+$row = (new Hydrator())->fill(new Row());
+echo (($row instanceof Row) ? "Row" : "not-row") . ":" . $row->id . ":" . $row->name;
+"#,
+    );
+    assert_eq!(out, "Row:1:Ada");
+}
+
+/// Verifies a prelude-style hydrator can instantiate from a mixed class-string
+/// parameter and then assign runtime dynamic property names into the object.
+#[test]
+fn test_dynamic_property_set_after_mixed_dynamic_instantiation() {
+    let out = compile_and_run(
+        r#"<?php
+class Row {
+    public mixed $id;
+    public mixed $name;
+}
+
+class Hydrator {
+    private function value(int $i): mixed {
+        if ($i == 0) {
+            return 1;
+        }
+        $_out = "";
+        $_out = $_out . chr(65);
+        $_out = $_out . chr(100);
+        $_out = $_out . chr(97);
+        return $_out;
+    }
+
+    private function column(int $i): string {
+        $_name = "";
+        if ($i == 0) {
+            $_name = $_name . chr(105);
+            $_name = $_name . chr(100);
+            return $_name;
+        }
+        $_name = $_name . chr(110);
+        $_name = $_name . chr(97);
+        $_name = $_name . chr(109);
+        $_name = $_name . chr(101);
+        return $_name;
+    }
+
+    private function assign(mixed $object): mixed {
+        $_name = $this->column(0);
+        $object->{$_name} = $this->value(0);
+        $_name = $this->column(1);
+        $object->{$_name} = $this->value(1);
+        return $object;
+    }
+
+    public function fetch(mixed $classOrObject = null): mixed {
+        return $this->assign(new $classOrObject());
+    }
+}
+
+$row = (new Hydrator())->fetch(Row::class);
+echo (($row instanceof Row) ? "Row" : "not-row") . ":" . $row->id . ":" . $row->name;
+"#,
+    );
+    assert_eq!(out, "Row:1:Ada");
+}
+
 /// Verifies that an untyped `public $headers = []` property (array default)
 /// accepts a string-keyed assignment (`$r->headers["Host"] = ...`) and the
 /// value is retrievable via the same key.

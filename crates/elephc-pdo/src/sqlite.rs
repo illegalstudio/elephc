@@ -99,7 +99,13 @@ impl SqliteConn {
             return 0;
         };
         let rc = unsafe {
-            ffi::sqlite3_exec(self.db, c_sql.as_ptr(), None, ptr::null_mut(), ptr::null_mut())
+            ffi::sqlite3_exec(
+                self.db,
+                c_sql.as_ptr(),
+                None,
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
         };
         (rc == ffi::SQLITE_OK) as i64
     }
@@ -246,14 +252,21 @@ impl SqliteStmt {
 
     /// Returns the current row's column `i` (0-based) text representation.
     pub fn column_text(&self, i: i64) -> String {
+        String::from_utf8_lossy(&self.column_data(i)).into_owned()
+    }
+
+    /// Returns the current row's column `i` (0-based) as raw SQLite bytes.
+    /// This uses SQLite's byte-counted column API, so embedded NUL bytes are
+    /// preserved for BLOBs and text values alike.
+    pub fn column_data(&self, i: i64) -> Vec<u8> {
         unsafe {
-            let p = ffi::sqlite3_column_text(self.ptr, i as c_int);
+            let p = ffi::sqlite3_column_blob(self.ptr, i as c_int);
             if p.is_null() {
-                String::new()
+                Vec::new()
             } else {
                 let n = ffi::sqlite3_column_bytes(self.ptr, i as c_int);
                 let bytes = std::slice::from_raw_parts(p as *const u8, n.max(0) as usize);
-                String::from_utf8_lossy(bytes).into_owned()
+                bytes.to_vec()
             }
         }
     }

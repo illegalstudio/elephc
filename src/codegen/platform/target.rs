@@ -227,6 +227,17 @@ impl Platform {
         matches!(self, Platform::Linux)
     }
 
+    /// Returns the platform errno value for `EAGAIN`/`EWOULDBLOCK`.
+    ///
+    /// Non-blocking stream reads use this to distinguish a transient would-block
+    /// result from EOF or a permanent read failure.
+    pub fn would_block_errno(&self) -> u32 {
+        match self {
+            Platform::MacOS => 35,
+            Platform::Linux => 11,
+        }
+    }
+
     /// Returns the size of `struct stat` for this platform in bytes.
     ///
     /// Used when allocating the stat buffer passed to `*at()` syscalls.

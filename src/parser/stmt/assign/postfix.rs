@@ -37,8 +37,9 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     let lhs = &tokens[start..assign_pos];
-    let is_append =
-        lhs.len() >= 3 && lhs[lhs.len() - 2].0 == Token::LBracket && lhs[lhs.len() - 1].0 == Token::RBracket;
+    let is_append = lhs.len() >= 3
+        && lhs[lhs.len() - 2].0 == Token::LBracket
+        && lhs[lhs.len() - 1].0 == Token::RBracket;
     if is_append && op != AssignmentOperator::Assign {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
@@ -51,7 +52,11 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     let mut lhs_pos = 0;
-    let lhs_expr_tokens = if is_append { &lhs[..lhs.len() - 2] } else { lhs };
+    let lhs_expr_tokens = if is_append {
+        &lhs[..lhs.len() - 2]
+    } else {
+        lhs
+    };
     let lhs_expr = parse_expr(lhs_expr_tokens, &mut lhs_pos)?;
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
@@ -88,30 +93,41 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
 
     let stmt = match lhs_expr.kind {
-        ExprKind::ArrayAccess { array, index } => {
-            match array.kind {
-                ExprKind::Variable(array) => StmtKind::ArrayAssign {
-                    array,
-                    index: *index,
-                    value,
-                },
-                ExprKind::PropertyAccess { object, property } => StmtKind::PropertyArrayAssign {
-                    object,
-                    property,
-                    index: *index,
-                    value,
-                },
-                _ => StmtKind::NestedArrayAssign {
-                    target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
-                    value,
-                },
-            }
-        }
+        ExprKind::ArrayAccess { array, index } => match array.kind {
+            ExprKind::Variable(array) => StmtKind::ArrayAssign {
+                array,
+                index: *index,
+                value,
+            },
+            ExprKind::PropertyAccess { object, property } => StmtKind::PropertyArrayAssign {
+                object,
+                property,
+                index: *index,
+                value,
+            },
+            _ => StmtKind::NestedArrayAssign {
+                target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
+                value,
+            },
+        },
         ExprKind::PropertyAccess { object, property } => StmtKind::PropertyAssign {
             object,
             property,
             value,
         },
+        ExprKind::DynamicPropertyAccess { object, property } => StmtKind::ExprStmt(Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(
+                    ExprKind::DynamicPropertyAccess { object, property },
+                    lhs_span,
+                )),
+                value: Box::new(value),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        )),
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 
@@ -144,11 +160,8 @@ fn lower_nested_append_assignment(
         },
         span,
     ));
-    let write_back = assignment_target_store_stmt(
-        target,
-        Expr::new(ExprKind::Variable(temp), span),
-        span,
-    )?;
+    let write_back =
+        assignment_target_store_stmt(target, Expr::new(ExprKind::Variable(temp), span), span)?;
     Ok(lowerer.finish(write_back))
 }
 
@@ -162,13 +175,11 @@ fn assignment_target_store_stmt(
 ) -> Result<StmtKind, CompileError> {
     match target.kind {
         ExprKind::Variable(name) => Ok(StmtKind::Assign { name, value }),
-        ExprKind::PropertyAccess { object, property } => {
-            Ok(StmtKind::PropertyAssign {
-                object,
-                property,
-                value,
-            })
-        }
+        ExprKind::PropertyAccess { object, property } => Ok(StmtKind::PropertyAssign {
+            object,
+            property,
+            value,
+        }),
         ExprKind::StaticPropertyAccess { receiver, property } => {
             Ok(StmtKind::StaticPropertyAssign {
                 receiver,
@@ -182,14 +193,12 @@ fn assignment_target_store_stmt(
                 index: *index,
                 value,
             }),
-            ExprKind::PropertyAccess { object, property } => {
-                Ok(StmtKind::PropertyArrayAssign {
-                    object,
-                    property,
-                    index: *index,
-                    value,
-                })
-            }
+            ExprKind::PropertyAccess { object, property } => Ok(StmtKind::PropertyArrayAssign {
+                object,
+                property,
+                index: *index,
+                value,
+            }),
             ExprKind::StaticPropertyAccess { receiver, property } => {
                 Ok(StmtKind::StaticPropertyArrayAssign {
                     receiver,
@@ -265,13 +274,18 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     let lhs = &tokens[start..assign_pos];
-    let is_append =
-        lhs.len() >= 3 && lhs[lhs.len() - 2].0 == Token::LBracket && lhs[lhs.len() - 1].0 == Token::RBracket;
+    let is_append = lhs.len() >= 3
+        && lhs[lhs.len() - 2].0 == Token::LBracket
+        && lhs[lhs.len() - 1].0 == Token::RBracket;
     if is_append && op != AssignmentOperator::Assign {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
     let mut lhs_pos = 0;
-    let lhs_expr_tokens = if is_append { &lhs[..lhs.len() - 2] } else { lhs };
+    let lhs_expr_tokens = if is_append {
+        &lhs[..lhs.len() - 2]
+    } else {
+        lhs
+    };
     let lhs_expr = parse_expr(lhs_expr_tokens, &mut lhs_pos)?;
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
@@ -401,6 +415,9 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
             can_replay_assignment_target(array) && can_replay_assignment_target(index)
         }
         ExprKind::PropertyAccess { object, .. } => can_replay_assignment_target(object),
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            can_replay_assignment_target(object) && can_replay_assignment_target(property)
+        }
         ExprKind::BinaryOp { left, right, .. } => {
             can_replay_assignment_target(left) && can_replay_assignment_target(right)
         }
@@ -414,8 +431,7 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
         | ExprKind::Spread(value) => can_replay_assignment_target(value),
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default } => {
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             can_replay_assignment_target(value) && can_replay_assignment_target(default)
         }
         ExprKind::Ternary {
@@ -433,7 +449,8 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
         | ExprKind::ConstRef(_)
-        | ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => true,
         _ => false,
     }
@@ -469,7 +486,11 @@ fn lower_effectful_postfix_assignment(
                     span,
                 );
                 let value = assignment_value(target, op, rhs, span);
-                StmtKind::ArrayAssign { array, index, value }
+                StmtKind::ArrayAssign {
+                    array,
+                    index,
+                    value,
+                }
             }
             ExprKind::PropertyAccess { object, property } => {
                 let object = Box::new(lowerer.stabilize(*object));

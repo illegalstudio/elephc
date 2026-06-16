@@ -202,6 +202,43 @@ fn test_error_hash_wrong_args() {
     expect_error(r#"<?php hash("md5");"#, "hash() takes 2 or 3 arguments");
 }
 
+/// Verifies the remaining hash-family builtins reject invalid argument counts.
+#[test]
+fn test_error_hash_family_wrong_args() {
+    for (source, message) in [
+        (
+            r#"<?php hash_hmac("sha256", "data");"#,
+            "hash_hmac() takes 3 or 4 arguments",
+        ),
+        (
+            r#"<?php hash_equals("known");"#,
+            "hash_equals() takes exactly 2 arguments",
+        ),
+        (
+            "<?php hash_algos(1);",
+            "hash_algos() takes no arguments",
+        ),
+        (
+            "<?php hash_init();",
+            "hash_init() flags/HASH_HMAC streaming mode is not supported; use hash_hmac() for HMAC",
+        ),
+        (
+            "<?php hash_update();",
+            "hash_update() takes exactly 2 arguments",
+        ),
+        (
+            "<?php hash_final();",
+            "hash_final() takes 1 or 2 arguments",
+        ),
+        (
+            "<?php hash_copy();",
+            "hash_copy() takes exactly 1 argument",
+        ),
+    ] {
+        expect_error(source, message);
+    }
+}
+
 /// Verifies that `sscanf()` with only one argument produces the correct arity error.
 #[test]
 fn test_error_sscanf_wrong_args() {

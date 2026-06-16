@@ -1,3 +1,5 @@
 *.s
 *.o
 main
+runtime-write.phar
+runtime-write.zip

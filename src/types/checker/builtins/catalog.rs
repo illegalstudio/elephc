@@ -1,13 +1,14 @@
 //! Purpose:
 //! Defines the canonical set of PHP builtin functions known to the type system.
-//! Provides case-insensitive lookup used by name resolution, redeclaration checks, and function_exists semantics.
+//! Provides case-insensitive lookup used by name resolution, redeclaration checks, and PHP visibility checks.
 //!
 //! Called from:
 //! - `crate::types::checker::builtins`
 //! - `crate::name_resolver`
 //!
 //! Key details:
-//! - This catalog is the source of truth for PHP-visible builtin names; avoid parallel tables.
+//! - `SUPPORTED_BUILTIN_FUNCTIONS` is the source of truth for PHP-visible builtin names.
+//! - `INTERNAL_BUILTIN_FUNCTIONS` exists only for compiler-generated synthetic bodies.
 
 const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "abs",
@@ -214,6 +215,8 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "lcfirst",
     "link",
     "linkinfo",
+    "lchgrp",
+    "lchown",
     "log",
     "log10",
     "log2",
@@ -269,6 +272,8 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "readline",
     "readlink",
     "realpath",
+    "realpath_cache_get",
+    "realpath_cache_size",
     "rename",
     "rewind",
     "rmdir",
@@ -405,14 +410,19 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "wordwrap",
 ];
 
-/// Checks if the exact (lowercase) name is in the supported builtin list.
+const INTERNAL_BUILTIN_FUNCTIONS: &[&str] = &[
+    "__elephc_phar_list_entries",
+    "__elephc_phar_set_compression",
+];
+
+/// Checks if the exact (lowercase) name is in the PHP-visible or internal builtin lists.
 /// Does not perform case folding; use `is_supported_builtin_function` for case-insensitive lookup.
 fn is_supported_builtin_function_exact(name: &str) -> bool {
-    SUPPORTED_BUILTIN_FUNCTIONS.contains(&name)
+    SUPPORTED_BUILTIN_FUNCTIONS.contains(&name) || INTERNAL_BUILTIN_FUNCTIONS.contains(&name)
 }
 
-/// Returns the static slice of all supported builtin function names.
-/// Used by name resolution and `function_exists` to enumerate or verify builtins.
+/// Returns the static slice of PHP-visible supported builtin function names.
+/// Used by callers that must enumerate only the public builtin surface.
 pub(crate) fn supported_builtin_function_names() -> &'static [&'static str] {
     SUPPORTED_BUILTIN_FUNCTIONS
 }
@@ -422,6 +432,12 @@ pub(crate) fn supported_builtin_function_names() -> &'static [&'static str] {
 pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     let canonical = name.to_ascii_lowercase();
     is_supported_builtin_function_exact(&canonical).then_some(canonical)
+}
+
+/// Returns true only for PHP-visible builtin functions.
+pub(crate) fn is_php_visible_builtin_function(name: &str) -> bool {
+    let canonical = name.to_ascii_lowercase();
+    SUPPORTED_BUILTIN_FUNCTIONS.contains(&canonical.as_str())
 }
 
 /// Returns `true` if the name is a supported builtin function (case-insensitive).

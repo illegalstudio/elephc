@@ -72,6 +72,7 @@ fn json_serialize_method() -> ClassMethod {
         has_body: false,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
         body: Vec::new(),
         span: crate::span::Span::dummy(),

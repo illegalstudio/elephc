@@ -12,11 +12,15 @@
 //!   compile time (relative paths resolve against the compiler's working
 //!   directory), the requested entry's uncompressed bytes are embedded in the
 //!   binary's data section, and reads come from that embedded copy — mirroring
-//!   how `data://` lowers a literal payload. Read-only entries from the native
-//!   PHAR format; uncompressed, gzip (raw-DEFLATE), and bzip2 entries are all
-//!   decompressed at compile time.
+//!   how `data://` lowers a literal payload. Read-only entries from native PHAR,
+//!   tar-based PHAR, and zip-based PHAR containers are supported; native gzip
+//!   (raw-DEFLATE), native bzip2, and zip deflate entries are decompressed at
+//!   compile time.
 //! - A missing archive or a missing entry lowers to PHP `false`, matching a
 //!   failed `fopen()`.
+//! - Write-mode literal URLs seed the shared PHAR write runtime. The splitter
+//!   recognizes `.phar/`, `.tar/`, and `.zip/` archive boundaries so the
+//!   runtime bridge can preserve the requested archive family.
 //! - PHAR binary layout parsed here (all integers little-endian): a PHP stub
 //!   ending in `__HALT_COMPILER();`, then the manifest
 //!   (`manifest_len`, `num_files`, 2-byte api version, 4-byte global flags,
@@ -50,8 +54,8 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("fopen() phar:// stream");
-    // A write/append/create mode lowers to the phar-write path (Milestone-1):
-    // a single uncompressed entry buffered in memory and flushed on fclose().
+    // Write/append/create modes lower to the PHAR write runtime/bridge, which
+    // can update native PHAR, tar, and ZIP archives while preserving siblings.
     if let ExprKind::StringLiteral(mode) = &args[1].kind {
         if is_phar_write_mode(mode) {
             return emit_write(args, emitter, ctx, data);
@@ -61,9 +65,8 @@ pub fn emit(
         ExprKind::StringLiteral(path) => extract_phar_entry(path),
         _ => None,
     };
-    // The mode and optional fopen args are evaluated for side effects;
-    // phar:// streams are read-only regardless of the requested mode
-    // (Milestone-1).
+    // Read-mode literal phar:// URLs embed the resolved payload; optional fopen
+    // args are still evaluated for PHP-visible side effects.
     super::fopen::emit_mode_and_ignored_optional_args(args, emitter, ctx, data);
     match bytes {
         Some(payload) => {
@@ -90,7 +93,7 @@ pub fn emit(
 }
 
 /// Returns true for `fopen()` modes that open a `phar://` entry for writing.
-/// Milestone-1 treats `w`/`a`/`c`/`x` (and their `+` variants) as write modes;
+/// `w`/`a`/`c`/`x` and their `+` variants use the runtime write bridge, while
 /// `r`/`r+` use the read path.
 fn is_phar_write_mode(mode: &str) -> bool {
     matches!(
@@ -101,15 +104,19 @@ fn is_phar_write_mode(mode: &str) -> bool {
 
 /// Splits a `phar://<archive>/<entry>` write URL into `(archive_path, entry)`.
 /// Unlike the read path the archive need not exist yet, so the split happens at
-/// the first `.phar/` boundary; if none is present it falls back to the longest
-/// existing-file prefix. Returns `None` when neither rule yields an entry.
-fn resolve_write_target(url: &str) -> Option<(String, String)> {
+/// the first `.phar/`, `.tar/`, or `.zip/` boundary; if none is present it
+/// falls back to the longest existing-file prefix. Returns `None` when neither
+/// rule yields an entry.
+pub(crate) fn resolve_write_target(url: &str) -> Option<(String, String)> {
     let rest = url.strip_prefix("phar://")?;
-    if let Some(idx) = rest.find(".phar/") {
-        let archive = &rest[..idx + 5];
-        let entry = &rest[idx + 6..];
-        if !entry.is_empty() {
-            return Some((archive.to_string(), entry.to_string()));
+    for suffix in [".phar/", ".tar/", ".zip/"] {
+        if let Some(idx) = rest.find(suffix) {
+            let archive_end = idx + suffix.len() - 1;
+            let archive = &rest[..archive_end];
+            let entry = &rest[archive_end + 1..];
+            if !entry.is_empty() {
+                return Some((archive.to_string(), entry.to_string()));
+            }
         }
     }
     let (archive, entry) = split_archive_entry(rest)?;
@@ -241,8 +248,11 @@ pub(crate) fn emit_file_put_contents_write(
 /// Resolves a `phar://<archive>/<entry>` URL to the entry's uncompressed bytes.
 /// Splits the archive (the longest leading path that names an existing file)
 /// from the inner entry, reads and parses the archive, and returns the entry
-/// payload, or `None` on any failure (missing file/entry, compressed entry).
+/// payload, or `None` on any failure.
 pub(crate) fn extract_phar_entry(url: &str) -> Option<Vec<u8>> {
+    if let Some(bytes) = elephc_phar::extract_url_bytes(url.as_bytes()) {
+        return Some(bytes);
+    }
     let rest = url.strip_prefix("phar://")?;
     let (archive, entry) = split_archive_entry(rest)?;
     let archive_bytes = std::fs::read(archive).ok()?;
@@ -267,8 +277,7 @@ fn split_archive_entry(rest: &str) -> Option<(&str, &str)> {
 }
 
 /// Parses the native PHAR manifest in `data` and returns the uncompressed bytes
-/// of `entry`, or `None` if the archive is malformed, the entry is absent, or
-/// the entry is compressed (out of scope for Milestone-1).
+/// of `entry`, or `None` if the archive is malformed or the entry is absent.
 fn parse_phar_entry(data: &[u8], entry: &str) -> Option<Vec<u8>> {
     let halt = b"__HALT_COMPILER();";
     let halt_idx = find_subslice(data, halt)?;
@@ -373,7 +382,7 @@ fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// content and patches the size/CRC fields, which sit at fixed negative offsets
 /// from the end of the template (uncompressed at -24, compressed at -16, crc at
 /// -12) — so `__rt_phar_write_finalize` derives them from the template length.
-fn build_phar_write_template(entry: &str) -> Vec<u8> {
+pub(crate) fn build_phar_write_template(entry: &str) -> Vec<u8> {
     let name = entry.as_bytes();
     let mut out = Vec::new();
     out.extend_from_slice(b"<?php __HALT_COMPILER(); ?>\r\n");

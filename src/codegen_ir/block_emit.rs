@@ -34,7 +34,9 @@ use super::function_variants;
 use super::literal_defaults::{
     emit_array_literal_default_to_result, emit_assoc_array_literal_default_to_result,
     emit_boxed_null_literal_to_result,
-    emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
+    emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
+    emit_boxed_int_literal_to_result, emit_boxed_string_literal_default_to_result,
+    emit_empty_assoc_array_literal_to_result,
     emit_string_literal_default_to_result, emit_tagged_null_literal_to_result,
     literal_default_value, LiteralDefaultValue,
 };
@@ -594,6 +596,15 @@ fn emit_static_property_default_value(
         }
         LiteralDefaultValue::BoxedStr(value) => {
             emit_boxed_string_literal_default_to_result(ctx, value);
+        }
+        LiteralDefaultValue::BoxedInt(value) => {
+            emit_boxed_int_literal_to_result(ctx, *value);
+        }
+        LiteralDefaultValue::BoxedBool(value) => {
+            emit_boxed_bool_literal_to_result(ctx, *value);
+        }
+        LiteralDefaultValue::BoxedFloat(value) => {
+            emit_boxed_float_literal_to_result(ctx, *value);
         }
         LiteralDefaultValue::Array {
             elem_type,

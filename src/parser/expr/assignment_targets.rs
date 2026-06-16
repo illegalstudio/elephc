@@ -15,13 +15,15 @@ use crate::parser::stmt::can_replay_assignment_target;
 use crate::span::Span;
 
 /// Returns true if the expression is a non-local assignment target (array-access,
-/// property-access, or static-property-access). These require stabilization because
-/// the base expression may be evaluated multiple times during assignment.
+/// property-access, dynamic-property-access, or static-property-access). These
+/// require stabilization because the base expression may be evaluated multiple
+/// times during assignment.
 pub(super) fn is_non_local_assignment_target(expr: &Expr) -> bool {
     matches!(
         &expr.kind,
         ExprKind::ArrayAccess { .. }
             | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
             | ExprKind::StaticPropertyAccess { .. }
     )
 }
@@ -33,6 +35,7 @@ pub(super) fn is_assignment_expression_target(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_)
         | ExprKind::PropertyAccess { .. }
+        | ExprKind::DynamicPropertyAccess { .. }
         | ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::ArrayAccess { array, .. } => is_array_assignment_base(array),
         _ => false,
@@ -45,6 +48,7 @@ fn is_array_assignment_base(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_)
         | ExprKind::PropertyAccess { .. }
+        | ExprKind::DynamicPropertyAccess { .. }
         | ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::ArrayAccess { array, .. } => is_array_assignment_base(array),
         _ => false,
@@ -149,10 +153,16 @@ impl AssignmentExpressionLowerer {
                 },
                 span,
             ),
-            ExprKind::StaticPropertyAccess { receiver, property } => Expr::new(
-                ExprKind::StaticPropertyAccess { receiver, property },
+            ExprKind::DynamicPropertyAccess { object, property } => Expr::new(
+                ExprKind::DynamicPropertyAccess {
+                    object: Box::new(self.stabilize_receiver(*object, rhs)),
+                    property: Box::new(self.stabilize_dimension_index(*property, rhs)),
+                },
                 span,
             ),
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                Expr::new(ExprKind::StaticPropertyAccess { receiver, property }, span)
+            }
             other => Expr::new(other, span),
         }
     }
@@ -169,6 +179,13 @@ impl AssignmentExpressionLowerer {
                 },
                 span,
             ),
+            ExprKind::DynamicPropertyAccess { object, property } => Expr::new(
+                ExprKind::DynamicPropertyAccess {
+                    object: Box::new(self.stabilize_receiver(*object, rhs)),
+                    property: Box::new(self.stabilize_dimension_index(*property, rhs)),
+                },
+                span,
+            ),
             ExprKind::ArrayAccess { array, index } => Expr::new(
                 ExprKind::ArrayAccess {
                     array: Box::new(self.stabilize_receiver(*array, rhs)),
@@ -177,8 +194,8 @@ impl AssignmentExpressionLowerer {
                 span,
             ),
             kind @ (ExprKind::Variable(_)
-                | ExprKind::This
-                | ExprKind::StaticPropertyAccess { .. }) => Expr::new(kind, span),
+            | ExprKind::This
+            | ExprKind::StaticPropertyAccess { .. }) => Expr::new(kind, span),
             other => {
                 let expr = Expr::new(other, span);
                 if self.must_bind_target_part(&expr, rhs) {
@@ -204,8 +221,7 @@ impl AssignmentExpressionLowerer {
     /// before the assignment proceeds. This is the case when the expression
     /// cannot be replayed or when it reads a variable that the RHS may mutate.
     fn must_bind_target_part(&self, expr: &Expr, rhs: &Expr) -> bool {
-        !can_replay_assignment_target(expr)
-            || target_part_reads_mutated_dependency(expr, rhs)
+        !can_replay_assignment_target(expr) || target_part_reads_mutated_dependency(expr, rhs)
     }
 
     /// Returns true if a dimension index must be bound to a temporary.
@@ -223,8 +239,7 @@ impl AssignmentExpressionLowerer {
             return false;
         }
 
-        !can_replay_assignment_target(expr)
-            || target_part_reads_mutated_dependency(expr, rhs)
+        !can_replay_assignment_target(expr) || target_part_reads_mutated_dependency(expr, rhs)
     }
 
     /// Emits an assignment statement to a temporary variable and returns a variable
@@ -258,10 +273,7 @@ impl AssignmentExpressionLowerer {
 /// Returns true if the assignment value may mutate a variable that the target
 /// depends on. Used to detect when stabilization is required to preserve
 /// evaluation order (e.g., `$arr[$i] = $arr[$j]` where RHS reads `$arr`).
-pub(super) fn assignment_value_may_mutate_target_dependency(
-    target: &Expr,
-    value: &Expr,
-) -> bool {
+pub(super) fn assignment_value_may_mutate_target_dependency(target: &Expr, value: &Expr) -> bool {
     let mut dependencies = HashSet::new();
     collect_assignment_target_dependencies(target, &mut dependencies);
     !dependencies.is_empty() && expr_may_write_dependency(value, &dependencies)
@@ -288,6 +300,9 @@ fn target_part_reads_mutated_dependency(target: &Expr, value: &Expr) -> bool {
 /// and other expressions that may reference variables.
 fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSet<String>) {
     match &expr.kind {
+        // A value-position include is never an assignment target, so it contributes no
+        // target dependencies.
+        ExprKind::IncludeValue { .. } => {}
         ExprKind::Variable(name) => {
             dependencies.insert(name.clone());
         }
@@ -324,8 +339,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
         | ExprKind::Spread(value) => collect_assignment_target_dependencies(value, dependencies),
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default } => {
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             collect_assignment_target_dependencies(value, dependencies);
             collect_assignment_target_dependencies(default, dependencies);
         }
@@ -396,7 +410,8 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::FirstClassCallable(_)
         | ExprKind::This
         | ExprKind::BufferNew { .. }
-        | ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::NewScopedObject { .. }
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_)
@@ -409,6 +424,8 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
 /// with arguments that could mutate dependencies, and recursively checks nested expressions.
 fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> bool {
     match &expr.kind {
+        // A value-position include runs in the caller's scope and may write any variable.
+        ExprKind::IncludeValue { .. } => true,
         ExprKind::Assignment {
             target,
             value,
@@ -454,8 +471,7 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
         | ExprKind::Spread(value) => expr_may_write_dependency(value, dependencies),
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default } => {
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             expr_may_write_dependency(value, dependencies)
                 || expr_may_write_dependency(default, dependencies)
         }
@@ -472,9 +488,9 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
                 || expr_may_write_dependency(then_expr, dependencies)
                 || expr_may_write_dependency(else_expr, dependencies)
         }
-        ExprKind::ArrayLiteral(items) => {
-            items.iter().any(|item| expr_may_write_dependency(item, dependencies))
-        }
+        ExprKind::ArrayLiteral(items) => items
+            .iter()
+            .any(|item| expr_may_write_dependency(item, dependencies)),
         ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
             expr_may_write_dependency(key, dependencies)
                 || expr_may_write_dependency(value, dependencies)
@@ -582,6 +598,7 @@ fn assignment_target_may_write_dependency(target: &Expr, dependencies: &HashSet<
         ExprKind::Variable(name) => dependencies.contains(name),
         ExprKind::ArrayAccess { array, .. } => expr_contains_dependency(array, dependencies),
         ExprKind::PropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => {
             expr_contains_dependency(object, dependencies)
         }
@@ -634,6 +651,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
     }
 
     match &expr.kind {
+        ExprKind::IncludeValue { path, .. } => expr_contains_equivalent(path, needle),
         ExprKind::BinaryOp { left, right, .. } => {
             expr_contains_equivalent(left, needle) || expr_contains_equivalent(right, needle)
         }
@@ -652,14 +670,11 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::NamedArg { value, .. }
         | ExprKind::Spread(value)
         | ExprKind::YieldFrom(value) => expr_contains_equivalent(value, needle),
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default } => {
-            expr_contains_equivalent(value, needle)
-                || expr_contains_equivalent(default, needle)
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+            expr_contains_equivalent(value, needle) || expr_contains_equivalent(default, needle)
         }
         ExprKind::Pipe { value, callable } => {
-            expr_contains_equivalent(value, needle)
-                || expr_contains_equivalent(callable, needle)
+            expr_contains_equivalent(value, needle) || expr_contains_equivalent(callable, needle)
         }
         ExprKind::Ternary {
             condition,
@@ -703,16 +718,14 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
             expr_contains_equivalent(callee, needle)
                 || args.iter().any(|arg| expr_contains_equivalent(arg, needle))
         }
-        ExprKind::ArrayLiteral(items) => {
-            items.iter().any(|item| expr_contains_equivalent(item, needle))
-        }
+        ExprKind::ArrayLiteral(items) => items
+            .iter()
+            .any(|item| expr_contains_equivalent(item, needle)),
         ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
-            expr_contains_equivalent(key, needle)
-                || expr_contains_equivalent(value, needle)
+            expr_contains_equivalent(key, needle) || expr_contains_equivalent(value, needle)
         }),
         ExprKind::ArrayAccess { array, index } => {
-            expr_contains_equivalent(array, needle)
-                || expr_contains_equivalent(index, needle)
+            expr_contains_equivalent(array, needle) || expr_contains_equivalent(index, needle)
         }
         ExprKind::Match {
             subject,

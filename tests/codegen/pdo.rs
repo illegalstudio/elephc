@@ -112,6 +112,78 @@ echo $o->id . ":" . $o->name . ":" . $o->score;
     assert_eq!(out, "1:Ada:9.5");
 }
 
+/// `FETCH_OBJ` uses real stdClass dynamic properties, so numeric column aliases
+/// remain object properties instead of degrading through a JSON list round-trip.
+#[test]
+fn test_pdo_fetch_obj_numeric_property_name() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$o = $db->query("SELECT 7 AS \"0\", 'Ada' AS name")->fetch(PDO::FETCH_OBJ);
+echo gettype($o) . ":" . $o->{"0"} . ":" . $o->name;
+"#,
+    );
+    assert_eq!(out, "object:7:Ada");
+}
+
+/// `FETCH_CLASS` creates the requested class and assigns matching columns to
+/// declared properties; `FETCH_INTO` fills an existing object instance.
+#[test]
+fn test_pdo_fetch_class_and_fetch_into() {
+    let out = compile_and_run(
+        r#"<?php
+class Row {
+    public mixed $id;
+    public mixed $name;
+}
+
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'Ada'), (2, 'Bob')");
+
+$stmt = $db->query("SELECT id, name FROM t ORDER BY id");
+$row = $stmt->fetch(PDO::FETCH_CLASS, Row::class);
+echo (($row instanceof Row) ? "Row" : "not-row") . ":" . $row->id . ":" . $row->name;
+
+$stmt2 = $db->query("SELECT id, name FROM t WHERE id = 2");
+$into = new Row();
+$same = $stmt2->fetch(PDO::FETCH_INTO, $into);
+echo "|" . (($same === $into) ? "same" : "different") . ":" . $into->id . ":" . $into->name;
+"#,
+    );
+    assert_eq!(out, "Row:1:Ada|same:2:Bob");
+}
+
+/// `setFetchMode()` stores the class/object target used by later no-argument
+/// `fetch()` calls for `FETCH_CLASS` and `FETCH_INTO`.
+#[test]
+fn test_pdo_set_fetch_mode_class_and_into_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class Row {
+    public mixed $id;
+    public mixed $name;
+}
+
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'Ada'), (2, 'Bob')");
+
+$stmt = $db->query("SELECT id, name FROM t WHERE id = 1");
+$stmt->setFetchMode(PDO::FETCH_CLASS, Row::class);
+$row = $stmt->fetch();
+echo (($row instanceof Row) ? "Row" : "not-row") . ":" . $row->id . ":" . $row->name;
+
+$stmt2 = $db->query("SELECT id, name FROM t WHERE id = 2");
+$into = new Row();
+$stmt2->setFetchMode(PDO::FETCH_INTO, $into);
+$same = $stmt2->fetch();
+echo "|" . (($same === $into) ? "same" : "different") . ":" . $into->id . ":" . $into->name;
+"#,
+    );
+    assert_eq!(out, "Row:1:Ada|same:2:Bob");
+}
+
 /// `fetchAll()` drains every row into an array, and `count()` reports the total.
 #[test]
 fn test_pdo_fetch_all() {
@@ -408,6 +480,22 @@ echo implode(",", $names) . ":" . $db->query("SELECT id FROM t ORDER BY id")->fe
     assert_eq!(out, "a,b,c:1");
 }
 
+/// BLOB values are read through a byte-counted bridge path, preserving embedded
+/// NUL bytes that would be truncated by C-string marshaling.
+#[test]
+fn test_pdo_blob_fetch_preserves_embedded_nul() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE blobs (data BLOB)");
+$db->exec("INSERT INTO blobs VALUES (x'410042')");
+$s = (string) $db->query("SELECT data FROM blobs")->fetchColumn();
+echo strlen($s) . ":" . ord($s[0]) . ":" . ord($s[1]) . ":" . ord($s[2]);
+"#,
+    );
+    assert_eq!(out, "3:65:0:66");
+}
+
 /// `foreach` honors `FETCH_COLUMN` with the column index set through
 /// `setFetchMode(PDO::FETCH_COLUMN, $col)`, yielding that column's scalar per row.
 #[test]
@@ -443,6 +531,56 @@ echo ":" . $db->getAttribute(PDO::ATTR_DRIVER_NAME);
     assert_eq!(out, "2:0:sqlite");
 }
 
+/// `ATTR_PERSISTENT` is accepted through constructor options and setAttribute(),
+/// can be read back, and constructor-level truthy values opt into the
+/// process-local DSN pool.
+#[test]
+fn test_pdo_persistent_attribute_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:", null, null, [PDO::ATTR_PERSISTENT => true]);
+echo $db->getAttribute(PDO::ATTR_PERSISTENT) ? "1" : "0";
+$db->setAttribute(PDO::ATTR_PERSISTENT, false);
+echo ":" . ($db->getAttribute(PDO::ATTR_PERSISTENT) ? "1" : "0");
+"#,
+    );
+    assert_eq!(out, "1:0");
+}
+
+/// Constructor-level `ATTR_PERSISTENT` opens through the process-local DSN pool:
+/// two `sqlite::memory:` handles with the option share the same in-memory DB.
+#[test]
+fn test_pdo_persistent_sqlite_memory_reuses_connection() {
+    let out = compile_and_run(
+        r#"<?php
+$a = new PDO("sqlite::memory:", null, null, [PDO::ATTR_PERSISTENT => true]);
+$a->exec("CREATE TABLE pdo_persist (n INTEGER)");
+$a->exec("INSERT INTO pdo_persist VALUES (42)");
+
+$b = new PDO("sqlite::memory:", null, null, [PDO::ATTR_PERSISTENT => true]);
+echo $b->query("SELECT n FROM pdo_persist")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Non-persistent `sqlite::memory:` connections stay isolated, so the persistent
+/// pool only applies when requested by constructor options.
+#[test]
+fn test_pdo_nonpersistent_sqlite_memory_stays_isolated() {
+    let out = compile_and_run(
+        r#"<?php
+$a = new PDO("sqlite::memory:");
+$a->exec("CREATE TABLE pdo_isolated (n INTEGER)");
+$a->exec("INSERT INTO pdo_isolated VALUES (7)");
+
+$b = new PDO("sqlite::memory:", null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_SILENT]);
+echo ($b->query("SELECT n FROM pdo_isolated") === false) ? "isolated" : "shared";
+"#,
+    );
+    assert_eq!(out, "isolated");
+}
+
 /// `ERRMODE_SILENT` suppresses exceptions: `exec()`, `query()`, and `prepare()`
 /// all return `false` (a real `false`, matched with `=== false`) on a SQL error
 /// instead of throwing.
@@ -461,6 +599,24 @@ echo (($r === false) ? "1" : "0")
 "#,
     );
     assert_eq!(out, "111");
+}
+
+/// A statement inherits the PDO error mode: DML failures during `execute()`
+/// return `false` in silent mode instead of throwing.
+#[test]
+fn test_pdo_statement_execute_uses_silent_error_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_SILENT);
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+$stmt = $db->prepare("INSERT INTO t (id) VALUES (?)");
+$stmt->execute([1]);
+$again = $stmt->execute([1]);
+echo ($again === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
 }
 
 /// The default `ERRMODE_EXCEPTION` still throws a `PDOException` on a SQL error.

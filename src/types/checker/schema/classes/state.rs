@@ -32,6 +32,7 @@ pub(super) struct ClassBuildState {
     pub(super) property_declaring_classes: HashMap<String, String>,
     pub(super) defaults: Vec<Option<Expr>>,
     pub(super) property_visibilities: HashMap<String, Visibility>,
+    pub(super) property_set_visibilities: HashMap<String, Visibility>,
     pub(super) declared_properties: HashSet<String>,
     pub(super) final_properties: HashSet<String>,
     pub(super) readonly_properties: HashSet<String>,
@@ -129,6 +130,7 @@ impl ClassBuildState {
             property_declaring_classes: self.property_declaring_classes,
             defaults: self.defaults,
             property_visibilities: self.property_visibilities,
+            property_set_visibilities: self.property_set_visibilities,
             declared_properties: self.declared_properties,
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
@@ -261,6 +263,10 @@ impl ClassBuildState {
             if let Some(visibility) = parent.property_visibilities.get(name) {
                 self.property_visibilities
                     .insert(name.clone(), visibility.clone());
+            }
+            if let Some(set_visibility) = parent.property_set_visibilities.get(name) {
+                self.property_set_visibilities
+                    .insert(name.clone(), set_visibility.clone());
             }
             if parent.declared_properties.contains(name) {
                 self.declared_properties.insert(name.clone());

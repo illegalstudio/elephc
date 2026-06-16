@@ -70,7 +70,7 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 | `php://memory`, `php://temp` | Seekable in-memory streams backed by an anonymous temporary buffer. `php://temp/maxmemory:N` is accepted and ignored. |
 | `php://filter` | Opens an underlying resource and attaches one built-in filter at open time, for example `php://filter/read=string.toupper/resource=php://temp`. |
 | `data://` | RFC 2397 inline payload streams. Base64 and percent-decoded payloads are supported. The URI must be a string literal. |
-| `phar://` | Read or write a single PHAR entry. Literal reads happen at compile time and embed the entry in the binary; non-literal reads happen at runtime for uncompressed entries. |
+| `phar://` | Read or write PHAR entries. Literal reads happen at compile time and embed the entry in the binary; non-literal reads happen at runtime. Native PHAR, tar-based PHAR, and zip-based PHAR containers are readable; native PHAR gzip/bzip2 entries and ZIP deflate entries are decoded transparently. |
 | `ftp://` | Anonymous binary passive FTP read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. Credentials in the URL are ignored in v1. |
 | `ftps://` | Explicit FTP over TLS using `AUTH TLS`, with TLS on both control and data channels. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. |
 | `http://` | HTTP/1.0 `GET` read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. v1 does not follow redirects and buffers up to 1 MiB. |
@@ -79,16 +79,33 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 | `compress.bzip2://` | Read-only wrapper that opens the underlying file and decompresses it through libbz2. |
 | `glob://` | Directory-style wrapper for iterating paths matching a glob pattern through `opendir()` / `readdir()`. |
 
-`phar://` write streams buffer one uncompressed entry in memory. `fclose()` writes
-a native, signed PHAR archive with a SHA1 trailer, and
-`file_put_contents("phar://archive.phar/entry", $data)` uses the same path.
-Current limits: one PHAR write stream at a time, uncompressed entry payloads
-only, no key/private-key signing variants, and no tar/zip PHAR variants.
+`phar://` write streams buffer one uncompressed entry in memory. `fclose()` and
+`file_put_contents("phar://archive.phar/entry", $data)` insert or replace that
+entry in a SHA1-signed PHAR archive while preserving existing entries.
+`file_put_contents()` and write-mode `fopen()` also accept runtime-built
+`phar://` URLs. Native PHAR, tar-based PHAR, and zip-based PHAR containers are
+writable; ZIP writes preserve stored/deflated entries and compression controls
+can rewrite ZIP entries between stored and deflated forms. `Phar` and
+`PharData` expose a
+baseline OOP surface with constructors, format/compression/signature constants,
+`addFromString()`, `delete()`, `compressFiles()`, `decompressFiles()`,
+mixed metadata/string stub accessors, path helpers, and ArrayAccess read/write/isset
+over the same `phar://` paths. ArrayAccess reads return `PharFileInfo` objects
+with `getContent()` for payload reads. `foreach` over a `Phar` / `PharData`
+object visits entries scanned from the archive at construction time plus entries
+written through that object, yielding `entryName => PharFileInfo`.
+`unlink("phar://archive/entry")` and `unset($phar["entry"])` remove entries
+while preserving sibling entries. Native PHAR compression controls support
+`Phar::GZ`, `Phar::BZ2`, and `Phar::NONE`; ZIP compression controls support
+`Phar::GZ` and `Phar::NONE`. Current limits: metadata values and stub strings
+are stored on the archive object and are not serialized into the archive file;
+tar compression controls and key/private-key signing variants are not
+implemented.
 
 `file_get_contents($url)` recognizes runtime `http://`, `https://`, `ftp://`,
 and `ftps://` strings before falling back to `phar://`/filesystem handling.
 Because the scheme is not known statically, non-literal `file_get_contents()`
-conservatively links `elephc-tls`.
+conservatively links `elephc-tls`, `elephc-phar`, zlib, and libbz2.
 
 `https://`, `ftps://`, and `stream_socket_enable_crypto()` use `elephc-tls`
 (rustls, the `ring` crypto provider, and Mozilla webpki roots). TLS contexts can
@@ -96,7 +113,10 @@ override trust with `ssl.cafile` or `ssl.capath`, set `ssl.peer_name`, or relax
 verification with `ssl.verify_peer = "0"`, `ssl.allow_self_signed`, or
 `ssl.verify_peer_name = "0"`. Client certificates are supported when both
 `ssl.local_cert` and `ssl.local_pk` point at readable PEM files; encrypted keys
-and `ssl.passphrase` are not supported.
+and `ssl.passphrase` are not supported. `ssl.ciphers` and
+`ssl.security_level` are accepted as context options for source compatibility
+but are no-ops: rustls does not consume OpenSSL cipher-list strings and chooses
+its TLS 1.2/1.3 policy internally.
 
 ## Stream contexts
 
@@ -172,8 +192,11 @@ reads `level` (`-1..9`). `bzip2.compress` reads `blocks` (`1..9`) and `work`
 
 User filters can implement either `filter(string $data): string` or PHP's
 four-argument `filter($in, $out, &$consumed, $closing): int` bucket form.
-Optional `onCreate(): bool` and `onClose(): void` hooks are honored. v1 seeds one
-input bucket per dispatch; `PSFS_FEED_ME` does not request more input, and
+Classes may extend PHP's `php_user_filter` base class; the fourth
+`stream_filter_append`/`prepend` `$params` argument is available as
+`$this->params` before `onCreate()` runs. Optional `onCreate(): bool` and
+`onClose(): void` hooks are honored. v1 seeds one input bucket per dispatch;
+`PSFS_FEED_ME` does not request more input, and
 `PSFS_ERR_FATAL` does not propagate as a stream error.
 
 ## User stream wrappers
@@ -210,7 +233,7 @@ type, or as `mixed`, when returning associative stat arrays with string keys.
 | `stream_socket_enable_crypto()` | `stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | Attach TLS to an already-connected TCP fd. `$enable=false` unwinds the session (sends `close_notify` and clears the per-fd TLS handle), leaving the fd a plain TCP socket, then reports `true`; it is a no-op when no session is attached. |
 | `fsockopen()` | `fsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): resource\|false` | Open a TCP connection to `$hostname:$port`, writing optional by-reference error outputs. The timeout arg is evaluated but the OS default connect timeout is used in v1. |
 | `pfsockopen()` | `pfsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): resource\|false` | Alias of `fsockopen()`; persistent connections are not meaningful for standalone native binaries. |
-| `stream_set_blocking()` | `stream_set_blocking($stream, bool $enable): bool` | Toggle `O_NONBLOCK`. User wrappers route through `stream_set_option(STREAM_OPTION_BLOCKING, ...)`. |
+| `stream_set_blocking()` | `stream_set_blocking($stream, bool $enable): bool` | Toggle `O_NONBLOCK`. Non-blocking read misses return an empty `fread()` result or `false` from `fgetc()`/`fgets()` without setting EOF. User wrappers route through `stream_set_option(STREAM_OPTION_BLOCKING, ...)`. |
 | `stream_set_timeout()` | `stream_set_timeout($stream, int $seconds, int $microseconds = 0): bool` | Set `SO_RCVTIMEO` on socket streams. User wrappers route through `stream_set_option(STREAM_OPTION_READ_TIMEOUT, ...)`. |
 | `stream_select()` | `stream_select(array &$read, array &$write, array &$except, int $seconds, int $microseconds = 0): int` | Wait until stream arrays are ready and rewrite each array to its ready subset. Word-0 only: descriptors must be `0..63`. User wrappers are selectable when `stream_cast(STREAM_CAST_FOR_SELECT)` returns a real stream resource. |
 | `stream_socket_shutdown()` | `stream_socket_shutdown($stream, int $mode): bool` | Shut down socket reads (`0`), writes (`1`), or both (`2`). |

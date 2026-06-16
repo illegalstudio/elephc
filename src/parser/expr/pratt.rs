@@ -74,6 +74,56 @@ pub(super) fn parse_expr_bp(
                     span,
                 );
             }
+            Token::DoubleColon => {
+                // A `::` reaching the postfix loop has a dynamic (variable/expression) class
+                // receiver — named-class static calls are fully parsed in the prefix parser.
+                // `$cls::method(args)` / `$cls::$method(args)` desugars to
+                // `call_user_func([$cls, $method], ...args)`, reusing the runtime dispatch path.
+                let span = tokens[*pos].1;
+                *pos += 1; // consume '::'
+                let member = match tokens.get(*pos).map(|(token, s)| (token.clone(), *s)) {
+                    Some((Token::Identifier(name), name_span)) => {
+                        *pos += 1;
+                        Expr::new(ExprKind::StringLiteral(name), name_span)
+                    }
+                    Some((Token::Variable(name), var_span)) => {
+                        *pos += 1;
+                        Expr::new(ExprKind::Variable(name), var_span)
+                    }
+                    Some((Token::LBrace, _)) => {
+                        *pos += 1;
+                        let member = parse_expr(tokens, pos)?;
+                        if *pos >= tokens.len() || tokens[*pos].0 != Token::RBrace {
+                            return Err(CompileError::new(span, "Expected '}'"));
+                        }
+                        *pos += 1;
+                        member
+                    }
+                    _ => {
+                        return Err(CompileError::new(span, "Expected method name after '::'"));
+                    }
+                };
+                if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                    *pos += 1; // consume '('
+                    let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
+                    reject_named_args_in_dynamic_call(&dynamic_args, span)?;
+                    let mut call_args =
+                        vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)];
+                    call_args.extend(dynamic_args);
+                    lhs = Expr::new(
+                        ExprKind::FunctionCall {
+                            name: crate::names::Name::unqualified("call_user_func"),
+                            args: call_args,
+                        },
+                        span,
+                    );
+                } else {
+                    return Err(CompileError::new(
+                        span,
+                        "Dynamic class access (`$class::X`) is only supported for method calls",
+                    ));
+                }
+            }
             Token::Arrow | Token::QuestionArrow => {
                 let arrow_span = tokens[*pos].1;
                 let nullsafe = tokens[*pos].0 == Token::QuestionArrow;
@@ -82,10 +132,31 @@ pub(super) fn parse_expr_bp(
                     ObjectMember::Named(member_name) => member_name,
                     ObjectMember::Dynamic(property) => {
                         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-                            return Err(CompileError::new(
+                            if nullsafe {
+                                return Err(CompileError::new(
+                                    arrow_span,
+                                    "Nullsafe dynamic method calls are not supported yet",
+                                ));
+                            }
+                            // `$obj->$method(args)` reuses the runtime dynamic-dispatch path by
+                            // desugaring to `call_user_func([$obj, $method], ...args)`.
+                            *pos += 1; // consume '('
+                            let dynamic_args =
+                                crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
+                            reject_named_args_in_dynamic_call(&dynamic_args, arrow_span)?;
+                            let mut call_args = vec![Expr::new(
+                                ExprKind::ArrayLiteral(vec![lhs, property]),
                                 arrow_span,
-                                "Dynamic method calls are not supported yet",
-                            ));
+                            )];
+                            call_args.extend(dynamic_args);
+                            lhs = Expr::new(
+                                ExprKind::FunctionCall {
+                                    name: crate::names::Name::unqualified("call_user_func"),
+                                    args: call_args,
+                                },
+                                arrow_span,
+                            );
+                            continue;
                         }
                         lhs = Expr::new(
                             if nullsafe {
@@ -435,6 +506,16 @@ fn parse_object_member(
         *pos += 1;
         return Ok(ObjectMember::Dynamic(property));
     }
+    // `->$var` selects a member whose name is the runtime value of `$var`.
+    if let Some((Token::Variable(name), var_span)) =
+        tokens.get(*pos).map(|(token, span)| (token.clone(), *span))
+    {
+        *pos += 1;
+        return Ok(ObjectMember::Dynamic(Expr::new(
+            ExprKind::Variable(name),
+            var_span,
+        )));
+    }
     // PHP 8 allows identifiers and any semi-reserved keyword as a member name after `->`/`?->`.
     if let Some(name) = tokens
         .get(*pos)
@@ -459,6 +540,27 @@ enum AssignmentOperator {
     Assign,
     Compound(BinOp),
     NullCoalesce,
+}
+
+/// Rejects named arguments in a dynamic call (`$obj->$m(...)`, `$cls::$m(...)`, `C::$m(...)`).
+///
+/// The callee method name is a runtime value, so its parameter names are unknown at compile time
+/// and named arguments cannot be matched to positions. Emits a clear diagnostic instead of letting
+/// the internal `call_user_func` desugaring surface a confusing error.
+pub(in crate::parser) fn reject_named_args_in_dynamic_call(
+    args: &[Expr],
+    span: Span,
+) -> Result<(), CompileError> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+    {
+        return Err(CompileError::new(
+            span,
+            "Named arguments are not supported in dynamic calls; the target method is not known at compile time",
+        ));
+    }
+    Ok(())
 }
 
 /// Looks up assignment operator binding power.

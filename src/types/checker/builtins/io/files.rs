@@ -38,7 +38,8 @@ pub(super) fn check_builtin(
             }
             // A literal https:///ftps:// URL is read at run time over TLS.
             // Non-literal paths route through the runtime URL dispatcher, so
-            // conservatively link elephc-tls because the scheme is unknown.
+            // conservatively link TLS plus the PHAR bridge/decompression
+            // libraries because the scheme and PHAR entry flags are unknown.
             if let Some(crate::parser::ast::ExprKind::StringLiteral(url)) =
                 args.first().map(|a| &a.kind)
             {
@@ -47,6 +48,9 @@ pub(super) fn check_builtin(
                 }
             } else {
                 checker.require_builtin_library("elephc_tls");
+                checker.require_builtin_library("elephc_phar");
+                checker.require_builtin_library("z");
+                checker.require_builtin_library("bz2");
             }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Union(vec![PhpType::Str, PhpType::Bool])))
@@ -71,20 +75,49 @@ pub(super) fn check_builtin(
                     "file_put_contents() takes exactly 2 arguments",
                 ));
             }
-            // file_put_contents("phar://...") writes a signed entry; the SHA1
-            // signature computed in __rt_phar_write_finalize needs libcrypto on
-            // Linux (CommonCrypto is in libSystem on macOS).
+            // file_put_contents("phar://...") writes through the elephc-phar
+            // read-modify-write bridge, with the assembly SHA1 path retained as
+            // a fallback when the bridge slot is not published.
             if let Some(crate::parser::ast::ExprKind::StringLiteral(url)) =
                 args.first().map(|a| &a.kind)
             {
                 if url.starts_with("phar://") {
+                    checker.require_builtin_library("elephc_phar");
                     checker.require_builtin_library("elephc_crypto");
                 }
+            } else {
+                checker.require_builtin_library("elephc_phar");
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Int))
+        }
+        "__elephc_phar_set_compression" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "__elephc_phar_set_compression() takes exactly 2 arguments",
+                ));
+            }
+            checker.require_builtin_library("elephc_phar");
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "__elephc_phar_list_entries" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "__elephc_phar_list_entries() takes exactly 1 argument",
+                ));
+            }
+            checker.require_builtin_library("elephc_phar");
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
         }
         "file" => {
             if args.len() != 1 {
@@ -111,6 +144,17 @@ pub(super) fn check_builtin(
                     span,
                     &format!("{}() takes exactly 1 argument", name),
                 ));
+            }
+            if name == "unlink" {
+                if let Some(crate::parser::ast::ExprKind::StringLiteral(url)) =
+                    args.first().map(|a| &a.kind)
+                {
+                    if url.starts_with("phar://") {
+                        checker.require_builtin_library("elephc_phar");
+                    }
+                } else {
+                    checker.require_builtin_library("elephc_phar");
+                }
             }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Bool))
@@ -163,7 +207,7 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Bool))
         }
-        "chown" | "chgrp" => {
+        "chown" | "chgrp" | "lchown" | "lchgrp" => {
             if args.len() != 2 {
                 return Err(CompileError::new(
                     span,

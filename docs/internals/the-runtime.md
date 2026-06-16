@@ -496,7 +496,7 @@ The first table covers the file/filesystem core; the subsections after it cover 
 | `__rt_fnmatch` | Match shell-style path globs with PHP/libc-compatible flag bits for the selected target |
 | `__rt_realpath` | Canonicalize an existing path, returning a null pointer on failure so codegen can box PHP `false` |
 | `__rt_pathinfo_str` / `__rt_pathinfo_array` | Return one `pathinfo()` component for component flags, or build the associative-array `PATHINFO_ALL` shape |
-| `__rt_chmod` / `__rt_chown` / `__rt_chown_user` / `__rt_chgrp_group` | File ownership and mode modification helpers |
+| `__rt_chmod` / `__rt_chown` / `__rt_lchown` / name-resolving variants | File ownership and mode modification helpers, including symlink-aware ownership updates |
 | `__rt_umask` / `__rt_ftruncate` | Process umask and file truncation helpers |
 | `__rt_fsync` / `__rt_fflush` / `__rt_fdatasync` | File descriptor flush helpers; `fflush()` maps to `fsync()` because elephc has no userspace stdio buffer |
 | `__rt_touch` | Create missing files and update access/modification timestamps |
@@ -545,9 +545,9 @@ Userspace `streamWrapper` classes registered with `stream_wrapper_register()` di
 
 | Routine | What it does |
 |---|---|
-| `__rt_fopen_maybe_phar` / `__rt_file_get_contents_maybe_phar` | Route `phar://` paths to archive entry reads, falling through to plain file I/O otherwise |
-| `__rt_phar_read_entry` | Locate and read one entry from a phar archive |
-| `__rt_phar_write_open` / `__rt_phar_write_append` / `__rt_phar_write_finalize` | Create phar archives entry by entry with manifest finalization |
+| `__rt_fopen_maybe_phar` / `__rt_file_get_contents_maybe_phar` | Route dynamic `phar://` read paths to archive entry reads and write-mode `fopen()` paths to PHAR write streams, falling through to plain file I/O otherwise |
+| `__rt_phar_read_entry` | Locate and read one entry from a PHAR URL. When the `elephc-phar` bridge is published it handles native PHAR, tar, and ZIP containers; the assembly fallback handles native PHAR plus gzip/bzip2 payloads through published zlib/libbz2 slots |
+| `__rt_phar_write_open` / `__rt_phar_write_open_url` / `__rt_phar_write_append` / `__rt_phar_write_finalize` / `__rt_file_put_contents_maybe_phar` | Buffer `phar://` write entries in bridge-owned descriptor slots, then finalize each through the `elephc-phar` bridge so native PHAR, tar, and ZIP archives preserve existing entries; runtime-built `file_put_contents()` and `fopen()` write URLs call a bridge variant that splits the full `phar://` URL; the assembly fallback still emits a single-entry SHA1-signed native archive |
 
 ### var_dump output routines
 

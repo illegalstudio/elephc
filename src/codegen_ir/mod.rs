@@ -902,7 +902,13 @@ fn referenced_dynamic_object_new_class_names(module: &Module) -> HashSet<String>
     {
         for inst in &function.instructions {
             if matches!(inst.op, Op::DynamicObjectNewMixed) {
-                names.extend(module.class_infos.keys().cloned());
+                names.extend(
+                    module
+                        .class_infos
+                        .keys()
+                        .filter(|class_name| is_dynamic_new_mixed_metadata_candidate(class_name))
+                        .cloned(),
+                );
                 continue;
             }
             if !matches!(inst.op, Op::DynamicObjectNew) {
@@ -923,6 +929,129 @@ fn referenced_dynamic_object_new_class_names(module: &Module) -> HashSet<String>
         }
     }
     names
+}
+
+/// Returns true when generic `new $class` can emit static metadata for this class.
+fn is_dynamic_new_mixed_metadata_candidate(class_name: &str) -> bool {
+    if class_name.starts_with("__Elephc") {
+        return false;
+    }
+    if supported_dynamic_new_builtin_class_name(class_name) {
+        return true;
+    }
+    !known_dynamic_new_builtin_class_name(class_name)
+}
+
+/// Returns true for builtin classes with safe static allocation paths in generic dynamic new.
+fn supported_dynamic_new_builtin_class_name(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "arrayiterator"
+            | "arrayobject"
+            | "badfunctioncallexception"
+            | "badmethodcallexception"
+            | "callbackfilteriterator"
+            | "domainexception"
+            | "error"
+            | "exception"
+            | "fiber"
+            | "fibererror"
+            | "invalidargumentexception"
+            | "iteratoriterator"
+            | "jsonexception"
+            | "lengthexception"
+            | "logicexception"
+            | "outofboundsexception"
+            | "outofrangeexception"
+            | "overflowexception"
+            | "rangeexception"
+            | "recursivecallbackfilteriterator"
+            | "reflectionclass"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "runtimeexception"
+            | "spldoublylinkedlist"
+            | "splfixedarray"
+            | "splqueue"
+            | "splstack"
+            | "typeerror"
+            | "underflowexception"
+            | "unexpectedvalueexception"
+            | "valueerror"
+            | "stdclass"
+    )
+}
+
+/// Returns true for builtin classes that generic dynamic new must not treat as user classes.
+fn known_dynamic_new_builtin_class_name(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "appenditerator"
+            | "arrayiterator"
+            | "arrayobject"
+            | "badfunctioncallexception"
+            | "badmethodcallexception"
+            | "cachingiterator"
+            | "callbackfilteriterator"
+            | "directoryiterator"
+            | "domainexception"
+            | "emptyiterator"
+            | "error"
+            | "exception"
+            | "fiber"
+            | "fibererror"
+            | "filesystemiterator"
+            | "filteriterator"
+            | "generator"
+            | "globiterator"
+            | "infiniteiterator"
+            | "internaliterator"
+            | "invalidargumentexception"
+            | "iteratoriterator"
+            | "jsonexception"
+            | "lengthexception"
+            | "limititerator"
+            | "logicexception"
+            | "multipleiterator"
+            | "norewinditerator"
+            | "outofboundsexception"
+            | "outofrangeexception"
+            | "overflowexception"
+            | "parentiterator"
+            | "phar"
+            | "phardata"
+            | "rangeexception"
+            | "recursivearrayiterator"
+            | "recursivecachingiterator"
+            | "recursivecallbackfilteriterator"
+            | "recursivedirectoryiterator"
+            | "recursivefilteriterator"
+            | "recursiveiteratoriterator"
+            | "recursiveregexiterator"
+            | "reflectionattribute"
+            | "reflectionclass"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "regexiterator"
+            | "runtimeexception"
+            | "spldoublylinkedlist"
+            | "splfileinfo"
+            | "splfileobject"
+            | "splfixedarray"
+            | "splheap"
+            | "splmaxheap"
+            | "splminheap"
+            | "splobjectstorage"
+            | "splpriorityqueue"
+            | "splqueue"
+            | "splstack"
+            | "spltempfileobject"
+            | "typeerror"
+            | "underflowexception"
+            | "unexpectedvalueexception"
+            | "valueerror"
+            | "stdclass"
+    )
 }
 
 /// Parses the fallback and required-parent names from a dynamic object factory immediate.

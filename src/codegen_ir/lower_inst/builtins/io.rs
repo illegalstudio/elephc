@@ -42,15 +42,130 @@ pub(super) fn lower_file_get_contents(
 ) -> Result<()> {
     super::ensure_arg_count(inst, "file_get_contents", 1)?;
     let path = expect_operand(inst, 0)?;
-    if let Some(path_literal) = optional_const_string_operand(ctx, path)? {
+    let path_literal = optional_const_string_operand(ctx, path)?;
+    if let Some(path_literal) = path_literal.as_deref() {
         if path_literal.starts_with("phar://") {
-            return lower_literal_phar_file_get_contents(ctx, inst, &path_literal);
+            return lower_literal_phar_file_get_contents(ctx, inst, path_literal);
         }
+    }
+    if path_literal.is_none() {
+        publish_dynamic_phar_function_pointers(ctx);
     }
     load_string_to_result(ctx, path, "file_get_contents filename")?;
     abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
     box_owned_string_or_false_result(ctx, "fgc");
     store_if_result(ctx, inst)
+}
+
+/// Publishes bridge/decompressor entry points into runtime slots used by
+/// dynamic `phar://` reads.
+fn publish_dynamic_phar_function_pointers(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[
+        ("elephc_phar_extract_url", "_elephc_phar_extract_url_fn"),
+        ("inflateInit2_", "_phar_zlib_inflate_init2_fn"),
+        ("inflate", "_phar_zlib_inflate_fn"),
+        ("inflateEnd", "_phar_zlib_inflate_end_fn"),
+        ("BZ2_bzBuffToBuffDecompress", "_phar_bz2_decompress_fn"),
+    ];
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            for (c_name, slot) in ENTRIES {
+                let extern_sym = ctx.emitter.target.extern_symbol(c_name);
+                abi::emit_extern_symbol_address(ctx.emitter, "x9", &extern_sym);
+                abi::emit_symbol_address(ctx.emitter, "x10", slot);
+                ctx.emitter.instruction("str x9, [x10]");                       // publish the decompressor entry into its runtime slot
+            }
+        }
+        Arch::X86_64 => {
+            for (c_name, slot) in ENTRIES {
+                let extern_sym = ctx.emitter.target.extern_symbol(c_name);
+                abi::emit_extern_symbol_address(ctx.emitter, "r9", &extern_sym);
+                abi::emit_store_reg_to_symbol(ctx.emitter, "r9", slot, 0);     // publish the decompressor entry into its runtime slot
+            }
+        }
+    }
+}
+
+/// Publishes a list of elephc-phar bridge entry points into runtime slots.
+fn publish_phar_bridge_entries(ctx: &mut FunctionContext<'_>, entries: &[(&str, &str)]) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            for (c_name, slot) in entries {
+                let extern_sym = ctx.emitter.target.extern_symbol(c_name);
+                abi::emit_extern_symbol_address(ctx.emitter, "x9", &extern_sym);
+                abi::emit_symbol_address(ctx.emitter, "x10", slot);
+                ctx.emitter.instruction("str x9, [x10]");                       // publish the PHAR bridge entry into its runtime slot
+            }
+        }
+        Arch::X86_64 => {
+            for (c_name, slot) in entries {
+                let extern_sym = ctx.emitter.target.extern_symbol(c_name);
+                abi::emit_extern_symbol_address(ctx.emitter, "r9", &extern_sym);
+                abi::emit_store_reg_to_symbol(ctx.emitter, "r9", slot, 0);     // publish the PHAR bridge entry into its runtime slot
+            }
+        }
+    }
+}
+
+/// Publishes the native PHAR read-modify-write bridge used by write finalization.
+fn publish_phar_write_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[
+        ("elephc_phar_put_entry", "_elephc_phar_put_entry_fn"),
+        (
+            "elephc_phar_stream_open_entry",
+            "_elephc_phar_stream_open_entry_fn",
+        ),
+        ("elephc_phar_stream_append", "_elephc_phar_stream_append_fn"),
+        (
+            "elephc_phar_stream_finalize",
+            "_elephc_phar_stream_finalize_fn",
+        ),
+    ];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the native PHAR writer bridge used by runtime-built phar:// URLs.
+fn publish_dynamic_phar_write_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[
+        ("elephc_phar_put_url", "_elephc_phar_put_url_fn"),
+        (
+            "elephc_phar_stream_open_url",
+            "_elephc_phar_stream_open_url_fn",
+        ),
+        ("elephc_phar_stream_append", "_elephc_phar_stream_append_fn"),
+        (
+            "elephc_phar_stream_finalize",
+            "_elephc_phar_stream_finalize_fn",
+        ),
+    ];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the native PHAR deletion bridge used by `unlink("phar://...")`.
+fn publish_phar_delete_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_delete_url",
+        "_elephc_phar_delete_url_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the native PHAR compression-control bridge.
+fn publish_phar_set_compression_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_set_compression",
+        "_elephc_phar_set_compression_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the archive-entry listing bridge used by PHAR OOP constructors.
+fn publish_phar_list_entries_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_phar_list_entries",
+        "_elephc_phar_list_entries_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
 }
 
 /// Lowers `hash_file(algo, filename, binary?)` by reading bytes then hashing them.
@@ -111,32 +226,40 @@ pub(super) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     ensure_arg_count_between(inst, "fopen", 2, 4)?;
     let filename = expect_operand(inst, 0)?;
     let mode = expect_operand(inst, 1)?;
-    if let Some(path) = optional_const_string_operand(ctx, filename)? {
+    let filename_literal = optional_const_string_operand(ctx, filename)?;
+    if let Some(path) = filename_literal.as_deref() {
         if path.starts_with("php://filter/") {
-            return lower_literal_php_filter_fopen(ctx, inst, &path);
+            return lower_literal_php_filter_fopen(ctx, inst, path);
         }
-        if let Some(fd) = php_standard_stream_fd(&path).or_else(|| php_fd_stream(&path)) {
+        if let Some(fd) = php_standard_stream_fd(path).or_else(|| php_fd_stream(path)) {
             emit_fd_result(ctx, fd);
             box_stream_fd_or_false_result(ctx, "fopen");
             return store_if_result(ctx, inst);
         }
-        if is_php_memory_stream(&path) {
+        if is_php_memory_stream(path) {
             abi::emit_call_label(ctx.emitter, "__rt_tmpfile");
             box_stream_fd_or_false_result(ctx, "fopen");
             return store_if_result(ctx, inst);
         }
         if path.starts_with("data://") {
-            return lower_literal_data_fopen(ctx, inst, &path);
+            return lower_literal_data_fopen(ctx, inst, path);
         }
         if path.starts_with("ftp://") {
-            return lower_literal_ftp_fopen(ctx, inst, &path);
+            return lower_literal_ftp_fopen(ctx, inst, path);
         }
-        if path.starts_with("phar://") && !literal_fopen_mode_is_write(ctx, mode)? {
-            return lower_literal_phar_fopen_read(ctx, inst, &path);
+        if path.starts_with("phar://") {
+            if literal_fopen_mode_is_write(ctx, mode)? {
+                return lower_literal_phar_fopen_write(ctx, inst, path);
+            }
+            return lower_literal_phar_fopen_read(ctx, inst, path);
         }
         if path.starts_with("http://") {
-            return lower_literal_http_fopen(ctx, inst, &path);
+            return lower_literal_http_fopen(ctx, inst, path);
         }
+    }
+    if filename_literal.is_none() {
+        publish_dynamic_phar_function_pointers(ctx);
+        publish_dynamic_phar_write_function_pointer(ctx);
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -184,7 +307,10 @@ fn emit_literal_fopen_result(
     if path.starts_with("ftp://") {
         return emit_literal_ftp_fopen_result(ctx, path);
     }
-    if path.starts_with("phar://") && !literal_fopen_mode_is_write(ctx, mode)? {
+    if path.starts_with("phar://") {
+        if literal_fopen_mode_is_write(ctx, mode)? {
+            return emit_literal_phar_fopen_write_result(ctx, path);
+        }
         return emit_literal_phar_fopen_read_result(ctx, path);
     }
     if path.starts_with("http://") {
@@ -665,6 +791,81 @@ fn emit_literal_phar_fopen_read_result(ctx: &mut FunctionContext<'_>, path: &str
     }
     box_stream_fd_or_false_result(ctx, "fopen_phar");
     Ok(())
+}
+
+/// Lowers a literal write-mode `fopen("phar://...", ...)` through the PHAR writer.
+fn lower_literal_phar_fopen_write(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    path: &str,
+) -> Result<()> {
+    emit_literal_phar_fopen_write_result(ctx, path)?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits the boxed stream result for a literal write-mode `phar://` stream open.
+fn emit_literal_phar_fopen_write_result(ctx: &mut FunctionContext<'_>, path: &str) -> Result<()> {
+    if !emit_phar_write_open_for_literal(ctx, path)? {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, #-1");                         // unresolved phar write target lowers to PHP false
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, -1");                         // unresolved phar write target lowers to PHP false
+            }
+        }
+    }
+    box_stream_fd_or_false_result(ctx, "fopen_phar_write");
+    Ok(())
+}
+
+/// Seeds the PHAR write buffer for a literal target and records the output archive path.
+fn emit_phar_write_open_for_literal(ctx: &mut FunctionContext<'_>, url: &str) -> Result<bool> {
+    let Some((archive, entry)) = crate::codegen::builtins::phar_stream::resolve_write_target(url)
+    else {
+        return Ok(false);
+    };
+    let template = crate::codegen::builtins::phar_stream::build_phar_write_template(&entry);
+    let (template_label, template_len) = ctx.data.add_string(&template);
+    let (path_label, path_len) = ctx.data.add_string(archive.as_bytes());
+    let (entry_label, entry_len) = ctx.data.add_string(entry.as_bytes());
+    publish_phar_write_function_pointer(ctx);
+    crate::codegen::builtins::hash_crypto::publish_elephc_crypto_function_pointers(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", &path_label);
+            abi::emit_symbol_address(ctx.emitter, "x10", "_phar_write_path_ptr");
+            ctx.emitter.instruction("str x9, [x10]");                           // record the archive path pointer for finalize
+            ctx.emitter.instruction(&format!("mov x9, #{}", path_len));         // materialize the archive path byte length
+            abi::emit_symbol_address(ctx.emitter, "x10", "_phar_write_path_len");
+            ctx.emitter.instruction("str x9, [x10]");                           // record the archive path length for finalize
+            abi::emit_symbol_address(ctx.emitter, "x9", &entry_label);
+            abi::emit_symbol_address(ctx.emitter, "x10", "_phar_write_entry_ptr");
+            ctx.emitter.instruction("str x9, [x10]");                           // record the archive entry name pointer for finalize
+            ctx.emitter.instruction(&format!("mov x9, #{}", entry_len));        // materialize the archive entry name byte length
+            abi::emit_symbol_address(ctx.emitter, "x10", "_phar_write_entry_len");
+            ctx.emitter.instruction("str x9, [x10]");                           // record the archive entry name length for finalize
+            abi::emit_symbol_address(ctx.emitter, "x0", &template_label);
+            ctx.emitter.instruction(&format!("mov x1, #{}", template_len));     // pass the single-entry PHAR template length
+            abi::emit_call_label(ctx.emitter, "__rt_phar_write_open");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", &path_label);
+            abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_path_ptr");
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // record the archive path pointer for finalize
+            abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_path_len");
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {}", path_len)); // record the archive path length for finalize
+            abi::emit_symbol_address(ctx.emitter, "r9", &entry_label);
+            abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_entry_ptr");
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // record the archive entry name pointer for finalize
+            abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_entry_len");
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {}", entry_len)); // record the archive entry name length for finalize
+            abi::emit_symbol_address(ctx.emitter, "rdi", &template_label);
+            ctx.emitter.instruction(&format!("mov rsi, {}", template_len));     // pass the single-entry PHAR template length
+            abi::emit_call_label(ctx.emitter, "__rt_phar_write_open");
+        }
+    }
+    Ok(true)
 }
 
 /// Returns true when a literal fopen mode opens a PHAR entry for writing.
@@ -2284,22 +2485,31 @@ pub(super) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     let done_label = ctx.next_label("fclose_done");
     let user_wrapper_label = ctx.next_label("fclose_user_wrapper");
     let phar_label = ctx.next_label("fclose_phar");
+    let not_phar_label = ctx.next_label("fclose_not_phar");
     let after_dispatch_label = ctx.next_label("fclose_after_dispatch");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov w9, #0x5000");                         // low half of the phar-write descriptor 0x50000000
-            ctx.emitter.instruction("lsl w9, w9, #16");                         // form the phar-write synthetic descriptor
-            ctx.emitter.instruction("cmp x0, x9");                              // test whether this is the phar write stream
-            ctx.emitter.instruction(&format!("b.eq {}", phar_label));           // finalize phar writes instead of closing a real fd
+            ctx.emitter.instruction("mov w9, #0x5000");                         // low half of the phar-write descriptor base 0x50000000
+            ctx.emitter.instruction("lsl w9, w9, #16");                         // form the phar-write synthetic descriptor base
+            ctx.emitter.instruction("cmp x0, x9");                              // is the descriptor below the phar-write range?
+            ctx.emitter.instruction(&format!("b.lt {}", not_phar_label));       // below the PHAR range: continue with normal dispatch
+            ctx.emitter.instruction("add x10, x9, #32");                        // upper bound for the 32 buffered PHAR write descriptors
+            ctx.emitter.instruction("cmp x0, x10");                             // is this inside the phar-write descriptor range?
+            ctx.emitter.instruction(&format!("b.lt {}", phar_label));           // finalize phar writes instead of closing a real fd
+            ctx.emitter.label(&not_phar_label);
             ctx.emitter.instruction("mov w9, #0x4000");                         // materialize the high half of USER_WRAPPER_FD_BASE
             ctx.emitter.instruction("lsl w9, w9, #16");                         // form the synthetic wrapper fd base 0x40000000
             ctx.emitter.instruction("cmp x0, x9");                              // test whether this is a userspace-wrapper stream
             ctx.emitter.instruction(&format!("b.ge {}", user_wrapper_label));   // dispatch synthetic handles without indexing fd tables
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r9d, 0x50000000");                     // materialize the phar-write synthetic descriptor
-            ctx.emitter.instruction("cmp rax, r9");                             // test whether this is the phar write stream
-            ctx.emitter.instruction(&format!("je {}", phar_label));             // finalize phar writes instead of closing a real fd
+            ctx.emitter.instruction("mov r9d, 0x50000000");                     // materialize the phar-write synthetic descriptor base
+            ctx.emitter.instruction("cmp rax, r9");                             // is the descriptor below the phar-write range?
+            ctx.emitter.instruction(&format!("jl {}", not_phar_label));         // below the PHAR range: continue with normal dispatch
+            ctx.emitter.instruction("lea r10, [r9 + 32]");                      // upper bound for the 32 buffered PHAR write descriptors
+            ctx.emitter.instruction("cmp rax, r10");                            // is this inside the phar-write descriptor range?
+            ctx.emitter.instruction(&format!("jl {}", phar_label));             // finalize phar writes instead of closing a real fd
+            ctx.emitter.label(&not_phar_label);
             ctx.emitter.instruction("mov r9d, 0x40000000");                     // materialize USER_WRAPPER_FD_BASE for synthetic handles
             ctx.emitter.instruction("cmp rax, r9");                             // test whether this is a userspace-wrapper stream
             ctx.emitter.instruction(&format!("jge {}", user_wrapper_label));    // dispatch synthetic handles without indexing fd tables
@@ -2365,6 +2575,9 @@ pub(super) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         }
     }
     ctx.emitter.label(&phar_label);
+    if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the PHAR write descriptor to the finalizer
+    }
     abi::emit_call_label(ctx.emitter, "__rt_phar_write_finalize");
     ctx.emitter.label(&after_dispatch_label);
     store_if_result(ctx, inst)
@@ -3250,6 +3463,33 @@ pub(super) fn lower_realpath(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     store_if_result(ctx, inst)
 }
 
+/// Lowers `realpath_cache_get()` to elephc's empty realpath-cache view.
+pub(super) fn lower_realpath_cache_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "realpath_cache_get", 0)?;
+    emit_empty_mixed_hash(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `realpath_cache_size()` to zero because elephc has no realpath cache.
+pub(super) fn lower_realpath_cache_size(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "realpath_cache_size", 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #0");                              // report an empty realpath cache size
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor rax, rax");                            // report an empty realpath cache size
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `file_put_contents(path, data)` through the target-aware runtime writer.
 pub(super) fn lower_file_put_contents(
     ctx: &mut FunctionContext<'_>,
@@ -3258,11 +3498,250 @@ pub(super) fn lower_file_put_contents(
     super::ensure_arg_count(inst, "file_put_contents", 2)?;
     let path = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
+    let path_literal = optional_const_string_operand(ctx, path)?;
+    if let Some(path_literal) = path_literal.as_deref() {
+        if path_literal.starts_with("phar://") {
+            return lower_literal_phar_file_put_contents(ctx, inst, path_literal, data);
+        }
+    }
+    let helper = if path_literal.is_none() {
+        publish_dynamic_phar_write_function_pointer(ctx);
+        "__rt_file_put_contents_maybe_phar"
+    } else {
+        "__rt_file_put_contents"
+    };
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data)?,
-        Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data)?,
+        Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, helper)?,
+        Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, helper)?,
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers one-shot `file_put_contents("phar://archive/entry", data)`.
+fn lower_literal_phar_file_put_contents(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    path: &str,
+    data: ValueId,
+) -> Result<()> {
+    if !emit_phar_write_open_for_literal(ctx, path)? {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, #-1");                         // unresolved phar write target returns failure
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, -1");                         // unresolved phar write target returns failure
+            }
+        }
+        return store_if_result(ctx, inst);
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_string_to_result(ctx, data, "file_put_contents phar data")?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_phar_write_append");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("mov x0, x9");                              // pass the PHAR write descriptor to finalize
+            abi::emit_call_label(ctx.emitter, "__rt_phar_write_finalize");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            load_string_to_result(ctx, data, "file_put_contents phar data")?;
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the entry payload pointer to the phar writer
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_phar_write_append");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_phar_write_finalize");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the compiler-internal native PHAR compression-control helper.
+pub(super) fn lower_elephc_phar_set_compression(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_phar_set_compression", 2)?;
+    let path = expect_operand(inst, 0)?;
+    let compression = expect_operand(inst, 1)?;
+    let fail = ctx.next_label("phar_set_compression_fail");
+    let done = ctx.next_label("phar_set_compression_done");
+    publish_phar_set_compression_function_pointer(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_result(compression)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_string_to_result(ctx, path, "__elephc_phar_set_compression path")?;
+            ctx.emitter.instruction("mov x0, x1");                              // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov x1, x2");                              // bridge arg 1 = archive path length
+            abi::emit_pop_reg(ctx.emitter, "x2");
+            abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_phar_set_compression_fn");
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional PHAR compression bridge pointer
+            ctx.emitter.instruction(&format!("cbz x9, {}", fail));              // missing bridge makes compression control fail
+            ctx.emitter.instruction("blr x9");                                  // rewrite native-PHAR entry compression flags
+            ctx.emitter.instruction("cmp x0, #0");                              // test the bridge success flag
+            ctx.emitter.instruction("cset x0, ne");                             // normalize bridge result to PHP bool
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the failure result
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("mov x0, #0");                              // report false when the bridge is unavailable
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_result(compression)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            load_string_to_result(ctx, path, "__elephc_phar_set_compression path")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // bridge arg 1 = archive path length
+            abi::emit_pop_reg(ctx.emitter, "rdx");
+            abi::emit_load_symbol_to_reg(
+                ctx.emitter,
+                "r10",
+                "_elephc_phar_set_compression_fn",
+                0,
+            );
+            ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR compression bridge was published
+            ctx.emitter.instruction(&format!("jz {}", fail));                   // missing bridge makes compression control fail
+            ctx.emitter.instruction("call r10");                                // rewrite native-PHAR entry compression flags
+            ctx.emitter.instruction("test rax, rax");                           // test the bridge success flag
+            ctx.emitter.instruction("setne al");                                // normalize bridge result to PHP bool
+            ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the failure result
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("xor eax, eax");                            // report false when the bridge is unavailable
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the compiler-internal PHAR entry-list helper into a PHP string array.
+pub(super) fn lower_elephc_phar_list_entries(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_phar_list_entries", 1)?;
+    let path = expect_operand(inst, 0)?;
+    let empty = ctx.next_label("phar_list_entries_empty");
+    let done = ctx.next_label("phar_list_entries_done");
+    publish_phar_list_entries_function_pointer(ctx);
+    load_string_to_result(ctx, path, "__elephc_phar_list_entries path")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov x1, x2");                              // bridge arg 1 = archive path length
+            abi::emit_symbol_address(ctx.emitter, "x2", "_phar_list_len");
+            abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_phar_list_entries_fn");
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional PHAR list bridge pointer
+            ctx.emitter.instruction(&format!("cbz x9, {}", empty));             // missing bridge yields an empty entry list
+            ctx.emitter.instruction("blr x9");                                  // serialize archive entry names into the bridge buffer
+            ctx.emitter.instruction(&format!("cbz x0, {}", empty));             // unreadable archives yield an empty entry list
+            emit_phar_list_entries_buffer_to_array_aarch64(ctx);
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the empty-array fallback after successful expansion
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // bridge arg 0 = archive path pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // bridge arg 1 = archive path length
+            abi::emit_symbol_address(ctx.emitter, "rdx", "_phar_list_len");
+            abi::emit_load_symbol_to_reg(
+                ctx.emitter,
+                "r10",
+                "_elephc_phar_list_entries_fn",
+                0,
+            );
+            ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR list bridge was published
+            ctx.emitter.instruction(&format!("jz {}", empty));                  // missing bridge yields an empty entry list
+            ctx.emitter.instruction("call r10");                                // serialize archive entry names into the bridge buffer
+            ctx.emitter.instruction("test rax, rax");                           // test whether the bridge returned a serialized buffer
+            ctx.emitter.instruction(&format!("jz {}", empty));                  // unreadable archives yield an empty entry list
+            emit_phar_list_entries_buffer_to_array_x86_64(ctx);
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the empty-array fallback after successful expansion
+        }
+    }
+    ctx.emitter.label(&empty);
+    emit_static_string_array(ctx, &[]);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Expands the serialized PHAR entry-name buffer in `x0` into a string array.
+fn emit_phar_list_entries_buffer_to_array_aarch64(ctx: &mut FunctionContext<'_>) {
+    let loop_label = ctx.next_label("phar_list_entries_loop");
+    let done_label = ctx.next_label("phar_list_entries_expand_done");
+    ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve cursor, end, and array spill slots
+    ctx.emitter.instruction("str x0, [sp, #0]");                                // seed the serialized-buffer cursor
+    abi::emit_symbol_address(ctx.emitter, "x10", "_phar_list_len");
+    ctx.emitter.instruction("ldr x11, [x10]");                                  // load the serialized entry-name byte length
+    ctx.emitter.instruction("add x11, x0, x11");                                // compute the end pointer for the serialized buffer
+    ctx.emitter.instruction("str x11, [sp, #8]");                               // save the end pointer across array helper calls
+    ctx.emitter.instruction("mov x0, #1");                                      // allocate at least one slot for the entry-name array
+    ctx.emitter.instruction("mov x1, #16");                                     // entry-name array stores 16-byte string slots
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    ctx.emitter.instruction("str x0, [sp, #16]");                               // save the growing entry-name array pointer
+    ctx.emitter.label(&loop_label);
+    ctx.emitter.instruction("ldr x10, [sp, #0]");                               // reload the current serialized-buffer cursor
+    ctx.emitter.instruction("ldr x11, [sp, #8]");                               // reload the serialized-buffer end pointer
+    ctx.emitter.instruction("cmp x10, x11");                                    // has the cursor reached the serialized-buffer end?
+    ctx.emitter.instruction(&format!("b.hs {}", done_label));                   // stop when no complete length header remains
+    ctx.emitter.instruction("add x12, x10, #8");                                // compute the entry-name byte pointer after the length header
+    ctx.emitter.instruction("cmp x12, x11");                                    // does the length header fit in the serialized buffer?
+    ctx.emitter.instruction(&format!("b.hi {}", done_label));                   // stop on malformed trailing length bytes
+    ctx.emitter.instruction("ldr x2, [x10]");                                   // load the next entry-name byte length
+    ctx.emitter.instruction("add x13, x12, x2");                                // compute the cursor for the following serialized entry
+    ctx.emitter.instruction("cmp x13, x11");                                    // does the entry-name payload fit in the serialized buffer?
+    ctx.emitter.instruction(&format!("b.hi {}", done_label));                   // stop on malformed trailing entry bytes
+    ctx.emitter.instruction("str x13, [sp, #0]");                               // advance the cursor before helper calls clobber scratch registers
+    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // pass the current string array to array_push_str
+    ctx.emitter.instruction("mov x1, x12");                                     // pass the entry-name pointer to array_push_str
+    abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+    ctx.emitter.instruction("str x0, [sp, #16]");                               // preserve the possibly-grown string array
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue expanding serialized entry names
+    ctx.emitter.label(&done_label);
+    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // restore the completed entry-name array as the result
+    ctx.emitter.instruction("add sp, sp, #32");                                 // release serialized-buffer expansion spill slots
+}
+
+/// Expands the serialized PHAR entry-name buffer in `rax` into a string array.
+fn emit_phar_list_entries_buffer_to_array_x86_64(ctx: &mut FunctionContext<'_>) {
+    let loop_label = ctx.next_label("phar_list_entries_loop");
+    let done_label = ctx.next_label("phar_list_entries_expand_done");
+    ctx.emitter.instruction("sub rsp, 48");                                     // reserve aligned cursor, end, and array spill slots
+    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // seed the serialized-buffer cursor
+    abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_phar_list_len", 0);
+    ctx.emitter.instruction("add r10, rax");                                    // compute the end pointer for the serialized buffer
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r10");                    // save the end pointer across array helper calls
+    ctx.emitter.instruction("mov edi, 1");                                      // allocate at least one slot for the entry-name array
+    ctx.emitter.instruction("mov esi, 16");                                     // entry-name array stores 16-byte string slots
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // save the growing entry-name array pointer
+    ctx.emitter.label(&loop_label);
+    ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                        // reload the current serialized-buffer cursor
+    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");                    // reload the serialized-buffer end pointer
+    ctx.emitter.instruction("cmp r10, r11");                                    // has the cursor reached the serialized-buffer end?
+    ctx.emitter.instruction(&format!("jae {}", done_label));                    // stop when no complete length header remains
+    ctx.emitter.instruction("lea r8, [r10 + 8]");                               // compute the entry-name byte pointer after the length header
+    ctx.emitter.instruction("cmp r8, r11");                                     // does the length header fit in the serialized buffer?
+    ctx.emitter.instruction(&format!("ja {}", done_label));                     // stop on malformed trailing length bytes
+    ctx.emitter.instruction("mov rdx, QWORD PTR [r10]");                        // load the next entry-name byte length
+    ctx.emitter.instruction("lea rcx, [r8 + rdx]");                             // compute the cursor for the following serialized entry
+    ctx.emitter.instruction("cmp rcx, r11");                                    // does the entry-name payload fit in the serialized buffer?
+    ctx.emitter.instruction(&format!("ja {}", done_label));                     // stop on malformed trailing entry bytes
+    ctx.emitter.instruction("mov QWORD PTR [rsp], rcx");                        // advance the cursor before helper calls clobber scratch registers
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");                   // pass the current string array to array_push_str
+    ctx.emitter.instruction("mov rsi, r8");                                     // pass the entry-name pointer to array_push_str
+    abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // preserve the possibly-grown string array
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue expanding serialized entry names
+    ctx.emitter.label(&done_label);
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // restore the completed entry-name array as the result
+    ctx.emitter.instruction("add rsp, 48");                                     // release serialized-buffer expansion spill slots
 }
 
 /// Lowers `file_exists(path)` through the target-aware runtime stat helper.
@@ -3275,13 +3754,23 @@ pub(super) fn lower_file_exists(
 
 /// Lowers `unlink(path)` through the target-aware runtime helper.
 pub(super) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_single_path_wrapper_op(
-        ctx,
-        inst,
-        "unlink",
-        "__rt_unlink",
-        STREAM_WRAPPER_UNLINK_SLOT,
-    )
+    super::ensure_arg_count(inst, "unlink", 1)?;
+    let path = expect_operand(inst, 0)?;
+    let path_literal = optional_const_string_operand(ctx, path)?;
+    let can_be_phar = path_literal
+        .as_deref()
+        .map(|path| path.starts_with("phar://"))
+        .unwrap_or(true);
+    if can_be_phar {
+        publish_phar_delete_function_pointer(ctx);
+    }
+    load_string_to_result(ctx, path, "unlink")?;
+    if can_be_phar {
+        emit_unlink_maybe_phar_dispatch(ctx);
+    } else {
+        emit_single_path_wrapper_dispatch(ctx, "__rt_unlink", STREAM_WRAPPER_UNLINK_SLOT);
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `mkdir(path)` through the target-aware runtime helper.
@@ -3337,6 +3826,16 @@ pub(super) fn lower_chown(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// Lowers `chgrp(path, group)` for integer GIDs and string group names.
 pub(super) fn lower_chgrp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_chown_or_chgrp(ctx, inst, "chgrp", PrincipalKind::Group)
+}
+
+/// Lowers `lchown(path, owner)` for integer UIDs and string user names without following symlinks.
+pub(super) fn lower_lchown(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_lchown_or_lchgrp(ctx, inst, "lchown", PrincipalKind::Owner)
+}
+
+/// Lowers `lchgrp(path, group)` for integer GIDs and string group names without following symlinks.
+pub(super) fn lower_lchgrp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_lchown_or_lchgrp(ctx, inst, "lchgrp", PrincipalKind::Group)
 }
 
 /// Lowers `umask(mask?)` through the target-aware runtime helper.
@@ -3617,6 +4116,101 @@ fn lower_chown_or_chgrp_x86_64(
     Ok(())
 }
 
+/// Lowers the native symlink-aware path/principal convention for `lchown()` and `lchgrp()`.
+fn lower_lchown_or_lchgrp(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    kind: PrincipalKind,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 2)?;
+    let path = expect_operand(inst, 0)?;
+    let principal = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_lchown_or_lchgrp_aarch64(ctx, path, principal, name, kind)?,
+        Arch::X86_64 => lower_lchown_or_lchgrp_x86_64(ctx, path, principal, name, kind)?,
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Materializes `lchown()`/`lchgrp()` operands for the ARM64 runtime ABI.
+fn lower_lchown_or_lchgrp_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    path: ValueId,
+    principal: ValueId,
+    name: &str,
+    kind: PrincipalKind,
+) -> Result<()> {
+    load_string_to_result(ctx, path, name)?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    match ctx.load_value_to_result(principal)?.codegen_repr() {
+        PhpType::Str => {
+            ctx.emitter.instruction("mov x3, x1");                              // pass principal name pointer to symlink ownership helper
+            ctx.emitter.instruction("mov x4, x2");                              // pass principal name length to symlink ownership helper
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, lprincipal_string_runtime(kind));
+        }
+        PhpType::Int => {
+            ctx.emitter.instruction("mov x9, x0");                              // preserve uid/gid while restoring the path
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            if matches!(kind, PrincipalKind::Owner) {
+                ctx.emitter.instruction("mov x3, x9");                          // pass uid and leave symlink group unchanged
+                ctx.emitter.instruction("mov x4, #-1");                         // keep the symlink group unchanged
+            } else {
+                ctx.emitter.instruction("mov x3, #-1");                         // keep the symlink owner unchanged
+                ctx.emitter.instruction("mov x4, x9");                          // pass gid and leave symlink owner unchanged
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_lchown");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} principal PHP type {:?}",
+                name, other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Materializes `lchown()`/`lchgrp()` operands for the Linux x86_64 runtime ABI.
+fn lower_lchown_or_lchgrp_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    path: ValueId,
+    principal: ValueId,
+    name: &str,
+    kind: PrincipalKind,
+) -> Result<()> {
+    load_string_to_result(ctx, path, name)?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    match ctx.load_value_to_result(principal)?.codegen_repr() {
+        PhpType::Str => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass principal name pointer to symlink ownership helper
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass principal name length to symlink ownership helper
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_call_label(ctx.emitter, lprincipal_string_runtime(kind));
+        }
+        PhpType::Int => {
+            ctx.emitter.instruction("mov r9, rax");                             // preserve uid/gid while restoring the path
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            if matches!(kind, PrincipalKind::Owner) {
+                ctx.emitter.instruction("mov rdi, r9");                         // pass uid and leave symlink group unchanged
+                ctx.emitter.instruction("mov rsi, -1");                         // keep the symlink group unchanged
+            } else {
+                ctx.emitter.instruction("mov rdi, -1");                         // keep the symlink owner unchanged
+                ctx.emitter.instruction("mov rsi, r9");                         // pass gid and leave symlink owner unchanged
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_lchown");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} principal PHP type {:?}",
+                name, other
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Returns the wrapper metadata option for string ownership changes.
 fn principal_name_option(kind: PrincipalKind) -> usize {
     match kind {
@@ -3638,6 +4232,14 @@ fn principal_string_runtime(kind: PrincipalKind) -> &'static str {
     match kind {
         PrincipalKind::Owner => "__rt_chown_user",
         PrincipalKind::Group => "__rt_chgrp_group",
+    }
+}
+
+/// Returns the string-principal runtime helper for symlink ownership changes.
+fn lprincipal_string_runtime(kind: PrincipalKind) -> &'static str {
+    match kind {
+        PrincipalKind::Owner => "__rt_lchown_user",
+        PrincipalKind::Group => "__rt_lchgrp_group",
     }
 }
 
@@ -4683,6 +5285,101 @@ fn emit_single_path_wrapper_dispatch(
     }
 }
 
+/// Emits PHAR-aware `unlink()` dispatch with wrapper/native fallback.
+fn emit_unlink_maybe_phar_dispatch(ctx: &mut FunctionContext<'_>) {
+    let not_phar = ctx.next_label("unlink_not_phar");
+    let phar_fail = ctx.next_label("unlink_phar_fail");
+    let after = ctx.next_label("unlink_after");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #16");                         // reserve path scratch storage across the PHAR probe
+            ctx.emitter.instruction("str x1, [sp, #0]");                        // preserve the unlink path pointer
+            ctx.emitter.instruction("str x2, [sp, #8]");                        // preserve the unlink path length
+            ctx.emitter.instruction("cmp x2, #7");                              // path must be at least "phar://" long
+            ctx.emitter.instruction(&format!("b.lt {}", not_phar));             // shorter paths use normal unlink dispatch
+            ctx.emitter.instruction("ldrb w9, [x1, #0]");                       // read scheme byte 0
+            ctx.emitter.instruction("cmp w9, #112");                            // compare with 'p'
+            ctx.emitter.instruction(&format!("b.ne {}", not_phar));             // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("ldrb w9, [x1, #1]");                       // read scheme byte 1
+            ctx.emitter.instruction("cmp w9, #104");                            // compare with 'h'
+            ctx.emitter.instruction(&format!("b.ne {}", not_phar));             // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("ldrb w9, [x1, #2]");                       // read scheme byte 2
+            ctx.emitter.instruction("cmp w9, #97");                             // compare with 'a'
+            ctx.emitter.instruction(&format!("b.ne {}", not_phar));             // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("ldrb w9, [x1, #3]");                       // read scheme byte 3
+            ctx.emitter.instruction("cmp w9, #114");                            // compare with 'r'
+            ctx.emitter.instruction(&format!("b.ne {}", not_phar));             // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("ldrb w9, [x1, #4]");                       // read scheme separator byte
+            ctx.emitter.instruction("cmp w9, #58");                             // compare with ':'
+            ctx.emitter.instruction(&format!("b.ne {}", not_phar));             // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("ldrb w9, [x1, #5]");                       // read first slash byte
+            ctx.emitter.instruction("cmp w9, #47");                             // compare with '/'
+            ctx.emitter.instruction(&format!("b.ne {}", not_phar));             // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("ldrb w9, [x1, #6]");                       // read second slash byte
+            ctx.emitter.instruction("cmp w9, #47");                             // compare with '/'
+            ctx.emitter.instruction(&format!("b.ne {}", not_phar));             // non-PHAR scheme uses normal unlink dispatch
+            abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_phar_delete_url_fn");
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional PHAR delete bridge pointer
+            ctx.emitter.instruction(&format!("cbz x9, {}", phar_fail));         // missing bridge makes PHAR unlink fail
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // bridge arg 0 = full phar:// URL pointer
+            ctx.emitter.instruction("ldr x1, [sp, #8]");                        // bridge arg 1 = full phar:// URL length
+            ctx.emitter.instruction("blr x9");                                  // delete the archive entry through elephc-phar
+            ctx.emitter.instruction("cmp x0, #0");                              // test the bridge success flag
+            ctx.emitter.instruction("cset x0, ne");                             // normalize bridge result to PHP bool
+            ctx.emitter.instruction(&format!("b {}", after));                   // skip native unlink fallback for PHAR URLs
+            ctx.emitter.label(&phar_fail);
+            ctx.emitter.instruction("mov x0, #0");                              // report false for failed PHAR unlink
+            ctx.emitter.instruction(&format!("b {}", after));                   // skip native unlink fallback for PHAR URLs
+            ctx.emitter.label(&not_phar);
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // restore the path pointer for normal unlink dispatch
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // restore the path length for normal unlink dispatch
+            emit_single_path_wrapper_dispatch(ctx, "__rt_unlink", STREAM_WRAPPER_UNLINK_SLOT);
+            ctx.emitter.label(&after);
+            ctx.emitter.instruction("add sp, sp, #16");                         // release path scratch storage
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve path scratch storage across the PHAR probe
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the unlink path pointer
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // preserve the unlink path length
+            ctx.emitter.instruction("cmp rdx, 7");                              // path must be at least "phar://" long
+            ctx.emitter.instruction(&format!("jl {}", not_phar));               // shorter paths use normal unlink dispatch
+            ctx.emitter.instruction("cmp BYTE PTR [rax + 0], 0x70");            // compare scheme byte 0 with 'p'
+            ctx.emitter.instruction(&format!("jne {}", not_phar));              // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("cmp BYTE PTR [rax + 1], 0x68");            // compare scheme byte 1 with 'h'
+            ctx.emitter.instruction(&format!("jne {}", not_phar));              // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("cmp BYTE PTR [rax + 2], 0x61");            // compare scheme byte 2 with 'a'
+            ctx.emitter.instruction(&format!("jne {}", not_phar));              // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("cmp BYTE PTR [rax + 3], 0x72");            // compare scheme byte 3 with 'r'
+            ctx.emitter.instruction(&format!("jne {}", not_phar));              // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("cmp BYTE PTR [rax + 4], 0x3A");            // compare scheme separator with ':'
+            ctx.emitter.instruction(&format!("jne {}", not_phar));              // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("cmp BYTE PTR [rax + 5], 0x2F");            // compare first slash byte
+            ctx.emitter.instruction(&format!("jne {}", not_phar));              // non-PHAR scheme uses normal unlink dispatch
+            ctx.emitter.instruction("cmp BYTE PTR [rax + 6], 0x2F");            // compare second slash byte
+            ctx.emitter.instruction(&format!("jne {}", not_phar));              // non-PHAR scheme uses normal unlink dispatch
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_elephc_phar_delete_url_fn", 0);
+            ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR delete bridge was published
+            ctx.emitter.instruction(&format!("jz {}", phar_fail));              // missing bridge makes PHAR unlink fail
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // bridge arg 0 = full phar:// URL pointer
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // bridge arg 1 = full phar:// URL length
+            ctx.emitter.instruction("call r10");                                // delete the archive entry through elephc-phar
+            ctx.emitter.instruction("test rax, rax");                           // test the bridge success flag
+            ctx.emitter.instruction("setne al");                                // normalize bridge result to PHP bool
+            ctx.emitter.instruction("movzx eax, al");                           // widen the normalized bool
+            ctx.emitter.instruction(&format!("jmp {}", after));                 // skip native unlink fallback for PHAR URLs
+            ctx.emitter.label(&phar_fail);
+            ctx.emitter.instruction("xor eax, eax");                            // report false for failed PHAR unlink
+            ctx.emitter.instruction(&format!("jmp {}", after));                 // skip native unlink fallback for PHAR URLs
+            ctx.emitter.label(&not_phar);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the path pointer for normal unlink dispatch
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the path length for normal unlink dispatch
+            emit_single_path_wrapper_dispatch(ctx, "__rt_unlink", STREAM_WRAPPER_UNLINK_SLOT);
+            ctx.emitter.label(&after);
+            ctx.emitter.instruction("add rsp, 16");                             // release path scratch storage
+        }
+    }
+}
+
 /// Lowers `rename()` through userspace wrapper rename dispatch before libc rename.
 fn lower_rename_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "rename", 2)?;
@@ -5109,13 +5806,13 @@ fn store_fsockopen_error_outputs(
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("cmp rax, 0");                              // test whether the fsockopen connection succeeded
             ctx.emitter.instruction(&format!("mov r9, {}", econnrefused));      // failure error code is ECONNREFUSED
-            ctx.emitter.instruction("xor r10d, r10d");                          // success error code is zero
+            ctx.emitter.instruction("mov r10, 0");                              // success error code is zero without clobbering compare flags
             ctx.emitter.instruction("cmovge r9, r10");                          // choose the error code for the connection outcome
             abi::emit_symbol_address(ctx.emitter, "r10", &msg_sym);
             abi::emit_symbol_address(ctx.emitter, "r11", &empty_sym);
             ctx.emitter.instruction("cmovge r10, r11");                         // choose the error-message pointer for the outcome
             ctx.emitter.instruction(&format!("mov r11, {}", msg_len));          // failure error-message byte length
-            ctx.emitter.instruction("xor ecx, ecx");                            // success error-message length is zero
+            ctx.emitter.instruction("mov rcx, 0");                              // success error-message length is zero without clobbering compare flags
             ctx.emitter.instruction("cmovge r11, rcx");                         // choose the error-message length for the outcome
             if let Some(slot) = errstr_slot {
                 let preserve_errno = errno_slot.is_some()
@@ -5309,6 +6006,29 @@ fn materialize_stream_filter_mode(ctx: &mut FunctionContext<'_>, inst: &Instruct
     Ok(())
 }
 
+/// Materializes the optional stream-filter params operand as an owned boxed
+/// Mixed cell, defaulting to PHP null when the caller omitted it.
+fn materialize_stream_filter_params(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() < 4 {
+        emit_null_mixed(ctx);
+        return Ok(());
+    }
+    let params = expect_operand(inst, 3)?;
+    let params_ty = ctx.value_php_type(params)?.codegen_repr();
+    ctx.load_value_to_result(params)?;
+    if matches!(params_ty, PhpType::Mixed | PhpType::Union(_)) {
+        if !ctx.value_can_own_mixed_box_source(params)? {
+            abi::emit_incref_if_refcounted(ctx.emitter, &params_ty);
+        }
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, &params_ty);
+    }
+    Ok(())
+}
+
 /// Attaches a user-defined stream filter through the runtime registry.
 fn lower_user_stream_filter_attach(
     ctx: &mut FunctionContext<'_>,
@@ -5323,14 +6043,20 @@ fn lower_user_stream_filter_attach(
         Arch::AArch64 => {
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             materialize_stream_filter_mode(ctx, inst)?;
-            ctx.emitter.instruction("mov x3, x0");                              // pass the selected stream-filter mode to the attach helper
+            abi::emit_push_reg(ctx.emitter, "x0");
+            materialize_stream_filter_params(ctx, inst)?;
+            ctx.emitter.instruction("mov x4, x0");                              // pass the boxed stream-filter params to the attach helper
+            abi::emit_pop_reg(ctx.emitter, "x3");
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
             ctx.emitter.instruction("ldr x0, [sp]");                            // pass the saved stream descriptor without popping it yet
         }
         Arch::X86_64 => {
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             materialize_stream_filter_mode(ctx, inst)?;
-            ctx.emitter.instruction("mov rcx, rax");                            // pass the selected stream-filter mode to the attach helper
+            abi::emit_push_reg(ctx.emitter, "rax");
+            materialize_stream_filter_params(ctx, inst)?;
+            ctx.emitter.instruction("mov r8, rax");                             // pass the boxed stream-filter params to the attach helper
+            abi::emit_pop_reg(ctx.emitter, "rcx");
             abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // pass the saved stream descriptor without popping it yet
         }
@@ -6969,6 +7695,7 @@ fn lower_file_put_contents_arm64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    helper: &str,
 ) -> Result<()> {
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
@@ -6976,7 +7703,7 @@ fn lower_file_put_contents_arm64(
     ctx.emitter.instruction("mov x3, x1");                                      // pass the data pointer in the runtime helper's second string slot
     ctx.emitter.instruction("mov x4, x2");                                      // pass the data length in the runtime helper's second string slot
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
-    abi::emit_call_label(ctx.emitter, "__rt_file_put_contents");
+    abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
 
@@ -6985,6 +7712,7 @@ fn lower_file_put_contents_x86_64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    helper: &str,
 ) -> Result<()> {
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
@@ -6992,7 +7720,7 @@ fn lower_file_put_contents_x86_64(
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the data pointer while the filename remains on the temporary stack
     ctx.emitter.instruction("mov rsi, rdx");                                    // pass the data length while the filename remains on the temporary stack
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
-    abi::emit_call_label(ctx.emitter, "__rt_file_put_contents");
+    abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
 

@@ -19,7 +19,7 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::function;
-use crate::names::{php_symbol_key, Name};
+use crate::names::{php_symbol_key, property_hook_get_method, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget, MagicConstant,
     StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
@@ -41,6 +41,11 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
     }
 
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::StringLiteral(value) => lower_string_literal(ctx, value, expr),
         ExprKind::IntLiteral(value) => lower_int_literal(ctx, *value, expr),
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
@@ -616,6 +621,11 @@ pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
 /// Returns whether evaluating an expression can reset the caller's concat scratch storage.
 fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::FunctionCall { .. }
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }
@@ -1375,6 +1385,10 @@ fn lower_non_local_assignment_write(
     value: &Expr,
     span: Span,
 ) {
+    if let ExprKind::DynamicPropertyAccess { object, property } = &target.kind {
+        lower_dynamic_property_assign(ctx, object, property, value, span);
+        return;
+    }
     let Some(kind) = non_local_assignment_stmt_kind(target, value) else {
         lower_expr(ctx, value);
         return;
@@ -1424,6 +1438,26 @@ fn non_local_assignment_stmt_kind(target: &Expr, value: &Expr) -> Option<StmtKin
         }
         _ => None,
     }
+}
+
+/// Lowers a runtime-name property write (`$object->{$property} = $value`).
+fn lower_dynamic_property_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+    value: &Expr,
+    span: Span,
+) {
+    let object = lower_expr(ctx, object);
+    let property = lower_expr(ctx, property);
+    let value = lower_expr(ctx, value);
+    ctx.emit_void(
+        Op::DynamicPropSet,
+        vec![object.value, property.value, value.value],
+        None,
+        Op::DynamicPropSet.default_effects(),
+        Some(span),
+    );
 }
 
 /// Lowers pre/post increment and decrement expressions.
@@ -5143,7 +5177,8 @@ fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
 /// Returns precise builtin return types needed by EIR value materialization.
 fn builtin_return_type_override(name: &str) -> Option<PhpType> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "chdir" | "chgrp" | "chmod" | "chown" | "class_alias" | "class_exists" | "copy" | "define" | "defined"
+        "chdir" | "chgrp" | "chmod" | "chown" | "lchgrp" | "lchown"
+        | "class_alias" | "class_exists" | "copy" | "define" | "defined"
         | "empty" | "file_exists" | "fnmatch" | "function_exists" | "is_a" | "is_callable"
         | "fdatasync" | "fflush" | "flock" | "fsync" | "ftruncate" | "interface_exists" | "is_dir"
         | "is_executable" | "is_file" | "is_link" | "is_numeric" | "link" | "mkdir" | "rename"
@@ -5151,7 +5186,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "is_subclass_of" | "is_writeable" | "is_writable" | "settype"
         | "is_resource" | "hash_equals" | "hash_update" | "spl_autoload_register"
         | "spl_autoload_unregister" | "stream_context_set_option" | "stream_context_set_params"
-        | "stream_filter_register" | "stream_filter_remove"
+        | "stream_filter_register" | "stream_filter_remove" | "__elephc_phar_set_compression"
         | "stream_wrapper_register" | "stream_wrapper_restore" | "stream_wrapper_unregister"
         | "stream_isatty" | "stream_is_local" | "stream_set_blocking" | "stream_set_timeout"
         | "stream_socket_enable_crypto" | "stream_socket_shutdown" | "stream_supports_lock" | "symlink" | "touch"
@@ -5174,7 +5209,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "crc32" | "get_resource_id" | "isset" | "linkinfo" | "mktime" | "sleep"
         | "pclose" | "spl_object_id" | "stream_select" | "stream_set_chunk_size"
         | "stream_set_read_buffer" | "stream_set_write_buffer" | "strtotime" | "time"
-        | "umask" | "vfprintf" | "vprintf" => {
+        | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size" => {
             Some(PhpType::Int)
         }
         "spl_object_hash" => Some(PhpType::Str),
@@ -5182,7 +5217,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         "stream_context_create" | "stream_context_get_default" | "stream_context_set_default" => {
             Some(PhpType::stream_resource())
         }
-        "stream_context_get_options" | "stream_context_get_params" | "stream_get_meta_data" => Some(PhpType::AssocArray {
+        "realpath_cache_get" | "stream_context_get_options" | "stream_context_get_params"
+        | "stream_get_meta_data" => Some(PhpType::AssocArray {
             key: Box::new(PhpType::Str),
             value: Box::new(PhpType::Mixed),
         }),
@@ -5200,10 +5236,11 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
             Some(PhpType::Mixed)
         }
         "spl_autoload_functions" => Some(PhpType::Array(Box::new(PhpType::Int))),
-        "class_attribute_names" | "explode" | "fgetcsv" | "file" | "get_declared_classes"
-        | "fscanf" | "get_declared_interfaces" | "get_declared_traits" | "glob" | "hash_algos"
-        | "scandir" | "spl_classes" | "str_split" | "stream_get_filters" | "stream_get_transports"
-        | "stream_get_wrappers" | "sscanf" => {
+        "__elephc_phar_list_entries" | "class_attribute_names" | "explode" | "fgetcsv"
+        | "file" | "get_declared_classes" | "fscanf" | "get_declared_interfaces"
+        | "get_declared_traits" | "glob" | "hash_algos" | "scandir" | "spl_classes"
+        | "str_split" | "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers"
+        | "sscanf" => {
             Some(PhpType::Array(Box::new(PhpType::Str)))
         }
         "class_attribute_args" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
@@ -6732,6 +6769,21 @@ fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
+    // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
+    // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.
+    if matches!(op, Op::PropGet | Op::NullsafePropGet)
+        && class_declares_hook_accessor(ctx, object.value, &property_hook_get_method(property))
+        && !ctx.in_own_property_accessor(property)
+    {
+        let accessor = property_hook_get_method(property);
+        let call_op = if op == Op::NullsafePropGet {
+            Op::NullsafeMethodCall
+        } else {
+            Op::MethodCall
+        };
+        return lower_method_call_with_receiver(ctx, object, &accessor, &[], call_op, expr);
+    }
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
     ctx.emit_value(
@@ -6849,7 +6901,26 @@ fn nullable_result_type(php_type: PhpType) -> PhpType {
     }
 }
 
-/// Returns the single object class represented by a direct or nullable object type.
+/// Returns true when the runtime class of `object` declares the synthetic property-hook accessor
+/// `accessor_method` (`__propget_<p>` / `__propset_<p>`). Drives the decision to route a property
+/// read/write to a hook; inherited (flattened) methods count, so subclasses inherit hooks.
+fn class_declares_hook_accessor(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    accessor_method: &str,
+) -> bool {
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some((class_name, _nullable)) = singular_object_class(&object_ty) else {
+        return false;
+    };
+    let key = php_symbol_key(accessor_method);
+    ctx.classes
+        .get(class_name)
+        .is_some_and(|info| info.methods.contains_key(&key))
+}
+
+/// Returns the class name and nullability if `php_type` is a single object type (optionally
+/// nullable). Heterogeneous unions and non-object types return `None`.
 fn singular_object_class(php_type: &PhpType) -> Option<(&str, bool)> {
     match php_type {
         PhpType::Object(name) => Some((name.as_str(), false)),
@@ -7090,7 +7161,7 @@ fn lower_method_call(
         op.default_effects(),
         Some(expr.span),
     );
-    release_owned_call_arg_temporaries(ctx, &arg_values, expr.span);
+    release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
     call
 }
 
@@ -7308,14 +7379,15 @@ fn lower_method_call_with_receiver(
         op.default_effects(),
         Some(expr.span),
     );
-    release_owned_call_arg_temporaries(ctx, &arg_values, expr.span);
+    release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
     call
 }
 
-/// Releases normalized call arguments that were allocated only for this call.
+/// Releases normalized call arguments that cannot be returned by this call.
 fn release_owned_call_arg_temporaries(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[crate::ir::ValueId],
+    result: Option<crate::ir::ValueId>,
     span: Span,
 ) {
     for value in args {
@@ -7325,8 +7397,42 @@ fn release_owned_call_arg_temporaries(
             ir_type: value_ir_type(&php_type),
         };
         if ctx.value_is_owning_temporary(lowered) {
+            if call_result_may_alias_arg(ctx, *value, result) {
+                continue;
+            }
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
         }
+    }
+}
+
+/// Returns true when a call result can legally be the same refcounted payload as an argument.
+fn call_result_may_alias_arg(
+    ctx: &LoweringContext<'_, '_>,
+    arg: crate::ir::ValueId,
+    result: Option<crate::ir::ValueId>,
+) -> bool {
+    let Some(result) = result else {
+        return false;
+    };
+    let arg_ty = ctx.builder.value_php_type(arg).codegen_repr();
+    let result_ty = ctx.builder.value_php_type(result).codegen_repr();
+    if !Ownership::php_type_needs_lifetime_tracking(&arg_ty)
+        || !Ownership::php_type_needs_lifetime_tracking(&result_ty)
+    {
+        return false;
+    }
+    match (&arg_ty, &result_ty) {
+        (PhpType::Mixed | PhpType::Union(_), _) | (_, PhpType::Mixed | PhpType::Union(_)) => true,
+        (PhpType::Object(_), PhpType::Object(_)) => true,
+        (PhpType::Array(_), PhpType::Array(_)) => true,
+        (
+            PhpType::AssocArray { .. },
+            PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
+        ) => true,
+        (PhpType::Str, PhpType::Str) => true,
+        (PhpType::Callable, PhpType::Callable) => true,
+        (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
+        _ => arg_ty == result_ty,
     }
 }
 

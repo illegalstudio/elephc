@@ -77,9 +77,10 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // -- check if read failed or returned 0 (EOF) --
     if emitter.platform.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: check return value
-        emitter.instruction("b.le __rt_fgets_eof");                             // if <= 0, error or EOF
+        emitter.instruction("b.eq __rt_fgets_eof");                             // zero-byte read means EOF
+        emitter.instruction("b.lt __rt_fgets_read_failed");                     // negative result: inspect errno before setting EOF
     } else {
-        emitter.instruction("b.cs __rt_fgets_eof");                             // macOS: if carry set, read syscall failed
+        emitter.instruction("b.cs __rt_fgets_read_failed");                     // macOS: if carry set, inspect errno before setting EOF
         emitter.instruction("cbz x0, __rt_fgets_eof");                          // if 0 bytes read, we hit EOF
     }
 
@@ -133,6 +134,15 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return the wrapper line (ptr/len)
+
+    // -- nonblocking read miss: return accumulated bytes without EOF --
+    emitter.label("__rt_fgets_read_failed");
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction(&format!("cmn x0, #{}", emitter.platform.would_block_errno())); // Linux: compare read result with -EAGAIN/-EWOULDBLOCK
+    } else {
+        emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); // macOS: compare errno with EAGAIN/EWOULDBLOCK
+    }
+    emitter.instruction("b.eq __rt_fgets_done");                                // would-block returns the partial line, not EOF
 
     // -- EOF reached: set eof flag for this fd --
     emitter.label("__rt_fgets_eof");
@@ -195,9 +205,12 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the tracked file descriptor as the first libc read() argument
     emitter.instruction("mov edx, 1");                                          // request exactly one byte so fgets() can stop on the first newline
     emitter.instruction("call read");                                           // read one byte from the stream through libc read() into the concat buffer
-    emitter.instruction("cmp rax, 0");                                          // did libc read() append a byte into the concat buffer?
-    emitter.instruction("jle __rt_fgets_eof_x86");                              // treat EOF or read failure as the end of the current line and mark the stream as exhausted
+    emitter.instruction("cmp rax, 0");                                          // classify libc read() as a byte, EOF, or failure
+    emitter.instruction("jg __rt_fgets_read_ok_x86");                           // positive byte count: publish the appended byte
+    emitter.instruction("jl __rt_fgets_read_failed_x86");                       // negative result: inspect errno before setting EOF
+    emitter.instruction("jmp __rt_fgets_eof_x86");                              // zero-byte read means real EOF
 
+    emitter.label("__rt_fgets_read_ok_x86");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the previous concat-buffer absolute offset before publishing the appended byte
     emitter.instruction("add r10, 1");                                          // advance the concat-buffer offset by the one byte that libc read() appended
     abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat-buffer offset for later string appenders
@@ -254,6 +267,12 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the fgets() spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper line (ptr/len)
+
+    emitter.label("__rt_fgets_read_failed_x86");
+    emitter.instruction("call __errno_location");                               // fetch errno after libc read() failed
+    emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the thread-local errno value
+    emitter.instruction("cmp r10d, 11");                                        // is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
+    emitter.instruction("je __rt_fgets_done_x86");                              // would-block returns the partial line without setting EOF
 
     emitter.label("__rt_fgets_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted

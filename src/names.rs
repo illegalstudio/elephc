@@ -348,6 +348,22 @@ pub fn static_property_symbol(class_name: &str, property_name: &str) -> String {
     )
 }
 
+/// Returns the synthetic accessor-method name for a property's `get` hook.
+///
+/// Format: `__propget_<property>`. The parser compiles a `get { ... }` / `get => expr` hook into a
+/// method of this name; codegen routes external `$obj-><property>` reads to a call of it.
+pub fn property_hook_get_method(property_name: &str) -> String {
+    format!("__propget_{}", property_name)
+}
+
+/// Returns the synthetic accessor-method name for a property's `set` hook.
+///
+/// Format: `__propset_<property>`. The parser compiles a `set { ... }` hook into a method of this
+/// name taking the assigned value; codegen routes external `$obj-><property> = v` writes to it.
+pub fn property_hook_set_method(property_name: &str) -> String {
+    format!("__propset_{}", property_name)
+}
+
 /// Returns the enum case symbol for an enum/case pair.
 ///
 /// Format: `_enum_case_<mangled_enum>_<mangled_case>`. Used for enum case

@@ -219,6 +219,51 @@ fn test_error_spl_object_storage_cannot_be_redeclared() {
     );
 }
 
+/// Verifies that `Phar` cannot be redeclared as a user class.
+#[test]
+fn test_error_phar_cannot_be_redeclared() {
+    expect_error(
+        "<?php class Phar {}",
+        "Cannot redeclare built-in class: Phar",
+    );
+}
+
+/// Verifies that `PharFileInfo` cannot be redeclared as a user class.
+#[test]
+fn test_error_phar_file_info_cannot_be_redeclared() {
+    expect_error(
+        "<?php class PharFileInfo {}",
+        "Cannot redeclare built-in class: PharFileInfo",
+    );
+}
+
+/// Verifies that `Phar::addFromString()` enforces its two required arguments.
+#[test]
+fn test_error_phar_add_from_string_wrong_args() {
+    expect_error(
+        "<?php $p = new Phar(\"x.phar\"); $p->addFromString(\"entry.txt\");",
+        "expects 2 arguments, got 1",
+    );
+}
+
+/// Verifies that `Phar::compressFiles()` requires a compression constant.
+#[test]
+fn test_error_phar_compress_files_wrong_args() {
+    expect_error(
+        "<?php $p = new Phar(\"x.phar\"); $p->compressFiles();",
+        "expects 1 arguments, got 0",
+    );
+}
+
+/// Verifies that `Phar::setMetadata()` requires a metadata value.
+#[test]
+fn test_error_phar_set_metadata_wrong_args() {
+    expect_error(
+        "<?php $p = new Phar(\"x.phar\"); $p->setMetadata();",
+        "expects 1 arguments, got 0",
+    );
+}
+
 /// Verifies that `SplHeap` stays abstract and cannot be instantiated directly.
 #[test]
 fn test_error_spl_heap_is_abstract() {

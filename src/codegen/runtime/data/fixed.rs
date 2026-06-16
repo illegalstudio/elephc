@@ -212,6 +212,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".comm _zstream_handles, 2048, 3\n");
     out.push_str(".comm _zlib_fwrite_fn, 8, 3\n");
     out.push_str(".comm _zlib_close_fn, 8, 3\n");
+    out.push_str(".comm _phar_zlib_inflate_init2_fn, 8, 3\n");
+    out.push_str(".comm _phar_zlib_inflate_fn, 8, 3\n");
+    out.push_str(".comm _phar_zlib_inflate_end_fn, 8, 3\n");
     out.push_str(".globl _zlib_version\n_zlib_version:\n    .asciz \"1\"\n");
     // bzip2.compress write-filter state: per-fd bz_stream pointer table
     // (_bzstream_handles, indexed by fd) plus the indirect fn-pointer slots the
@@ -219,6 +222,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".comm _bzstream_handles, 2048, 3\n");
     out.push_str(".comm _bz2_fwrite_fn, 8, 3\n");
     out.push_str(".comm _bz2_close_fn, 8, 3\n");
+    out.push_str(".comm _phar_bz2_decompress_fn, 8, 3\n");
     // convert.iconv.* WRITE-filter state: per-fd iconv_t descriptor table
     // (_iconv_handles) plus the indirect fn-pointer slots the shared runtime
     // calls through so it never names libc iconv (which needs -liconv on macOS).
@@ -283,6 +287,41 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".comm _elephc_crypto_update_fn, 8, 3\n");
     out.push_str(".comm _elephc_crypto_final_fn, 8, 3\n");
     out.push_str(".comm _elephc_crypto_clone_fn, 8, 3\n");
+    // _elephc_phar_extract_url_fn: indirect pointer to the elephc-phar bridge
+    // reader. Dynamic phar:// paths publish it before calling the runtime
+    // reader; literal phar:// paths are still decoded at compile time.
+    out.push_str(".p2align 3\n.globl _elephc_phar_extract_url_fn\n_elephc_phar_extract_url_fn:\n    .quad 0\n");
+    // _elephc_phar_put_entry_fn: indirect pointer to the elephc-phar native
+    // writer bridge. phar:// write paths publish it so finalize can preserve
+    // existing native PHAR entries instead of regenerating a single-entry file.
+    out.push_str(".p2align 3\n.globl _elephc_phar_put_entry_fn\n_elephc_phar_put_entry_fn:\n    .quad 0\n");
+    // _elephc_phar_put_url_fn: indirect pointer to the elephc-phar native
+    // writer bridge for runtime-built phar:// file_put_contents() URLs.
+    out.push_str(".p2align 3\n.globl _elephc_phar_put_url_fn\n_elephc_phar_put_url_fn:\n    .quad 0\n");
+    // _elephc_phar_delete_url_fn: indirect pointer to the elephc-phar entry
+    // deletion bridge used by unlink("phar://...") and Phar::offsetUnset().
+    out.push_str(".p2align 3\n.globl _elephc_phar_delete_url_fn\n_elephc_phar_delete_url_fn:\n    .quad 0\n");
+    // _elephc_phar_set_compression_fn: indirect pointer to the elephc-phar
+    // native-PHAR compression-control bridge used by Phar::compressFiles().
+    out.push_str(".p2align 3\n.globl _elephc_phar_set_compression_fn\n_elephc_phar_set_compression_fn:\n    .quad 0\n");
+    // _elephc_phar_list_entries_fn: indirect pointer to the elephc-phar archive
+    // listing bridge used by Phar/PharData constructors to seed iteration.
+    out.push_str(".p2align 3\n.globl _elephc_phar_list_entries_fn\n_elephc_phar_list_entries_fn:\n    .quad 0\n");
+    // _elephc_phar_stream_*_fn: indirect pointers to the elephc-phar buffered
+    // write-stream bridge. These allow multiple phar:// write descriptors to
+    // stay open at once while the old assembly single-entry writer remains as
+    // a fallback when the bridge is not linked.
+    out.push_str(".p2align 3\n.globl _elephc_phar_stream_open_entry_fn\n_elephc_phar_stream_open_entry_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_stream_open_url_fn\n_elephc_phar_stream_open_url_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_stream_append_fn\n_elephc_phar_stream_append_fn:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _elephc_phar_stream_finalize_fn\n_elephc_phar_stream_finalize_fn:\n    .quad 0\n");
+    // _phar_extract_len: output-length scratch written by elephc_phar_extract_url
+    // and consumed immediately by __rt_phar_read_entry before __rt_data_stream
+    // copies the bytes into a temp-file-backed descriptor.
+    out.push_str(".p2align 3\n.globl _phar_extract_len\n_phar_extract_len:\n    .quad 0\n");
+    // _phar_list_len: output-length scratch written by elephc_phar_list_entries
+    // and consumed immediately while expanding serialized names into an array.
+    out.push_str(".p2align 3\n.globl _phar_list_len\n_phar_list_len:\n    .quad 0\n");
     // _tls_sessions: per-fd TLS handle (i64 returned by
     // elephc_tls_attach_fd or 0 when the fd is plain TCP). Indexed by raw
     // fd up to 256; the runtime fread/fwrite/fclose paths consult this
@@ -525,18 +564,22 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     // Each fread chunk is copied here, building one contiguous result. Drains
     // larger than 1 MiB are truncated (v1).
     out.push_str(".comm _user_wrapper_drain_buf, 1048576, 3\n");
-    // phar:// write (Milestone-1) state. _phar_write_out is the 1 MiB in-memory
-    // archive buffer (template prefix + entry content); _phar_write_len is the
-    // bytes used; _phar_write_tpl_len is the template prefix length finalize uses
-    // to locate the manifest size/crc fields and the content start; the
-    // _phar_write_path_ptr/_len pair holds the on-disk archive path the
-    // fopen("phar://...","w") emitter records for __rt_phar_write_finalize. One
-    // phar-write stream at a time; the synthetic descriptor is 0x50000000.
+    // phar:// write stream state. _phar_write_out is the 1 MiB in-memory
+    // payload buffer (template prefix + entry content); _phar_write_len is the
+    // bytes used; _phar_write_tpl_len locates the entry payload. The path and
+    // entry ptr/len pairs let literal writes call the elephc-phar
+    // read-modify-write bridge. The url ptr/len pair keeps a runtime-built
+    // phar:// URL alive until fclose() can route it through the URL bridge.
+    // Fallback only: one stream at a time; synthetic fd 0x50000000.
     out.push_str(".comm _phar_write_out, 1048576, 3\n");
     out.push_str(".comm _phar_write_len, 8, 3\n");
     out.push_str(".comm _phar_write_tpl_len, 8, 3\n");
     out.push_str(".comm _phar_write_path_ptr, 8, 3\n");
     out.push_str(".comm _phar_write_path_len, 8, 3\n");
+    out.push_str(".comm _phar_write_entry_ptr, 8, 3\n");
+    out.push_str(".comm _phar_write_entry_len, 8, 3\n");
+    out.push_str(".comm _phar_write_url_ptr, 8, 3\n");
+    out.push_str(".comm _phar_write_url_len, 8, 3\n");
     // _stream_open_opened_path_scratch: 16-byte scratch backing the 5th
     // `?string &$opened_path` parameter of stream_open. The runtime passes
     // its address so wrappers that follow the PHP-faithful signature can

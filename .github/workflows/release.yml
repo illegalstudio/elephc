@@ -1,91 +1,78 @@
 name: Release
 
 on:
-  push:
-    tags: ['v*']
+  # Use create instead of push tags so commit-message skip directives do not
+  # suppress the release gate before it can verify the tagged commit.
+  create:
 
 permissions:
   contents: write
+  checks: read
 
 jobs:
-  # Gate the release on the same sharded test suite the CI runs, so a tag never
-  # publishes artifacts that would fail `cargo test`. The `build` job below only
-  # runs once every test job here succeeds.
-  non-codegen-tests:
-    name: Non-Codegen Tests
-    runs-on: macos-14  # Apple Silicon runner
+  verify-ci:
+    name: Verify CI for tagged commit
+    if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-nextest
+      - name: Resolve tagged commit
+        id: tag
         run: |
-          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
-          curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
-          cargo nextest --version
+          TAG_NAME="${GITHUB_REF_NAME}"
+          SHA="$(git rev-list -n 1 "$GITHUB_REF")"
+          echo "name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Install native test dependencies
-        run: brew install pcre2
-
-      - name: Build bridge staticlibs
-        # The codegen test runner links compiled programs against libelephc_tls.a
-        # (https:// / TLS), libelephc_pdo.a (PDO), and libelephc_crypto.a (hash /
-        # HMAC family), which `cargo test` / nextest do not produce on their own
-        # (the crates are pulled in as rlib dev-dependencies, not the staticlibs
-        # the external linker needs). Build them explicitly first.
-        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto
-
-      - name: Run non-codegen tests
-        run: cargo nextest run --workspace -E 'not binary(codegen_tests)' --no-fail-fast -j 8
-
-      - name: Run doctests
-        run: cargo test --workspace --doc
-
-  codegen-tests:
-    name: Codegen Tests (${{ matrix.shard }}/16)
-    runs-on: macos-14  # Apple Silicon runner
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-nextest
+      - name: Require tag on main
+        env:
+          SHA: ${{ steps.tag.outputs.sha }}
         run: |
-          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
-          curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
-          cargo nextest --version
+          git fetch origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} points to ${SHA}, which is not reachable from origin/main."
+            exit 1
+          fi
 
-      - name: Install native test dependencies
-        run: brew install pcre2
+      - name: Require green Build & Test check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          RESULT="$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?check_name=Build%20%26%20Test&status=completed&filter=latest" \
+            --jq '.check_runs | map(select(.app.slug == "github-actions" and .conclusion == "success")) | first // {} | [(.conclusion // ""), (.html_url // "")] | @tsv')"
+          CONCLUSION="$(printf '%s' "$RESULT" | cut -f1)"
+          CHECK_URL="$(printf '%s' "$RESULT" | cut -f2)"
 
-      - name: Build bridge staticlibs
-        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::Tagged commit ${SHA} does not have a successful Build & Test check."
+            exit 1
+          fi
 
-      - name: Run codegen test shard
-        run: cargo nextest run --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast -j 8
+          echo "Found successful Build & Test check: ${CHECK_URL}"
 
   build:
     name: Build macOS ARM64
+    if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: macos-14  # Apple Silicon runner
     needs:
-      - non-codegen-tests
-      - codegen-tests
+      - verify-ci
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Set version from tag and commit
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
+          VERSION="${GITHUB_REF_NAME#v}"
           export VERSION
           python3 - <<'PY'
           from pathlib import Path
@@ -126,19 +113,24 @@ jobs:
         run: cargo build --release
 
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar
 
       - name: Strip binary
         run: strip target/release/elephc
 
       - name: Get version
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
 
       - name: Create tarball
         run: |
           cd target/release
-          tar czf elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz elephc libelephc_tls.a libelephc_pdo.a
+          tar czf elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz \
+            elephc \
+            libelephc_tls.a \
+            libelephc_pdo.a \
+            libelephc_crypto.a \
+            libelephc_phar.a
           shasum -a 256 elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz > elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
 
       - name: Create GitHub Release
@@ -180,6 +172,8 @@ jobs:
               bin.install "elephc"
               lib.install "libelephc_tls.a"
               lib.install "libelephc_pdo.a"
+              lib.install "libelephc_crypto.a"
+              lib.install "libelephc_phar.a"
             end
 
             test do
@@ -188,16 +182,26 @@ jobs:
               assert_equal "hello", shell_output("#{testpath}/hello")
 
               # Exercise the TLS bridge (https wrapper).
-              (testpath/"https.php").write('<?php $h = fopen("https://example.com/", "r"); echo is_resource($h);')
+              (testpath/"https.php").write('<?php \$h = fopen("https://example.com/", "r"); echo is_resource(\$h);')
               system bin/"elephc", "https.php"
               assert_predicate testpath/"https", :exist?
 
               # Exercise the PDO bridge (SQLite driver is bundled; no external
               # DB client or server required). This also validates that
-              # libelephc_pdo.a is discoverable in the Homebrew `lib/` layout.
-              (testpath/"pdo.php").write('<?php $db = new PDO("sqlite::memory:"); $db->exec("CREATE TABLE t(id INTEGER)"); echo "pdo-ok";')
+              # libelephc_pdo.a is discoverable in the Homebrew lib/ layout.
+              (testpath/"pdo.php").write('<?php \$db = new PDO("sqlite::memory:"); \$db->exec("CREATE TABLE t(id INTEGER)"); echo "pdo-ok";')
               system bin/"elephc", "pdo.php"
               assert_equal "pdo-ok", shell_output("#{testpath}/pdo")
+
+              # Exercise the crypto bridge used by hash()/hash_hmac().
+              (testpath/"hash.php").write('<?php echo hash("sha256", "abc");')
+              system bin/"elephc", "hash.php"
+              assert_equal "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", shell_output("#{testpath}/hash")
+
+              # Exercise the PHAR bridge from the Homebrew lib/ layout.
+              (testpath/"phar.php").write('<?php file_put_contents("phar://brew.phar/entry.txt", "phar-ok"); \$p = "brew.phar"; echo file_get_contents("phar://" . \$p . "/entry.txt");')
+              system bin/"elephc", "phar.php"
+              assert_equal "phar-ok", shell_output("#{testpath}/phar")
             end
           end
           EOF

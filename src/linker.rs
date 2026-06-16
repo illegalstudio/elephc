@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Target-specific command flags must stay aligned with `crate::codegen::platform::Target`.
-//! - Non-system bridge staticlibs (TLS, PDO, ...) are described once in `BRIDGES`;
+//! - Non-system bridge staticlibs (TLS, PDO, PHAR, ...) are described once in `BRIDGES`;
 //!   discovery, source-tree auto-build, and link flags are all driven from that table.
 
 use std::path::{Path, PathBuf};
@@ -75,6 +75,14 @@ const BRIDGES: &[BridgeStaticlib] = &[
         // No native transitive deps.
         macos_frameworks: &[],
         // Rust runtime/unwinder symbols, like the other bridges.
+        needs_libdl: true,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_phar",
+        env_var: "ELEPHC_PHAR_LIB_DIR",
+        crate_name: "elephc-phar",
+        whole_archive: false,
+        macos_frameworks: &[],
         needs_libdl: true,
     },
 ];
@@ -448,5 +456,18 @@ mod tests {
         assert_eq!(entry.env_var, "ELEPHC_CRYPTO_LIB_DIR");
         assert_eq!(entry.archive_filename(), "libelephc_crypto.a");
         assert!(!entry.whole_archive, "crypto bridge must not force-load (no link-time side effects)");
+    }
+
+    /// Verifies the elephc-phar bridge is registered for runtime archive reads.
+    #[test]
+    fn bridges_includes_elephc_phar() {
+        let entry = BRIDGES
+            .iter()
+            .find(|b| b.lib_name == "elephc_phar")
+            .expect("elephc_phar must be a registered bridge");
+        assert_eq!(entry.crate_name, "elephc-phar");
+        assert_eq!(entry.env_var, "ELEPHC_PHAR_LIB_DIR");
+        assert_eq!(entry.archive_filename(), "libelephc_phar.a");
+        assert!(!entry.whole_archive, "phar bridge must not force-load");
     }
 }

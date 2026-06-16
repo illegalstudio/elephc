@@ -183,3 +183,125 @@ fn test_parse_new_parent_with_args() {
 }
 
 // --- Static closures ---
+
+/// Verifies that `self`, `static`, and `parent` parse as named type expressions in method
+/// return position, kept symbolic for the checker to resolve to the enclosing class later.
+#[test]
+fn test_parse_relative_class_return_types() {
+    let stmts = parse_source(
+        "<?php class C { public function a(): self {} public static function b(): static {} public function c(): parent {} }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { methods, .. } => {
+            assert_eq!(
+                methods[0].return_type,
+                Some(TypeExpr::Named(Name::unqualified("self")))
+            );
+            assert_eq!(
+                methods[1].return_type,
+                Some(TypeExpr::Named(Name::unqualified("static")))
+            );
+            assert_eq!(
+                methods[2].return_type,
+                Some(TypeExpr::Named(Name::unqualified("parent")))
+            );
+        }
+        _ => panic!("Expected ClassDecl"),
+    }
+}
+
+/// Verifies that `self` parses in parameter and (nullable) property type positions.
+#[test]
+fn test_parse_relative_class_param_and_property_types() {
+    let stmts = parse_source(
+        "<?php class C { public ?self $next = null; public function link(self $other): void {} }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ClassDecl {
+            properties,
+            methods,
+            ..
+        } => {
+            assert_eq!(
+                properties[0].type_expr,
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(
+                    Name::unqualified("self")
+                ))))
+            );
+            assert_eq!(
+                methods[0].params[0].1,
+                Some(TypeExpr::Named(Name::unqualified("self")))
+            );
+        }
+        _ => panic!("Expected ClassDecl"),
+    }
+}
+
+/// Verifies that `new class { ... }` is rewritten to `new <synthetic>()` and that the class body
+/// is hoisted to the program as a synthetic `ClassDecl` whose name marks it as anonymous.
+#[test]
+fn test_parse_anonymous_class_hoists_declaration() {
+    let stmts = parse_source(
+        "<?php $o = new class { public function v(): string { return \"x\"; } };",
+    );
+    // The assignment plus the hoisted synthetic class declaration appended to the program.
+    assert_eq!(stmts.len(), 2);
+    let synthetic_name = match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewObject { class_name, args } => {
+                assert!(args.is_empty());
+                assert!(
+                    class_name.as_str().starts_with("class@anonymous"),
+                    "expected anonymous synthetic name, got {}",
+                    class_name.as_str()
+                );
+                class_name.as_str().to_string()
+            }
+            other => panic!("Expected NewObject, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    };
+    match &stmts[1].kind {
+        StmtKind::ClassDecl { name, methods, .. } => {
+            assert_eq!(name, &synthetic_name);
+            assert_eq!(methods[0].name, "v");
+        }
+        other => panic!("Expected hoisted ClassDecl, got {:?}", other),
+    }
+}
+
+/// Verifies that `new class(args) extends P implements I {}` carries constructor args, the parent,
+/// and the interface list onto the hoisted declaration.
+#[test]
+fn test_parse_anonymous_class_with_ctor_extends_implements() {
+    let stmts = parse_source(
+        "<?php interface I {} class P {} $o = new class(1, 2) extends P implements I { public function __construct(int $a, int $b) {} };",
+    );
+    // interface, parent class, the assignment, then the hoisted anonymous class.
+    let assign = stmts
+        .iter()
+        .find(|s| matches!(s.kind, StmtKind::Assign { .. }))
+        .expect("assignment present");
+    match &assign.kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewObject { args, .. } => assert_eq!(args.len(), 2),
+            other => panic!("Expected NewObject, got {:?}", other),
+        },
+        _ => unreachable!(),
+    }
+    let anon = stmts
+        .iter()
+        .filter_map(|s| match &s.kind {
+            StmtKind::ClassDecl {
+                name,
+                extends,
+                implements,
+                ..
+            } if name.starts_with("class@anonymous") => Some((extends, implements)),
+            _ => None,
+        })
+        .next()
+        .expect("hoisted anonymous class present");
+    assert_eq!(anon.0.as_deref(), Some("P"));
+    assert_eq!(anon.1.len(), 1);
+}

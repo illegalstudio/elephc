@@ -28,6 +28,13 @@ echo "after chmod 0400 writable: " . (is_writable("hello.txt") ? "y" : "n") . "\
 chmod("hello.txt", 0o644);
 echo "after chmod 0644 writable: " . (is_writable("hello.txt") ? "y" : "n") . "\n";
 
+// lchown()/lchgrp() operate on the symlink itself. Passing -1 asks libc to
+// leave that ownership field unchanged, so this is a non-privileged probe.
+symlink("hello.txt", "hello-link.txt");
+echo "lchown symlink no-op: " . (lchown("hello-link.txt", -1) ? "y" : "n") . "\n";
+echo "lchgrp symlink no-op: " . (lchgrp("hello-link.txt", -1) ? "y" : "n") . "\n";
+unlink("hello-link.txt");
+
 // umask() returns the previous mask. Save and restore it so the change
 // is bounded to this example.
 $old = umask(0o022);

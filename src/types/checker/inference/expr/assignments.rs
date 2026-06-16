@@ -53,6 +53,22 @@ impl Checker {
             return self.check_local_assignment_expression(name, value, span, env);
         }
 
+        if let ExprKind::DynamicPropertyAccess { object, property } = &target.kind {
+            self.check_dynamic_property_assignment_expression(
+                object,
+                property,
+                value,
+                result_target,
+                span,
+                env,
+            )?;
+            let result_expr = match result_target {
+                Some(result_target) if result_target != target => result_target,
+                _ => value,
+            };
+            return self.infer_type(result_expr, env);
+        }
+
         let stmt_kind = match &target.kind {
             ExprKind::ArrayAccess { array, index } => match &array.kind {
                 ExprKind::Variable(array) => StmtKind::ArrayAssign {
@@ -101,5 +117,45 @@ impl Checker {
             _ => value,
         };
         self.infer_type(result_expr, env)
+    }
+
+    /// Type-checks `$object->{$property} = $value` assignment expressions.
+    ///
+    /// Dynamic property writes use runtime dispatch, so the checker validates the
+    /// receiver and property-name expression shapes and leaves value coercion to
+    /// the existing property-store lowerers for the matched runtime target.
+    fn check_dynamic_property_assignment_expression(
+        &mut self,
+        object: &Expr,
+        property: &Expr,
+        value: &Expr,
+        result_target: Option<&Expr>,
+        span: Span,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        let obj_ty = self.infer_type(object, env)?;
+        if !matches!(
+            obj_ty,
+            PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed
+        ) {
+            return Err(CompileError::new(
+                span,
+                "Property assignment requires an object",
+            ));
+        }
+
+        let property_ty = self.infer_type(property, env)?;
+        if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+            return Err(CompileError::new(
+                property.span,
+                "Dynamic property name must be string or integer",
+            ));
+        }
+
+        self.infer_type(value, env)?;
+        if let Some(result_target) = result_target {
+            self.infer_type(result_target, env)?;
+        }
+        Ok(())
     }
 }

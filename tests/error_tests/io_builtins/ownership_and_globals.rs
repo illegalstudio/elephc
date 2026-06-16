@@ -9,8 +9,8 @@
 
 use super::*;
 
-/// Verifies that `chmod()`, `chown()`, and `chgrp()` reject invalid principal types.
-/// `chmod()` requires an integer mode; `chown()`/`chgrp()` require int or string owner/group.
+/// Verifies ownership builtins reject invalid principal types.
+/// `chmod()` requires an integer mode; owner/group builtins require int or string principals.
 /// Uses `expect_error()` to assert the correct diagnostic message for each case.
 #[test]
 fn test_error_file_ownership_builtins_reject_invalid_principals() {
@@ -26,6 +26,21 @@ fn test_error_file_ownership_builtins_reject_invalid_principals() {
         r#"<?php chgrp("file.txt", null);"#,
         "chgrp() owner/group must be int or string",
     );
+    expect_error(
+        r#"<?php lchown("file.txt", null);"#,
+        "lchown() owner/group must be int or string",
+    );
+    expect_error(
+        r#"<?php lchgrp("file.txt", null);"#,
+        "lchgrp() owner/group must be int or string",
+    );
+}
+
+/// Verifies lchown()/lchgrp() reject the wrong number of arguments.
+#[test]
+fn test_error_lchown_lchgrp_wrong_args() {
+    expect_error("<?php lchown(\"file.txt\");", "lchown() takes exactly 2 arguments");
+    expect_error("<?php lchgrp(\"file.txt\");", "lchgrp() takes exactly 2 arguments");
 }
 
 /// Verifies that `umask()` rejects calls with more than 1 argument.

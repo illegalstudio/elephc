@@ -112,6 +112,10 @@ pub struct ClassInfo {
     pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
+    /// PHP 8.4 asymmetric write (`set`) visibility, only for properties whose write visibility
+    /// differs from their read visibility (e.g. `public private(set)`). Properties absent here
+    /// use their `property_visibilities` entry for writes too.
+    pub property_set_visibilities: HashMap<String, Visibility>,
     pub declared_properties: HashSet<String>,
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,

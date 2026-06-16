@@ -475,6 +475,102 @@ fn test_parse_union_and_nullable_function_types() {
 }
 
 #[test]
+/// Verifies that a `T|null` union folds to the canonical `?T` nullable shorthand: the
+/// parser reproduces exactly the same `TypeExpr::Nullable` that `?string` would yield, so
+/// both spellings share one representation downstream.
+fn test_parse_t_or_null_folds_to_nullable() {
+    let stmts = parse_source("<?php function f(): string|null { return null; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { return_type, .. } => {
+            assert_eq!(
+                return_type.as_ref(),
+                Some(&TypeExpr::Nullable(Box::new(TypeExpr::Str)))
+            );
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
+/// Verifies that a leading `null|T` union order also folds to `Nullable(T)`, confirming the
+/// null member is recognized regardless of its position in the pipe list.
+fn test_parse_null_first_union_folds_to_nullable() {
+    let stmts = parse_source("<?php function f(null|int $x): int { return $x ?? 0; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { params, .. } => {
+            assert_eq!(params[0].1, Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))));
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
+/// Verifies that the `false` literal type widens to `bool` in a union, so `int|false`
+/// (PHP's classic `strpos`-style return) parses as `Union([Int, Bool])`.
+fn test_parse_t_or_false_widens_to_bool_union() {
+    let stmts = parse_source("<?php function f(): int|false { return 1; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { return_type, .. } => {
+            assert_eq!(
+                return_type.as_ref(),
+                Some(&TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Bool]))
+            );
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
+/// Verifies that the `true` literal type also widens to `bool`, so `int|true` parses as
+/// `Union([Int, Bool])`.
+fn test_parse_t_or_true_widens_to_bool_union() {
+    let stmts = parse_source("<?php function f(int|true $x): int { return 0; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { params, .. } => {
+            assert_eq!(
+                params[0].1,
+                Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Bool]))
+            );
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
+/// Verifies that a multi-member union with `null` keeps the other members flat and retains a
+/// single null sentinel (`TypeExpr::Void`) rather than collapsing to `Nullable`, so the
+/// checker still sees every member.
+fn test_parse_multi_member_null_union_keeps_sentinel() {
+    let stmts = parse_source("<?php function f(): int|string|null { return 1; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { return_type, .. } => {
+            assert_eq!(
+                return_type.as_ref(),
+                Some(&TypeExpr::Union(vec![
+                    TypeExpr::Int,
+                    TypeExpr::Str,
+                    TypeExpr::Void
+                ]))
+            );
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
+/// Verifies that a standalone `null` return type parses as the null sentinel
+/// (`TypeExpr::Void`), which the checker treats as null-accepting.
+fn test_parse_standalone_null_type() {
+    let stmts = parse_source("<?php function f(): null { return null; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { return_type, .. } => {
+            assert_eq!(return_type.as_ref(), Some(&TypeExpr::Void));
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
 // Verifies that `<?php function bump(int &$x) { }` parses a typed by-reference parameter:
 // type `Int`, name "x", and pass-by-reference flag set.
 /// Verifies that parse typed ref param.
@@ -569,11 +665,28 @@ fn test_parse_no_variadic() {
 }
 
 #[test]
-// Verifies that `<?php function foo(int ...$xs) { }` fails to parse because typed
-// variadic parameters are not permitted.
-/// Verifies that parse typed variadic param fails.
-fn test_parse_typed_variadic_param_fails() {
-    assert!(parse_fails("<?php function foo(int ...$xs) { }"));
+/// Verifies that a typed variadic parameter (`int ...$xs`) parses: the variadic name is
+/// captured and the declared element type does not block parsing.
+fn test_parse_typed_variadic_param() {
+    let stmts = parse_source("<?php function foo(string $a, int ...$xs) { }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl {
+            params, variadic, ..
+        } => {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "a");
+            assert_eq!(variadic.as_deref(), Some("xs"));
+        }
+        _ => panic!("Expected FunctionDecl"),
+    }
+}
+
+#[test]
+/// Verifies that a typed variadic parses on a closure parameter list as well.
+fn test_parse_typed_variadic_closure_param() {
+    let stmts = parse_source("<?php $f = function (int ...$xs) { return 0; };");
+    // The closure is the RHS of the assignment expression statement; assert it parsed cleanly.
+    assert_eq!(stmts.len(), 1);
 }
 
 #[test]
@@ -715,5 +828,41 @@ fn test_parse_single_arg_trailing_comma_in_call() {
         }
     } else {
         panic!("expected ExprStmt");
+    }
+}
+
+#[test]
+/// Verifies that an intersection type `A&B` parses as `TypeExpr::Intersection` with both members,
+/// and is not mistaken for a by-reference parameter.
+fn test_parse_intersection_type_param() {
+    let stmts = parse_source("<?php function f(A&B $x): int { return 0; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { params, .. } => {
+            match &params[0].1 {
+                Some(TypeExpr::Intersection(members)) => {
+                    assert_eq!(members.len(), 2);
+                    assert_eq!(members[0], TypeExpr::Named(Name::unqualified("A")));
+                    assert_eq!(members[1], TypeExpr::Named(Name::unqualified("B")));
+                }
+                other => panic!("Expected Intersection, got {:?}", other),
+            }
+            // The parameter is by-value, not by-reference.
+            assert!(!params[0].3);
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
+/// Verifies that a by-reference parameter `int &$x` is still parsed as by-reference, not as an
+/// intersection — the `&` is followed by a variable, not a type.
+fn test_parse_byref_not_intersection() {
+    let stmts = parse_source("<?php function f(int &$x): int { return 0; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { params, .. } => {
+            assert_eq!(params[0].1, Some(TypeExpr::Int));
+            assert!(params[0].3, "parameter should be by-reference");
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
     }
 }

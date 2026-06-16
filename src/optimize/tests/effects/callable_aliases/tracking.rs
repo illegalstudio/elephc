@@ -20,6 +20,7 @@ fn test_program_function_effects_track_closure_alias_locals() {
             name: "relay".to_string(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -29,6 +30,7 @@ fn test_program_function_effects_track_closure_alias_locals() {
                             ExprKind::Closure {
                                 params: Vec::new(),
                                 variadic: None,
+                                variadic_type: None,
                                 return_type: None,
                                 body: vec![Stmt::new(
                                     StmtKind::Return(Some(Expr::new(
@@ -83,6 +85,7 @@ fn test_program_function_effects_track_callable_alias_through_ternary() {
             name: "relay".to_string(),
             params: vec![("flag".to_string(), None, None, false)],
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -142,6 +145,7 @@ fn test_program_function_effects_track_callable_alias_through_match() {
             name: "relay".to_string(),
             params: vec![("flag".to_string(), None, None, false)],
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -204,6 +208,7 @@ fn test_program_function_effects_track_callable_alias_through_null_coalesce() {
             name: "relay".to_string(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(
@@ -262,6 +267,7 @@ fn test_program_function_effects_track_callable_alias_locals() {
             name: "relay".to_string(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![
                 Stmt::new(

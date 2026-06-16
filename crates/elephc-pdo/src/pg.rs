@@ -15,7 +15,7 @@
 //!   lazily on the first `step()`. The whole result set is materialized into
 //!   typed `Cell` values, so the column accessors read from owned data and
 //!   per-value NULL is reported through the SQLite-compatible type codes
-//!   (1=int, 2=float, 3=text, 5=null).
+//!   (1=int, 2=float, 3=text, 4=bytea/blob, 5=null).
 //! - Parameter values are encoded according to the prepared statement's inferred
 //!   parameter types, so an int bound where the column is `int4` is sent as a
 //!   4-byte int, a text where the column is `int` is parsed, etc.
@@ -31,6 +31,7 @@ pub enum Cell {
     Int(i64),
     Float(f64),
     Text(String),
+    Bytes(Vec<u8>),
 }
 
 /// A pending bound parameter value (before it is encoded for the inferred
@@ -476,7 +477,9 @@ impl PgStmt {
         if self.cursor < 0 {
             return None;
         }
-        self.rows.get(self.cursor as usize).and_then(|row| row.get(i as usize))
+        self.rows
+            .get(self.cursor as usize)
+            .and_then(|row| row.get(i as usize))
     }
 
     /// Number of result columns (available before execution).
@@ -490,12 +493,13 @@ impl PgStmt {
     }
 
     /// SQLite-compatible type code for the current row's column `i`:
-    /// 1=int, 2=float, 3=text, 5=null.
+    /// 1=int, 2=float, 3=text, 4=bytea/blob, 5=null.
     pub fn column_type(&self, i: i64) -> i64 {
         match self.cell(i) {
             Some(Cell::Int(_)) => 1,
             Some(Cell::Float(_)) => 2,
             Some(Cell::Text(_)) => 3,
+            Some(Cell::Bytes(_)) => 4,
             _ => 5,
         }
     }
@@ -506,6 +510,7 @@ impl PgStmt {
             Some(Cell::Int(v)) => *v,
             Some(Cell::Float(v)) => *v as i64,
             Some(Cell::Text(s)) => s.trim().parse().unwrap_or(0),
+            Some(Cell::Bytes(b)) => String::from_utf8_lossy(b).trim().parse().unwrap_or(0),
             _ => 0,
         }
     }
@@ -516,6 +521,7 @@ impl PgStmt {
             Some(Cell::Float(v)) => *v,
             Some(Cell::Int(v)) => *v as f64,
             Some(Cell::Text(s)) => s.trim().parse().unwrap_or(0.0),
+            Some(Cell::Bytes(b)) => String::from_utf8_lossy(b).trim().parse().unwrap_or(0.0),
             _ => 0.0,
         }
     }
@@ -524,9 +530,21 @@ impl PgStmt {
     pub fn column_text(&self, i: i64) -> String {
         match self.cell(i) {
             Some(Cell::Text(s)) => s.clone(),
+            Some(Cell::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
             Some(Cell::Int(v)) => v.to_string(),
             Some(Cell::Float(v)) => v.to_string(),
             _ => String::new(),
+        }
+    }
+
+    /// Current row's column `i` as byte-counted PDO data.
+    pub fn column_data(&self, i: i64) -> Vec<u8> {
+        match self.cell(i) {
+            Some(Cell::Bytes(b)) => b.clone(),
+            Some(Cell::Text(s)) => s.as_bytes().to_vec(),
+            Some(Cell::Int(v)) => v.to_string().into_bytes(),
+            Some(Cell::Float(v)) => v.to_string().into_bytes(),
+            _ => Vec::new(),
         }
     }
 }
@@ -575,6 +593,10 @@ fn decode_row(row: &Row) -> Vec<Cell> {
                 | Type::UNKNOWN => row
                     .get::<_, Option<String>>(i)
                     .map(Cell::Text)
+                    .unwrap_or(Cell::Null),
+                Type::BYTEA => row
+                    .get::<_, Option<Vec<u8>>>(i)
+                    .map(Cell::Bytes)
                     .unwrap_or(Cell::Null),
                 // numeric/decimal: returned as a string to preserve precision,
                 // matching PHP's PDO_pgsql.

@@ -84,12 +84,12 @@ fn emit_x86_64_float_predicate_result(
         CmpPredicate::Ne => {
             ctx.emitter.instruction("setne al");                                // materialize ordered float inequality in the low byte
             ctx.emitter.instruction("setp r10b");                               // materialize unordered NaN comparison as true for !=
-            ctx.emitter.instruction("or al, r10b");                              // merge ordered inequality with unordered inequality
+            ctx.emitter.instruction("or al, r10b");                             // merge ordered inequality with unordered inequality
         }
         predicate => {
             ctx.emitter.instruction(&format!("set{} al", x86_64_float_condition(predicate)?)); // materialize the ordered float predicate in the low byte
             ctx.emitter.instruction("setnp r10b");                              // materialize whether the comparison was ordered
-            ctx.emitter.instruction("and al, r10b");                             // clear ordered predicates for unordered NaN comparisons
+            ctx.emitter.instruction("and al, r10b");                            // clear ordered predicates for unordered NaN comparisons
         }
     }
     ctx.emitter.instruction("movzx rax, al");                                   // widen the predicate byte into the integer result register

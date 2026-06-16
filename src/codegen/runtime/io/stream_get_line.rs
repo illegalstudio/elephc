@@ -69,6 +69,12 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_get_line_read_ok")); // continue when the read succeeded
+    if plat.needs_cmp_before_error_branch() {
+        emitter.instruction(&format!("cmn x0, #{}", plat.would_block_errno())); // Linux: compare read result with -EAGAIN/-EWOULDBLOCK
+    } else {
+        emitter.instruction(&format!("cmp x0, #{}", plat.would_block_errno())); // macOS: compare errno with EAGAIN/EWOULDBLOCK
+    }
+    emitter.instruction("b.eq __rt_stream_get_line_done");                      // transient nonblocking miss is not EOF
     emitter.instruction("b __rt_stream_get_line_eof");                          // a read failure ends the line
     emitter.label("__rt_stream_get_line_read_ok");
     emitter.instruction("cbz x0, __rt_stream_get_line_eof");                    // a zero-byte read means EOF
@@ -217,9 +223,12 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
     emitter.instruction("mov rdx, 1");                                          // read exactly one byte
     emitter.instruction("call read");                                           // read one byte through libc read()
-    emitter.instruction("cmp rax, 0");                                          // did read() return a byte?
-    emitter.instruction("jle __rt_stream_get_line_eof_x86");                    // EOF or failure ends the line
+    emitter.instruction("cmp rax, 0");                                          // classify libc read() as a byte, EOF, or failure
+    emitter.instruction("jg __rt_stream_get_line_read_ok_x86");                 // positive byte count: publish the appended byte
+    emitter.instruction("jl __rt_stream_get_line_read_failed_x86");             // negative result: inspect errno before setting EOF
+    emitter.instruction("jmp __rt_stream_get_line_eof_x86");                    // zero-byte read means real EOF
 
+    emitter.label("__rt_stream_get_line_read_ok_x86");
     abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // concat-buffer offset
     emitter.instruction("inc r9");                                              // advance past the byte just read
     abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated offset
@@ -255,6 +264,12 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r9, rcx");                                         // rewind past the consumed delimiter
     abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the rewound offset
     emitter.instruction("jmp __rt_stream_get_line_done_x86");                   // a delimiter match is not EOF
+
+    emitter.label("__rt_stream_get_line_read_failed_x86");
+    emitter.instruction("call __errno_location");                               // fetch errno after libc read() failed
+    emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the thread-local errno value
+    emitter.instruction("cmp r10d, 11");                                        // is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
+    emitter.instruction("je __rt_stream_get_line_done_x86");                    // transient nonblocking miss returns without setting EOF
 
     // -- user-wrapper line read: feof-gated stream_read into _user_wrapper_drain_buf
     //    (a SEPARATE buffer from _concat_buf, which each __rt_fread result may

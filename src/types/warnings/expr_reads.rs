@@ -26,6 +26,11 @@ pub(super) fn collect_expr_reads(
     warnings: &mut Vec<CompileWarning>,
 ) {
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::Variable(name) => scope.read(name),
         ExprKind::BinaryOp { left, right, .. } => {
             collect_expr_reads(left, scope, warnings);

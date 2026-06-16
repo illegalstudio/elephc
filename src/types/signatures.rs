@@ -365,6 +365,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         | "stat" | "lstat" => Some(fixed(&["filename"])),
         "disk_free_space" | "disk_total_space" => Some(fixed(&["directory"])),
         "file_put_contents" => Some(fixed(&["filename", "data"])),
+        "__elephc_phar_list_entries" => Some(fixed(&["filename"])),
+        "__elephc_phar_set_compression" => Some(fixed(&["filename", "compression"])),
         "copy" | "rename" => Some(fixed(&["from", "to"])),
         "unlink" => Some(fixed(&["filename"])),
         "mkdir" | "rmdir" | "chdir" | "scandir" => Some(fixed(&["directory"])),
@@ -373,6 +375,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "chmod" => Some(fixed(&["filename", "permissions"])),
         "chown" => Some(fixed(&["filename", "user"])),
         "chgrp" => Some(fixed(&["filename", "group"])),
+        "lchown" => Some(fixed(&["filename", "user"])),
+        "lchgrp" => Some(fixed(&["filename", "group"])),
         "touch" => Some(optional(
             &["filename", "mtime", "atime"],
             1,
@@ -382,6 +386,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "dirname" => Some(optional(&["path", "levels"], 1, vec![int_lit(1)])),
         "fnmatch" => Some(optional(&["pattern", "filename", "flags"], 2, vec![int_lit(0)])),
         "realpath" => Some(fixed(&["path"])),
+        "realpath_cache_get" | "realpath_cache_size" => Some(fixed(&[])),
         "pathinfo" => Some(optional(&["path", "flags"], 1, vec![int_lit(15)])),
         "fopen" => Some(optional(
             &["filename", "mode", "use_include_path", "context"],

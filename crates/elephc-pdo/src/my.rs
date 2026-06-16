@@ -18,7 +18,7 @@
 //!   lazily on the first `step()`. The whole result set is materialized into typed
 //!   `Cell` values, so the column accessors read from owned data and per-value
 //!   NULL is reported through the SQLite-compatible type codes (1=int, 2=float,
-//!   3=text, 5=null).
+//!   3=text, 4=blob, 5=null).
 //! - Bound values cross the wire as their native `mysql::Value` (ints, doubles,
 //!   text bytes); the server coerces text to the column type, so — unlike the
 //!   PostgreSQL driver — no per-parameter type inference is needed.
@@ -35,6 +35,7 @@ pub enum Cell {
     Int(i64),
     Float(f64),
     Text(String),
+    Bytes(Vec<u8>),
 }
 
 /// A pending bound parameter value, converted to a `mysql::Value` at execute time.
@@ -50,6 +51,7 @@ pub enum Bind {
 /// need their own formatting; everything else decodes directly from the value.
 #[derive(Clone, Copy)]
 enum ColKind {
+    Binary,
     Date,
     DateTime,
     Time,
@@ -61,6 +63,10 @@ impl ColKind {
     /// needs (date-only, date+time, time-of-day, or value-driven).
     fn from_column_type(ct: ColumnType) -> ColKind {
         match ct {
+            ColumnType::MYSQL_TYPE_TINY_BLOB
+            | ColumnType::MYSQL_TYPE_BLOB
+            | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+            | ColumnType::MYSQL_TYPE_LONG_BLOB => ColKind::Binary,
             ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE => ColKind::Date,
             ColumnType::MYSQL_TYPE_DATETIME
             | ColumnType::MYSQL_TYPE_DATETIME2
@@ -153,10 +159,7 @@ pub fn build_opts(dsn: &str) -> Result<OptsBuilder, String> {
             _ => {}
         }
     }
-    let mut opts = OptsBuilder::new()
-        .user(user)
-        .pass(password)
-        .db_name(dbname);
+    let mut opts = OptsBuilder::new().user(user).pass(password).db_name(dbname);
     // A unix socket DSN connects locally; otherwise connect over TCP (defaulting
     // the host so a `mysql:dbname=…` DSN still reaches a local server).
     if let Some(sock) = socket {
@@ -378,16 +381,7 @@ impl MyConn {
 /// Renders a MySQL `DATE`/`DATETIME`/`TIMESTAMP` value as its canonical text:
 /// date-only columns drop the time, others keep `H:M:S` (with a fractional part
 /// only when present), matching the server's string output.
-fn format_date(
-    kind: ColKind,
-    y: u16,
-    mo: u8,
-    d: u8,
-    h: u8,
-    mi: u8,
-    s: u8,
-    us: u32,
-) -> String {
+fn format_date(kind: ColKind, y: u16, mo: u8, d: u8, h: u8, mi: u8, s: u8, us: u32) -> String {
     if let ColKind::Date = kind {
         return format!("{:04}-{:02}-{:02}", y, mo, d);
     }
@@ -422,8 +416,16 @@ fn decode_value(v: Value, kind: ColKind) -> Cell {
         Value::Float(f) => Cell::Float(f as f64),
         Value::Double(d) => Cell::Float(d),
         // Text, VARCHAR, DECIMAL, BLOB, etc. all arrive as raw bytes.
-        Value::Bytes(b) => Cell::Text(String::from_utf8_lossy(&b).into_owned()),
-        Value::Date(y, mo, d, h, mi, s, us) => Cell::Text(format_date(kind, y, mo, d, h, mi, s, us)),
+        Value::Bytes(b) => {
+            if matches!(kind, ColKind::Binary) {
+                Cell::Bytes(b)
+            } else {
+                Cell::Text(String::from_utf8_lossy(&b).into_owned())
+            }
+        }
+        Value::Date(y, mo, d, h, mi, s, us) => {
+            Cell::Text(format_date(kind, y, mo, d, h, mi, s, us))
+        }
         Value::Time(neg, days, h, mi, s, us) => Cell::Text(format_time(neg, days, h, mi, s, us)),
     }
 }
@@ -509,7 +511,11 @@ impl MyStmt {
         })();
         match outcome {
             Ok((affected, last, rows)) => {
-                conn.changes = if is_select { rows.len() as i64 } else { affected };
+                conn.changes = if is_select {
+                    rows.len() as i64
+                } else {
+                    affected
+                };
                 conn.note_last_id(last);
                 conn.errcode = 0;
                 self.rows = rows;
@@ -561,12 +567,13 @@ impl MyStmt {
     }
 
     /// SQLite-compatible type code for the current row's column `i`:
-    /// 1=int, 2=float, 3=text, 5=null.
+    /// 1=int, 2=float, 3=text, 4=blob, 5=null.
     pub fn column_type(&self, i: i64) -> i64 {
         match self.cell(i) {
             Some(Cell::Int(_)) => 1,
             Some(Cell::Float(_)) => 2,
             Some(Cell::Text(_)) => 3,
+            Some(Cell::Bytes(_)) => 4,
             _ => 5,
         }
     }
@@ -577,6 +584,7 @@ impl MyStmt {
             Some(Cell::Int(v)) => *v,
             Some(Cell::Float(v)) => *v as i64,
             Some(Cell::Text(s)) => s.trim().parse().unwrap_or(0),
+            Some(Cell::Bytes(b)) => String::from_utf8_lossy(b).trim().parse().unwrap_or(0),
             _ => 0,
         }
     }
@@ -587,6 +595,7 @@ impl MyStmt {
             Some(Cell::Float(v)) => *v,
             Some(Cell::Int(v)) => *v as f64,
             Some(Cell::Text(s)) => s.trim().parse().unwrap_or(0.0),
+            Some(Cell::Bytes(b)) => String::from_utf8_lossy(b).trim().parse().unwrap_or(0.0),
             _ => 0.0,
         }
     }
@@ -595,9 +604,21 @@ impl MyStmt {
     pub fn column_text(&self, i: i64) -> String {
         match self.cell(i) {
             Some(Cell::Text(s)) => s.clone(),
+            Some(Cell::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
             Some(Cell::Int(v)) => v.to_string(),
             Some(Cell::Float(v)) => v.to_string(),
             _ => String::new(),
+        }
+    }
+
+    /// Current row's column `i` as byte-counted PDO data.
+    pub fn column_data(&self, i: i64) -> Vec<u8> {
+        match self.cell(i) {
+            Some(Cell::Bytes(b)) => b.clone(),
+            Some(Cell::Text(s)) => s.as_bytes().to_vec(),
+            Some(Cell::Int(v)) => v.to_string().into_bytes(),
+            Some(Cell::Float(v)) => v.to_string().into_bytes(),
+            _ => Vec::new(),
         }
     }
 }

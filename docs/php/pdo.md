@@ -34,11 +34,17 @@ $my = new PDO("mysql:host=127.0.0.1;dbname=app", "me", "secret");
 ```
 
 The DSN must start with `sqlite:`, `pgsql:`, or `mysql:`. For SQLite, the
-`$username`, `$password`, and `$options` arguments are accepted for signature
-compatibility but ignored. For PostgreSQL and MySQL, `$username` / `$password` are
-folded into the connection (other keys like `host`, `port`, `dbname`, and — for
-MySQL — `unix_socket` come from the `key=value;…` DSN). A failed connection throws
-a `PDOException`.
+`$username` and `$password` arguments are accepted for signature compatibility
+but ignored; constructor options still seed PDO attributes. For PostgreSQL and
+MySQL, `$username` / `$password` are folded into the connection (other keys like
+`host`, `port`, `dbname`, and — for MySQL — `unix_socket` come from the
+`key=value;…` DSN). A failed connection throws a `PDOException`.
+
+Constructor options may include `PDO::ATTR_PERSISTENT => true`. Persistent PDO
+instances use a process-local pool keyed by the fully materialized DSN, so a later
+PDO constructed with the same DSN and persistent option reuses the existing
+connection inside the same compiled program. Non-persistent connections are
+opened independently.
 
 ## Executing statements
 
@@ -105,6 +111,16 @@ $stmt->fetch(PDO::FETCH_NUM);    // [0 => 1, 1 => "Ada"]
 $stmt->fetch(PDO::FETCH_BOTH);   // both numeric and string keys
 $stmt->fetch(PDO::FETCH_OBJ);    // stdClass { id: 1, name: "Ada" }
 
+class UserRow {
+    public mixed $id;
+    public mixed $name;
+}
+
+$row = $db->query("SELECT id, name FROM users")->fetch(PDO::FETCH_CLASS, UserRow::class);
+
+$target = new UserRow();
+$same = $db->query("SELECT id, name FROM users")->fetch(PDO::FETCH_INTO, $target);
+
 $all = $db->query("SELECT id FROM users")->fetchAll(PDO::FETCH_NUM);
 $one = $db->query("SELECT name FROM users")->fetchColumn();  // first column of next row
 
@@ -112,9 +128,15 @@ $one = $db->query("SELECT name FROM users")->fetchColumn();  // first column of 
 $ids = $db->query("SELECT id FROM users")->fetchAll(PDO::FETCH_COLUMN);  // [1, 2, …]
 ```
 
-`fetch()` returns `false` when the result set is exhausted. Column values are
-returned with their SQLite type: INTEGER → int, REAL → float, TEXT → string,
-NULL → null. `FETCH_BOTH` is the default mode.
+`fetch()` returns `false` when the result set is exhausted. `FETCH_OBJ` creates a
+real `stdClass` and assigns dynamic properties directly, including numeric column
+names such as `"0"`. `FETCH_CLASS` creates the requested class and assigns column
+values to matching declared or dynamic properties; `FETCH_INTO` fills and returns
+the object instance passed as the second argument.
+
+Column values are returned with their native scalar shape: integer → int, real /
+floating point → float, text → string, binary/BLOB/`bytea` → string with embedded
+NUL bytes preserved, and `NULL` → null. `FETCH_BOTH` is the default mode.
 
 ## Iterating a statement
 
@@ -149,10 +171,11 @@ points:
   `boolean` → `0`/`1`, text types → string, `NULL` → null. The rich types are
   returned as their text representation: `numeric`/`decimal` (scale preserved),
   `date` / `time` / `timestamp` / `timestamptz`, `uuid`, and `json`/`jsonb`. The
-  same values bind as parameters (text is coerced to the column type). `json` /
-  `jsonb` are re-serialized compactly, so whitespace may differ from the server's
-  text output, but the value is equivalent. Other types (arrays, `bytea`, network
-  types) are best read with an explicit `::text` cast.
+  same values bind as parameters (text is coerced to the column type). `bytea`
+  is returned as a PHP string with embedded NUL bytes preserved. `json` / `jsonb`
+  are re-serialized compactly, so whitespace may differ from the server's text
+  output, but the value is equivalent. Other types (arrays, network types) are
+  best read with an explicit `::text` cast.
 
 ## MySQL / MariaDB notes
 
@@ -171,7 +194,8 @@ The MySQL driver behaves like the others, with a few database-specific points:
   `FLOAT`/`DOUBLE` → float, text types → string, `NULL` → null. The rich types are
   returned as their text representation: `DECIMAL` (scale preserved), `DATE`,
   `DATETIME` / `TIMESTAMP`, and `TIME`. The same values bind as parameters (text
-  is coerced to the column type by the server).
+  is coerced to the column type by the server). Binary and BLOB columns are
+  returned as PHP strings with embedded NUL bytes preserved.
 - **Driver name.** `getAttribute(PDO::ATTR_DRIVER_NAME)` reports `"mysql"`.
 
 ## Transactions
@@ -225,8 +249,13 @@ if ($db->exec("BAD SQL") === false) {
 
 The mode can also be seeded from the constructor's options array:
 `new PDO($dsn, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_SILENT])`.
-`getAttribute()` reads it back; `ATTR_DRIVER_NAME` reports the active driver
-(`"sqlite"`, `"pgsql"`, or `"mysql"`).
+Prepared statements inherit the connection's current error mode when they are
+created. `getAttribute()` reads attributes back; `ATTR_DRIVER_NAME` reports the
+active driver (`"sqlite"`, `"pgsql"`, or `"mysql"`). `ATTR_PERSISTENT` can be set
+in the constructor options to use the process-local DSN pool; setting it later
+with `setAttribute()` updates the reported attribute but does not reopen an
+already-created connection. Persistent connections are local to the running
+native process; there is no cross-process pool.
 
 ## Supported surface
 
@@ -244,11 +273,12 @@ released — at the end of its scope, when its variable is reassigned or `unset(
 or at program exit. You do not need to close them explicitly.
 - **Fetch modes**: `FETCH_ASSOC`, `FETCH_NUM`, `FETCH_BOTH`, `FETCH_OBJ`,
   `FETCH_COLUMN` (a single column as a scalar; the column index is the second
-  argument to `setFetchMode(PDO::FETCH_COLUMN, $col)`).
+  argument to `setFetchMode(PDO::FETCH_COLUMN, $col)`), `FETCH_CLASS`, and
+  `FETCH_INTO`.
 - **Parameters**: positional `?` and named `:name`; `PARAM_INT` / `PARAM_STR` /
   `PARAM_NULL` / `PARAM_BOOL` constants.
-- **Constants**: the fetch-mode, parameter, `ATTR_ERRMODE` / `ATTR_DRIVER_NAME`,
-  and `ERRMODE_*` constants used above.
+- **Constants**: the fetch-mode, parameter, `ATTR_ERRMODE`,
+  `ATTR_DRIVER_NAME`, `ATTR_PERSISTENT`, and `ERRMODE_*` constants used above.
 
 ## Limitations
 
@@ -263,13 +293,8 @@ or at program exit. You do not need to close them explicitly.
   the PostgreSQL client surfaces only a message (reported as a generic code).
   `errorInfo()[0]` therefore mirrors the native code rather than a true `SQLSTATE`.
 - **`bindParam()`** binds the current value, not a deferred by-reference read.
-- **`FETCH_CLASS` / `FETCH_INTO`** are not implemented.
-- **`FETCH_OBJ`** materializes the stdClass via a JSON round-trip, so a result
-  set whose column names are `0, 1, 2, …` degrades to an array.
-- **Binary / BLOB values with embedded NUL bytes** are not round-tripped through
-  the text path.
-- **`getAttribute` / `setAttribute`** support `ATTR_ERRMODE` and `ATTR_DRIVER_NAME`;
-  other attributes are stored and read back but have no effect. Persistent
-  connections are not implemented.
+- **`getAttribute` / `setAttribute`** support `ATTR_ERRMODE`,
+  `ATTR_DRIVER_NAME`, and `ATTR_PERSISTENT`; other attributes are stored and read
+  back but have no effect.
 - Avoid `new PDOStatement(...)` directly — statements are created by `query()` /
   `prepare()`.
