@@ -1303,6 +1303,21 @@ echo function_exists("usleep");');
     assert_eq!(out, "0:0:u:0:null:11");
 }
 
+/// Verifies eval `gethostbyname()` handles IPv4 literals and failed lookups.
+#[test]
+fn test_eval_dispatches_gethostbyname_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo gethostbyname("127.0.0.1") . ":";
+echo gethostbyname(hostname: "not a host") . ":";
+echo call_user_func("gethostbyname", "127.0.0.1") . ":";
+echo call_user_func_array("gethostbyname", ["hostname" => "not a host"]) . ":";
+echo function_exists("gethostbyname");');
+"#,
+    );
+    assert_eq!(out, "127.0.0.1:not a host:127.0.0.1:not a host:1");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
