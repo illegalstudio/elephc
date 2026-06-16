@@ -25,7 +25,7 @@ Argument unpacking (`...`) and `call_user_func_array()` argument arrays are supp
 
 Eval associative array literals and `$array[] = value` append writes use PHP's next automatic integer key rule. Hash appends scan existing integer keys through the eval value hooks before delegating to the shared mixed-array setter; mixed literal construction advances the same automatic key when explicit keys normalize to integers, while `null` keys remain the empty-string key.
 
-Eval builtin dispatch also covers byte-string helpers including `chr()`, `strrev()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, and `base64_decode()`, plus `fdiv()` / `fmod()` through target-aware bridge wrappers that return boxed double cells.
+Eval builtin dispatch also covers byte-string helpers including `chr()`, `strrev()`, `str_repeat()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, and `base64_decode()`, plus `fdiv()` / `fmod()` through target-aware bridge wrappers that return boxed double cells.
 
 ## Why a runtime?
 
