@@ -948,6 +948,29 @@ echo function_exists("array_pop") && function_exists("array_shift");');
     assert_eq!(out, "3:2:2:1:2:3:4:5:2:5:6:2:6:1");
 }
 
+/// Verifies eval `array_push()` and `array_unshift()` mutate direct variable arguments only.
+#[test]
+fn test_eval_dispatches_array_push_unshift_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = [1];
+echo array_push($a, 2, 3) . ":" . $a[2] . ":";
+$b = ["x" => 1, 10 => 2];
+echo array_push($b, "A") . ":" . $b["x"] . ":" . $b[11] . ":";
+$c = [2, 3];
+echo array_unshift($c, 0, 1) . ":" . $c[0] . ":" . $c[3] . ":";
+$d = ["x" => 1, 10 => 2, "y" => 3];
+echo array_unshift($d, "A") . ":" . $d[0] . ":" . $d["x"] . ":" . $d[1] . ":" . $d["y"] . ":";
+$e = [5];
+echo call_user_func("array_push", $e, 6) . ":" . count($e) . ":" . $e[0] . ":";
+$f = [7];
+echo call_user_func_array("array_unshift", [$f, 6]) . ":" . count($f) . ":" . $f[0] . ":";
+echo function_exists("array_push") && function_exists("array_unshift");');
+"#,
+    );
+    assert_eq!(out, "3:3:3:1:A:4:0:3:4:A:1:2:3:2:1:5:2:1:7:1");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {
