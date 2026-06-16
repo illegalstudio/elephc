@@ -1576,6 +1576,31 @@ echo function_exists("chmod"); echo function_exists("tempnam"); echo function_ex
     );
 }
 
+/// Verifies eval `touch()` creates files, stamps mtimes, and dispatches dynamically.
+#[test]
+fn test_eval_dispatches_touch_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo touch(filename: "eval-touch-created.txt") && file_exists("eval-touch-created.txt") ? "create" : "bad"; echo ":";
+file_put_contents("eval-touch-stamped.txt", "x");
+echo touch("eval-touch-stamped.txt", 1000000000) ? "mtime" : "bad"; echo ":";
+echo filemtime("eval-touch-stamped.txt") === 1000000000 ? "readmtime" : "bad"; echo ":";
+echo touch("eval-touch-stamped.txt", 1000000001, null) && filemtime("eval-touch-stamped.txt") === 1000000001 ? "nullatime" : "bad"; echo ":";
+echo touch("eval-touch-stamped.txt", 1000000002, 1000000003) && filemtime("eval-touch-stamped.txt") === 1000000002 ? "both" : "bad"; echo ":";
+echo touch("eval-touch-missing/x.txt") ? "bad" : "touch-false"; echo ":";
+echo call_user_func("touch", "eval-touch-created.txt", 1000000004) ? "calltouch" : "bad"; echo ":";
+echo call_user_func_array("touch", ["filename" => "eval-touch-stamped.txt", "mtime" => 1000000005]) ? "callarray" : "bad"; echo ":";
+echo unlink("eval-touch-created.txt") && unlink("eval-touch-stamped.txt") ? "cleanup" : "bad"; echo ":";
+echo function_exists("touch");
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "create:mtime:readmtime:nullatime:both:touch-false:calltouch:callarray:cleanup:1"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

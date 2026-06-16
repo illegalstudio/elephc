@@ -1297,6 +1297,7 @@ fn eval_positional_expr_call(
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
         "tempnam" => eval_builtin_tempnam(args, context, scope, values),
         "time" => eval_builtin_time(args, values),
+        "touch" => eval_builtin_touch(args, context, scope, values),
         "unlink" => eval_builtin_unlink(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
         "str_repeat" => eval_builtin_str_repeat(args, context, scope, values),
@@ -1714,6 +1715,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "sys_get_temp_dir"
             | "tempnam"
             | "time"
+            | "touch"
             | "trim"
             | "substr_replace"
             | "ucfirst"
@@ -1877,6 +1879,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "substr_replace" => Some(&["string", "replace", "offset", "length"]),
         "sys_get_temp_dir" | "time" => Some(&[]),
         "tempnam" => Some(&["directory", "prefix"]),
+        "touch" => Some(&["filename", "mtime", "atime"]),
         "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
             Some(&["string"])
         }
@@ -2542,6 +2545,14 @@ fn eval_builtin_with_values(
             }
             eval_time_result(values)?
         }
+        "touch" => match evaluated_args {
+            [filename] => eval_touch_result(*filename, None, None, values)?,
+            [filename, mtime] => eval_touch_result(*filename, Some(*mtime), None, values)?,
+            [filename, mtime, atime] => {
+                eval_touch_result(*filename, Some(*mtime), Some(*atime), values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "umask" => match evaluated_args {
             [] => eval_umask_result(None, values)?,
             [mask] => eval_umask_result(Some(*mask), values)?,
@@ -4644,6 +4655,96 @@ fn eval_tempnam_result(
 /// Builds one deterministic tempnam candidate basename from prefix, process, and attempt data.
 fn eval_tempnam_filename(prefix: &str, nonce: u128, attempt: u32) -> String {
     format!("{}{}_{:x}_{attempt}", prefix, std::process::id(), nonce)
+}
+
+/// Evaluates PHP `touch($filename, $mtime = null, $atime = null)` over eval expressions.
+fn eval_builtin_touch(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [filename] => {
+            let filename = eval_expr(filename, context, scope, values)?;
+            eval_touch_result(filename, None, None, values)
+        }
+        [filename, mtime] => {
+            let filename = eval_expr(filename, context, scope, values)?;
+            let mtime = eval_expr(mtime, context, scope, values)?;
+            eval_touch_result(filename, Some(mtime), None, values)
+        }
+        [filename, mtime, atime] => {
+            let filename = eval_expr(filename, context, scope, values)?;
+            let mtime = eval_expr(mtime, context, scope, values)?;
+            let atime = eval_expr(atime, context, scope, values)?;
+            eval_touch_result(filename, Some(mtime), Some(atime), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Creates or stamps one local file and returns whether the operation succeeded.
+fn eval_touch_result(
+    filename: RuntimeCellHandle,
+    mtime: Option<RuntimeCellHandle>,
+    atime: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let (mtime, atime) = eval_touch_times(mtime, atime, values)?;
+    let file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(_) => return values.bool_value(false),
+    };
+    let times = std::fs::FileTimes::new()
+        .set_modified(mtime)
+        .set_accessed(atime);
+    values.bool_value(file.set_times(times).is_ok())
+}
+
+/// Resolves PHP touch timestamp defaults into concrete system times.
+fn eval_touch_times(
+    mtime: Option<RuntimeCellHandle>,
+    atime: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(std::time::SystemTime, std::time::SystemTime), EvalStatus> {
+    let now = std::time::SystemTime::now();
+    let Some(mtime) = mtime else {
+        return Ok((now, now));
+    };
+    if values.is_null(mtime)? {
+        if let Some(atime) = atime {
+            if !values.is_null(atime)? {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        }
+        return Ok((now, now));
+    }
+    let mtime = eval_system_time_from_unix(eval_int_value(mtime, values)?)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let Some(atime) = atime else {
+        return Ok((mtime, mtime));
+    };
+    if values.is_null(atime)? {
+        return Ok((mtime, mtime));
+    }
+    let atime = eval_system_time_from_unix(eval_int_value(atime, values)?)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    Ok((mtime, atime))
+}
+
+/// Converts a Unix timestamp in seconds into a `SystemTime`.
+fn eval_system_time_from_unix(seconds: i64) -> Option<std::time::SystemTime> {
+    if seconds >= 0 {
+        std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(seconds as u64))
+    } else {
+        std::time::UNIX_EPOCH.checked_sub(std::time::Duration::from_secs(seconds.unsigned_abs()))
+    }
 }
 
 /// Evaluates PHP `umask($mask = null)` over an optional eval expression.
@@ -10066,6 +10167,44 @@ return true;"#
         assert_eq!(
             values.output,
             "chmod:mode:chmod-false:tempnam:umask:probe:callchmod:calltempnam:cleanup:111"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `touch()` creates files, stamps mtimes, and dispatches dynamically.
+    #[test]
+    fn execute_program_dispatches_touch_builtin() {
+        let pid = std::process::id();
+        let created = format!("elephc_eval_touch_created_{pid}.txt");
+        let stamped = format!("elephc_eval_touch_stamped_{pid}.txt");
+        let missing = format!("elephc_eval_touch_missing_{pid}/x.txt");
+        let source = format!(
+            r#"echo touch(filename: "{created}") && file_exists("{created}") ? "create" : "bad"; echo ":";
+file_put_contents("{stamped}", "x");
+echo touch("{stamped}", 1000000000) ? "mtime" : "bad"; echo ":";
+echo filemtime("{stamped}") === 1000000000 ? "readmtime" : "bad"; echo ":";
+echo touch("{stamped}", 1000000001, null) && filemtime("{stamped}") === 1000000001 ? "nullatime" : "bad"; echo ":";
+echo touch("{stamped}", 1000000002, 1000000003) && filemtime("{stamped}") === 1000000002 ? "both" : "bad"; echo ":";
+echo touch("{missing}") ? "bad" : "touch-false"; echo ":";
+echo call_user_func("touch", "{created}", 1000000004) ? "calltouch" : "bad"; echo ":";
+echo call_user_func_array("touch", ["filename" => "{stamped}", "mtime" => 1000000005]) ? "callarray" : "bad"; echo ":";
+echo unlink("{created}") && unlink("{stamped}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("touch");
+return true;"#
+        );
+        let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+        let _ = std::fs::remove_file(&created);
+        let _ = std::fs::remove_file(&stamped);
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        let _ = std::fs::remove_file(&created);
+        let _ = std::fs::remove_file(&stamped);
+        assert_eq!(
+            values.output,
+            "create:mtime:readmtime:nullatime:both:touch-false:calltouch:callarray:cleanup:1"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
