@@ -87,7 +87,7 @@ impl NativeFunction {
 pub struct ElephcEvalContext {
     abi_version: u32,
     classes: HashSet<String>,
-    constants: HashSet<String>,
+    constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
@@ -104,7 +104,7 @@ impl ElephcEvalContext {
         Self {
             abi_version: ABI_VERSION,
             classes: HashSet::new(),
-            constants: HashSet::new(),
+            constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
@@ -122,7 +122,7 @@ impl ElephcEvalContext {
         Self {
             abi_version,
             classes: HashSet::new(),
-            constants: HashSet::new(),
+            constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
@@ -154,19 +154,24 @@ impl ElephcEvalContext {
         self.classes.contains(&normalize_class_name(name))
     }
 
-    /// Defines an eval dynamic constant name, failing if it is invalid or already present.
-    pub fn define_constant(&mut self, name: &str) -> bool {
+    /// Defines an eval dynamic constant value, failing if the name is invalid or already present.
+    pub fn define_constant(&mut self, name: &str, value: RuntimeCellHandle) -> bool {
         let key = normalize_constant_name(name);
-        if key.is_empty() || self.constants.contains(&key) {
+        if key.is_empty() || self.constants.contains_key(&key) {
             return false;
         }
-        self.constants.insert(key);
+        self.constants.insert(key, value);
         true
     }
 
     /// Returns true when this eval context has a dynamic constant with the requested name.
     pub fn has_constant(&self, name: &str) -> bool {
-        self.constants.contains(&normalize_constant_name(name))
+        self.constants.contains_key(&normalize_constant_name(name))
+    }
+
+    /// Returns an eval dynamic constant value by case-sensitive PHP constant name.
+    pub fn constant(&self, name: &str) -> Option<RuntimeCellHandle> {
+        self.constants.get(&normalize_constant_name(name)).copied()
     }
 
     /// Defines a dynamic user function, failing if the name already exists.

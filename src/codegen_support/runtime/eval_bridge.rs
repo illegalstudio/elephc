@@ -1073,6 +1073,9 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_truthy");
     emitter.instruction("b __rt_mixed_cast_bool");                              // cast one boxed mixed value to PHP truthiness for eval
 
+    label_c_global(emitter, "__elephc_eval_value_retain");
+    emitter.instruction("b __rt_incref");                                       // retain one eval-owned boxed Mixed cell
+
     label_c_global(emitter, "__elephc_eval_value_release");
     emitter.instruction("b __rt_decref_mixed");                                 // release one eval-owned boxed Mixed cell
 }
@@ -2210,6 +2213,10 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_truthy");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed value argument into mixed truthiness input
     emitter.instruction("jmp __rt_mixed_cast_bool");                            // cast one boxed mixed value to PHP truthiness for eval
+
+    label_c_global(emitter, "__elephc_eval_value_retain");
+    emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal retain register
+    emitter.instruction("jmp __rt_incref");                                     // retain one eval-owned boxed Mixed cell
 
     label_c_global(emitter, "__elephc_eval_value_release");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal release register

@@ -126,6 +126,9 @@ pub trait RuntimeValueOps {
     /// Releases one owned runtime cell that is no longer held by the eval scope.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
+    /// Retains one runtime cell so the eval caller receives an independent owner.
+    fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -901,6 +904,7 @@ fn eval_expr(
         }
         EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
+        EvalExpr::ConstFetch(name) => eval_const_fetch(name, context, values),
         EvalExpr::LoadVar(name) => {
             visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok)
         }
@@ -1211,8 +1215,8 @@ fn eval_builtin_define(
         return Err(EvalStatus::RuntimeFatal);
     };
     let name = eval_expr(name, context, scope, values)?;
-    let _value = eval_expr(value, context, scope, values)?;
-    let defined = eval_define_name(name, context, values)?;
+    let value = eval_expr(value, context, scope, values)?;
+    let defined = eval_define_name(name, value, context, values)?;
     values.bool_value(defined)
 }
 
@@ -1237,10 +1241,10 @@ fn eval_define_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [name, _value] = evaluated_args else {
+    let [name, value] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let defined = eval_define_name(*name, context, values)?;
+    let defined = eval_define_name(*name, *value, context, values)?;
     values.bool_value(defined)
 }
 
@@ -1260,6 +1264,7 @@ fn eval_defined_result(
 /// Normalizes and registers one eval dynamic constant name.
 fn eval_define_name(
     name: RuntimeCellHandle,
+    value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
@@ -1267,7 +1272,16 @@ fn eval_define_name(
     if name.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    Ok(context.define_constant(&name))
+    if context.has_constant(&name) {
+        return Ok(false);
+    }
+    let value = values.retain(value)?;
+    if context.define_constant(&name, value) {
+        Ok(true)
+    } else {
+        values.release(value)?;
+        Ok(false)
+    }
 }
 
 /// Normalizes and probes one eval dynamic constant name.
@@ -3353,6 +3367,18 @@ fn eval_const(
     }
 }
 
+/// Loads a retained value for one eval-defined dynamic constant.
+fn eval_const_fetch(
+    name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(value) = context.constant(name) else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    values.retain(value)
+}
+
 /// Resolves one eval magic constant against fragment and dynamic-call metadata.
 fn eval_magic_const(
     magic: &EvalMagicConst,
@@ -3718,6 +3744,11 @@ mod tests {
         fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
             self.releases.push(value);
             Ok(())
+        }
+
+        /// Returns the same fake handle because fake cells do not refcount.
+        fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+            Ok(value)
         }
 
         /// Creates a fake null cell.
@@ -6266,7 +6297,9 @@ echo function_exists("missing_probe") . "x";"#,
     #[test]
     fn execute_program_define_and_defined_use_dynamic_constant_table() {
         let program = parse_fragment(
-            br#"echo define("DynEvalConst", 1) ? "Y" : "N";
+            br#"echo define("DynEvalConst", "ok") ? "Y" : "N";
+echo DynEvalConst;
+echo \DynEvalConst;
 echo defined("DynEvalConst") ? "Y" : "N";
 echo defined("\\DynEvalConst") ? "Y" : "N";
 echo defined("dynevalconst") ? "Y" : "N";
@@ -6280,7 +6313,20 @@ echo call_user_func_array("defined", ["constant_name" => "\\DynEvalConst"]) ? "Y
 
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "YYYNNYY");
+        assert_eq!(values.output, "YokokYYNNYY");
+    }
+
+    /// Verifies missing eval dynamic constants fail through runtime status.
+    #[test]
+    fn execute_program_missing_constant_fetch_fails() {
+        let program = parse_fragment(br#"return MissingEvalConst;"#).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let err = execute_program(&program, &mut scope, &mut values)
+            .expect_err("missing constant should fail");
+
+        assert_eq!(err, EvalStatus::RuntimeFatal);
     }
 
     /// Verifies eval class probes use the runtime class-name table.

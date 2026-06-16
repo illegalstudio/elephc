@@ -134,6 +134,7 @@ unsafe extern "C" {
     ) -> u64;
     fn __elephc_eval_value_truthy(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_release(value: *mut RuntimeCell);
+    fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
 }
 
 /// Runtime hook adapter that produces and consumes boxed elephc Mixed cells.
@@ -349,6 +350,13 @@ impl RuntimeValueOps for ElephcRuntimeOps {
             __elephc_eval_value_release(value.as_ptr());
         }
         Ok(())
+    }
+
+    /// Retains one boxed Mixed cell through the generated runtime wrapper.
+    fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Ok(RuntimeCellHandle::from_raw(unsafe {
+            __elephc_eval_value_retain(value.as_ptr())
+        }))
     }
 
     /// Creates a boxed null Mixed cell through the generated runtime wrapper.
