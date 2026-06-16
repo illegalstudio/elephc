@@ -13439,7 +13439,10 @@ fn eval_json_decode_result(
         .map(|flags| eval_int_value(flags, values))
         .transpose()?
         .unwrap_or(0);
-    if flags & !EVAL_JSON_BIGINT_AS_STRING != 0 {
+    let supported_flags = EVAL_JSON_BIGINT_AS_STRING
+        | EVAL_JSON_INVALID_UTF8_IGNORE
+        | EVAL_JSON_INVALID_UTF8_SUBSTITUTE;
+    if flags & !supported_flags != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
     }
     if let Some(associative) = associative {
@@ -13454,7 +13457,14 @@ fn eval_json_decode_result(
     }
 
     let bytes = values.string_bytes(json)?;
-    let decoded = match json_validate::decode_result(&bytes, depth as usize) {
+    let decoded_result = if flags & EVAL_JSON_INVALID_UTF8_SUBSTITUTE != 0 {
+        json_validate::decode_result_substituting_invalid_utf8(&bytes, depth as usize)
+    } else if flags & EVAL_JSON_INVALID_UTF8_IGNORE != 0 {
+        json_validate::decode_result_ignoring_invalid_utf8(&bytes, depth as usize)
+    } else {
+        json_validate::decode_result(&bytes, depth as usize)
+    };
+    let decoded = match decoded_result {
         Ok(decoded) => decoded,
         Err(error) => {
             eval_record_json_parse_error(context, error, &bytes);
@@ -17966,13 +17976,26 @@ $call = call_user_func("json_decode", "[3,4]");
 echo $call[1] . ":";
 $named = call_user_func_array("json_decode", ["json" => "{\"k\":\"v\"}", "associative" => true, "depth" => 4, "flags" => 0]);
 echo $named["k"] . ":";
+$badJson = "\"a" . hex2bin("80") . "b\"";
+echo (is_null(json_decode($badJson)) ? "utf8-null" : "bad") . ":";
+echo json_last_error() . ":";
+echo bin2hex(json_decode($badJson, true, 512, JSON_INVALID_UTF8_IGNORE)) . ":";
+echo json_last_error() . ":";
+echo bin2hex(json_decode($badJson, true, 512, JSON_INVALID_UTF8_SUBSTITUTE)) . ":";
+echo json_last_error() . ":";
+$objSub = json_decode("{\"k" . hex2bin("80") . "\":\"v" . hex2bin("80") . "\"}", true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
+$objSubKeys = array_keys($objSub);
+echo bin2hex($objSubKeys[0]) . "=" . bin2hex($objSub[$objSubKeys[0]]) . ":";
+$objIgnore = json_decode("{\"k" . hex2bin("80") . "\":\"v" . hex2bin("80") . "\"}", true, 512, JSON_INVALID_UTF8_IGNORE);
+$objIgnoreKeys = array_keys($objIgnore);
+echo bin2hex($objIgnoreKeys[0]) . "=" . bin2hex($objIgnore[$objIgnoreKeys[0]]) . ":";
 echo (is_null(json_decode("bad")) ? "BAD" : "wrong") . ":";
 $big = json_decode("[9223372036854775808]", true, 512, JSON_BIGINT_AS_STRING);
 echo json_decode("9223372036854775808", true, 512, JSON_BIGINT_AS_STRING) . ":";
 echo json_decode("-9223372036854775809", true, 512, JSON_BIGINT_AS_STRING) . ":";
 echo gettype($big[0]) . ":" . $big[0] . ":";
 echo call_user_func_array("json_decode", ["json" => "9223372036854775808", "associative" => true, "depth" => 512, "flags" => JSON_BIGINT_AS_STRING]) . ":";
-return function_exists("json_decode") && defined("JSON_BIGINT_AS_STRING");"#,
+return function_exists("json_decode") && defined("JSON_BIGINT_AS_STRING") && defined("JSON_INVALID_UTF8_IGNORE") && defined("JSON_INVALID_UTF8_SUBSTITUTE");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17982,7 +18005,7 @@ return function_exists("json_decode") && defined("JSON_BIGINT_AS_STRING");"#,
 
         assert_eq!(
             values.output,
-            "hello:42:T:NULL:1:x:F:4:v:BAD:9223372036854775808:-9223372036854775809:string:9223372036854775808:9223372036854775808:"
+            "hello:42:T:NULL:1:x:F:4:v:utf8-null:5:6162:0:61efbfbd62:0:6befbfbd=76efbfbd:6b=76:BAD:9223372036854775808:-9223372036854775809:string:9223372036854775808:9223372036854775808:"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }

@@ -879,6 +879,19 @@ $call = call_user_func("json_decode", "[3,4]");
 echo $call[1] . ":";
 $named = call_user_func_array("json_decode", ["json" => "{\"k\":\"v\"}", "associative" => true, "depth" => 4, "flags" => 0]);
 echo $named["k"] . ":";
+$badJson = "\"a" . chr(128) . "b\"";
+echo (is_null(json_decode($badJson)) ? "utf8-null" : "bad") . ":";
+echo json_last_error() . ":";
+echo bin2hex(json_decode($badJson, true, 512, JSON_INVALID_UTF8_IGNORE)) . ":";
+echo json_last_error() . ":";
+echo bin2hex(json_decode($badJson, true, 512, JSON_INVALID_UTF8_SUBSTITUTE)) . ":";
+echo json_last_error() . ":";
+$objSub = json_decode("{\"k" . chr(128) . "\":\"v" . chr(128) . "\"}", true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
+$objSubKeys = array_keys($objSub);
+echo bin2hex($objSubKeys[0]) . "=" . bin2hex($objSub[$objSubKeys[0]]) . ":";
+$objIgnore = json_decode("{\"k" . chr(128) . "\":\"v" . chr(128) . "\"}", true, 512, JSON_INVALID_UTF8_IGNORE);
+$objIgnoreKeys = array_keys($objIgnore);
+echo bin2hex($objIgnoreKeys[0]) . "=" . bin2hex($objIgnore[$objIgnoreKeys[0]]) . ":";
 echo (is_null(json_decode("bad")) ? "BAD" : "wrong") . ":";
 $big = json_decode("[9223372036854775808]", true, 512, JSON_BIGINT_AS_STRING);
 echo json_decode("9223372036854775808", true, 512, JSON_BIGINT_AS_STRING) . ":";
@@ -890,7 +903,7 @@ echo function_exists("json_decode");');
     );
     assert_eq!(
         out,
-        "hello:42:T:NULL:1:x:F:4:v:BAD:9223372036854775808:-9223372036854775809:string:9223372036854775808:9223372036854775808:1"
+        "hello:42:T:NULL:1:x:F:4:v:utf8-null:5:6162:0:61efbfbd62:0:6befbfbd=76efbfbd:6b=76:BAD:9223372036854775808:-9223372036854775809:string:9223372036854775808:9223372036854775808:1"
     );
 }
 

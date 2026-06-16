@@ -10,7 +10,7 @@
 //!   is rejected when the active depth would reach the requested limit.
 //! - String parsing accepts JSON escapes, paired UTF-16 surrogate escapes, and raw
 //!   UTF-8 bytes while rejecting control bytes; malformed UTF-8 is rejected by
-//!   default and can be ignored for PHP's `JSON_INVALID_UTF8_IGNORE` validate flag.
+//!   default and can be ignored or substituted for PHP JSON UTF-8 flags.
 
 /// Parsed JSON value used by eval JSON builtins before runtime-cell allocation.
 pub(crate) enum JsonValue {
@@ -74,12 +74,29 @@ pub(crate) fn decode_result_ignoring_invalid_utf8(
     parser.parse_document()
 }
 
+/// Parses one complete JSON document while replacing malformed raw UTF-8 with U+FFFD.
+pub(crate) fn decode_result_substituting_invalid_utf8(
+    bytes: &[u8],
+    depth_limit: usize,
+) -> Result<JsonValue, JsonParseError> {
+    let mut parser = Parser::new_with_invalid_utf8_substitute(bytes, depth_limit);
+    parser.parse_document()
+}
+
+/// How malformed raw UTF-8 bytes inside JSON strings should be handled.
+#[derive(Clone, Copy)]
+enum InvalidUtf8Mode {
+    Reject,
+    Ignore,
+    Substitute,
+}
+
 /// Cursor-based JSON parser for eval JSON builtin calls.
 struct Parser<'a> {
     bytes: &'a [u8],
     cursor: usize,
     depth_limit: usize,
-    ignore_invalid_utf8: bool,
+    invalid_utf8_mode: InvalidUtf8Mode,
 }
 
 impl<'a> Parser<'a> {
@@ -89,7 +106,7 @@ impl<'a> Parser<'a> {
             bytes,
             cursor: 0,
             depth_limit,
-            ignore_invalid_utf8: false,
+            invalid_utf8_mode: InvalidUtf8Mode::Reject,
         }
     }
 
@@ -99,7 +116,17 @@ impl<'a> Parser<'a> {
             bytes,
             cursor: 0,
             depth_limit,
-            ignore_invalid_utf8: true,
+            invalid_utf8_mode: InvalidUtf8Mode::Ignore,
+        }
+    }
+
+    /// Creates a JSON parser that substitutes malformed raw UTF-8 bytes inside strings.
+    fn new_with_invalid_utf8_substitute(bytes: &'a [u8], depth_limit: usize) -> Self {
+        Self {
+            bytes,
+            cursor: 0,
+            depth_limit,
+            invalid_utf8_mode: InvalidUtf8Mode::Substitute,
         }
     }
 
@@ -222,15 +249,33 @@ impl<'a> Parser<'a> {
                     let start = self.cursor;
                     match self.consume_utf8_char() {
                         Ok(()) => output.extend_from_slice(&self.bytes[start..self.cursor]),
-                        Err(_) if self.ignore_invalid_utf8 => {
-                            self.cursor = start + 1;
-                        }
-                        Err(error) => return Err(error),
+                        Err(error) => self.handle_invalid_utf8(error, start, &mut output)?,
                     }
                 }
             }
         }
         Err(self.error(JsonParseErrorKind::Syntax))
+    }
+
+    /// Applies the configured malformed-UTF-8 policy for a raw string byte.
+    fn handle_invalid_utf8(
+        &mut self,
+        error: JsonParseError,
+        start: usize,
+        output: &mut Vec<u8>,
+    ) -> Result<(), JsonParseError> {
+        match self.invalid_utf8_mode {
+            InvalidUtf8Mode::Reject => Err(error),
+            InvalidUtf8Mode::Ignore => {
+                self.cursor = start + 1;
+                Ok(())
+            }
+            InvalidUtf8Mode::Substitute => {
+                append_codepoint(output, 0xfffd).ok_or_else(|| self.error(JsonParseErrorKind::Utf8))?;
+                self.cursor = start + 1;
+                Ok(())
+            }
+        }
     }
 
     /// Parses one JSON string escape sequence at the current backslash.
