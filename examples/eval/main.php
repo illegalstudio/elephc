@@ -134,6 +134,7 @@ $trimmed = eval('return trim("  boxed  ") . ":" . ltrim("0007", "0") . ":" . cho
 $aggregates = eval('return array_sum([1, 2, 3]) . ":" . array_product([2, 3, 4]);');
 $array_map = eval('function eval_example_double($value) { return $value * 2; } $mapped = array_map("eval_example_double", ["a" => 2, "b" => 3]); return $mapped["a"] . ":" . $mapped["b"];');
 $array_reduce = eval('function eval_example_sum($carry, $item) { return $carry + $item; } return array_reduce([1, 2, 3], "eval_example_sum", 10) . ":" . array_reduce([4, 5], "eval_example_sum");');
+$array_walk = eval('function eval_example_walk($value, $key) { echo "walk-" . $key . "=" . $value . "\n"; } return array_walk(["a" => 2, "b" => 3], "eval_example_walk") ? "ok" : "bad";');
 $array_filter = eval('$items = array_filter([0, 1, "", "ok"]); return count($items) . ":" . $items[1] . ":" . $items[3];');
 $array_filter_callback = eval('function eval_example_keep_pair($value, $key) { return $key === "b" || $value === 3; } $items = array_filter(["a" => 1, "b" => 2, "c" => 3], "eval_example_keep_pair", ARRAY_FILTER_USE_BOTH); return count($items) . ":" . $items["b"] . ":" . $items["c"];');
 $named_builtins = eval('return strlen(string: "eval") . ":" . (str_contains(...["haystack" => "dynamic eval", "needle" => "eval"]) ? "yes" : "no");');
@@ -270,6 +271,7 @@ echo "trimmed=" . $trimmed . "\n";
 echo "aggregates=" . $aggregates . "\n";
 echo "array-map=" . $array_map . "\n";
 echo "array-reduce=" . $array_reduce . "\n";
+echo "array-walk=" . $array_walk . "\n";
 echo "array-filter=" . $array_filter . "\n";
 echo "array-filter-callback=" . $array_filter_callback . "\n";
 echo "named-builtins=" . $named_builtins . "\n";

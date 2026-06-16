@@ -1403,6 +1403,7 @@ fn eval_positional_expr_call(
         "array_flip" => eval_builtin_array_flip(args, context, scope, values),
         "array_map" => eval_builtin_array_map(args, context, scope, values),
         "array_reduce" => eval_builtin_array_reduce(args, context, scope, values),
+        "array_walk" => eval_builtin_array_walk(args, context, scope, values),
         "array_keys" | "array_values" => {
             eval_builtin_array_projection(name, args, context, scope, values)
         }
@@ -1843,6 +1844,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_flip"
             | "array_map"
             | "array_reduce"
+            | "array_walk"
             | "array_key_exists"
             | "array_keys"
             | "array_diff"
@@ -2148,6 +2150,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_filter" => Some(&["array", "callback", "mode"]),
         "array_map" => Some(&["callback", "array"]),
         "array_reduce" => Some(&["array", "callback", "initial"]),
+        "array_walk" => Some(&["array", "callback"]),
         "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_unique"
         | "array_rand" | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
@@ -2470,6 +2473,12 @@ fn eval_builtin_with_values(
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "array_walk" => {
+            let [array, callback] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_walk_result(*array, *callback, context, values)?
+        }
         "array_flip" => {
             let [array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -3526,7 +3535,7 @@ fn eval_array_map_result(
     Ok(result)
 }
 
-/// Evaluates PHP `array_reduce()` with an explicit initial carry value.
+/// Evaluates PHP `array_reduce()` with an optional initial carry value.
 fn eval_builtin_array_reduce(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -3567,6 +3576,38 @@ fn eval_array_reduce_result(
         carry = eval_callable_with_values(&callback, vec![carry, value], context, values)?;
     }
     Ok(carry)
+}
+
+/// Evaluates PHP `array_walk()` for side-effect callbacks over value/key pairs.
+fn eval_builtin_array_walk(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array, callback] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = eval_expr(array, context, scope, values)?;
+    let callback = eval_expr(callback, context, scope, values)?;
+    eval_array_walk_result(array, callback, context, values)
+}
+
+/// Walks one eval array by invoking a string callback with value and key cells.
+fn eval_array_walk_result(
+    array: RuntimeCellHandle,
+    callback: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = eval_callable_name(callback, values)?;
+    let len = values.array_len(array)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        let _ = eval_callable_with_values(&callback, vec![value, key], context, values)?;
+    }
+    values.bool_value(true)
 }
 
 /// Evaluates PHP `array_filter()` for null and string-callback filtering modes.
@@ -13137,6 +13178,26 @@ return function_exists("array_reduce");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "16:9:ab:13:9:9:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_walk()` invokes string callbacks with value and key cells.
+    #[test]
+    fn execute_program_dispatches_array_walk_builtin() {
+        let program = parse_fragment(
+            br#"function eval_walk_show($value, $key) { echo $key . "=" . $value . ";"; }
+echo array_walk(["a" => 2, "b" => 3], "eval_walk_show") ? "T:" : "F:";
+$call = call_user_func("array_walk", [4, 5], "eval_walk_show");
+$spread = call_user_func_array("array_walk", ["array" => ["z" => 6], "callback" => "eval_walk_show"]);
+return function_exists("array_walk");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "a=2;b=3;T:0=4;1=5;z=6;");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

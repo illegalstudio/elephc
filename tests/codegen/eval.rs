@@ -836,6 +836,21 @@ echo function_exists("array_reduce");');
     assert_eq!(out, "16:9:ab:13:9:9:1");
 }
 
+/// Verifies eval `array_walk()` invokes string callbacks with value and key cells.
+#[test]
+fn test_eval_dispatches_array_walk_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function eval_walk_show($value, $key) { echo $key . "=" . $value . ";"; }
+echo array_walk(["a" => 2, "b" => 3], "eval_walk_show") ? "T:" : "F:";
+$call = call_user_func("array_walk", [4, 5], "eval_walk_show");
+$spread = call_user_func_array("array_walk", ["array" => ["z" => 6], "callback" => "eval_walk_show"]);
+echo function_exists("array_walk");');
+"#,
+    );
+    assert_eq!(out, "a=2;b=3;T:0=4;1=5;z=6;1");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {
