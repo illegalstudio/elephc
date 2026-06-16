@@ -1472,6 +1472,40 @@ unlink("eval-stat.txt");');
     );
 }
 
+/// Verifies eval path operation builtins mutate local filesystem state.
+#[test]
+fn test_eval_dispatches_path_operation_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('file_put_contents("eval-op-src.txt", "hello");
+echo mkdir("eval-op-dir") ? "mkdir" : "bad"; echo ":";
+echo copy("eval-op-src.txt", "eval-op-copy.txt") ? "copy" : "bad"; echo ":";
+echo rename("eval-op-copy.txt", "eval-op-moved.txt") && file_exists("eval-op-moved.txt") ? "rename" : "bad"; echo ":";
+echo symlink("eval-op-src.txt", "eval-op-link.txt") ? "symlink" : "bad"; echo ":";
+echo readlink("eval-op-link.txt") === "eval-op-src.txt" ? "readlink" : "bad"; echo ":";
+echo linkinfo("eval-op-link.txt") >= 0 ? "linkinfo" : "bad"; echo ":";
+echo link("eval-op-src.txt", "eval-op-hard.txt") ? "hardlink" : "bad"; echo ":";
+echo readlink("eval-op-src.txt") === false ? "readlink-false" : "bad"; echo ":";
+echo linkinfo("eval-op-missing.txt") === -1 ? "linkinfo-missing" : "bad"; echo ":";
+echo chdir("eval-op-dir") ? "chdir" : "bad"; echo ":";
+echo getcwd() !== "" ? "cwd" : "bad"; echo ":";
+chdir("..");
+echo clearstatcache(true, "eval-op-src.txt") === null ? "cache" : "bad"; echo ":";
+echo unlink("eval-op-link.txt") && unlink("eval-op-hard.txt") && unlink("eval-op-moved.txt") && unlink("eval-op-src.txt") && rmdir("eval-op-dir") ? "cleanup" : "bad"; echo ":";
+echo call_user_func("mkdir", "eval-op-call-dir") ? "callmkdir" : "bad"; echo ":";
+echo call_user_func_array("rmdir", ["directory" => "eval-op-call-dir"]) ? "callrmdir" : "bad"; echo ":";
+echo function_exists("mkdir"); echo function_exists("rmdir"); echo function_exists("copy");
+echo function_exists("rename"); echo function_exists("symlink"); echo function_exists("link");
+echo function_exists("readlink"); echo function_exists("linkinfo"); echo function_exists("clearstatcache");
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "mkdir:copy:rename:symlink:readlink:linkinfo:hardlink:readlink-false:linkinfo-missing:chdir:cwd:cache:cleanup:callmkdir:callrmdir:111111111"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

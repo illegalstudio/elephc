@@ -1201,7 +1201,11 @@ fn eval_positional_expr_call(
         "basename" => eval_builtin_basename(args, context, scope, values),
         "bin2hex" => eval_builtin_bin2hex(args, context, scope, values),
         "ceil" => eval_builtin_ceil(args, context, scope, values),
+        "chdir" | "mkdir" | "rmdir" => {
+            eval_builtin_unary_path_bool(name, args, context, scope, values)
+        }
         "chr" => eval_builtin_chr(args, context, scope, values),
+        "clearstatcache" => eval_builtin_clearstatcache(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "class_exists" => eval_builtin_class_exists(args, context, scope, values),
@@ -1210,6 +1214,9 @@ fn eval_positional_expr_call(
             eval_builtin_cast(name, args, context, scope, values)
         }
         "count" => eval_builtin_count(args, context, scope, values),
+        "copy" | "link" | "rename" | "symlink" => {
+            eval_builtin_binary_path_bool(name, args, context, scope, values)
+        }
         "crc32" => eval_builtin_crc32(args, context, scope, values),
         "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => {
             eval_builtin_ctype(name, args, context, scope, values)
@@ -1252,6 +1259,7 @@ fn eval_positional_expr_call(
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
+        "linkinfo" => eval_builtin_linkinfo(args, context, scope, values),
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
         "max" | "min" => eval_builtin_min_max(name, args, context, scope, values),
         "microtime" => eval_builtin_microtime(args, context, scope, values),
@@ -1269,6 +1277,7 @@ fn eval_positional_expr_call(
         "rawurlencode" | "urlencode" => {
             eval_builtin_url_encode(name, args, context, scope, values)
         }
+        "readlink" => eval_builtin_readlink(args, context, scope, values),
         "realpath" => eval_builtin_realpath(args, context, scope, values),
         "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
         "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
@@ -1565,13 +1574,16 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "base64_encode"
             | "bin2hex"
             | "ceil"
+            | "chdir"
             | "call_user_func"
             | "call_user_func_array"
             | "class_exists"
             | "boolval"
             | "chop"
             | "chr"
+            | "clearstatcache"
             | "count"
+            | "copy"
             | "crc32"
             | "ctype_alnum"
             | "ctype_alpha"
@@ -1621,6 +1633,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_writable"
             | "is_writeable"
             | "intval"
+            | "link"
+            | "linkinfo"
             | "ltrim"
             | "is_callable"
             | "is_array"
@@ -1640,6 +1654,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "max"
             | "microtime"
             | "min"
+            | "mkdir"
             | "nl2br"
             | "number_format"
             | "ord"
@@ -1650,11 +1665,14 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "putenv"
             | "rawurldecode"
             | "rawurlencode"
+            | "readlink"
             | "realpath"
             | "realpath_cache_get"
             | "realpath_cache_size"
+            | "rename"
             | "rtrim"
             | "round"
+            | "rmdir"
             | "sleep"
             | "sqrt"
             | "strcasecmp"
@@ -1677,6 +1695,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strtolower"
             | "strtoupper"
             | "strval"
+            | "symlink"
             | "sys_get_temp_dir"
             | "time"
             | "trim"
@@ -1783,9 +1802,12 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_exists" => Some(&["class", "autoload"]),
+        "chdir" | "mkdir" | "rmdir" => Some(&["directory"]),
         "chr" => Some(&["codepoint"]),
+        "clearstatcache" => Some(&["clear_realpath_cache", "filename"]),
         "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
         "count" => Some(&["value", "mode"]),
+        "copy" | "rename" => Some(&["from", "to"]),
         "crc32" => Some(&["string"]),
         "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => Some(&["text"]),
         "define" => Some(&["constant_name", "value"]),
@@ -1809,6 +1831,8 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "inet_ntop" => Some(&["ip"]),
         "inet_pton" => Some(&["ip"]),
         "ip2long" => Some(&["ip"]),
+        "link" | "symlink" => Some(&["target", "link"]),
+        "linkinfo" | "readlink" => Some(&["path"]),
         "max" | "min" => Some(&["value"]),
         "microtime" => Some(&["as_float"]),
         "nl2br" => Some(&["string", "use_xhtml"]),
@@ -2066,6 +2090,24 @@ fn eval_builtin_with_values(
             };
             eval_chr_result(*value, values)?
         }
+        "chdir" | "mkdir" | "rmdir" => {
+            let [path] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_unary_path_bool_result(name, *path, values)?
+        }
+        "clearstatcache" => {
+            if evaluated_args.len() > 2 {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            values.null()?
+        }
+        "copy" | "link" | "rename" | "symlink" => {
+            let [from, to] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_binary_path_bool_result(name, *from, *to, values)?
+        }
         "floor" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -2115,6 +2157,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_filetype_result(*filename, values)?
+        }
+        "linkinfo" => {
+            let [path] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_linkinfo_result(*path, values)?
         }
         "pi" => {
             if !evaluated_args.is_empty() {
@@ -2449,6 +2497,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_usleep_result(*microseconds, values)?
+        }
+        "readlink" => {
+            let [path] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_readlink_result(*path, values)?
         }
         "unlink" => {
             let [filename] = evaluated_args else {
@@ -4259,6 +4313,141 @@ fn eval_filetype_result(
         "unknown"
     };
     values.string(label)
+}
+
+/// Evaluates a one-path filesystem operation that returns a PHP boolean.
+fn eval_builtin_unary_path_bool(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [path] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let path = eval_expr(path, context, scope, values)?;
+    eval_unary_path_bool_result(name, path, values)
+}
+
+/// Executes a one-path local filesystem operation and returns whether it succeeded.
+fn eval_unary_path_bool_result(
+    name: &str,
+    path: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(path, values)?;
+    let ok = match name {
+        "chdir" => std::env::set_current_dir(path).is_ok(),
+        "mkdir" => std::fs::create_dir(path).is_ok(),
+        "rmdir" => std::fs::remove_dir(path).is_ok(),
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.bool_value(ok)
+}
+
+/// Evaluates a two-path filesystem operation that returns a PHP boolean.
+fn eval_builtin_binary_path_bool(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [from, to] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let from = eval_expr(from, context, scope, values)?;
+    let to = eval_expr(to, context, scope, values)?;
+    eval_binary_path_bool_result(name, from, to, values)
+}
+
+/// Executes a two-path local filesystem operation and returns whether it succeeded.
+fn eval_binary_path_bool_result(
+    name: &str,
+    from: RuntimeCellHandle,
+    to: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let from = eval_path_string(from, values)?;
+    let to = eval_path_string(to, values)?;
+    let ok = match name {
+        "copy" => std::fs::copy(from, to).is_ok(),
+        "link" => std::fs::hard_link(from, to).is_ok(),
+        "rename" => std::fs::rename(from, to).is_ok(),
+        "symlink" => std::os::unix::fs::symlink(from, to).is_ok(),
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.bool_value(ok)
+}
+
+/// Evaluates PHP `readlink($path)` over one eval expression.
+fn eval_builtin_readlink(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [path] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let path = eval_expr(path, context, scope, values)?;
+    eval_readlink_result(path, values)
+}
+
+/// Reads one symbolic-link target string, or returns PHP false on failure.
+fn eval_readlink_result(
+    path: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(path, values)?;
+    match std::fs::read_link(path) {
+        Ok(target) => values.string(target.to_string_lossy().as_ref()),
+        Err(_) => values.bool_value(false),
+    }
+}
+
+/// Evaluates PHP `linkinfo($path)` over one eval expression.
+fn eval_builtin_linkinfo(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [path] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let path = eval_expr(path, context, scope, values)?;
+    eval_linkinfo_result(path, values)
+}
+
+/// Returns one symlink metadata device id, or PHP's `-1` failure sentinel.
+fn eval_linkinfo_result(
+    path: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(path, values)?;
+    let dev = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => i64::try_from(metadata.dev()).map_err(|_| EvalStatus::RuntimeFatal)?,
+        Err(_) => -1,
+    };
+    values.int(dev)
+}
+
+/// Evaluates `clearstatcache(...)` as an ordered no-op in eval.
+fn eval_builtin_clearstatcache(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.len() > 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    for arg in args {
+        eval_expr(arg, context, scope, values)?;
+    }
+    values.null()
 }
 
 /// Evaluates PHP `unlink($filename)` over one eval expression.
@@ -9397,6 +9586,64 @@ return true;"#
         assert_eq!(
             values.output,
             "mtime:atime:ctime:perms:owner:group:inode:file:dir:link:noexec:link:missing-atime:missing-ctime:missing-perms:missing-owner:missing-group:missing-inode:missing-type:missing-mtime:file:callinode:1111111111"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval local path operation builtins mutate filesystem state.
+    #[test]
+    fn execute_program_dispatches_path_operation_builtins() {
+        let pid = std::process::id();
+        let dir = format!("elephc_eval_ops_dir_{pid}");
+        let call_dir = format!("elephc_eval_ops_call_dir_{pid}");
+        let src = format!("elephc_eval_ops_src_{pid}.txt");
+        let copy = format!("elephc_eval_ops_copy_{pid}.txt");
+        let moved = format!("elephc_eval_ops_moved_{pid}.txt");
+        let symlink = format!("elephc_eval_ops_symlink_{pid}.txt");
+        let hardlink = format!("elephc_eval_ops_hardlink_{pid}.txt");
+        let source = format!(
+            r#"file_put_contents("{src}", "hello");
+echo mkdir("{dir}") ? "mkdir" : "bad"; echo ":";
+echo is_dir("{dir}") ? "dir" : "bad"; echo ":";
+echo copy("{src}", "{copy}") && file_get_contents("{copy}") === "hello" ? "copy" : "bad"; echo ":";
+echo rename("{copy}", "{moved}") && file_exists("{moved}") && !file_exists("{copy}") ? "rename" : "bad"; echo ":";
+echo symlink("{src}", "{symlink}") ? "symlink" : "bad"; echo ":";
+echo readlink("{symlink}") === "{src}" ? "readlink" : "bad"; echo ":";
+echo linkinfo("{symlink}") >= 0 ? "linkinfo" : "bad"; echo ":";
+echo readlink("{src}") === false ? "readlink-false" : "bad"; echo ":";
+echo linkinfo("{missing}") === -1 ? "linkinfo-missing" : "bad"; echo ":";
+echo link("{src}", "{hardlink}") && file_get_contents("{hardlink}") === "hello" ? "hardlink" : "bad"; echo ":";
+echo clearstatcache() === null ? "cache" : "bad"; echo ":";
+echo unlink("{symlink}") && unlink("{hardlink}") && unlink("{moved}") && unlink("{src}") && rmdir("{dir}") ? "cleanup" : "bad"; echo ":";
+echo call_user_func("mkdir", "{call_dir}") ? "callmkdir" : "bad"; echo ":";
+echo call_user_func_array("rmdir", ["directory" => "{call_dir}"]) ? "callrmdir" : "bad"; echo ":";
+echo function_exists("mkdir"); echo function_exists("rmdir"); echo function_exists("copy");
+echo function_exists("rename"); echo function_exists("symlink"); echo function_exists("link");
+echo function_exists("readlink"); echo function_exists("linkinfo"); echo function_exists("clearstatcache");
+return true;"#,
+            missing = format!("elephc_eval_ops_missing_{pid}.txt"),
+        );
+        let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+        for path in [&symlink, &hardlink, &moved, &copy, &src] {
+            let _ = std::fs::remove_file(path);
+        }
+        for path in [&call_dir, &dir] {
+            let _ = std::fs::remove_dir(path);
+        }
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        for path in [&symlink, &hardlink, &moved, &copy, &src] {
+            let _ = std::fs::remove_file(path);
+        }
+        for path in [&call_dir, &dir] {
+            let _ = std::fs::remove_dir(path);
+        }
+        assert_eq!(
+            values.output,
+            "mkdir:dir:copy:rename:symlink:readlink:linkinfo:readlink-false:linkinfo-missing:hardlink:cache:cleanup:callmkdir:callrmdir:111111111"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
