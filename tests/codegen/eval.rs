@@ -1558,6 +1558,36 @@ echo function_exists("gethostbyname");');
     assert_eq!(out, "127.0.0.1:not a host:127.0.0.1:not a host:1");
 }
 
+/// Verifies eval `gethostname()` dispatches direct and callable zero-arg calls.
+#[test]
+fn test_eval_dispatches_gethostname_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strlen(gethostname()) > 0 ? "host" : "empty"; echo ":";
+echo strlen(call_user_func("gethostname")) > 0 ? "call" : "empty"; echo ":";
+echo strlen(call_user_func_array("gethostname", [])) > 0 ? "spread" : "empty"; echo ":";
+echo function_exists("gethostname");');
+"#,
+    );
+    assert_eq!(out, "host:call:spread:1");
+}
+
+/// Verifies eval `gethostbyaddr()` handles valid, malformed, and callable calls.
+#[test]
+fn test_eval_dispatches_gethostbyaddr_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strlen(gethostbyaddr("127.0.0.1")) > 0 ? "direct" : "empty"; echo ":";
+echo strlen(gethostbyaddr(ip: "127.0.0.1")) > 0 ? "named" : "empty"; echo ":";
+echo gethostbyaddr("not-an-ip-address") === false ? "false" : "bad"; echo ":";
+echo strlen(call_user_func("gethostbyaddr", "127.0.0.1")) > 0 ? "call" : "empty"; echo ":";
+echo call_user_func_array("gethostbyaddr", ["ip" => "not-an-ip-address"]) === false ? "spread" : "bad"; echo ":";
+echo function_exists("gethostbyaddr");');
+"#,
+    );
+    assert_eq!(out, "direct:named:false:call:spread:1");
+}
+
 /// Verifies eval IPv4 conversion builtins handle integer, string, and raw-byte forms.
 #[test]
 fn test_eval_dispatches_ip_conversion_builtin_calls() {

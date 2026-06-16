@@ -20,6 +20,7 @@ use crate::eval_ir::{
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
+use std::ffi::CStr;
 use std::net::ToSocketAddrs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -72,6 +73,16 @@ const EVAL_HASH_ALGOS: &[&str] = &[
 
 /// Root package manifest used to mirror native `phpversion()` in the eval crate.
 const EVAL_ROOT_CARGO_TOML: &str = include_str!("../../../Cargo.toml");
+
+unsafe extern "C" {
+    /// Reverse-resolves one socket address through libc's `gethostbyaddr`.
+    #[link_name = "gethostbyaddr"]
+    fn libc_gethostbyaddr(
+        addr: *const libc::c_void,
+        len: libc::socklen_t,
+        type_: libc::c_int,
+    ) -> *mut libc::hostent;
+}
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
@@ -1272,7 +1283,9 @@ fn eval_positional_expr_call(
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
         }
+        "gethostbyaddr" => eval_builtin_gethostbyaddr(args, context, scope, values),
         "gethostbyname" => eval_builtin_gethostbyname(args, context, scope, values),
+        "gethostname" => eval_builtin_gethostname(args, values),
         "getcwd" => eval_builtin_getcwd(args, values),
         "getenv" => eval_builtin_getenv(args, context, scope, values),
         "gettype" => eval_builtin_gettype(args, context, scope, values),
@@ -1679,7 +1692,9 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "floatval"
             | "fmod"
             | "function_exists"
+            | "gethostbyaddr"
             | "gethostbyname"
+            | "gethostname"
             | "getcwd"
             | "getenv"
             | "gettype"
@@ -1928,7 +1943,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         | "is_writeable" | "lstat" | "readfile" | "stat" | "unlink" => Some(&["filename"]),
         "file_put_contents" => Some(&["filename", "data"]),
         "function_exists" => Some(&["function"]),
+        "gethostbyaddr" => Some(&["ip"]),
         "gethostbyname" => Some(&["hostname"]),
+        "gethostname" => Some(&[]),
         "getcwd" => Some(&[]),
         "getenv" => Some(&["name"]),
         "glob" => Some(&["pattern"]),
@@ -2606,11 +2623,23 @@ fn eval_builtin_with_values(
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
+        "gethostbyaddr" => {
+            let [ip] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_gethostbyaddr_result(*ip, values)?
+        }
         "gethostbyname" => {
             let [hostname] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_gethostbyname_result(*hostname, values)?
+        }
+        "gethostname" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_gethostname_result(values)?
         }
         "getcwd" => {
             if !evaluated_args.is_empty() {
@@ -6604,6 +6633,51 @@ fn eval_fnmatch_fold(byte: u8, flags: i64) -> u8 {
     }
 }
 
+/// Evaluates PHP `gethostbyaddr($ip)` over one eval expression.
+fn eval_builtin_gethostbyaddr(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [ip] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let ip = eval_expr(ip, context, scope, values)?;
+    eval_gethostbyaddr_result(ip, values)
+}
+
+/// Reverse-resolves one IPv4 address, returns the input on miss, or PHP false when malformed.
+fn eval_gethostbyaddr_result(
+    ip: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let ip_bytes = values.string_bytes(ip)?;
+    let ip_text = String::from_utf8_lossy(&ip_bytes);
+    let Ok(ipv4) = ip_text.parse::<std::net::Ipv4Addr>() else {
+        return values.bool_value(false);
+    };
+    let octets = ipv4.octets();
+    let resolved = unsafe {
+        // libc reads the stack-owned IPv4 octets during this call and returns
+        // static resolver storage, which is copied before the next resolver call.
+        let host = libc_gethostbyaddr(
+            octets.as_ptr().cast::<libc::c_void>(),
+            octets.len() as libc::socklen_t,
+            libc::AF_INET,
+        );
+        if host.is_null() || (*host).h_name.is_null() {
+            None
+        } else {
+            Some(CStr::from_ptr((*host).h_name).to_bytes().to_vec())
+        }
+    };
+    match resolved {
+        Some(name) if !name.is_empty() => values.string_bytes_value(&name),
+        _ => values.string(ip_text.as_ref()),
+    }
+}
+
 /// Evaluates PHP `gethostbyname($hostname)` over one eval expression.
 fn eval_builtin_gethostbyname(
     args: &[EvalExpr],
@@ -6638,8 +6712,42 @@ fn eval_gethostbyname_result(
                     std::net::IpAddr::V6(_) => None,
                 })
                 .next()
-        });
+    });
     values.string(resolved.as_deref().unwrap_or_else(|| hostname.as_ref()))
+}
+
+/// Evaluates PHP `gethostname()` over one eval expression.
+fn eval_builtin_gethostname(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    eval_gethostname_result(values)
+}
+
+/// Reads the current host name through libc and returns an empty string on failure.
+fn eval_gethostname_result(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut buffer = [0 as libc::c_char; 256];
+    let status = unsafe {
+        // libc writes at most buffer.len() bytes into this stack buffer.
+        libc::gethostname(buffer.as_mut_ptr(), buffer.len())
+    };
+    if status != 0 {
+        return values.string("");
+    }
+    let length = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
+    let hostname = buffer[..length]
+        .iter()
+        .map(|byte| *byte as u8)
+        .collect::<Vec<_>>();
+    values.string_bytes_value(&hostname)
 }
 
 /// Evaluates PHP `long2ip($ip)` over one eval expression.
@@ -11687,6 +11795,46 @@ return function_exists("gethostbyname");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "127.0.0.1:not a host:127.0.0.1:not a host:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `gethostname()` dispatches direct and callable zero-arg calls.
+    #[test]
+    fn execute_program_dispatches_gethostname_builtin() {
+        let program = parse_fragment(
+            br#"echo strlen(gethostname()) > 0 ? "host" : "empty"; echo ":";
+echo strlen(call_user_func("gethostname")) > 0 ? "call" : "empty"; echo ":";
+echo strlen(call_user_func_array("gethostname", [])) > 0 ? "spread" : "empty"; echo ":";
+return function_exists("gethostname");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "host:call:spread:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `gethostbyaddr()` handles valid, malformed, and callable calls.
+    #[test]
+    fn execute_program_dispatches_gethostbyaddr_builtin() {
+        let program = parse_fragment(
+            br#"echo strlen(gethostbyaddr("127.0.0.1")) > 0 ? "direct" : "empty"; echo ":";
+echo strlen(gethostbyaddr(ip: "127.0.0.1")) > 0 ? "named" : "empty"; echo ":";
+echo gethostbyaddr("not-an-ip-address") === false ? "false" : "bad"; echo ":";
+echo strlen(call_user_func("gethostbyaddr", "127.0.0.1")) > 0 ? "call" : "empty"; echo ":";
+echo call_user_func_array("gethostbyaddr", ["ip" => "not-an-ip-address"]) === false ? "spread" : "bad"; echo ":";
+return function_exists("gethostbyaddr");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "direct:named:false:call:spread:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
