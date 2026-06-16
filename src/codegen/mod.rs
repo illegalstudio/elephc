@@ -201,7 +201,7 @@ fn finalize_user_asm(
     let user_functions = runtime_user_function_sigs(module);
     let function_variant_groups = runtime_function_variant_groups(module);
     let mut allowed_class_names = runtime_referenced_class_names(module);
-    if module_uses_dynamic_callable_lookup(module) {
+    if module_uses_dynamic_callable_lookup(module) || module.required_runtime_features.eval {
         allowed_class_names.extend(module.class_infos.keys().cloned());
     }
     let runtime_interfaces = runtime_referenced_interfaces(module, &allowed_class_names);

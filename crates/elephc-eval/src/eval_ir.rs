@@ -173,6 +173,10 @@ pub enum EvalExpr {
         args: Vec<EvalCallArg>,
     },
     Magic(EvalMagicConst),
+    NewObject {
+        class_name: String,
+        args: Vec<EvalCallArg>,
+    },
     NullCoalesce {
         value: Box<EvalExpr>,
         default: Box<EvalExpr>,

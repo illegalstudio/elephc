@@ -58,6 +58,7 @@ unsafe extern "C" {
         name_len: u64,
         args: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    fn __elephc_eval_value_new_object(name_ptr: *const u8, name_len: u64) -> *mut RuntimeCell;
     fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
@@ -266,6 +267,13 @@ impl RuntimeValueOps for ElephcRuntimeOps {
             __elephc_eval_value_release(arg_array.as_ptr());
         }
         result
+    }
+
+    /// Creates a boxed Mixed object through the generated dynamic class-name wrapper.
+    fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_value_new_object(class_name.as_ptr(), class_name.len() as u64)
+        })
     }
 
     /// Returns the visible element count for a boxed Mixed array through the generated runtime wrapper.

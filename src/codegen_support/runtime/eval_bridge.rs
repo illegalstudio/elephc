@@ -40,6 +40,29 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x2, xzr");                                         // bool payloads do not use a high word
     emitter.instruction("b __rt_mixed_from_value");                             // box the bool payload and return to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_new_object");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame across dynamic object lookup
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across runtime calls
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("mov x2, x1");                                          // move the C class-name length into new_by_name's string ABI
+    emitter.instruction("mov x1, x0");                                          // move the C class-name pointer into new_by_name's string ABI
+    emitter.instruction("bl __rt_new_by_name");                                 // allocate the named AOT class object, or return null on miss
+    emitter.instruction("cbz x0, __elephc_eval_value_new_object_null");         // box PHP null when no runtime class matched the eval name
+    emitter.instruction("mov x1, x0");                                          // move the allocated object pointer into the Mixed payload
+    emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
+    emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the allocated object for Rust
+    emitter.instruction("b __elephc_eval_value_new_object_done");               // skip the null boxing path after successful allocation
+    emitter.label("__elephc_eval_value_new_object_null");
+    emitter.instruction("mov x0, #8");                                          // runtime tag 8 = null
+    emitter.instruction("mov x1, xzr");                                         // null has no low payload word
+    emitter.instruction("mov x2, xzr");                                         // null has no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box null for unknown eval class names
+    emitter.label("__elephc_eval_value_new_object_done");
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the dynamic-object wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed object or null Mixed cell to Rust
+
     label_c_global(emitter, "__elephc_eval_value_array_new");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for array allocation and boxing
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across runtime calls
@@ -1022,6 +1045,28 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 3");                                          // runtime tag 3 = bool
     emitter.instruction("xor esi, esi");                                        // bool payloads do not use a high word
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the bool payload and return to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_new_object");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable dynamic-object wrapper frame
+    emitter.instruction("mov rax, rdi");                                        // move the C class-name pointer into new_by_name's string ABI
+    emitter.instruction("mov rdx, rsi");                                        // move the C class-name length into new_by_name's string ABI
+    emitter.instruction("call __rt_new_by_name");                               // allocate the named AOT class object, or return null on miss
+    emitter.instruction("test rax, rax");                                       // did the runtime class-name lookup allocate an object?
+    emitter.instruction("jz __elephc_eval_value_new_object_null_x86");          // box PHP null when no runtime class matched the eval name
+    emitter.instruction("mov rdi, rax");                                        // move the allocated object pointer into the Mixed payload
+    emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
+    emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the allocated object for Rust
+    emitter.instruction("jmp __elephc_eval_value_new_object_done_x86");         // skip the null boxing path after successful allocation
+    emitter.label("__elephc_eval_value_new_object_null_x86");
+    emitter.instruction("mov eax, 8");                                          // runtime tag 8 = null
+    emitter.instruction("xor edi, edi");                                        // null has no low payload word
+    emitter.instruction("xor esi, esi");                                        // null has no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box null for unknown eval class names
+    emitter.label("__elephc_eval_value_new_object_done_x86");
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed object or null Mixed cell to Rust
 
     label_c_global(emitter, "__elephc_eval_value_array_new");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
