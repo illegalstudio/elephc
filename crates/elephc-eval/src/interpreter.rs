@@ -601,6 +601,7 @@ const EVAL_JSON_BIGINT_AS_STRING: i64 = 2;
 const EVAL_JSON_FORCE_OBJECT: i64 = 16;
 const EVAL_JSON_NUMERIC_CHECK: i64 = 32;
 const EVAL_JSON_UNESCAPED_SLASHES: i64 = 64;
+const EVAL_JSON_PRETTY_PRINT: i64 = 128;
 const EVAL_JSON_PRESERVE_ZERO_FRACTION: i64 = 1024;
 
 unsafe extern "C" {
@@ -13172,6 +13173,7 @@ fn eval_json_encode_result(
         | EVAL_JSON_HEX_QUOT
         | EVAL_JSON_UNESCAPED_SLASHES
         | EVAL_JSON_FORCE_OBJECT
+        | EVAL_JSON_PRETTY_PRINT
         | EVAL_JSON_PRESERVE_ZERO_FRACTION;
     let supported_flags = supported_flags | EVAL_JSON_NUMERIC_CHECK;
     if flags & !supported_flags != 0 {
@@ -13572,11 +13574,21 @@ fn eval_json_encode_append_indexed_array(
 ) -> Result<(), EvalStatus> {
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
     let force_object = flags & EVAL_JSON_FORCE_OBJECT != 0;
+    let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
     output.push(if force_object { b'{' } else { b'[' });
     let len = values.array_len(value)?;
+    if pretty && len > 0 {
+        output.push(b'\n');
+    }
     for position in 0..len {
         if position > 0 {
             output.push(b',');
+            if pretty {
+                output.push(b'\n');
+            }
+        }
+        if pretty {
+            eval_json_encode_pretty_indent(output, depth + 1);
         }
         let key = values.array_iter_key(value, position)?;
         if force_object {
@@ -13585,7 +13597,7 @@ fn eval_json_encode_append_indexed_array(
                 flags & !EVAL_JSON_NUMERIC_CHECK,
                 output,
             );
-            output.push(b':');
+            eval_json_encode_append_colon(flags, output);
         }
         let element = values.array_get(value, key)?;
         eval_json_encode_append(
@@ -13597,6 +13609,10 @@ fn eval_json_encode_append_indexed_array(
             arrays_seen,
             output,
         )?;
+    }
+    if pretty && len > 0 {
+        output.push(b'\n');
+        eval_json_encode_pretty_indent(output, depth);
     }
     output.push(if force_object { b'}' } else { b']' });
     arrays_seen.pop();
@@ -13614,11 +13630,21 @@ fn eval_json_encode_append_assoc(
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
     eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
+    let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
     output.push(b'{');
     let len = values.array_len(value)?;
+    if pretty && len > 0 {
+        output.push(b'\n');
+    }
     for position in 0..len {
         if position > 0 {
             output.push(b',');
+            if pretty {
+                output.push(b'\n');
+            }
+        }
+        if pretty {
+            eval_json_encode_pretty_indent(output, depth + 1);
         }
         let key = values.array_iter_key(value, position)?;
         eval_json_encode_append_string(
@@ -13626,7 +13652,7 @@ fn eval_json_encode_append_assoc(
             flags & !EVAL_JSON_NUMERIC_CHECK,
             output,
         );
-        output.push(b':');
+        eval_json_encode_append_colon(flags, output);
         let element = values.array_get(value, key)?;
         eval_json_encode_append(
             element,
@@ -13638,9 +13664,29 @@ fn eval_json_encode_append_assoc(
             output,
         )?;
     }
+    if pretty && len > 0 {
+        output.push(b'\n');
+        eval_json_encode_pretty_indent(output, depth);
+    }
     output.push(b'}');
     arrays_seen.pop();
     Ok(())
+}
+
+/// Appends a JSON object colon, including pretty-print spacing when active.
+fn eval_json_encode_append_colon(flags: i64, output: &mut Vec<u8>) {
+    if flags & EVAL_JSON_PRETTY_PRINT != 0 {
+        output.extend_from_slice(b": ");
+    } else {
+        output.push(b':');
+    }
+}
+
+/// Appends PHP's four-space JSON pretty-print indentation for one nesting level.
+fn eval_json_encode_pretty_indent(output: &mut Vec<u8>, depth: usize) {
+    for _ in 0..depth {
+        output.extend_from_slice(b"    ");
+    }
 }
 
 /// Records entry into one JSON array/object, rejecting depth overrun and recursion.
@@ -14488,6 +14534,7 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "JSON_FORCE_OBJECT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_FORCE_OBJECT)),
         "JSON_NUMERIC_CHECK" => Some(EvalPredefinedConstant::Int(EVAL_JSON_NUMERIC_CHECK)),
         "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
+        "JSON_PRETTY_PRINT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_PRETTY_PRINT)),
         "JSON_PRESERVE_ZERO_FRACTION" => {
             Some(EvalPredefinedConstant::Int(
                 EVAL_JSON_PRESERVE_ZERO_FRACTION,
@@ -17524,7 +17571,8 @@ echo call_user_func_array("json_encode", ["value" => [1, 2], "flags" => JSON_FOR
 echo json_encode("<>&\"" . chr(39), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ":";
 echo json_encode(["01", "+12", "1e3", " 7", "7x"], JSON_NUMERIC_CHECK) . ":";
 echo json_encode([1.0, 2.5, -3.0], JSON_PRESERVE_ZERO_FRACTION) . ":";
-return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK") && defined("JSON_PRESERVE_ZERO_FRACTION");"#,
+echo str_replace("\n", "|", json_encode(["a" => [1, 2]], JSON_PRETTY_PRINT)) . ":";
+return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK") && defined("JSON_PRETTY_PRINT") && defined("JSON_PRESERVE_ZERO_FRACTION");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17534,7 +17582,7 @@ return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES") && de
 
         assert_eq!(
             values.output,
-            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:"#
+            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:{|    "a": [|        1,|        2|    ]|}:"#
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
