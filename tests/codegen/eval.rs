@@ -3989,6 +3989,35 @@ $box->run();
     assert_eq!(out, "50!");
 }
 
+/// Verifies eval callable arrays dispatch public AOT methods through all dynamic call surfaces.
+#[test]
+fn test_eval_fragment_callable_array_dispatches_this_public_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCallableArrayBox {
+    public int $x = 40;
+
+    public function label(int $amount, string $suffix): string {
+        return ($this->x + $amount) . $suffix;
+    }
+
+    public function run(): void {
+        echo eval('$cb = [$this, "label"];
+echo $cb(1, "a");
+echo ":";
+echo call_user_func($cb, 2, "b");
+echo ":";
+return call_user_func_array($cb, [3, "c"]);');
+    }
+}
+
+$box = new EvalCallableArrayBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "41a:42b:43c");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {

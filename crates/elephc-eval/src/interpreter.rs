@@ -51,6 +51,15 @@ struct EvaluatedCallArg {
     value: RuntimeCellHandle,
 }
 
+/// One already evaluated PHP callback supported by the eval dispatcher.
+enum EvaluatedCallable {
+    Named(String),
+    ObjectMethod {
+        object: RuntimeCellHandle,
+        method: String,
+    },
+}
+
 /// Parsed flags for one eval `sprintf()` conversion specifier.
 #[derive(Clone, Copy)]
 struct EvalSprintfSpec {
@@ -1505,9 +1514,9 @@ fn eval_dynamic_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_expr(callee, context, scope, values)?;
-    let callback = eval_callable_name(callback, values)?;
+    let callback = eval_callable(callback, values)?;
     let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    eval_callable_with_call_array_args(&callback, evaluated_args, context, values)
+    eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
 }
 
 /// Returns true for language constructs that need unevaluated argument expressions.
@@ -2513,12 +2522,12 @@ fn eval_call_user_func_array_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable_name(callback, values)?;
+    let callback = eval_callable(callback, values)?;
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
     let evaluated_args = eval_array_call_arg_values(arg_array, values)?;
-    eval_callable_with_call_array_args(&callback, evaluated_args, context, values)
+    eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
 }
 
 /// Dispatches `call_user_func` after its callback and arguments are already evaluated.
@@ -2530,8 +2539,39 @@ fn eval_call_user_func_with_values(
     let Some((callback, callback_args)) = evaluated_args.split_first() else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let callback = eval_callable_name(*callback, values)?;
-    eval_callable_with_values(&callback, callback_args.to_vec(), context, values)
+    let callback = eval_callable(*callback, values)?;
+    eval_evaluated_callable_with_values(&callback, callback_args.to_vec(), context, values)
+}
+
+/// Normalizes one PHP callback value for eval dynamic callable dispatch.
+fn eval_callable(
+    callback: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedCallable, EvalStatus> {
+    if values.is_array_like(callback)? {
+        return eval_array_callable(callback, values);
+    }
+    eval_callable_name(callback, values).map(EvaluatedCallable::Named)
+}
+
+/// Normalizes one two-element object-method callable array.
+fn eval_array_callable(
+    callback: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedCallable, EvalStatus> {
+    if values.array_len(callback)? != 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let zero = values.int(0)?;
+    let one = values.int(1)?;
+    let object = values.array_get(callback, zero)?;
+    if values.type_tag(object)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    let method = values.array_get(callback, one)?;
+    let method = String::from_utf8(values.string_bytes(method)?)
+        .map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok(EvaluatedCallable::ObjectMethod { object, method })
 }
 
 /// Normalizes one string callback name for eval dynamic callable dispatch.
@@ -2546,6 +2586,44 @@ fn eval_callable_name(
         return Err(EvalStatus::UnsupportedConstruct);
     }
     Ok(callback)
+}
+
+/// Invokes an already normalized callback with source-order positional values.
+fn eval_evaluated_callable_with_values(
+    callback: &EvaluatedCallable,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match callback {
+        EvaluatedCallable::Named(name) => {
+            eval_callable_with_values(name, evaluated_args, context, values)
+        }
+        EvaluatedCallable::ObjectMethod { object, method } => {
+            values.method_call(*object, method, evaluated_args)
+        }
+    }
+}
+
+/// Invokes an already normalized callback with optional named-argument metadata.
+fn eval_evaluated_callable_with_call_array_args(
+    callback: &EvaluatedCallable,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match callback {
+        EvaluatedCallable::Named(name) => {
+            eval_callable_with_call_array_args(name, evaluated_args, context, values)
+        }
+        EvaluatedCallable::ObjectMethod { object, method } => {
+            if evaluated_args.iter().any(|arg| arg.name.is_some()) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let evaluated_args = evaluated_args.into_iter().map(|arg| arg.value).collect();
+            values.method_call(*object, method, evaluated_args)
+        }
+    }
 }
 
 /// Invokes a PHP-visible callable name with source-order positional values.
@@ -3424,11 +3502,11 @@ fn eval_builtin_with_values(
         }
         "iterator_apply" => match evaluated_args {
             [iterator, callback] => {
-                let callback = eval_callable_name(*callback, values)?;
+                let callback = eval_callable(*callback, values)?;
                 eval_iterator_apply_result(*iterator, &callback, Vec::new(), context, values)?
             }
             [iterator, callback, args] => {
-                let callback = eval_callable_name(*callback, values)?;
+                let callback = eval_callable(*callback, values)?;
                 let callback_args = eval_iterator_apply_arg_values(*args, values)?;
                 eval_iterator_apply_result(*iterator, &callback, callback_args, context, values)?
             }
@@ -5646,13 +5724,13 @@ fn eval_builtin_iterator_apply(
         [iterator, callback] => {
             let iterator = eval_expr(iterator, context, scope, values)?;
             let callback = eval_expr(callback, context, scope, values)?;
-            let callback = eval_callable_name(callback, values)?;
+            let callback = eval_callable(callback, values)?;
             eval_iterator_apply_result(iterator, &callback, Vec::new(), context, values)
         }
         [iterator, callback, callback_args] => {
             let iterator = eval_expr(iterator, context, scope, values)?;
             let callback = eval_expr(callback, context, scope, values)?;
-            let callback = eval_callable_name(callback, values)?;
+            let callback = eval_callable(callback, values)?;
             let callback_args = eval_expr(callback_args, context, scope, values)?;
             let callback_args = eval_iterator_apply_arg_values(callback_args, values)?;
             eval_iterator_apply_result(iterator, &callback, callback_args, context, values)
@@ -5675,10 +5753,10 @@ fn eval_iterator_apply_arg_values(
     eval_array_call_arg_values(args, values)
 }
 
-/// Applies a string callback to each valid position of an eval-supported Traversable object.
+/// Applies a callback to each valid position of an eval-supported Traversable object.
 fn eval_iterator_apply_result(
     iterator: RuntimeCellHandle,
-    callback: &str,
+    callback: &EvaluatedCallable,
     callback_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -5706,7 +5784,7 @@ fn eval_iterator_apply_result(
 /// Drives one Iterator object through `rewind()`, `valid()`, callback, and `next()`.
 fn eval_iterator_apply_iterator_object(
     iterator: RuntimeCellHandle,
-    callback: &str,
+    callback: &EvaluatedCallable,
     callback_args: &[EvaluatedCallArg],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -5719,8 +5797,12 @@ fn eval_iterator_apply_iterator_object(
             return Ok(count);
         }
         count = count.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-        let result =
-            eval_callable_with_call_array_args(callback, callback_args.to_vec(), context, values)?;
+        let result = eval_evaluated_callable_with_call_array_args(
+            callback,
+            callback_args.to_vec(),
+            context,
+            values,
+        )?;
         if !values.truthy(result)? {
             return Ok(count);
         }
@@ -15905,6 +15987,56 @@ return $fn(right: 2, left: 1);"#,
         assert_eq!(result, expected);
     }
 
+    /// Verifies direct callable-array variable calls dispatch object methods.
+    #[test]
+    fn execute_program_callable_array_variable_dispatches_object_method() {
+        let program = parse_fragment(
+            br#"$box = new Box(41);
+$cb = [$box, "add_x"];
+return $cb(1);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(42));
+    }
+
+    /// Verifies `call_user_func` dispatches callable arrays with object receivers.
+    #[test]
+    fn execute_program_call_user_func_dispatches_object_method_array() {
+        let program = parse_fragment(
+            br#"$box = new Box(42);
+$cb = [$box, "read_x"];
+return call_user_func($cb);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(42));
+    }
+
+    /// Verifies `call_user_func_array` dispatches callable arrays with positional args.
+    #[test]
+    fn execute_program_call_user_func_array_dispatches_object_method_array() {
+        let program = parse_fragment(
+            br#"$box = new Box(39);
+return call_user_func_array([$box, "add2_x"], [1, 2]);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(42));
+    }
+
     /// Verifies `call_user_func_array` inside eval can dispatch an eval-declared function.
     #[test]
     fn execute_program_call_user_func_array_dispatches_declared_function() {
@@ -16633,6 +16765,29 @@ return function_exists("iterator_apply");"#,
 
         assert_eq!(values.output, "xxx3:yyy3:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `iterator_apply()` accepts object-method callable arrays.
+    #[test]
+    fn execute_program_iterator_apply_dispatches_object_method_array() {
+        let program = parse_fragment(
+            br#"$box = new Box(5);
+echo iterator_apply($it, [$box, "add_x"], [1]) . ":";
+return call_user_func("iterator_apply", $it, [$box, "add_x"], [1]);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let iterator = values.alloc(FakeValue::Iterator {
+            len: 3,
+            position: 0,
+        });
+        scope.set("it", iterator, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "3:");
+        assert_eq!(values.get(result), FakeValue::Int(3));
     }
 
     /// Verifies eval `iterator_apply()` counts the position where the callback stops.
