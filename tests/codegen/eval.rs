@@ -1249,6 +1249,27 @@ echo function_exists("realpath_cache_size");');
     assert_eq!(out, "0:0:0:0:11");
 }
 
+/// Verifies eval environment builtins read, write, unset, and dispatch as callables.
+#[test]
+fn test_eval_dispatches_environment_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('putenv("ELEPHC_EVAL_ENV_TEST=direct");
+echo getenv("ELEPHC_EVAL_ENV_TEST") . ":";
+putenv(assignment: "ELEPHC_EVAL_ENV_TEST=named");
+echo getenv(name: "ELEPHC_EVAL_ENV_TEST") . ":";
+echo call_user_func("getenv", "ELEPHC_EVAL_ENV_TEST") . ":";
+echo call_user_func_array("putenv", ["assignment" => "ELEPHC_EVAL_ENV_TEST=spread"]) ? "set" : "bad";
+echo ":" . getenv("ELEPHC_EVAL_ENV_TEST") . ":";
+putenv("ELEPHC_EVAL_ENV_TEST");
+echo getenv("ELEPHC_EVAL_ENV_TEST") === "" ? "empty" : "bad";
+echo ":"; echo function_exists("getenv");
+echo function_exists("putenv");');
+"#,
+    );
+    assert_eq!(out, "direct:named:named:set:spread:empty:11");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

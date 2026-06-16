@@ -1217,6 +1217,7 @@ fn eval_positional_expr_call(
             eval_builtin_function_probe(args, context, scope, values)
         }
         "getcwd" => eval_builtin_getcwd(args, values),
+        "getenv" => eval_builtin_getenv(args, context, scope, values),
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "hash_algos" => eval_builtin_hash_algos(args, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
@@ -1237,6 +1238,7 @@ fn eval_positional_expr_call(
         "pi" => eval_builtin_pi(args, values),
         "phpversion" => eval_builtin_phpversion(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
+        "putenv" => eval_builtin_putenv(args, context, scope, values),
         "rawurldecode" | "urldecode" => {
             eval_builtin_url_decode(name, args, context, scope, values)
         }
@@ -1554,6 +1556,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "fmod"
             | "function_exists"
             | "getcwd"
+            | "getenv"
             | "gettype"
             | "hash_algos"
             | "hash_equals"
@@ -1587,6 +1590,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "pi"
             | "pow"
             | "phpversion"
+            | "putenv"
             | "rawurldecode"
             | "rawurlencode"
             | "realpath_cache_get"
@@ -1728,6 +1732,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "function_exists" => Some(&["function"]),
         "getcwd" => Some(&[]),
+        "getenv" => Some(&["name"]),
         "hash_algos" => Some(&[]),
         "hash_equals" => Some(&["known_string", "user_string"]),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => Some(&["string"]),
@@ -1739,6 +1744,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "pi" => Some(&[]),
         "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
+        "putenv" => Some(&["assignment"]),
         "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
         "round" => Some(&["num", "precision"]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
@@ -2188,6 +2194,12 @@ fn eval_builtin_with_values(
             }
             eval_getcwd_result(values)?
         }
+        "getenv" => {
+            let [name] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_getenv_result(*name, values)?
+        }
         "gettype" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -2223,6 +2235,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_phpversion_result(values)?
+        }
+        "putenv" => {
+            let [assignment] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_putenv_result(*assignment, values)?
         }
         "realpath_cache_get" => {
             if !evaluated_args.is_empty() {
@@ -3768,6 +3786,64 @@ fn eval_builtin_getcwd(
 fn eval_getcwd_result(values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
     let cwd = std::env::current_dir().map_err(|_| EvalStatus::RuntimeFatal)?;
     values.string(cwd.to_string_lossy().as_ref())
+}
+
+/// Evaluates PHP `getenv($name)` over one eval expression.
+fn eval_builtin_getenv(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [name] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let name = eval_expr(name, context, scope, values)?;
+    eval_getenv_result(name, values)
+}
+
+/// Reads one environment variable and returns an empty string when it is unset.
+fn eval_getenv_result(
+    name: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let name = values.string_bytes(name)?;
+    let name = String::from_utf8_lossy(&name);
+    let value = std::env::var_os(name.as_ref())
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    values.string(&value)
+}
+
+/// Evaluates PHP `putenv($assignment)` over one eval expression.
+fn eval_builtin_putenv(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [assignment] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let assignment = eval_expr(assignment, context, scope, values)?;
+    eval_putenv_result(assignment, values)
+}
+
+/// Applies one `putenv()` assignment to the host environment.
+fn eval_putenv_result(
+    assignment: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let assignment = values.string_bytes(assignment)?;
+    if let Some(separator) = assignment.iter().position(|byte| *byte == b'=') {
+        let name = String::from_utf8_lossy(&assignment[..separator]);
+        let value = String::from_utf8_lossy(&assignment[separator + 1..]);
+        std::env::set_var(name.as_ref(), value.as_ref());
+    } else {
+        let name = String::from_utf8_lossy(&assignment);
+        std::env::remove_var(name.as_ref());
+    }
+    values.bool_value(true)
 }
 
 /// Evaluates PHP `sys_get_temp_dir()` with no arguments.
@@ -8004,6 +8080,32 @@ return function_exists("realpath_cache_size");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "0:0:0:0:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval environment builtins read, write, unset, and dispatch dynamically.
+    #[test]
+    fn execute_program_dispatches_environment_builtins() {
+        let program = parse_fragment(
+            br#"putenv("ELEPHC_EVAL_ENV_TEST=direct");
+echo getenv("ELEPHC_EVAL_ENV_TEST") . ":";
+putenv(assignment: "ELEPHC_EVAL_ENV_TEST=named");
+echo getenv(name: "ELEPHC_EVAL_ENV_TEST") . ":";
+echo call_user_func("getenv", "ELEPHC_EVAL_ENV_TEST") . ":";
+echo call_user_func_array("putenv", ["assignment" => "ELEPHC_EVAL_ENV_TEST=spread"]) ? "set" : "bad";
+echo ":" . getenv("ELEPHC_EVAL_ENV_TEST") . ":";
+putenv("ELEPHC_EVAL_ENV_TEST");
+echo getenv("ELEPHC_EVAL_ENV_TEST") === "" ? "empty" : "bad";
+echo ":"; echo function_exists("getenv");
+return function_exists("putenv");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "direct:named:named:set:spread:empty:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
