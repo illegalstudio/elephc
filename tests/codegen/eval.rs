@@ -1205,6 +1205,38 @@ echo function_exists("hash_algos") ? "exists" : "missing";');
     assert_eq!(out, "28:md2:sha256:crc:whirlpool:joaat:exists");
 }
 
+/// Verifies eval one-shot hash digest builtins use the crypto bridge.
+#[test]
+fn test_eval_dispatches_hash_digest_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo md5("abc"); echo ":";
+echo sha1(string: "abc"); echo ":";
+echo hash("sha256", "abc"); echo ":";
+echo hash_hmac(algo: "sha256", data: "data", key: "key"); echo ":";
+echo bin2hex(md5("abc", true)); echo ":";
+echo bin2hex(call_user_func("sha1", "abc", true)); echo ":";
+echo call_user_func_array("hash", ["algo" => "md5", "data" => "abc"]); echo ":";
+echo call_user_func_array("hash_hmac", ["algo" => "sha256", "data" => "data", "key" => "key"]); echo ":";
+echo function_exists("md5"); echo function_exists("sha1"); echo function_exists("hash"); echo function_exists("hash_hmac");');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "900150983cd24fb0d6963f7d28e17f72:",
+            "a9993e364706816aba3e25717850c26c9cd0d89d:",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad:",
+            "5031fe3d989c6d1537a013fa6e739da23463fdaec3b70137d828e36ace221bd0:",
+            "900150983cd24fb0d6963f7d28e17f72:",
+            "a9993e364706816aba3e25717850c26c9cd0d89d:",
+            "900150983cd24fb0d6963f7d28e17f72:",
+            "5031fe3d989c6d1537a013fa6e739da23463fdaec3b70137d828e36ace221bd0:",
+            "1111"
+        )
+    );
+}
+
 /// Verifies eval zero-argument system builtins match native runtime conventions.
 #[test]
 fn test_eval_dispatches_zero_arg_system_builtin_calls() {

@@ -545,6 +545,9 @@ dependencies = [
 [[package]]
 name = "elephc-eval"
 version = "0.1.0"
+dependencies = [
+ "elephc-crypto",
+]
 
 [[package]]
 name = "elephc-pdo"

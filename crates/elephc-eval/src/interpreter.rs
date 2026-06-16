@@ -1257,6 +1257,9 @@ fn eval_positional_expr_call(
         "getenv" => eval_builtin_getenv(args, context, scope, values),
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "glob" => eval_builtin_glob(args, context, scope, values),
+        "hash" | "hash_hmac" | "md5" | "sha1" => {
+            eval_builtin_hash_one_shot(name, args, context, scope, values)
+        }
         "hash_algos" => eval_builtin_hash_algos(args, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
         "hex2bin" => eval_builtin_hex2bin(args, context, scope, values),
@@ -1637,8 +1640,10 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "getenv"
             | "gettype"
             | "glob"
+            | "hash"
             | "hash_algos"
             | "hash_equals"
+            | "hash_hmac"
             | "hex2bin"
             | "html_entity_decode"
             | "htmlentities"
@@ -1675,6 +1680,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "lcfirst"
             | "long2ip"
             | "max"
+            | "md5"
             | "microtime"
             | "min"
             | "mkdir"
@@ -1699,6 +1705,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "rmdir"
             | "scandir"
             | "sleep"
+            | "sha1"
             | "sqrt"
             | "strcasecmp"
             | "str_contains"
@@ -1857,8 +1864,10 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "getcwd" => Some(&[]),
         "getenv" => Some(&["name"]),
         "glob" => Some(&["pattern"]),
+        "hash" => Some(&["algo", "data", "binary"]),
         "hash_algos" => Some(&[]),
         "hash_equals" => Some(&["known_string", "user_string"]),
+        "hash_hmac" => Some(&["algo", "data", "key", "binary"]),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => Some(&["string"]),
         "implode" => Some(&["separator", "array"]),
         "inet_ntop" => Some(&["ip"]),
@@ -1867,6 +1876,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "link" | "symlink" => Some(&["target", "link"]),
         "linkinfo" | "readlink" => Some(&["path"]),
         "max" | "min" => Some(&["value"]),
+        "md5" | "sha1" => Some(&["string", "binary"]),
         "microtime" => Some(&["as_float"]),
         "nl2br" => Some(&["string", "use_xhtml"]),
         "number_format" => Some(&["num", "decimals", "decimal_separator", "thousands_separator"]),
@@ -2468,6 +2478,9 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_glob_result(*pattern, values)?
+        }
+        "hash" | "hash_hmac" | "md5" | "sha1" => {
+            eval_hash_one_shot_result(name, evaluated_args, values)?
         }
         "hash_algos" => {
             if !evaluated_args.is_empty() {
@@ -4025,6 +4038,138 @@ fn eval_crc32_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(value)?;
     values.int(i64::from(eval_crc32_bytes(&bytes)))
+}
+
+/// Evaluates one-shot PHP hash digest builtins over eval expressions.
+fn eval_builtin_hash_one_shot(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut evaluated_args = Vec::with_capacity(args.len());
+    for arg in args {
+        evaluated_args.push(eval_expr(arg, context, scope, values)?);
+    }
+    eval_hash_one_shot_result(name, &evaluated_args, values)
+}
+
+/// Computes the result for one-shot PHP hash digest builtins from evaluated args.
+fn eval_hash_one_shot_result(
+    name: &str,
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match name {
+        "md5" | "sha1" => {
+            let (data, binary) = match evaluated_args {
+                [data] => (*data, false),
+                [data, binary] => (*data, values.truthy(*binary)?),
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            let data = values.string_bytes(data)?;
+            eval_hash_digest_result(name.as_bytes(), &data, binary, values)
+        }
+        "hash" => {
+            let (algo, data, binary) = match evaluated_args {
+                [algo, data] => (*algo, *data, false),
+                [algo, data, binary] => (*algo, *data, values.truthy(*binary)?),
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            let algo = values.string_bytes(algo)?;
+            let data = values.string_bytes(data)?;
+            eval_hash_digest_result(&algo, &data, binary, values)
+        }
+        "hash_hmac" => {
+            let (algo, data, key, binary) = match evaluated_args {
+                [algo, data, key] => (*algo, *data, *key, false),
+                [algo, data, key, binary] => (*algo, *data, *key, values.truthy(*binary)?),
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            let algo = values.string_bytes(algo)?;
+            let data = values.string_bytes(data)?;
+            let key = values.string_bytes(key)?;
+            eval_hash_hmac_result(&algo, &data, &key, binary, values)
+        }
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Computes a one-shot raw digest and formats it as PHP hex or raw bytes.
+fn eval_hash_digest_result(
+    algo: &[u8],
+    data: &[u8],
+    binary: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let raw = eval_crypto_hash(algo, data)?;
+    eval_format_digest_result(&raw, binary, values)
+}
+
+/// Computes a one-shot raw HMAC digest and formats it as PHP hex or raw bytes.
+fn eval_hash_hmac_result(
+    algo: &[u8],
+    data: &[u8],
+    key: &[u8],
+    binary: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let raw = eval_crypto_hmac(algo, data, key)?;
+    eval_format_digest_result(&raw, binary, values)
+}
+
+/// Calls the elephc-crypto one-shot hash ABI and returns the raw digest bytes.
+fn eval_crypto_hash(algo: &[u8], data: &[u8]) -> Result<Vec<u8>, EvalStatus> {
+    let mut output = [0_u8; 64];
+    let len = unsafe {
+        elephc_crypto::elephc_crypto_hash(
+            algo.as_ptr(),
+            algo.len(),
+            data.as_ptr(),
+            data.len(),
+            output.as_mut_ptr(),
+        )
+    };
+    eval_crypto_digest_bytes(len, &output)
+}
+
+/// Calls the elephc-crypto one-shot HMAC ABI and returns the raw digest bytes.
+fn eval_crypto_hmac(algo: &[u8], data: &[u8], key: &[u8]) -> Result<Vec<u8>, EvalStatus> {
+    let mut output = [0_u8; 64];
+    let len = unsafe {
+        elephc_crypto::elephc_crypto_hmac(
+            algo.as_ptr(),
+            algo.len(),
+            key.as_ptr(),
+            key.len(),
+            data.as_ptr(),
+            data.len(),
+            output.as_mut_ptr(),
+        )
+    };
+    eval_crypto_digest_bytes(len, &output)
+}
+
+/// Converts a crypto ABI digest length into an owned digest byte vector.
+fn eval_crypto_digest_bytes(len: isize, output: &[u8; 64]) -> Result<Vec<u8>, EvalStatus> {
+    let len = usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
+    if len > output.len() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(output[..len].to_vec())
+}
+
+/// Formats a raw digest using PHP's `$binary` flag convention.
+fn eval_format_digest_result(
+    raw: &[u8],
+    binary: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if binary {
+        return values.string_bytes_value(raw);
+    }
+    values.string(&eval_lower_hex_bytes(raw))
 }
 
 /// Evaluates PHP `hash_algos()` with no arguments.
@@ -6083,13 +6228,18 @@ fn eval_bin2hex_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(value)?;
+    values.string(&eval_lower_hex_bytes(&bytes))
+}
+
+/// Converts bytes to lowercase hexadecimal text.
+fn eval_lower_hex_bytes(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
     const HEX: &[u8; 16] = b"0123456789abcdef";
     for byte in bytes {
         output.push(HEX[(byte >> 4) as usize] as char);
         output.push(HEX[(byte & 0x0f) as usize] as char);
     }
-    values.string(&output)
+    output
 }
 
 /// Evaluates PHP's `hex2bin(...)` over one eval expression.
@@ -7643,6 +7793,7 @@ mod tests {
         Int(i64),
         Float(f64),
         String(String),
+        Bytes(Vec<u8>),
         Array(Vec<RuntimeCellHandle>),
         Assoc(Vec<(FakeKey, RuntimeCellHandle)>),
         Object(HashMap<String, RuntimeCellHandle>),
@@ -7682,6 +7833,12 @@ mod tests {
                 FakeValue::String(value) => eval_numeric_string_array_key(value.as_bytes())
                     .map(FakeKey::Int)
                     .map_or_else(|| Ok(FakeKey::String(value)), Ok),
+                FakeValue::Bytes(value) => eval_numeric_string_array_key(&value)
+                    .map(FakeKey::Int)
+                    .map_or_else(
+                        || Ok(FakeKey::String(String::from_utf8_lossy(&value).into_owned())),
+                        Ok,
+                    ),
                 FakeValue::Null => Ok(FakeKey::String(String::new())),
                 value => Ok(FakeKey::Int(self.fake_int(&value))),
             }
@@ -7946,7 +8103,7 @@ mod tests {
         fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
             Ok(match self.get(value) {
                 FakeValue::Int(_) => EVAL_TAG_INT,
-                FakeValue::String(_) => EVAL_TAG_STRING,
+                FakeValue::String(_) | FakeValue::Bytes(_) => EVAL_TAG_STRING,
                 FakeValue::Float(_) => EVAL_TAG_FLOAT,
                 FakeValue::Bool(_) => EVAL_TAG_BOOL,
                 FakeValue::Array(_) => EVAL_TAG_ARRAY,
@@ -7999,10 +8156,12 @@ mod tests {
             Ok(self.alloc(FakeValue::String(value.to_string())))
         }
 
-        /// Creates a fake string cell from UTF-8 bytes.
+        /// Creates a fake string cell from raw PHP bytes.
         fn string_bytes_value(&mut self, value: &[u8]) -> Result<RuntimeCellHandle, EvalStatus> {
-            let value = std::str::from_utf8(value).map_err(|_| EvalStatus::RuntimeFatal)?;
-            self.string(value)
+            match std::str::from_utf8(value) {
+                Ok(value) => self.string(value),
+                Err(_) => Ok(self.alloc(FakeValue::Bytes(value.to_vec()))),
+            }
         }
 
         /// Casts a fake runtime cell to a fake integer cell.
@@ -8219,15 +8378,16 @@ mod tests {
             self.int(!value)
         }
 
-        /// Concatenates fake cells with simple string conversion for interpreter tests.
+        /// Concatenates fake cells with byte-preserving string conversion for interpreter tests.
         fn concat(
             &mut self,
             left: RuntimeCellHandle,
             right: RuntimeCellHandle,
         ) -> Result<RuntimeCellHandle, EvalStatus> {
-            let left = self.stringify(left);
-            let right = self.stringify(right);
-            self.string(&(left + &right))
+            let mut left = self.string_bytes_for_value(&self.get(left));
+            let right = self.string_bytes_for_value(&self.get(right));
+            left.extend_from_slice(&right);
+            self.string_bytes_value(&left)
         }
 
         /// Compares fake scalar cells and returns a fake PHP boolean.
@@ -8295,7 +8455,7 @@ mod tests {
 
         /// Casts one fake runtime cell to bytes for nested eval parsing.
         fn string_bytes(&mut self, value: RuntimeCellHandle) -> Result<Vec<u8>, EvalStatus> {
-            Ok(self.stringify(value).into_bytes())
+            Ok(self.string_bytes_for_value(&self.get(value)))
         }
 
         /// Returns PHP-like truthiness for fake runtime cells.
@@ -8306,6 +8466,7 @@ mod tests {
                 FakeValue::Int(value) => value != 0,
                 FakeValue::Float(value) => value != 0.0,
                 FakeValue::String(value) => !value.is_empty() && value != "0",
+                FakeValue::Bytes(value) => !value.is_empty() && value.as_slice() != b"0",
                 FakeValue::Array(value) => !value.is_empty(),
                 FakeValue::Assoc(value) => !value.is_empty(),
                 FakeValue::Object(_) => true,
@@ -8323,18 +8484,31 @@ mod tests {
                 (FakeValue::Null, FakeValue::Null) => true,
                 (FakeValue::Null, FakeValue::String(value))
                 | (FakeValue::String(value), FakeValue::Null) => value.is_empty(),
+                (FakeValue::Null, FakeValue::Bytes(value))
+                | (FakeValue::Bytes(value), FakeValue::Null) => value.is_empty(),
                 (FakeValue::String(left), FakeValue::String(right)) => {
                     match (left.parse::<f64>(), right.parse::<f64>()) {
                         (Ok(left), Ok(right)) => left == right,
                         _ => left == right,
                     }
                 }
+                (FakeValue::Bytes(left), FakeValue::Bytes(right)) => left == right,
+                (FakeValue::String(left), FakeValue::Bytes(right))
+                | (FakeValue::Bytes(right), FakeValue::String(left)) => left.as_bytes() == right,
                 (FakeValue::String(left), right) => left
                     .parse::<f64>()
                     .is_ok_and(|left| left == self.fake_numeric(&right)),
+                (FakeValue::Bytes(left), right) => std::str::from_utf8(&left)
+                    .ok()
+                    .and_then(|left| left.parse::<f64>().ok())
+                    .is_some_and(|left| left == self.fake_numeric(&right)),
                 (left, FakeValue::String(right)) => right
                     .parse::<f64>()
                     .is_ok_and(|right| self.fake_numeric(&left) == right),
+                (left, FakeValue::Bytes(right)) => std::str::from_utf8(&right)
+                    .ok()
+                    .and_then(|right| right.parse::<f64>().ok())
+                    .is_some_and(|right| self.fake_numeric(&left) == right),
                 (left, right) => self.fake_numeric(&left) == self.fake_numeric(&right),
             }
         }
@@ -8347,6 +8521,9 @@ mod tests {
                 (FakeValue::Int(left), FakeValue::Int(right)) => left == right,
                 (FakeValue::Float(left), FakeValue::Float(right)) => left == right,
                 (FakeValue::String(left), FakeValue::String(right)) => left == right,
+                (FakeValue::Bytes(left), FakeValue::Bytes(right)) => left == right,
+                (FakeValue::String(left), FakeValue::Bytes(right))
+                | (FakeValue::Bytes(right), FakeValue::String(left)) => left.as_bytes() == right,
                 (FakeValue::Resource(left), FakeValue::Resource(right)) => left == right,
                 _ => false,
             }
@@ -8366,6 +8543,10 @@ mod tests {
                 FakeValue::Int(value) => *value as f64,
                 FakeValue::Float(value) => *value,
                 FakeValue::String(value) => value.parse::<f64>().unwrap_or(0.0),
+                FakeValue::Bytes(value) => std::str::from_utf8(value)
+                    .ok()
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .unwrap_or(0.0),
                 FakeValue::Array(value) => value.len() as f64,
                 FakeValue::Assoc(value) => value.len() as f64,
                 FakeValue::Object(_) => 1.0,
@@ -8386,6 +8567,7 @@ mod tests {
                 FakeValue::Int(value) => *value != 0,
                 FakeValue::Float(value) => *value != 0.0,
                 FakeValue::String(value) => !value.is_empty() && value != "0",
+                FakeValue::Bytes(value) => !value.is_empty() && value.as_slice() != b"0",
                 FakeValue::Array(value) => !value.is_empty(),
                 FakeValue::Assoc(value) => !value.is_empty(),
                 FakeValue::Object(_) => true,
@@ -8402,8 +8584,34 @@ mod tests {
                 FakeValue::Int(value) => value.to_string(),
                 FakeValue::Float(value) => value.to_string(),
                 FakeValue::String(value) => value,
+                FakeValue::Bytes(value) => String::from_utf8_lossy(&value).into_owned(),
                 FakeValue::Array(_) => "Array".to_string(),
                 FakeValue::Assoc(_) => "Array".to_string(),
+                FakeValue::Object(_) => "Object".to_string(),
+                FakeValue::Resource(value) => format!("Resource id #{}", value + 1),
+            }
+        }
+
+        /// Converts a fake PHP value to string bytes while preserving binary strings.
+        fn string_bytes_for_value(&self, value: &FakeValue) -> Vec<u8> {
+            match value {
+                FakeValue::String(value) => value.as_bytes().to_vec(),
+                FakeValue::Bytes(value) => value.clone(),
+                value => self.stringify_value(value).into_bytes(),
+            }
+        }
+
+        /// Converts one loaded fake PHP value to display text for byte coercions.
+        fn stringify_value(&self, value: &FakeValue) -> String {
+            match value {
+                FakeValue::Null => String::new(),
+                FakeValue::Bool(false) => String::new(),
+                FakeValue::Bool(true) => "1".to_string(),
+                FakeValue::Int(value) => value.to_string(),
+                FakeValue::Float(value) => value.to_string(),
+                FakeValue::String(value) => value.clone(),
+                FakeValue::Bytes(value) => String::from_utf8_lossy(value).into_owned(),
+                FakeValue::Array(_) | FakeValue::Assoc(_) => "Array".to_string(),
                 FakeValue::Object(_) => "Object".to_string(),
                 FakeValue::Resource(value) => format!("Resource id #{}", value + 1),
             }
@@ -10183,6 +10391,44 @@ return count($algos);"#,
             "28:md2:sha256:crc:whirlpool:joaat:exists"
         );
         assert_eq!(values.get(result), FakeValue::Int(28));
+    }
+
+    /// Verifies eval one-shot hash digest builtins use the crypto bridge and dispatch dynamically.
+    #[test]
+    fn execute_program_dispatches_hash_digest_builtins() {
+        let program = parse_fragment(
+            br#"echo md5("abc"); echo ":";
+echo sha1(string: "abc"); echo ":";
+echo hash("sha256", "abc"); echo ":";
+echo hash_hmac(algo: "sha256", data: "data", key: "key"); echo ":";
+echo bin2hex(md5("abc", true)); echo ":";
+echo bin2hex(call_user_func("sha1", "abc", true)); echo ":";
+echo call_user_func_array("hash", ["algo" => "md5", "data" => "abc"]); echo ":";
+echo call_user_func_array("hash_hmac", ["algo" => "sha256", "data" => "data", "key" => "key"]); echo ":";
+echo function_exists("md5"); echo function_exists("sha1"); echo function_exists("hash");
+return function_exists("hash_hmac");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            concat!(
+                "900150983cd24fb0d6963f7d28e17f72:",
+                "a9993e364706816aba3e25717850c26c9cd0d89d:",
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad:",
+                "5031fe3d989c6d1537a013fa6e739da23463fdaec3b70137d828e36ace221bd0:",
+                "900150983cd24fb0d6963f7d28e17f72:",
+                "a9993e364706816aba3e25717850c26c9cd0d89d:",
+                "900150983cd24fb0d6963f7d28e17f72:",
+                "5031fe3d989c6d1537a013fa6e739da23463fdaec3b70137d828e36ace221bd0:",
+                "111"
+            )
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
     /// Verifies eval zero-argument system builtins return native-compatible values.
