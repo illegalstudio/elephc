@@ -1470,6 +1470,9 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 Ok(EvalExpr::Print(Box::new(expr)))
             }
+            TokenKind::Ident(name) if is_unsupported_expression_keyword(name) => {
+                Err(EvalParseError::UnsupportedConstruct)
+            }
             TokenKind::Ident(name) if matches!(self.peek(), TokenKind::LParen) => {
                 self.parse_call_expr(name.clone())
             }
@@ -1713,6 +1716,7 @@ fn is_unsupported_statement_keyword(name: &str) -> bool {
         "require_once",
         "include",
         "include_once",
+        "new",
         "throw",
         "trait",
         "try",
@@ -1720,6 +1724,13 @@ fn is_unsupported_statement_keyword(name: &str) -> bool {
     ]
     .iter()
     .any(|keyword| ident_eq(name, keyword))
+}
+
+/// Returns true for PHP expression forms that the eval subset intentionally does not parse yet.
+fn is_unsupported_expression_keyword(name: &str) -> bool {
+    ["clone", "match", "new", "yield"]
+        .iter()
+        .any(|keyword| ident_eq(name, keyword))
 }
 
 #[cfg(test)]
@@ -2910,6 +2921,15 @@ mod tests {
     fn parse_fragment_rejects_class_as_unsupported_construct() {
         assert_eq!(
             parse_fragment(b"class DynEvalUnsupported {}"),
+            Err(EvalParseError::UnsupportedConstruct)
+        );
+    }
+
+    /// Verifies unsupported dynamic object construction reports the unsupported construct status.
+    #[test]
+    fn parse_fragment_rejects_new_as_unsupported_construct() {
+        assert_eq!(
+            parse_fragment(b"return new DynEvalUnsupported();"),
             Err(EvalParseError::UnsupportedConstruct)
         );
     }
