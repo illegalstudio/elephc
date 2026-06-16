@@ -807,10 +807,24 @@ $call = call_user_func("array_filter", [0, 4]);
 echo count($call) . ":" . $call[1] . ":";
 $spread = call_user_func_array("array_filter", ["array" => [0, 5], "callback" => null]);
 echo count($spread) . ":" . $spread[1] . ":";
+function eval_keep_even($value) { return $value % 2 == 0; }
+$evens = array_filter([1, 2, 3, 4], "eval_keep_even");
+echo count($evens) . ":" . $evens[1] . ":" . $evens[3] . ":";
+function eval_keep_key($key) { return $key === "b"; }
+$keyed = array_filter(["a" => 10, "b" => 20], "eval_keep_key", ARRAY_FILTER_USE_KEY);
+echo count($keyed) . ":" . $keyed["b"] . ":";
+function eval_keep_both($value, $key) { return $key === "c" || $value === 1; }
+$both = array_filter(["a" => 1, "b" => 2, "c" => 3], "eval_keep_both", ARRAY_FILTER_USE_BOTH);
+echo count($both) . ":" . $both["a"] . ":" . $both["c"] . ":";
+$ints = array_filter([1, "x", 2], "is_int");
+echo count($ints) . ":" . $ints[0] . ":" . $ints[2] . ":";
 echo function_exists("array_filter");');
 "#,
     );
-    assert_eq!(out, "3:1:2:ok:drop:2:1:3:1:4:1:5:1");
+    assert_eq!(
+        out,
+        "3:1:2:ok:drop:2:1:3:1:4:1:5:2:2:4:1:20:2:1:3:2:1:2:1"
+    );
 }
 
 /// Verifies eval `array_combine()` supports PHP key conversions and callable dispatch.

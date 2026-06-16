@@ -543,6 +543,9 @@ const EVAL_FNM_NOESCAPE: i64 = 1;
 const EVAL_FNM_PATHNAME: i64 = 2;
 const EVAL_FNM_PERIOD: i64 = 4;
 const EVAL_FNM_CASEFOLD: i64 = 16;
+const EVAL_ARRAY_FILTER_USE_VALUE: i64 = 0;
+const EVAL_ARRAY_FILTER_USE_BOTH: i64 = 1;
+const EVAL_ARRAY_FILTER_USE_KEY: i64 = 2;
 
 unsafe extern "C" {
     /// Sets the process file-creation mask and returns the previous mask.
@@ -2299,12 +2302,7 @@ fn eval_call_user_func_array_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = values.string_bytes(callback)?;
-    let callback = String::from_utf8(callback).map_err(|_| EvalStatus::RuntimeFatal)?;
-    let callback = callback.trim_start_matches('\\').to_ascii_lowercase();
-    if callback.contains("::") {
-        return Err(EvalStatus::UnsupportedConstruct);
-    }
+    let callback = eval_callable_name(callback, values)?;
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -2321,13 +2319,22 @@ fn eval_call_user_func_with_values(
     let Some((callback, callback_args)) = evaluated_args.split_first() else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let callback = values.string_bytes(*callback)?;
+    let callback = eval_callable_name(*callback, values)?;
+    eval_callable_with_values(&callback, callback_args.to_vec(), context, values)
+}
+
+/// Normalizes one string callback name for eval dynamic callable dispatch.
+fn eval_callable_name(
+    callback: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let callback = values.string_bytes(callback)?;
     let callback = String::from_utf8(callback).map_err(|_| EvalStatus::RuntimeFatal)?;
     let callback = callback.trim_start_matches('\\').to_ascii_lowercase();
     if callback.contains("::") {
         return Err(EvalStatus::UnsupportedConstruct);
     }
-    eval_callable_with_values(&callback, callback_args.to_vec(), context, values)
+    Ok(callback)
 }
 
 /// Invokes a PHP-visible callable name with source-order positional values.
@@ -2432,10 +2439,12 @@ fn eval_builtin_with_values(
             eval_array_fill_keys_result(*keys, *value, values)?
         }
         "array_filter" => match evaluated_args {
-            [array] => eval_array_filter_result(*array, None, None, values)?,
-            [array, callback] => eval_array_filter_result(*array, Some(*callback), None, values)?,
+            [array] => eval_array_filter_result(*array, None, None, context, values)?,
+            [array, callback] => {
+                eval_array_filter_result(*array, Some(*callback), None, context, values)?
+            }
             [array, callback, mode] => {
-                eval_array_filter_result(*array, Some(*callback), Some(*mode), values)?
+                eval_array_filter_result(*array, Some(*callback), Some(*mode), context, values)?
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
@@ -3453,7 +3462,7 @@ fn eval_array_fill_keys_result(
     Ok(result)
 }
 
-/// Evaluates PHP `array_filter()` for the default null-callback filtering mode.
+/// Evaluates PHP `array_filter()` for null and string-callback filtering modes.
 fn eval_builtin_array_filter(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -3463,49 +3472,85 @@ fn eval_builtin_array_filter(
     match args {
         [array] => {
             let array = eval_expr(array, context, scope, values)?;
-            eval_array_filter_result(array, None, None, values)
+            eval_array_filter_result(array, None, None, context, values)
         }
         [array, callback] => {
             let array = eval_expr(array, context, scope, values)?;
             let callback = eval_expr(callback, context, scope, values)?;
-            eval_array_filter_result(array, Some(callback), None, values)
+            eval_array_filter_result(array, Some(callback), None, context, values)
         }
         [array, callback, mode] => {
             let array = eval_expr(array, context, scope, values)?;
             let callback = eval_expr(callback, context, scope, values)?;
             let mode = eval_expr(mode, context, scope, values)?;
-            eval_array_filter_result(array, Some(callback), Some(mode), values)
+            eval_array_filter_result(array, Some(callback), Some(mode), context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 
-/// Filters falsey values from an eval array while preserving original keys.
+/// Filters eval array entries through PHP truthiness or a string callback.
 fn eval_array_filter_result(
     array: RuntimeCellHandle,
     callback: Option<RuntimeCellHandle>,
     mode: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some(callback) = callback {
-        if !values.is_null(callback)? {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-    }
-    if let Some(mode) = mode {
-        let _ = eval_int_value(mode, values)?;
-    }
+    let callback = match callback {
+        Some(callback) if !values.is_null(callback)? => Some(eval_callable_name(callback, values)?),
+        _ => None,
+    };
+    let mode = match mode {
+        Some(mode) => eval_array_filter_mode_value(mode, values)?,
+        None => EVAL_ARRAY_FILTER_USE_VALUE,
+    };
 
     let len = values.array_len(array)?;
     let mut result = values.assoc_new(len)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
-        if values.truthy(value)? {
+        let keep = if let Some(callback) = callback.as_deref() {
+            let args = eval_array_filter_callback_args(mode, key, value)?;
+            let result = eval_callable_with_values(callback, args, context, values)?;
+            values.truthy(result)?
+        } else {
+            values.truthy(value)?
+        };
+        if keep {
             result = values.array_set(result, key, value)?;
         }
     }
     Ok(result)
+}
+
+/// Reads and validates the optional `array_filter()` callback mode.
+fn eval_array_filter_mode_value(
+    mode: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let mode = eval_int_value(mode, values)?;
+    match mode {
+        EVAL_ARRAY_FILTER_USE_VALUE | EVAL_ARRAY_FILTER_USE_BOTH | EVAL_ARRAY_FILTER_USE_KEY => {
+            Ok(mode)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Builds the callback argument list for one `array_filter()` entry.
+fn eval_array_filter_callback_args(
+    mode: i64,
+    key: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    match mode {
+        EVAL_ARRAY_FILTER_USE_VALUE => Ok(vec![value]),
+        EVAL_ARRAY_FILTER_USE_BOTH => Ok(vec![value, key]),
+        EVAL_ARRAY_FILTER_USE_KEY => Ok(vec![key]),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Evaluates PHP `array_chunk()` over one array and chunk-size expression.
@@ -10599,6 +10644,9 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "FNM_PATHNAME" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME)),
         "FNM_PERIOD" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PERIOD)),
         "FNM_CASEFOLD" => Some(EvalPredefinedConstant::Int(EVAL_FNM_CASEFOLD)),
+        "ARRAY_FILTER_USE_VALUE" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_VALUE)),
+        "ARRAY_FILTER_USE_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_BOTH)),
+        "ARRAY_FILTER_USE_KEY" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_KEY)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
         "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
@@ -12945,6 +12993,17 @@ $call = call_user_func("array_filter", [0, 4]);
 echo count($call) . ":" . $call[1] . ":";
 $spread = call_user_func_array("array_filter", ["array" => [0, 5], "callback" => null]);
 echo count($spread) . ":" . $spread[1] . ":";
+function eval_keep_even($value) { return $value % 2 == 0; }
+$evens = array_filter([1, 2, 3, 4], "eval_keep_even");
+echo count($evens) . ":" . $evens[1] . ":" . $evens[3] . ":";
+function eval_keep_key($key) { return $key === "b"; }
+$keyed = array_filter(["a" => 10, "b" => 20], "eval_keep_key", ARRAY_FILTER_USE_KEY);
+echo count($keyed) . ":" . $keyed["b"] . ":";
+function eval_keep_both($value, $key) { return $key === "c" || $value === 1; }
+$both = array_filter(["a" => 1, "b" => 2, "c" => 3], "eval_keep_both", ARRAY_FILTER_USE_BOTH);
+echo count($both) . ":" . $both["a"] . ":" . $both["c"] . ":";
+$ints = array_filter([1, "x", 2], "is_int");
+echo count($ints) . ":" . $ints[0] . ":" . $ints[2] . ":";
 return function_exists("array_filter");"#,
         )
         .expect("parse eval fragment");
@@ -12953,7 +13012,10 @@ return function_exists("array_filter");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "3:1:2:ok:drop:2:1:3:1:4:1:5:");
+        assert_eq!(
+            values.output,
+            "3:1:2:ok:drop:2:1:3:1:4:1:5:2:2:4:1:20:2:1:3:2:1:2:"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

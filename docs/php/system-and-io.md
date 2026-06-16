@@ -55,7 +55,7 @@ Eval `number_format()` supports decimal counts plus custom decimal and thousands
 
 Eval printf-family formatting supports `sprintf()`, `printf()`, `vsprintf()`, and `vprintf()` with direct calls, named arguments for declared parameters, callable dispatch, `function_exists()` probes, scalar coercions, `%%`, and the common `%s`, integer, float, width, precision, and sign/padding flags covered by the native runtime subset.
 
-Eval `array_filter()` supports the PHP default omitted/null callback form, filters falsey values, preserves source keys, and dispatches through direct, named-argument, `call_user_func()`, `call_user_func_array()`, and `function_exists()` paths. Non-null callbacks remain outside the eval subset.
+Eval `array_filter()` supports the PHP default omitted/null callback form, filters falsey values, preserves source keys, and dispatches through direct, named-argument, `call_user_func()`, `call_user_func_array()`, and `function_exists()` paths. String callbacks can target eval-declared functions, registered AOT callbacks, or supported builtins, and the `ARRAY_FILTER_USE_VALUE`, `ARRAY_FILTER_USE_BOTH`, and `ARRAY_FILTER_USE_KEY` modes select value-only, value-and-key, or key-only callback arguments.
 
 Eval `crc32()` computes the same non-negative CRC-32 integer as the static runtime helper. Eval one-shot digest calls `hash()`, `hash_file()`, `hash_hmac()`, `md5()`, and `sha1()` use the same supported algorithm table as elephc's crypto bridge, including raw `$binary` output. `hash_file()` reads local host files directly and returns `false` when the file cannot be read. Eval `hash_algos()` returns the same indexed supported-algorithm name list as the native runtime helper.
 
@@ -83,7 +83,7 @@ Eval IPv4 conversion calls include `long2ip()`, `ip2long()`, `inet_pton()`, and 
 
 Eval path component calls include `basename()`, `dirname()`, `pathinfo()`, and `fnmatch()` with suffix trimming, repeated parent traversal, `PATHINFO_*` / `FNM_*` constants, named arguments, callable dispatch, and `function_exists()` probes.
 
-Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`, `PHP_INT_MAX`, `PATHINFO_*`, and `FNM_*`. `defined()` sees these names, including an optional leading `\`, and `define()` cannot replace them.
+Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`, `PHP_INT_MAX`, `PATHINFO_*`, `FNM_*`, and `ARRAY_FILTER_USE_*`. `defined()` sees these names, including an optional leading `\`, and `define()` cannot replace them.
 
 Eval `realpath()` canonicalizes existing paths through the host filesystem and returns `false` when the path cannot be resolved.
 
