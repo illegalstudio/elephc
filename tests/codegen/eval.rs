@@ -2432,6 +2432,31 @@ echo eval('return function_exists("define") && function_exists("defined") ? "Y" 
     );
 }
 
+/// Verifies eval can read predefined runtime constants and protect them from redefinition.
+#[test]
+fn test_eval_reads_predefined_runtime_constants() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo eval('return (PHP_EOL === "\n" ? "eol" : "bad") . ":" .
+    ((PHP_OS === "Darwin" || PHP_OS === "Linux") ? "os" : "bad") . ":" .
+    DIRECTORY_SEPARATOR . ":" .
+    (PHP_INT_MAX > 9000000000000000000 ? "int" : "bad") . ":" .
+    (defined("PHP_OS") ? "defined" : "bad") . ":" .
+    (defined("\\\\PHP_OS") ? "root" : "bad") . ":" .
+    (defined("php_os") ? "bad" : "case") . ":" .
+    (define("PHP_OS", "x") ? "bad" : "locked");');
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "eol:os:/:int:defined:root:case:locked");
+    assert!(
+        out.stderr
+            .contains("Warning: define(): Constant already defined"),
+        "expected predefined eval define warning, got stderr={}",
+        out.stderr
+    );
+}
+
 /// Verifies `@eval(...)` suppresses duplicate eval `define()` warnings.
 #[test]
 fn test_error_control_suppresses_duplicate_eval_define_warning() {

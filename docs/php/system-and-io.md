@@ -78,6 +78,8 @@ Eval IPv4 conversion calls include `long2ip()`, `ip2long()`, `inet_pton()`, and 
 
 Eval path component calls include `basename()`, `dirname()`, `pathinfo()`, and `fnmatch()` with suffix trimming, repeated parent traversal, `PATHINFO_*` / `FNM_*` constants, named arguments, callable dispatch, and `function_exists()` probes.
 
+Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`, `PHP_INT_MAX`, `PATHINFO_*`, and `FNM_*`. `defined()` sees these names, including an optional leading `\`, and `define()` cannot replace them.
+
 Eval `realpath()` canonicalizes existing paths through the host filesystem and returns `false` when the path cannot be resolved.
 
 Eval realpath-cache calls match elephc's native no-cache convention: `realpath_cache_get()` returns an empty array and `realpath_cache_size()` returns `0`.
