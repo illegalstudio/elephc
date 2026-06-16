@@ -865,7 +865,7 @@ json_validate("\"a" . chr(10) . "b\"");
 echo json_last_error() . ":" . json_last_error_msg() . ":";
 json_decode("\"\\uD83D\"");
 echo json_last_error() . ":" . json_last_error_msg() . ":";
-json_decode("\"" . chr(128) . "\"");
+json_decode("\"a" . chr(128) . "b\"");
 echo json_last_error() . ":" . json_last_error_msg() . ":";
 json_validate("[0]");
 echo call_user_func("json_last_error") . ":" . call_user_func_array("json_last_error_msg", []) . ":";
@@ -874,7 +874,7 @@ echo function_exists("json_last_error") && function_exists("json_last_error_msg"
     );
     assert_eq!(
         out,
-        "0:No error:4:syntax:Syntax error:1:Maximum stack depth exceeded:0:No error:3:Control character error, possibly incorrectly encoded:10:Single unpaired UTF-16 surrogate in unicode escape:5:Malformed UTF-8 characters, possibly incorrectly encoded:0:No error:1"
+        "0:No error:4:syntax:Syntax error near location 1:1:1:Maximum stack depth exceeded near location 1:1:0:No error:3:Control character error, possibly incorrectly encoded near location 1:3:10:Single unpaired UTF-16 surrogate in unicode escape near location 1:8:5:Malformed UTF-8 characters, possibly incorrectly encoded near location 1:3:0:No error:1"
     );
 }
 
