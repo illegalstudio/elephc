@@ -1192,6 +1192,8 @@ fn eval_positional_expr_call(
             eval_builtin_slashes(name, args, context, scope, values)
         }
         "array_combine" => eval_builtin_array_combine(args, context, scope, values),
+        "array_fill" => eval_builtin_array_fill(args, context, scope, values),
+        "array_fill_keys" => eval_builtin_array_fill_keys(args, context, scope, values),
         "array_flip" => eval_builtin_array_flip(args, context, scope, values),
         "array_keys" | "array_values" => {
             eval_builtin_array_projection(name, args, context, scope, values)
@@ -1590,6 +1592,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             "abs"
             | "addslashes"
             | "array_combine"
+            | "array_fill"
+            | "array_fill_keys"
             | "array_flip"
             | "array_key_exists"
             | "array_keys"
@@ -1852,6 +1856,8 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "abs" | "ceil" | "floor" | "sqrt" => Some(&["num"]),
         "array_combine" => Some(&["keys", "values"]),
+        "array_fill" => Some(&["start_index", "count", "value"]),
+        "array_fill_keys" => Some(&["keys", "value"]),
         "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_unique"
         | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
@@ -2097,6 +2103,18 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_combine_result(*keys, *values_array, values)?
+        }
+        "array_fill" => {
+            let [start, count, value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_fill_result(*start, *count, *value, values)?
+        }
+        "array_fill_keys" => {
+            let [keys, value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_fill_keys_result(*keys, *value, values)?
         }
         "array_flip" => {
             let [array] = evaluated_args else {
@@ -2839,6 +2857,80 @@ fn eval_array_combine_result(
         let target_key = values.cast_string(target_key)?;
         let value_key = values.array_iter_key(values_array, position)?;
         let value = values.array_get(values_array, value_key)?;
+        result = values.array_set(result, target_key, value)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `array_fill()` over start, count, and value expressions.
+fn eval_builtin_array_fill(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [start, count, value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let start = eval_expr(start, context, scope, values)?;
+    let count = eval_expr(count, context, scope, values)?;
+    let value = eval_expr(value, context, scope, values)?;
+    eval_array_fill_result(start, count, value, values)
+}
+
+/// Builds an `array_fill()` result with PHP's explicit integer key range.
+fn eval_array_fill_result(
+    start: RuntimeCellHandle,
+    count: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let start = eval_int_value(start, values)?;
+    let count = eval_int_value(count, values)?;
+    if count < 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let count = usize::try_from(count).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let mut result = if start == 0 {
+        values.array_new(count)?
+    } else {
+        values.assoc_new(count)?
+    };
+    for offset in 0..count {
+        let offset = i64::try_from(offset).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let key = start.checked_add(offset).ok_or(EvalStatus::RuntimeFatal)?;
+        let key = values.int(key)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `array_fill_keys()` over key-array and value expressions.
+fn eval_builtin_array_fill_keys(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [keys, value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let keys = eval_expr(keys, context, scope, values)?;
+    let value = eval_expr(value, context, scope, values)?;
+    eval_array_fill_keys_result(keys, value, values)
+}
+
+/// Builds an `array_fill_keys()` result preserving the source key iteration order.
+fn eval_array_fill_keys_result(
+    keys: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(keys)?;
+    let mut result = values.assoc_new(len)?;
+    for position in 0..len {
+        let source_key = values.array_iter_key(keys, position)?;
+        let target_key = values.array_get(keys, source_key)?;
         result = values.array_set(result, target_key, value)?;
     }
     Ok(result)
@@ -10220,6 +10312,36 @@ return function_exists("array_combine");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "10:20:nz:ftd:v:7:8:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
+    #[test]
+    fn execute_program_dispatches_array_fill_builtins() {
+        let program = parse_fragment(
+            br#"$filled = array_fill(2, 3, "x");
+echo count($filled) . ":" . $filled[2] . $filled[4];
+$negative = array_fill(-2, 3, 7);
+echo ":" . $negative[-2] . $negative[-1] . $negative[0];
+$empty = array_fill(5, 0, "x");
+echo ":" . count($empty);
+$map = array_fill_keys(["a", "1", "01"], 8);
+echo ":" . $map["a"] . ":" . $map[1] . ":" . $map["01"];
+$named = array_fill(start_index: 1, count: 2, value: "n");
+echo ":" . $named[1] . $named[2];
+$call = call_user_func("array_fill", 0, 2, "c");
+echo ":" . $call[0] . $call[1];
+$spread = call_user_func_array("array_fill_keys", [["x", "y"], "z"]);
+echo ":" . $spread["x"] . $spread["y"] . ":";
+return function_exists("array_fill") && function_exists("array_fill_keys");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "3:xx:777:0:8:8:8:nn:cc:zz:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

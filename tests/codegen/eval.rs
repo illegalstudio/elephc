@@ -757,6 +757,31 @@ echo function_exists("array_combine");');
     assert_eq!(out, "10:20:nz:ftd:v:7:8:1");
 }
 
+/// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
+#[test]
+fn test_eval_dispatches_array_fill_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$filled = array_fill(2, 3, "x");
+echo count($filled) . ":" . $filled[2] . $filled[4];
+$negative = array_fill(-2, 3, 7);
+echo ":" . $negative[-2] . $negative[-1] . $negative[0];
+$empty = array_fill(5, 0, "x");
+echo ":" . count($empty);
+$map = array_fill_keys(["a", "1", "01"], 8);
+echo ":" . $map["a"] . ":" . $map[1] . ":" . $map["01"];
+$named = array_fill(start_index: 1, count: 2, value: "n");
+echo ":" . $named[1] . $named[2];
+$call = call_user_func("array_fill", 0, 2, "c");
+echo ":" . $call[0] . $call[1];
+$spread = call_user_func_array("array_fill_keys", [["x", "y"], "z"]);
+echo ":" . $spread["x"] . $spread["y"] . ":";
+echo function_exists("array_fill"); echo function_exists("array_fill_keys");');
+"#,
+    );
+    assert_eq!(out, "3:xx:777:0:8:8:8:nn:cc:zz:11");
+}
+
 /// Verifies eval `array_flip()` supports PHP key rules and callable dispatch.
 #[test]
 fn test_eval_dispatches_array_flip_builtin_call() {
