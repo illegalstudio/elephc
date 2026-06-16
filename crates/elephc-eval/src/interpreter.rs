@@ -1200,6 +1200,7 @@ fn eval_positional_expr_call(
             eval_builtin_str_replace(name, args, context, scope, values)
         }
         "substr" => eval_builtin_substr(args, context, scope, values),
+        "substr_replace" => eval_builtin_substr_replace(args, context, scope, values),
         "str_contains" | "str_starts_with" | "str_ends_with" => {
             eval_builtin_string_search(name, args, context, scope, values)
         }
@@ -1534,6 +1535,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strtoupper"
             | "strval"
             | "trim"
+            | "substr_replace"
             | "ucfirst"
     )
 }
@@ -1649,6 +1651,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "strpos" | "strrpos" => Some(&["haystack", "needle", "offset"]),
         "str_repeat" => Some(&["string", "times"]),
         "substr" => Some(&["string", "offset", "length"]),
+        "substr_replace" => Some(&["string", "replace", "offset", "length"]),
         "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
             Some(&["string"])
         }
@@ -1933,6 +1936,15 @@ fn eval_builtin_with_values(
         "substr" => match evaluated_args {
             [value, offset] => eval_substr_result(*value, *offset, None, values)?,
             [value, offset, length] => eval_substr_result(*value, *offset, Some(*length), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "substr_replace" => match evaluated_args {
+            [value, replace, offset] => {
+                eval_substr_replace_result(*value, *replace, *offset, None, values)?
+            }
+            [value, replace, offset, length] => {
+                eval_substr_replace_result(*value, *replace, *offset, Some(*length), values)?
+            }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "call_user_func" => {
@@ -2811,6 +2823,69 @@ fn eval_substr_result(
     let start = usize::try_from(start).map_err(|_| EvalStatus::RuntimeFatal)?;
     let end = usize::try_from(end).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.string_bytes_value(&bytes[start..end])
+}
+
+/// Evaluates PHP's `substr_replace(...)` over eval scalar byte strings.
+fn eval_builtin_substr_replace(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [value, replace, offset] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let replace = eval_expr(replace, context, scope, values)?;
+            let offset = eval_expr(offset, context, scope, values)?;
+            eval_substr_replace_result(value, replace, offset, None, values)
+        }
+        [value, replace, offset, length] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let replace = eval_expr(replace, context, scope, values)?;
+            let offset = eval_expr(offset, context, scope, values)?;
+            let length = eval_expr(length, context, scope, values)?;
+            eval_substr_replace_result(value, replace, offset, Some(length), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Replaces the byte range selected by PHP `substr_replace()` scalar rules.
+fn eval_substr_replace_result(
+    value: RuntimeCellHandle,
+    replace: RuntimeCellHandle,
+    offset: RuntimeCellHandle,
+    length: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let replacement = values.string_bytes(replace)?;
+    let total = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let offset = eval_int_value(offset, values)?;
+    let start = if offset < 0 {
+        (total + offset).max(0)
+    } else {
+        offset.min(total)
+    };
+    let end = match length {
+        None => total,
+        Some(length) if values.is_null(length)? => total,
+        Some(length) => {
+            let length = eval_int_value(length, values)?;
+            if length < 0 {
+                (total + length).max(start)
+            } else {
+                start.saturating_add(length).min(total)
+            }
+        }
+    };
+    let start = usize::try_from(start).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let end = usize::try_from(end).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let mut output = Vec::with_capacity(bytes.len() + replacement.len());
+    output.extend_from_slice(&bytes[..start]);
+    output.extend_from_slice(&replacement);
+    output.extend_from_slice(&bytes[end..]);
+    values.string_bytes_value(&output)
 }
 
 /// Casts one eval value to PHP int and returns the scalar payload.
@@ -7026,6 +7101,27 @@ return function_exists("substr");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "cdef:bcde:ef:cd:cd:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `substr_replace()` dispatches through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_substr_replace_builtin() {
+        let program = parse_fragment(
+            br#"echo substr_replace("hello world", "PHP", 6, 5); echo ":";
+echo substr_replace(string: "abcdef", replace: "X", offset: 1, length: -1); echo ":";
+echo substr_replace("abcdef", "X", -2); echo ":";
+echo call_user_func("substr_replace", "abcdef", "X", 99, 1); echo ":";
+echo call_user_func_array("substr_replace", ["string" => "abcdef", "replace" => "X", "offset" => -99, "length" => 2]); echo ":";
+return function_exists("substr_replace");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "hello PHP:aXf:abcdX:abcdefX:Xcdef:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

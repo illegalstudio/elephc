@@ -134,6 +134,7 @@ $slashes = eval('return addslashes("A\"B") . ":" . stripslashes(addslashes("A\"B
 $chr = eval('return chr(65) . ":" . bin2hex(chr(256));');
 $repeated = eval('return str_repeat("ha", 3);');
 $substring = eval('return substr("abcdef", 2) . ":" . substr("abcdef", 1, -1);');
+$substring_replaced = eval('return substr_replace("hello world", "PHP", 6, 5);');
 $linebreaks = eval('return bin2hex(nl2br("a\nb", false));');
 $split_joined = eval('$parts = explode(",", "red,green,blue"); return implode("|", $parts);');
 $replaced = eval('return str_replace("green", "lime", "red green blue");');
@@ -217,6 +218,7 @@ echo "slashes=" . $slashes . "\n";
 echo "chr=" . $chr . "\n";
 echo "str-repeat=" . $repeated . "\n";
 echo "substr=" . $substring . "\n";
+echo "substr-replace=" . $substring_replaced . "\n";
 echo "nl2br-hex=" . $linebreaks . "\n";
 echo "explode-implode=" . $split_joined . "\n";
 echo "str-replace=" . $replaced . "\n";
