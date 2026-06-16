@@ -3691,6 +3691,46 @@ eval('echo call_user_func("native_eval_cuf_add", 4, 6);');
     assert_eq!(out, "10");
 }
 
+/// Verifies variable call syntax inside eval dispatches supported builtin callables.
+#[test]
+fn test_eval_fragment_variable_callable_dispatches_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$fn = "strlen";
+echo $fn("abcd") . ":";
+$callbacks = ["strtoupper"];
+echo $callbacks[0]("xy");');
+"#,
+    );
+    assert_eq!(out, "4:XY");
+}
+
+/// Verifies variable call syntax inside eval dispatches eval-declared functions with named args.
+#[test]
+fn test_eval_fragment_variable_callable_dispatches_eval_declared_function() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_var_callable($x, $y) { return ($x * 10) + $y; }
+$fn = "dyn_eval_var_callable";
+echo $fn(y: 2, x: 1);');
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+/// Verifies variable call syntax inside eval dispatches registered AOT user functions.
+#[test]
+fn test_eval_fragment_variable_callable_dispatches_native_user_function() {
+    let out = compile_and_run(
+        r#"<?php
+function native_eval_var_callable($left, $right) { return $left . ":" . $right; }
+eval('$fn = "native_eval_var_callable";
+echo $fn(right: "R", left: "L");');
+"#,
+    );
+    assert_eq!(out, "L:R");
+}
+
 /// Verifies `call_user_func_array()` inside eval dispatches to eval-declared functions.
 #[test]
 fn test_eval_fragment_call_user_func_array_dispatches_eval_declared_function() {

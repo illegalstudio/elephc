@@ -171,6 +171,10 @@ pub enum EvalExpr {
     },
     Const(EvalConst),
     ConstFetch(String),
+    DynamicCall {
+        callee: Box<EvalExpr>,
+        args: Vec<EvalCallArg>,
+    },
     LoadVar(String),
     MethodCall {
         object: Box<EvalExpr>,
