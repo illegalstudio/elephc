@@ -1879,6 +1879,21 @@ echo function_exists("missing_eval_inner_probe") . "x";');
     assert_eq!(out, "1x1x1xxx");
 }
 
+/// Verifies eval `class_exists()` probes generated AOT class-name metadata.
+#[test]
+fn test_eval_fragment_class_exists_probes_aot_classes() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalClassExistsProbe {}
+eval('echo class_exists("EvalClassExistsProbe") ? "Y" : "N";
+echo class_exists("evalclassexistsprobe") ? "Y" : "N";
+echo class_exists("\EvalClassExistsProbe") ? "Y" : "N";
+echo class_exists(class: "MissingEvalClassExistsProbe", autoload: false) ? "Y" : "N";');
+"#,
+    );
+    assert_eq!(out, "YYYN");
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {
