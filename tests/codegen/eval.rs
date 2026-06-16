@@ -757,6 +757,31 @@ echo function_exists("array_combine");');
     assert_eq!(out, "10:20:nz:ftd:v:7:8:1");
 }
 
+/// Verifies eval `array_pad()` and `array_chunk()` build reindexed array shapes.
+#[test]
+fn test_eval_dispatches_array_shape_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$right = array_pad([1, 2], 5, 0);
+echo count($right) . ":" . $right[0] . $right[1] . $right[2] . $right[4];
+$left = array_pad([1, 2], -4, 9);
+echo ":" . $left[0] . $left[1] . $left[2] . $left[3];
+$copy = array_pad([7, 8], 1, 0);
+echo ":" . count($copy) . ":" . $copy[0] . $copy[1];
+$chunks = array_chunk([1, 2, 3, 4, 5], 2);
+echo ":" . count($chunks) . ":" . $chunks[0][1] . $chunks[2][0];
+$named = array_pad(array: ["a"], length: 2, value: "b");
+echo ":" . $named[1];
+$call = call_user_func("array_chunk", [6, 7, 8], 2);
+echo ":" . $call[1][0];
+$spread = call_user_func_array("array_pad", [[1], 3, 2]);
+echo ":" . $spread[2] . ":";
+echo function_exists("array_pad"); echo function_exists("array_chunk");');
+"#,
+    );
+    assert_eq!(out, "5:1200:9912:2:78:3:25:b:8:2:11");
+}
+
 /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
 #[test]
 fn test_eval_dispatches_array_fill_builtin_calls() {

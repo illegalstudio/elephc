@@ -1192,6 +1192,7 @@ fn eval_positional_expr_call(
             eval_builtin_slashes(name, args, context, scope, values)
         }
         "array_combine" => eval_builtin_array_combine(args, context, scope, values),
+        "array_chunk" => eval_builtin_array_chunk(args, context, scope, values),
         "array_fill" => eval_builtin_array_fill(args, context, scope, values),
         "array_fill_keys" => eval_builtin_array_fill_keys(args, context, scope, values),
         "array_flip" => eval_builtin_array_flip(args, context, scope, values),
@@ -1202,6 +1203,7 @@ fn eval_positional_expr_call(
         "array_product" | "array_sum" => {
             eval_builtin_array_aggregate(name, args, context, scope, values)
         }
+        "array_pad" => eval_builtin_array_pad(args, context, scope, values),
         "array_reverse" => eval_builtin_array_reverse(args, context, scope, values),
         "array_search" | "in_array" => {
             eval_builtin_array_search(name, args, context, scope, values)
@@ -1591,12 +1593,14 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
         name,
             "abs"
             | "addslashes"
+            | "array_chunk"
             | "array_combine"
             | "array_fill"
             | "array_fill_keys"
             | "array_flip"
             | "array_key_exists"
             | "array_keys"
+            | "array_pad"
             | "array_product"
             | "array_reverse"
             | "array_search"
@@ -1855,12 +1859,14 @@ fn collect_contiguous_bound_args(
 fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "abs" | "ceil" | "floor" | "sqrt" => Some(&["num"]),
+        "array_chunk" => Some(&["array", "length"]),
         "array_combine" => Some(&["keys", "values"]),
         "array_fill" => Some(&["start_index", "count", "value"]),
         "array_fill_keys" => Some(&["keys", "value"]),
         "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_unique"
         | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
+        "array_pad" => Some(&["array", "length", "value"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
         "acos" | "asin" | "atan" | "cos" | "cosh" | "deg2rad" | "exp" | "log2" | "log10"
@@ -2104,6 +2110,12 @@ fn eval_builtin_with_values(
             };
             eval_array_combine_result(*keys, *values_array, values)?
         }
+        "array_chunk" => {
+            let [array, length] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_chunk_result(*array, *length, values)?
+        }
         "array_fill" => {
             let [start, count, value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -2121,6 +2133,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_flip_result(*array, values)?
+        }
+        "array_pad" => {
+            let [array, length, value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_pad_result(*array, *length, *value, values)?
         }
         "array_product" | "array_sum" => {
             let [array] = evaluated_args else {
@@ -2934,6 +2952,132 @@ fn eval_array_fill_keys_result(
         result = values.array_set(result, target_key, value)?;
     }
     Ok(result)
+}
+
+/// Evaluates PHP `array_chunk()` over one array and chunk-size expression.
+fn eval_builtin_array_chunk(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array, length] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = eval_expr(array, context, scope, values)?;
+    let length = eval_expr(length, context, scope, values)?;
+    eval_array_chunk_result(array, length, values)
+}
+
+/// Builds an `array_chunk()` result as nested reindexed arrays.
+fn eval_array_chunk_result(
+    array: RuntimeCellHandle,
+    length: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let chunk_size = eval_int_value(length, values)?;
+    if chunk_size <= 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let chunk_size = usize::try_from(chunk_size).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let len = values.array_len(array)?;
+    let chunk_count = len.div_ceil(chunk_size);
+    let mut result = values.array_new(chunk_count)?;
+
+    for chunk_index in 0..chunk_count {
+        let start = chunk_index * chunk_size;
+        let end = usize::min(start + chunk_size, len);
+        let mut chunk = values.array_new(end - start)?;
+        for source_position in start..end {
+            let source_key = values.array_iter_key(array, source_position)?;
+            let value = values.array_get(array, source_key)?;
+            let target_index =
+                i64::try_from(source_position - start).map_err(|_| EvalStatus::RuntimeFatal)?;
+            let target_index = values.int(target_index)?;
+            chunk = values.array_set(chunk, target_index, value)?;
+        }
+        let result_key = i64::try_from(chunk_index).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let result_key = values.int(result_key)?;
+        result = values.array_set(result, result_key, chunk)?;
+    }
+
+    Ok(result)
+}
+
+/// Evaluates PHP `array_pad()` over array, target length, and pad value expressions.
+fn eval_builtin_array_pad(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array, length, value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = eval_expr(array, context, scope, values)?;
+    let length = eval_expr(length, context, scope, values)?;
+    let value = eval_expr(value, context, scope, values)?;
+    eval_array_pad_result(array, length, value, values)
+}
+
+/// Builds an `array_pad()` result by copying values and padding left or right.
+fn eval_array_pad_result(
+    array: RuntimeCellHandle,
+    length: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let target = eval_int_value(length, values)?;
+    let target_len = target
+        .checked_abs()
+        .ok_or(EvalStatus::RuntimeFatal)
+        .and_then(|value| usize::try_from(value).map_err(|_| EvalStatus::RuntimeFatal))?;
+    let result_len = usize::max(len, target_len);
+    let pad_count = result_len.saturating_sub(len);
+    let mut result = values.array_new(result_len)?;
+    let mut output_index = 0usize;
+
+    if target < 0 {
+        let (padded, next_index) =
+            eval_array_pad_append_repeated(result, output_index, pad_count, value, values)?;
+        result = padded;
+        output_index = next_index;
+    }
+
+    for position in 0..len {
+        let source_key = values.array_iter_key(array, position)?;
+        let source_value = values.array_get(array, source_key)?;
+        let target_key = i64::try_from(output_index).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let target_key = values.int(target_key)?;
+        result = values.array_set(result, target_key, source_value)?;
+        output_index += 1;
+    }
+
+    if target > 0 {
+        result =
+            eval_array_pad_append_repeated(result, output_index, pad_count, value, values)?.0;
+    }
+
+    Ok(result)
+}
+
+/// Appends the same pad value at consecutive indexed positions in an array result.
+fn eval_array_pad_append_repeated(
+    mut array: RuntimeCellHandle,
+    start_index: usize,
+    count: usize,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, usize), EvalStatus> {
+    let mut next_index = start_index;
+    for _ in 0..count {
+        let key = i64::try_from(next_index).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let key = values.int(key)?;
+        array = values.array_set(array, key, value)?;
+        next_index += 1;
+    }
+    Ok((array, next_index))
 }
 
 /// Evaluates PHP `array_flip()` over one eval array expression.
@@ -10312,6 +10456,36 @@ return function_exists("array_combine");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "10:20:nz:ftd:v:7:8:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_pad()` and `array_chunk()` build reindexed array shapes.
+    #[test]
+    fn execute_program_dispatches_array_shape_builtins() {
+        let program = parse_fragment(
+            br#"$right = array_pad([1, 2], 5, 0);
+echo count($right) . ":" . $right[0] . $right[1] . $right[2] . $right[4];
+$left = array_pad([1, 2], -4, 9);
+echo ":" . $left[0] . $left[1] . $left[2] . $left[3];
+$copy = array_pad([7, 8], 1, 0);
+echo ":" . count($copy) . ":" . $copy[0] . $copy[1];
+$chunks = array_chunk([1, 2, 3, 4, 5], 2);
+echo ":" . count($chunks) . ":" . $chunks[0][1] . $chunks[2][0];
+$named = array_pad(array: ["a"], length: 2, value: "b");
+echo ":" . $named[1];
+$call = call_user_func("array_chunk", [6, 7, 8], 2);
+echo ":" . $call[1][0];
+$spread = call_user_func_array("array_pad", [[1], 3, 2]);
+echo ":" . $spread[2] . ":";
+return function_exists("array_pad") && function_exists("array_chunk");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "5:1200:9912:2:78:3:25:b:8:2:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
