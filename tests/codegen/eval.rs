@@ -814,6 +814,25 @@ echo function_exists("array_map");');
     assert_eq!(out, "2:6:X:Y:v:7:8:1");
 }
 
+/// Verifies eval `array_reduce()` folds values through a string callback.
+#[test]
+fn test_eval_dispatches_array_reduce_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function eval_reduce_sum($carry, $item) { return $carry + $item; }
+echo array_reduce([1, 2, 3], "eval_reduce_sum", 10) . ":";
+function eval_reduce_join($carry, $item) { return $carry . $item; }
+echo array_reduce(["a", "b"], "eval_reduce_join", "") . ":";
+$call = call_user_func("array_reduce", [4, 5], "eval_reduce_sum", 1);
+echo $call . ":";
+$spread = call_user_func_array("array_reduce", ["array" => [2, 3], "callback" => "eval_reduce_sum", "initial" => 4]);
+echo $spread . ":";
+echo function_exists("array_reduce");');
+"#,
+    );
+    assert_eq!(out, "16:ab:10:9:1");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {

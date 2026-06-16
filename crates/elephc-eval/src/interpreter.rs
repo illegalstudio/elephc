@@ -1402,6 +1402,7 @@ fn eval_positional_expr_call(
         "array_filter" => eval_builtin_array_filter(args, context, scope, values),
         "array_flip" => eval_builtin_array_flip(args, context, scope, values),
         "array_map" => eval_builtin_array_map(args, context, scope, values),
+        "array_reduce" => eval_builtin_array_reduce(args, context, scope, values),
         "array_keys" | "array_values" => {
             eval_builtin_array_projection(name, args, context, scope, values)
         }
@@ -1841,6 +1842,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_filter"
             | "array_flip"
             | "array_map"
+            | "array_reduce"
             | "array_key_exists"
             | "array_keys"
             | "array_diff"
@@ -2145,6 +2147,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_fill_keys" => Some(&["keys", "value"]),
         "array_filter" => Some(&["array", "callback", "mode"]),
         "array_map" => Some(&["callback", "array"]),
+        "array_reduce" => Some(&["array", "callback", "initial"]),
         "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_unique"
         | "array_rand" | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
@@ -2456,6 +2459,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_map_result(*callback, *array, context, values)?
+        }
+        "array_reduce" => {
+            let [array, callback, initial] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_reduce_result(*array, *callback, *initial, context, values)?
         }
         "array_flip" => {
             let [array] = evaluated_args else {
@@ -3511,6 +3520,41 @@ fn eval_array_map_result(
         result = values.array_set(result, key, mapped)?;
     }
     Ok(result)
+}
+
+/// Evaluates PHP `array_reduce()` with an explicit initial carry value.
+fn eval_builtin_array_reduce(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array, callback, initial] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = eval_expr(array, context, scope, values)?;
+    let callback = eval_expr(callback, context, scope, values)?;
+    let initial = eval_expr(initial, context, scope, values)?;
+    eval_array_reduce_result(array, callback, initial, context, values)
+}
+
+/// Reduces one eval array by invoking a string callback with carry and item cells.
+fn eval_array_reduce_result(
+    array: RuntimeCellHandle,
+    callback: RuntimeCellHandle,
+    initial: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = eval_callable_name(callback, values)?;
+    let len = values.array_len(array)?;
+    let mut carry = initial;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        carry = eval_callable_with_values(&callback, vec![carry, value], context, values)?;
+    }
+    Ok(carry)
 }
 
 /// Evaluates PHP `array_filter()` for null and string-callback filtering modes.
@@ -13054,6 +13098,30 @@ return function_exists("array_map");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "2:6:X:Y:v:7:8:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_reduce()` folds values through a string callback.
+    #[test]
+    fn execute_program_dispatches_array_reduce_builtin() {
+        let program = parse_fragment(
+            br#"function eval_reduce_sum($carry, $item) { return $carry + $item; }
+echo array_reduce([1, 2, 3], "eval_reduce_sum", 10) . ":";
+function eval_reduce_join($carry, $item) { return $carry . $item; }
+echo array_reduce(["a", "b"], "eval_reduce_join", "") . ":";
+$call = call_user_func("array_reduce", [4, 5], "eval_reduce_sum", 1);
+echo $call . ":";
+$spread = call_user_func_array("array_reduce", ["array" => [2, 3], "callback" => "eval_reduce_sum", "initial" => 4]);
+echo $spread . ":";
+return function_exists("array_reduce");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "16:ab:10:9:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
