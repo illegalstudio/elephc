@@ -1200,6 +1200,7 @@ fn eval_positional_expr_call(
             eval_builtin_array_projection(name, args, context, scope, values)
         }
         "array_key_exists" => eval_builtin_array_key_exists(args, context, scope, values),
+        "array_merge" => eval_builtin_array_merge(args, context, scope, values),
         "array_product" | "array_sum" => {
             eval_builtin_array_aggregate(name, args, context, scope, values)
         }
@@ -1601,6 +1602,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_flip"
             | "array_key_exists"
             | "array_keys"
+            | "array_merge"
             | "array_pad"
             | "array_product"
             | "array_reverse"
@@ -2160,6 +2162,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.array_key_exists(*key, *array)?
+        }
+        "array_merge" => {
+            let [left, right] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_merge_result(*left, *right, values)?
         }
         "array_reverse" => match evaluated_args {
             [array] => eval_array_reverse_result(*array, false, values)?,
@@ -3387,6 +3395,61 @@ fn eval_array_search_result(
         "array_search" => values.bool_value(false),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Evaluates PHP `array_merge()` over two array expressions.
+fn eval_builtin_array_merge(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [left, right] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let left = eval_expr(left, context, scope, values)?;
+    let right = eval_expr(right, context, scope, values)?;
+    eval_array_merge_result(left, right, values)
+}
+
+/// Builds an `array_merge()` result with PHP numeric reindexing and string-key overwrites.
+fn eval_array_merge_result(
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let left_len = values.array_len(left)?;
+    let right_len = values.array_len(right)?;
+    let capacity = left_len.checked_add(right_len).ok_or(EvalStatus::RuntimeFatal)?;
+    let mut result = values.assoc_new(capacity)?;
+    let mut next_numeric_key = 0_i64;
+    result = eval_array_merge_append_operand(result, left, &mut next_numeric_key, values)?;
+    eval_array_merge_append_operand(result, right, &mut next_numeric_key, values)
+}
+
+/// Appends one source array to an `array_merge()` result using PHP key handling.
+fn eval_array_merge_append_operand(
+    mut result: RuntimeCellHandle,
+    source: RuntimeCellHandle,
+    next_numeric_key: &mut i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(source)?;
+    for position in 0..len {
+        let source_key = values.array_iter_key(source, position)?;
+        let source_value = values.array_get(source, source_key)?;
+        let target_key = if values.type_tag(source_key)? == EVAL_TAG_STRING {
+            source_key
+        } else {
+            let target_key = values.int(*next_numeric_key)?;
+            *next_numeric_key = (*next_numeric_key)
+                .checked_add(1)
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            target_key
+        };
+        result = values.array_set(result, target_key, source_value)?;
+    }
+    Ok(result)
 }
 
 /// Evaluates PHP `explode()` over separator and string expressions.
@@ -10608,6 +10671,34 @@ return function_exists("array_slice");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "3:203040:30:3:3050:67:3:2040:2:8:10:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_merge()` appends numeric keys and overwrites string keys.
+    #[test]
+    fn execute_program_dispatches_array_merge_builtin() {
+        let program = parse_fragment(
+            br#"$merged = array_merge([1, 2], [3, 4]);
+echo count($merged) . ":" . $merged[0] . $merged[1] . $merged[2] . $merged[3];
+$left = [1, 2];
+$right = [3];
+$copy = array_merge($left, $right);
+echo ":" . count($left) . ":" . $left[0] . ":" . $copy[2];
+$assoc = array_merge(["a" => 1, 2 => "x"], ["a" => 9, 5 => "y", "b" => 3]);
+echo ":" . $assoc["a"] . ":" . $assoc[0] . ":" . $assoc[1] . ":" . $assoc["b"];
+$call = call_user_func("array_merge", [6], [7, 8]);
+echo ":" . $call[2];
+$spread = call_user_func_array("array_merge", [[9], [10]]);
+echo ":" . $spread[1] . ":";
+return function_exists("array_merge");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "4:1234:2:1:3:9:x:y:3:8:10:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
