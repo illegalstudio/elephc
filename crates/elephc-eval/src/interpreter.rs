@@ -10478,7 +10478,27 @@ fn eval_builtin_preg_match_all(
                 return Err(EvalStatus::RuntimeFatal);
             };
             let (result, matches_array) =
-                eval_preg_match_all_capture_result(pattern, subject, values)?;
+                eval_preg_match_all_capture_result(pattern, subject, None, values)?;
+            for replaced in set_scope_cell(
+                context,
+                scope,
+                matches_name.clone(),
+                matches_array,
+                ScopeCellOwnership::Owned,
+            )? {
+                values.release(replaced)?;
+            }
+            Ok(result)
+        }
+        [pattern, subject, matches, flags] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            let EvalExpr::LoadVar(matches_name) = matches else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let flags = eval_expr(flags, context, scope, values)?;
+            let (result, matches_array) =
+                eval_preg_match_all_capture_result(pattern, subject, Some(flags), values)?;
             for replaced in set_scope_cell(
                 context,
                 scope,
@@ -10510,6 +10530,7 @@ fn eval_preg_match_all_result(
 fn eval_preg_match_all_capture_result(
     pattern: RuntimeCellHandle,
     subject: RuntimeCellHandle,
+    flags: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
     let regex = eval_preg_regex(pattern, values)?;
@@ -10517,13 +10538,29 @@ fn eval_preg_match_all_capture_result(
     let subject = values.string_bytes(subject)?;
     let captures: Vec<Captures<'_>> = regex.captures_iter(&subject).collect();
     let count = values.int(i64::try_from(captures.len()).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-    let matches = eval_preg_match_all_pattern_order_array(
-        &subject,
-        &captures,
-        capture_count,
-        values,
-    )?;
+    let flags = eval_preg_match_all_flags(flags, values)?;
+    let matches = if flags & EVAL_PREG_SET_ORDER != 0 {
+        eval_preg_match_all_set_order_array(&subject, &captures, capture_count, values)?
+    } else {
+        eval_preg_match_all_pattern_order_array(&subject, &captures, capture_count, values)?
+    };
     Ok((count, matches))
+}
+
+/// Returns supported `preg_match_all()` flags and rejects offset-capture shape changes.
+fn eval_preg_match_all_flags(
+    flags: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let Some(flags) = flags else {
+        return Ok(EVAL_PREG_PATTERN_ORDER);
+    };
+    let flags = eval_int_value(flags, values)?;
+    let supported = EVAL_PREG_PATTERN_ORDER | EVAL_PREG_SET_ORDER;
+    if flags & EVAL_PREG_OFFSET_CAPTURE != 0 || flags & !supported != 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(flags)
 }
 
 /// Builds PHP's default `preg_match_all()` pattern-order capture matrix.
@@ -10545,6 +10582,30 @@ fn eval_preg_match_all_pattern_order_array(
         }
         let key = values
             .int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        outer = values.array_set(outer, key, row)?;
+    }
+    Ok(outer)
+}
+
+/// Builds PHP's `preg_match_all(..., PREG_SET_ORDER)` match-order capture matrix.
+fn eval_preg_match_all_set_order_array(
+    subject: &[u8],
+    captures: &[Captures<'_>],
+    capture_count: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut outer = values.array_new(captures.len())?;
+    for (match_index, capture) in captures.iter().enumerate() {
+        let mut row = values.array_new(capture_count)?;
+        for capture_index in 0..capture_count {
+            let key = values
+                .int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            let bytes = eval_preg_capture_bytes(subject, capture, capture_index).unwrap_or(b"");
+            let value = values.string_bytes_value(bytes)?;
+            row = values.array_set(row, key, value)?;
+        }
+        let key = values
+            .int(i64::try_from(match_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
         outer = values.array_set(outer, key, row)?;
     }
     Ok(outer)
@@ -18506,6 +18567,8 @@ echo preg_match("/xyz/", "id42") . ":";
 echo preg_match_all("/[0-9]+/", "a1b22c333") . ":";
 $allCount = preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $all);
 echo $allCount . ":" . count($all) . ":" . $all[0][1] . ":" . $all[1][0] . ":" . $all[2][1] . ":";
+$setCount = preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $set, PREG_SET_ORDER);
+echo $setCount . ":" . count($set) . ":" . $set[0][0] . ":" . $set[0][1] . ":" . $set[1][2] . ":";
 preg_match_all("/(x)(y)/", "abc", $none);
 echo count($none) . ":" . count($none[0]) . ":" . count($none[1]) . ":" . count($none[2]) . ":";
 echo preg_replace("/([a-z])([0-9])/", "$2-$1", "a1 b2") . ":";
@@ -18520,7 +18583,7 @@ $replaced = call_user_func_array("preg_replace", ["pattern" => "/[0-9]+/", "repl
 echo $replaced . ":";
 $captured = preg_split("/(,)/", "a,b", 0, PREG_SPLIT_DELIM_CAPTURE);
 echo count($captured) . ":" . $captured[1] . ":";
-return function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY");"#,
+return function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY") && defined("PREG_SET_ORDER");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -18530,7 +18593,7 @@ return function_exists("preg_match") && function_exists("preg_match_all") && fun
 
         assert_eq!(
             values.output,
-            "1:3:id42:id:42:0:3:2:3:b22:a:22:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:"
+            "1:3:id42:id:42:0:3:2:3:b22:a:22:2:2:a1:a:22:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
