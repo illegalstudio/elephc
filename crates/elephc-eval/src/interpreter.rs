@@ -60,6 +60,14 @@ enum EvaluatedCallable {
     },
 }
 
+/// Bound argument tuple for direct `array_splice()` calls.
+type EvalArraySpliceDirectArgs = (
+    String,
+    RuntimeCellHandle,
+    Option<RuntimeCellHandle>,
+    Option<RuntimeCellHandle>,
+);
+
 /// Parsed flags for one eval `sprintf()` conversion specifier.
 #[derive(Clone, Copy)]
 struct EvalSprintfSpec {
@@ -2413,7 +2421,7 @@ fn eval_builtin_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args)?;
+    let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, values)?;
     let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
         return Err(EvalStatus::UnsupportedConstruct);
     };
@@ -2424,6 +2432,7 @@ fn eval_builtin_call(
 fn bind_evaluated_builtin_args(
     name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if evaluated_args.iter().all(|arg| arg.name.is_none()) {
         return Ok(evaluated_args.into_iter().map(|arg| arg.value).collect());
@@ -2441,7 +2450,7 @@ fn bind_evaluated_builtin_args(
         }
     }
 
-    collect_contiguous_bound_args(bound_args)
+    collect_bound_builtin_args(name, bound_args, values)
 }
 
 /// Binds one named builtin-call value to the matching PHP parameter slot.
@@ -2475,6 +2484,20 @@ fn collect_contiguous_bound_args(
         .ok_or(EvalStatus::RuntimeFatal)
 }
 
+/// Collects ordered builtin arguments, applying PHP defaults for special named-call gaps.
+fn collect_bound_builtin_args(
+    name: &str,
+    mut bound_args: Vec<Option<RuntimeCellHandle>>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    if name == "array_splice" && bound_args.get(3).is_some_and(Option::is_some) {
+        if bound_args.get(2).is_some_and(Option::is_none) {
+            bound_args[2] = Some(values.null()?);
+        }
+    }
+    collect_contiguous_bound_args(bound_args)
+}
+
 /// Returns PHP parameter names for builtin calls implemented by eval.
 fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
     match name {
@@ -2499,7 +2522,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
         "array_slice" => Some(&["array", "offset", "length"]),
-        "array_splice" => Some(&["array", "offset", "length"]),
+        "array_splice" => Some(&["array", "offset", "length", "replacement"]),
         "acos" | "asin" | "atan" | "cos" | "cosh" | "deg2rad" | "exp" | "log2" | "log10"
         | "rad2deg" | "sin" | "sinh" | "tan" | "tanh" => Some(&["num"]),
         "atan2" => Some(&["y", "x"]),
@@ -2800,7 +2823,7 @@ fn eval_callable_with_call_array_args(
         return eval_callable_with_values(name, evaluated_args, context, values);
     }
     if eval_php_visible_builtin_exists(name) {
-        let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args)?;
+        let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args, values)?;
         let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
             return Err(EvalStatus::UnsupportedConstruct);
         };
@@ -2926,6 +2949,9 @@ fn eval_builtin_with_values(
                     eval_array_splice_value_result(*array, *offset, None, values)?
                 }
                 [array, offset, length] => {
+                    eval_array_splice_value_result(*array, *offset, Some(*length), values)?
+                }
+                [array, offset, length, _replacement] => {
                     eval_array_splice_value_result(*array, *offset, Some(*length), values)?
                 }
                 _ => return Err(EvalStatus::RuntimeFatal),
@@ -4335,14 +4361,14 @@ fn eval_builtin_array_push_unshift_call(
     Ok(result)
 }
 
-/// Evaluates direct by-reference `array_splice()` calls in eval's supported 2/3-argument form.
+/// Evaluates direct by-reference `array_splice()` calls and writes back the array.
 fn eval_builtin_array_splice_call(
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array_name, offset, length) =
+    let (array_name, offset, length, replacement_arg) =
         eval_array_splice_direct_args(args, context, scope, values)?;
     let Some(entry) =
         scope_entry(context, scope, &array_name).filter(|entry| entry.flags().is_visible())
@@ -4356,7 +4382,7 @@ fn eval_builtin_array_splice_call(
     }
 
     let (removed, replacement) =
-        eval_array_splice_removed_and_replacement(array, offset, length, values)?;
+        eval_array_splice_removed_and_replacement(array, offset, length, replacement_arg, values)?;
     for replaced in set_scope_cell(context, scope, array_name, replacement, ownership)? {
         values.release(replaced)?;
     }
@@ -4944,10 +4970,11 @@ fn eval_array_splice_direct_args(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<(String, RuntimeCellHandle, Option<RuntimeCellHandle>), EvalStatus> {
+) -> Result<EvalArraySpliceDirectArgs, EvalStatus> {
     let mut array = None;
     let mut offset = None;
     let mut length = None;
+    let mut replacement = None;
     let mut positional_index = 0;
     let mut saw_named = false;
 
@@ -4966,6 +4993,7 @@ fn eval_array_splice_direct_args(
                 0 => "array",
                 1 => "offset",
                 2 => "length",
+                3 => "replacement",
                 _ => return Err(EvalStatus::RuntimeFatal),
             };
             positional_index += 1;
@@ -4994,13 +5022,19 @@ fn eval_array_splice_direct_args(
                 }
                 length = Some(eval_expr(arg.value(), context, scope, values)?);
             }
+            "replacement" => {
+                if replacement.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                replacement = Some(eval_expr(arg.value(), context, scope, values)?);
+            }
             _ => return Err(EvalStatus::RuntimeFatal),
         }
     }
 
     let array = array.ok_or(EvalStatus::RuntimeFatal)?;
     let offset = offset.ok_or(EvalStatus::RuntimeFatal)?;
-    Ok((array, offset, length))
+    Ok((array, offset, length, replacement))
 }
 
 /// Returns the removed elements that `array_splice()` would produce without mutating the source.
@@ -5022,11 +5056,13 @@ fn eval_array_splice_removed_and_replacement(
     array: RuntimeCellHandle,
     offset: RuntimeCellHandle,
     length: Option<RuntimeCellHandle>,
+    replacement: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
     let (start, end) = eval_array_splice_bounds(array, offset, length, values)?;
     let removed = eval_array_splice_removed(array, start, end, values)?;
-    let replacement = eval_array_splice_replacement(array, start, end, values)?;
+    let inserted = eval_array_splice_insert_values(replacement, values)?;
+    let replacement = eval_array_splice_replacement(array, start, end, &inserted, values)?;
     Ok((removed, replacement))
 }
 
@@ -5087,21 +5123,59 @@ fn eval_array_splice_removed(
     Ok(result)
 }
 
+/// Expands the optional `array_splice()` replacement value into inserted values.
+fn eval_array_splice_insert_values(
+    replacement: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let Some(replacement) = replacement else {
+        return Ok(Vec::new());
+    };
+    if !matches!(
+        values.type_tag(replacement)?,
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC
+    ) {
+        return Ok(vec![replacement]);
+    }
+
+    let len = values.array_len(replacement)?;
+    let mut inserted = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.array_iter_key(replacement, position)?;
+        inserted.push(values.array_get(replacement, key)?);
+    }
+    Ok(inserted)
+}
+
 /// Builds the source replacement after removing the requested splice range.
 fn eval_array_splice_replacement(
     array: RuntimeCellHandle,
     start: usize,
     end: usize,
+    inserted: &[RuntimeCellHandle],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
+    let new_len = len
+        .saturating_sub(end.saturating_sub(start))
+        .checked_add(inserted.len())
+        .ok_or(EvalStatus::RuntimeFatal)?;
     if eval_array_splice_remaining_keys_are_int(array, start, end, len, values)? {
-        let mut result = values.array_new(len.saturating_sub(end.saturating_sub(start)))?;
+        let mut result = values.array_new(new_len)?;
         let mut target = 0_i64;
-        for position in 0..len {
-            if (start..end).contains(&position) {
-                continue;
-            }
+        for position in 0..start {
+            let key = values.array_iter_key(array, position)?;
+            let value = values.array_get(array, key)?;
+            let target_key = values.int(target)?;
+            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            result = values.array_set(result, target_key, value)?;
+        }
+        for value in inserted {
+            let target_key = values.int(target)?;
+            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            result = values.array_set(result, target_key, *value)?;
+        }
+        for position in end..len {
             let key = values.array_iter_key(array, position)?;
             let value = values.array_get(array, key)?;
             let target_key = values.int(target)?;
@@ -5111,12 +5185,26 @@ fn eval_array_splice_replacement(
         return Ok(result);
     }
 
-    let mut result = values.assoc_new(len.saturating_sub(end.saturating_sub(start)))?;
+    let mut result = values.assoc_new(new_len)?;
     let mut next_int_key = 0_i64;
-    for position in 0..len {
-        if (start..end).contains(&position) {
-            continue;
-        }
+    for position in 0..start {
+        let source_key = values.array_iter_key(array, position)?;
+        let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
+            let key = values.int(next_int_key)?;
+            next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            key
+        } else {
+            source_key
+        };
+        let value = values.array_get(array, source_key)?;
+        result = values.array_set(result, target_key, value)?;
+    }
+    for value in inserted {
+        let target_key = values.int(next_int_key)?;
+        next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+        result = values.array_set(result, target_key, *value)?;
+    }
+    for position in end..len {
         let source_key = values.array_iter_key(array, position)?;
         let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
             let key = values.int(next_int_key)?;
@@ -17391,6 +17479,18 @@ echo $tail[0] . ":" . count($c) . ":" . $c[2] . ":";
 $d = [5, 6, 7];
 $all = call_user_func_array("array_splice", ["array" => $d, "offset" => 1]);
 echo count($all) . ":" . $all[0] . ":" . $all[1] . ":" . count($d) . ":";
+$e = [1, 2, 3, 4];
+$rep = array_splice($e, 1, 2, ["A", "B"]);
+echo count($rep) . ":" . $rep[0] . ":" . $rep[1] . ":" . $e[0] . ":" . $e[1] . ":" . $e[2] . ":" . $e[3] . ":";
+$f = ["x" => 1, 10 => 2, "y" => 3, 11 => 4];
+$rep2 = array_splice(array: $f, offset: 1, length: 2, replacement: ["s" => "S", 9 => "N"]);
+echo $rep2[0] . ":" . $rep2["y"] . ":" . $f["x"] . ":" . $f[0] . ":" . $f[1] . ":" . $f[2] . ":";
+$g = [1, 2, 3];
+$rep3 = array_splice($g, offset: 1, replacement: [9]);
+echo count($rep3) . ":" . $rep3[0] . ":" . $rep3[1] . ":" . count($g) . ":" . $g[1] . ":";
+$h = [1, 2, 3];
+$removed2 = call_user_func_array("array_splice", ["array" => $h, "offset" => 1, "replacement" => [9]]);
+echo count($removed2) . ":" . $removed2[0] . ":" . $removed2[1] . ":" . count($h) . ":" . $h[1] . ":";
 return function_exists("array_splice");"#,
         )
         .expect("parse eval fragment");
@@ -17399,10 +17499,14 @@ return function_exists("array_splice");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "2:20:30:2:40:2:3:1:4:3:4:3:2:6:7:3:");
+        assert_eq!(
+            values.output,
+            "2:20:30:2:40:2:3:1:4:3:4:3:2:6:7:3:2:2:3:1:A:B:4:2:3:1:S:N:4:2:2:3:2:9:2:2:3:3:2:"
+        );
         assert_eq!(
             values.warnings,
             vec![
+                "array_splice(): Argument #1 ($array) must be passed by reference, value given",
                 "array_splice(): Argument #1 ($array) must be passed by reference, value given",
                 "array_splice(): Argument #1 ($array) must be passed by reference, value given",
             ]
