@@ -4290,3 +4290,54 @@ fn test_eval_fragment_with_php_opening_tag_reports_parse_error() {
         "stderr did not contain eval parse diagnostic: {err}"
     );
 }
+
+/// Verifies Throwable objects thrown inside eval cross into the caller's catch block.
+#[test]
+fn test_eval_throw_crosses_caller_try_catch() {
+    let out = compile_and_run(
+        r#"<?php
+$e = new Exception("eval boom");
+try {
+    eval('throw $e;');
+    echo "bad";
+} catch (Exception $caught) {
+    echo "caught:" . $caught->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "caught:eval boom");
+}
+
+/// Verifies Throwable objects thrown by eval-declared functions cross native call sites.
+#[test]
+fn test_eval_declared_function_throw_crosses_native_try_catch() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_throw($e) { throw $e; }');
+try {
+    dyn_eval_throw(new Exception("dyn boom"));
+    echo "bad";
+} catch (Exception $caught) {
+    echo "caught:" . $caught->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "caught:dyn boom");
+}
+
+/// Verifies Throwable objects thrown by nested eval calls keep the original catch target.
+#[test]
+fn test_eval_nested_throw_crosses_caller_try_catch() {
+    let out = compile_and_run(
+        r#"<?php
+$e = new Exception("nested boom");
+try {
+    eval('eval("throw $e;");');
+    echo "bad";
+} catch (Exception $caught) {
+    echo "caught:" . $caught->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "caught:nested boom");
+}

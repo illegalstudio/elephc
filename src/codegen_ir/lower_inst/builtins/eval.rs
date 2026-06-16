@@ -28,6 +28,7 @@ use super::super::{
 };
 
 const EVAL_STATUS_PARSE_ERROR: i64 = 1;
+const EVAL_STATUS_UNCAUGHT_THROWABLE: i64 = 3;
 const EVAL_STATUS_UNSUPPORTED: i64 = 4;
 const EVAL_PARSE_ERROR_MESSAGE: &str = "Parse error: eval() fragment is invalid\n";
 const EVAL_UNSUPPORTED_MESSAGE: &str =
@@ -35,6 +36,7 @@ const EVAL_UNSUPPORTED_MESSAGE: &str =
 const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";
 const EVAL_STACK_BYTES: usize = 80;
 const EVAL_RESULT_VALUE_CELL_OFFSET: usize = 8;
+const EVAL_RESULT_ERROR_OFFSET: usize = 16;
 const EVAL_CONTEXT_HANDLE_OFFSET: usize = 24;
 const EVAL_SCOPE_HANDLE_OFFSET: usize = 32;
 const EVAL_TEMP_CELL_OFFSET: usize = 40;
@@ -1264,13 +1266,17 @@ fn store_missing_scope_entry_to_global(
 fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
     let ok_label = ctx.next_label("eval_status_ok");
     let parse_error_label = ctx.next_label("eval_status_parse_error");
+    let throwable_label = ctx.next_label("eval_status_throwable");
     let unsupported_label = ctx.next_label("eval_status_unsupported");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
     emit_branch_if_eval_status(ctx, EVAL_STATUS_PARSE_ERROR, &parse_error_label);
+    emit_branch_if_eval_status(ctx, EVAL_STATUS_UNCAUGHT_THROWABLE, &throwable_label);
     emit_branch_if_eval_status(ctx, EVAL_STATUS_UNSUPPORTED, &unsupported_label);
     emit_eval_fatal_message(ctx, EVAL_RUNTIME_FATAL_MESSAGE);
     ctx.emitter.label(&parse_error_label);
     emit_eval_fatal_message(ctx, EVAL_PARSE_ERROR_MESSAGE);
+    ctx.emitter.label(&throwable_label);
+    emit_eval_throw_current(ctx);
     ctx.emitter.label(&unsupported_label);
     emit_eval_fatal_message(ctx, EVAL_UNSUPPORTED_MESSAGE);
     ctx.emitter.label(&ok_label);
@@ -1290,6 +1296,24 @@ fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: i64, label:
                 .instruction(&format!("cmp {}, {}", result_reg, status)); // compare the eval bridge status against the handled code
             ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching eval status handler
         }
+    }
+}
+
+/// Publishes an eval-thrown Throwable and enters the normal runtime unwinder.
+fn emit_eval_throw_current(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_ERROR_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let object_reg = eval_mixed_unbox_low_payload_reg(ctx);
+    abi::emit_store_reg_to_symbol(ctx.emitter, object_reg, "_exc_value", 0);
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+}
+
+/// Returns the low payload register produced by `__rt_mixed_unbox` for eval status handling.
+fn eval_mixed_unbox_low_payload_reg(ctx: &FunctionContext<'_>) -> &'static str {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
     }
 }
 

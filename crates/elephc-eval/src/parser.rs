@@ -590,6 +590,7 @@ impl Parser {
             }
             TokenKind::Ident(name) if ident_eq(name, "static") => self.parse_static_var_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "switch") => self.parse_switch_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "throw") => self.parse_throw_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "unset") => self.parse_unset_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
             TokenKind::Ident(name) if is_unsupported_statement_keyword(name) => {
@@ -771,6 +772,14 @@ impl Parser {
         let init = self.parse_expr()?;
         self.expect_semicolon()?;
         Ok(vec![EvalStmt::StaticVar { name, init }])
+    }
+
+    /// Parses `throw expr;` statements in eval fragments.
+    fn parse_throw_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let expr = self.parse_expr()?;
+        self.expect_semicolon()?;
+        Ok(vec![EvalStmt::Throw(expr)])
     }
 
     /// Parses a dynamic function declaration parameter list after `(`.
@@ -1799,7 +1808,6 @@ fn is_unsupported_statement_keyword(name: &str) -> bool {
         "require_once",
         "include",
         "include_once",
-        "throw",
         "trait",
         "try",
         "use",
@@ -3036,6 +3044,22 @@ mod tests {
                 }),
                 right: Box::new(EvalExpr::Const(EvalConst::Int(4))),
             }))]
+        );
+    }
+
+    /// Verifies throw statements lower to a Throwable expression carried by EvalIR.
+    #[test]
+    fn parse_fragment_accepts_throw_source() {
+        let program =
+            parse_fragment(br#"throw new Exception("eval boom");"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Throw(EvalExpr::NewObject {
+                class_name: "Exception".to_string(),
+                args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                    "eval boom".to_string()
+                )))],
+            })]
         );
     }
 

@@ -93,6 +93,7 @@ pub struct ElephcEvalContext {
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
+    pending_throw: Option<RuntimeCellHandle>,
     call_file: String,
     call_dir: String,
     call_line: i64,
@@ -110,6 +111,7 @@ impl ElephcEvalContext {
             static_locals: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
+            pending_throw: None,
             call_file: String::new(),
             call_dir: String::new(),
             call_line: 0,
@@ -128,6 +130,7 @@ impl ElephcEvalContext {
             static_locals: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
+            pending_throw: None,
             call_file: String::new(),
             call_dir: String::new(),
             call_line: 0,
@@ -278,6 +281,16 @@ impl ElephcEvalContext {
     /// Returns the current eval-executed function name, if execution is inside one.
     pub fn current_function(&self) -> Option<&str> {
         self.function_stack.last().map(String::as_str)
+    }
+
+    /// Records a Throwable cell that escaped from an eval-executed function call.
+    pub fn set_pending_throw(&mut self, value: RuntimeCellHandle) {
+        self.pending_throw = Some(value);
+    }
+
+    /// Returns and clears the Throwable cell currently escaping through eval.
+    pub fn take_pending_throw(&mut self) -> Option<RuntimeCellHandle> {
+        self.pending_throw.take()
     }
 
     /// Updates the source file, directory, and line for the current eval call site.

@@ -112,6 +112,7 @@ pub enum EvalStmt {
         expr: EvalExpr,
         cases: Vec<EvalSwitchCase>,
     },
+    Throw(EvalExpr),
     UnsetVar {
         name: String,
     },

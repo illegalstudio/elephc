@@ -33,8 +33,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 enum EvalControl {
     None,
     Return(RuntimeCellHandle),
+    Throw(RuntimeCellHandle),
     Break,
     Continue,
+}
+
+/// Final result of executing a parsed eval program.
+pub enum EvalOutcome {
+    Value(RuntimeCellHandle),
+    Throwable(RuntimeCellHandle),
 }
 
 /// One already evaluated function-like call argument.
@@ -580,10 +587,32 @@ pub fn execute_program_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match execute_statements(program.statements(), context, scope, values)? {
-        EvalControl::None => values.null(),
-        EvalControl::Return(result) => Ok(result),
-        EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
+    match execute_program_outcome_with_context(context, program, scope, values)? {
+        EvalOutcome::Value(result) => Ok(result),
+        EvalOutcome::Throwable(error) => {
+            context.set_pending_throw(error);
+            Err(EvalStatus::UncaughtThrowable)
+        }
+    }
+}
+
+/// Executes an EvalIR program and preserves escaping Throwable cells.
+pub fn execute_program_outcome_with_context(
+    context: &mut ElephcEvalContext,
+    program: &EvalProgram,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match execute_statements(program.statements(), context, scope, values) {
+        Ok(EvalControl::None) => values.null().map(EvalOutcome::Value),
+        Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
+        Ok(EvalControl::Throw(result)) => Ok(EvalOutcome::Throwable(result)),
+        Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
     }
 }
 
@@ -603,11 +632,34 @@ pub fn execute_context_function(
     args: Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    match execute_context_function_outcome(context, name, args, values)? {
+        EvalOutcome::Value(result) => Ok(result),
+        EvalOutcome::Throwable(error) => {
+            context.set_pending_throw(error);
+            Err(EvalStatus::UncaughtThrowable)
+        }
+    }
+}
+
+/// Executes a function declared in the shared eval context and preserves thrown cells.
+pub fn execute_context_function_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    args: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
     context
         .function(name)
         .cloned()
         .map_or(Err(EvalStatus::UnsupportedConstruct), |function| {
-            eval_dynamic_function_with_values(&function, args, context, values)
+            match eval_dynamic_function_with_values(&function, args, context, values) {
+                Ok(result) => Ok(EvalOutcome::Value(result)),
+                Err(EvalStatus::UncaughtThrowable) => context
+                    .take_pending_throw()
+                    .map(EvalOutcome::Throwable)
+                    .ok_or(EvalStatus::UncaughtThrowable),
+                Err(status) => Err(status),
+            }
         })
 }
 
@@ -618,11 +670,34 @@ pub fn execute_context_function_call_array(
     arg_array: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    match execute_context_function_call_array_outcome(context, name, arg_array, values)? {
+        EvalOutcome::Value(result) => Ok(result),
+        EvalOutcome::Throwable(error) => {
+            context.set_pending_throw(error);
+            Err(EvalStatus::UncaughtThrowable)
+        }
+    }
+}
+
+/// Executes a named eval-context callable from an argument array and preserves thrown cells.
+pub fn execute_context_function_call_array_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    arg_array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
     let evaluated_args = eval_array_call_arg_values(arg_array, values)?;
-    eval_callable_with_call_array_args(name, evaluated_args, context, values)
+    match eval_callable_with_call_array_args(name, evaluated_args, context, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
 }
 
 /// Executes statements in source order and propagates the first eval `return`.
@@ -912,6 +987,13 @@ fn execute_stmt(
         EvalStmt::Switch { expr, cases } => {
             execute_switch_stmt(expr, cases, context, scope, values)
         }
+        EvalStmt::Throw(expr) => {
+            let thrown = eval_expr(expr, context, scope, values)?;
+            if values.type_tag(thrown)? != EVAL_TAG_OBJECT {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            Ok(EvalControl::Throw(thrown))
+        }
         EvalStmt::UnsetVar { name } => {
             if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
                 values.release(replaced)?;
@@ -926,6 +1008,7 @@ fn execute_stmt(
                 match execute_statements(body, context, scope, values)? {
                     EvalControl::None | EvalControl::Continue => {}
                     EvalControl::Break => break,
+                    EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
                     EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
                 }
             }
@@ -1018,6 +1101,7 @@ fn execute_switch_stmt(
         match execute_statements(&case.body, context, scope, values)? {
             EvalControl::None => {}
             EvalControl::Break | EvalControl::Continue => break,
+            EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
     }
@@ -1036,6 +1120,7 @@ fn execute_do_while_stmt(
         match execute_statements(body, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
+            EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
         let condition = eval_expr(condition, context, scope, values)?;
@@ -1059,6 +1144,7 @@ fn execute_for_stmt(
     match execute_statements(init, context, scope, values)? {
         EvalControl::None | EvalControl::Continue => {}
         EvalControl::Break => return Ok(EvalControl::None),
+        EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
         EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
     }
     loop {
@@ -1071,11 +1157,13 @@ fn execute_for_stmt(
         match execute_statements(body, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
+            EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
         match execute_statements(update, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
+            EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
     }
@@ -1122,6 +1210,7 @@ fn execute_foreach_stmt(
         match execute_statements(body, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
+            EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
     }
@@ -13097,6 +13186,10 @@ fn eval_dynamic_function_with_values(
     match result? {
         EvalControl::None => values.null(),
         EvalControl::Return(result) => Ok(result),
+        EvalControl::Throw(result) => {
+            context.set_pending_throw(result);
+            Err(EvalStatus::UncaughtThrowable)
+        }
         EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
     }
 }
@@ -13165,6 +13258,7 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
             | EvalStmt::ReferenceAssign { .. }
             | EvalStmt::Return(_)
             | EvalStmt::StoreVar { .. }
+            | EvalStmt::Throw(_)
             | EvalStmt::UnsetVar { .. } => {}
         }
     }
@@ -14344,6 +14438,77 @@ mod tests {
         assert_eq!(x, alias);
         assert_eq!(values.get(x), FakeValue::Int(5));
         assert_eq!(values.get(result), FakeValue::Int(5));
+    }
+
+    /// Verifies eval `throw` exits the program with a retained Throwable cell.
+    #[test]
+    fn execute_program_propagates_throw_as_uncaught_outcome() {
+        let program =
+            parse_fragment(br#"throw new Exception("eval boom");"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let outcome = execute_program_outcome_with_context(
+            &mut context,
+            &program,
+            &mut scope,
+            &mut values,
+        )
+        .expect("throw should be an eval outcome");
+
+        match outcome {
+            EvalOutcome::Throwable(value) => {
+                assert_eq!(values.type_tag(value), Ok(EVAL_TAG_OBJECT));
+            }
+            EvalOutcome::Value(value) => panic!("expected Throwable, got {:?}", values.get(value)),
+        }
+    }
+
+    /// Verifies throws from eval-declared functions escape through the shared context.
+    #[test]
+    fn execute_context_function_propagates_throw_as_uncaught_outcome() {
+        let program =
+            parse_fragment(br#"function dyn($e) { throw $e; }"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("declare dynamic function");
+        let thrown = values.new_object("Exception").expect("allocate fake exception");
+
+        let outcome =
+            execute_context_function_outcome(&mut context, "dyn", vec![thrown], &mut values)
+                .expect("throw should be an eval function outcome");
+
+        match outcome {
+            EvalOutcome::Throwable(value) => assert_eq!(value, thrown),
+            EvalOutcome::Value(value) => panic!("expected Throwable, got {:?}", values.get(value)),
+        }
+    }
+
+    /// Verifies nested eval preserves the thrown cell while returning an uncaught status.
+    #[test]
+    fn execute_program_nested_eval_propagates_throw_as_uncaught_outcome() {
+        let program = parse_fragment(br#"eval("throw $e;");"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let thrown = values.new_object("Exception").expect("allocate fake exception");
+        scope.set("e", thrown, ScopeCellOwnership::Borrowed);
+
+        let outcome = execute_program_outcome_with_context(
+            &mut context,
+            &program,
+            &mut scope,
+            &mut values,
+        )
+        .expect("nested throw should be an eval outcome");
+
+        match outcome {
+            EvalOutcome::Throwable(value) => assert_eq!(value, thrown),
+            EvalOutcome::Value(value) => panic!("expected Throwable, got {:?}", values.get(value)),
+        }
     }
 
     /// Verifies simple variable compound assignments read, compute, and write the scope value.

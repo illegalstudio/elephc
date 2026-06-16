@@ -31,7 +31,7 @@ use abi::{
 use context::{NativeFunction, NativeFunctionInvoker};
 use errors::EvalStatus;
 #[cfg(not(test))]
-use interpreter::RuntimeValueOps;
+use interpreter::{EvalOutcome, RuntimeValueOps};
 #[cfg(not(test))]
 use runtime_hooks::ElephcRuntimeOps;
 use scope::{ScopeCellOwnership, ScopeEntry};
@@ -719,19 +719,27 @@ unsafe fn call_eval_function_inner(
         (*out).clear();
     }
     let mut values = ElephcRuntimeOps::new();
-    match interpreter::execute_context_function(
+    match interpreter::execute_context_function_outcome(
         context,
         &name.to_ascii_lowercase(),
         args,
         &mut values,
     ) {
-        Ok(result) => {
+        Ok(EvalOutcome::Value(result)) => {
             if !out.is_null() {
                 (*out).kind = 0;
                 (*out).value_cell = result.as_ptr();
                 (*out).error = std::ptr::null_mut();
             }
             EvalStatus::Ok.code()
+        }
+        Ok(EvalOutcome::Throwable(error)) => {
+            if !out.is_null() {
+                (*out).kind = 3;
+                (*out).value_cell = std::ptr::null_mut();
+                (*out).error = error.as_ptr();
+            }
+            EvalStatus::UncaughtThrowable.code()
         }
         Err(status) => status.code(),
     }
@@ -766,19 +774,27 @@ unsafe fn call_eval_function_array_inner(
         (*out).clear();
     }
     let mut values = ElephcRuntimeOps::new();
-    match interpreter::execute_context_function_call_array(
+    match interpreter::execute_context_function_call_array_outcome(
         context,
         &name.to_ascii_lowercase(),
         RuntimeCellHandle::from_raw(arg_array),
         &mut values,
     ) {
-        Ok(result) => {
+        Ok(EvalOutcome::Value(result)) => {
             if !out.is_null() {
                 (*out).kind = 0;
                 (*out).value_cell = result.as_ptr();
                 (*out).error = std::ptr::null_mut();
             }
             EvalStatus::Ok.code()
+        }
+        Ok(EvalOutcome::Throwable(error)) => {
+            if !out.is_null() {
+                (*out).kind = 3;
+                (*out).value_cell = std::ptr::null_mut();
+                (*out).error = error.as_ptr();
+            }
+            EvalStatus::UncaughtThrowable.code()
         }
         Err(status) => status.code(),
     }
@@ -846,14 +862,22 @@ unsafe fn execute_parsed_eval(
         &mut fallback_scope
     };
     let mut values = ElephcRuntimeOps::new();
-    match interpreter::execute_program_with_context(context, program, scope, &mut values) {
-        Ok(result) => {
+    match interpreter::execute_program_outcome_with_context(context, program, scope, &mut values) {
+        Ok(EvalOutcome::Value(result)) => {
             if !out.is_null() {
                 (*out).kind = 0;
                 (*out).value_cell = result.as_ptr();
                 (*out).error = std::ptr::null_mut();
             }
             EvalStatus::Ok.code()
+        }
+        Ok(EvalOutcome::Throwable(error)) => {
+            if !out.is_null() {
+                (*out).kind = 3;
+                (*out).value_cell = std::ptr::null_mut();
+                (*out).error = error.as_ptr();
+            }
+            EvalStatus::UncaughtThrowable.code()
         }
         Err(status) => status.code(),
     }
