@@ -49,6 +49,27 @@ fn test_eval_codegen_requires_eval_bridge() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies programs without `eval` do not link or reference the optional eval bridge.
+#[test]
+fn test_non_eval_program_does_not_request_eval_bridge() {
+    let dir = make_cli_test_dir("elephc_no_eval_bridge_asm");
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options("<?php echo 1 + 2;", &dir, 8_388_608, false, false);
+    assert!(
+        !user_asm.contains("__elephc_eval_"),
+        "non-eval user assembly should not reference eval bridge:\n{user_asm}"
+    );
+    assert!(
+        !runtime_asm.contains("__elephc_eval_"),
+        "non-eval runtime assembly should not reference eval bridge:\n{runtime_asm}"
+    );
+    assert!(
+        !required_libraries.iter().any(|lib| lib == "elephc_eval"),
+        "non-eval required libraries should not include elephc_eval: {required_libraries:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies the linked eval bridge can execute scalar echo fragments.
 #[test]
 fn test_eval_scalar_echo_executes_through_bridge() {
