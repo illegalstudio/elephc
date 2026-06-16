@@ -1270,6 +1270,9 @@ fn eval_expr(
         EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::ConstFetch(name) => eval_const_fetch(name, context, values),
+        EvalExpr::DynamicCall { callee, args } => {
+            eval_dynamic_call(callee, args, context, scope, values)
+        }
         EvalExpr::LoadVar(name) => {
             visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok)
         }
@@ -1490,6 +1493,20 @@ fn eval_call(
         return eval_native_function(function, args, context, scope, values);
     }
     Err(EvalStatus::UnsupportedConstruct)
+}
+
+/// Evaluates a variable or expression callable and dispatches it with source-order arguments.
+fn eval_dynamic_call(
+    callee: &EvalExpr,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = eval_expr(callee, context, scope, values)?;
+    let callback = eval_callable_name(callback, values)?;
+    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+    eval_callable_with_call_array_args(&callback, evaluated_args, context, values)
 }
 
 /// Returns true for language constructs that need unevaluated argument expressions.
@@ -15672,6 +15689,81 @@ return call_user_func("dyn", 4);"#,
         let expected = values.int(42).expect("allocate fake result");
         let native =
             NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 0);
+        assert!(context
+            .define_native_function("native_answer", native)
+            .is_ok());
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(result, expected);
+    }
+
+    /// Verifies string variable calls inside eval can dispatch a supported builtin.
+    #[test]
+    fn execute_program_variable_call_dispatches_builtin() {
+        let program = parse_fragment(
+            br#"$fn = "strlen";
+return $fn("abcd");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(4));
+    }
+
+    /// Verifies callable array entries can be invoked through postfix dynamic calls.
+    #[test]
+    fn execute_program_postfix_variable_call_dispatches_builtin() {
+        let program = parse_fragment(
+            br#"$callbacks = ["strlen"];
+return $callbacks[0]("abc");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(3));
+    }
+
+    /// Verifies variable calls bind eval-declared function arguments by name.
+    #[test]
+    fn execute_program_variable_call_binds_declared_named_args() {
+        let program = parse_fragment(
+            br#"function dyn($x, $y) { return ($x * 10) + $y; }
+$fn = "dyn";
+return $fn(y: 2, x: 1);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(12));
+    }
+
+    /// Verifies variable calls can dispatch registered native functions with named args.
+    #[test]
+    fn execute_program_variable_call_binds_registered_native_named_args() {
+        let program = parse_fragment(
+            br#"$fn = "native_answer";
+return $fn(right: 2, left: 1);"#,
+        )
+        .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let expected = values.int(42).expect("allocate fake result");
+        let mut native =
+            NativeFunction::new(expected.as_ptr().cast(), fake_native_return_descriptor, 2);
+        assert!(native.set_param_name(0, "left"));
+        assert!(native.set_param_name(1, "right"));
         assert!(context
             .define_native_function("native_answer", native)
             .is_ok());

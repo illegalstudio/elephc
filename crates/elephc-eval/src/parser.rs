@@ -1429,10 +1429,18 @@ impl Parser {
         Ok(expr)
     }
 
-    /// Parses postfix array reads, property reads, and method calls after a primary expression.
+    /// Parses postfix array reads, property reads, method calls, and dynamic calls.
     fn parse_postfix(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_primary()?;
         loop {
+            if matches!(self.current(), TokenKind::LParen) {
+                let args = self.parse_call_args()?;
+                expr = EvalExpr::DynamicCall {
+                    callee: Box::new(expr),
+                    args,
+                };
+                continue;
+            }
             if self.consume(TokenKind::LBracket) {
                 let index = self.parse_expr()?;
                 self.expect(TokenKind::RBracket)?;
@@ -2687,6 +2695,45 @@ mod tests {
             program.statements(),
             &[EvalStmt::Return(Some(EvalExpr::Call {
                 name: "strlen".to_string(),
+                args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                    "abcd".to_string()
+                )))],
+            }))]
+        );
+    }
+
+    /// Verifies variable callable expressions lower to dynamic calls with source-order args.
+    #[test]
+    fn parse_fragment_accepts_dynamic_call_expression_source() {
+        let program = parse_fragment(br#"return $fn(first: "a", ...$rest);"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::DynamicCall {
+                callee: Box::new(EvalExpr::LoadVar("fn".to_string())),
+                args: vec![
+                    EvalCallArg::named(
+                        "first",
+                        EvalExpr::Const(EvalConst::String("a".to_string())),
+                    ),
+                    EvalCallArg::spread(EvalExpr::LoadVar("rest".to_string())),
+                ],
+            }))]
+        );
+    }
+
+    /// Verifies dynamic calls can be applied after another postfix expression.
+    #[test]
+    fn parse_fragment_accepts_postfix_dynamic_call_source() {
+        let program =
+            parse_fragment(br#"return $callbacks[0]("abcd");"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::DynamicCall {
+                callee: Box::new(EvalExpr::ArrayGet {
+                    array: Box::new(EvalExpr::LoadVar("callbacks".to_string())),
+                    index: Box::new(EvalExpr::Const(EvalConst::Int(0))),
+                }),
                 args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
                     "abcd".to_string()
                 )))],
