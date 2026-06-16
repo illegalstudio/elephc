@@ -1436,6 +1436,42 @@ echo function_exists("filesize"); echo function_exists("unlink");');
     );
 }
 
+/// Verifies eval stat metadata builtins return scalar metadata and dispatch dynamically.
+#[test]
+fn test_eval_dispatches_stat_metadata_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('file_put_contents("eval-stat.txt", "hello");
+echo filemtime("eval-stat.txt") > 0 ? "mtime" : "bad"; echo ":";
+echo fileatime(filename: "eval-stat.txt") > 0 ? "atime" : "bad"; echo ":";
+echo filectime("eval-stat.txt") > 0 ? "ctime" : "bad"; echo ":";
+echo fileperms("eval-stat.txt") > 0 ? "perms" : "bad"; echo ":";
+echo fileowner("eval-stat.txt") >= 0 ? "owner" : "bad"; echo ":";
+echo filegroup("eval-stat.txt") >= 0 ? "group" : "bad"; echo ":";
+echo fileinode("eval-stat.txt") > 0 ? "inode" : "bad"; echo ":";
+echo filetype("eval-stat.txt") . ":";
+echo filetype(".") . ":";
+echo is_executable("/bin/sh") ? "exec" : "bad"; echo ":";
+echo is_link("eval-stat.txt") ? "bad" : "notlink"; echo ":";
+echo fileatime("missing-stat.txt") === false ? "missing-atime" : "bad"; echo ":";
+echo filetype("missing-stat.txt") === false ? "missing-type" : "bad"; echo ":";
+echo filemtime("missing-stat.txt") === 0 ? "missing-mtime" : "bad"; echo ":";
+echo call_user_func("filetype", "eval-stat.txt") . ":";
+echo call_user_func_array("fileinode", ["filename" => "eval-stat.txt"]) > 0 ? "callinode" : "bad"; echo ":";
+echo function_exists("filemtime"); echo function_exists("fileatime");
+echo function_exists("filectime"); echo function_exists("fileperms");
+echo function_exists("fileowner"); echo function_exists("filegroup");
+echo function_exists("fileinode"); echo function_exists("filetype");
+echo function_exists("is_executable"); echo function_exists("is_link");
+unlink("eval-stat.txt");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "mtime:atime:ctime:perms:owner:group:inode:file:dir:exec:notlink:missing-atime:missing-type:missing-mtime:file:callinode:1111111111"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

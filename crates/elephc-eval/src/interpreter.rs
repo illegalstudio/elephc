@@ -21,6 +21,7 @@ use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
 use std::net::ToSocketAddrs;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
 /// Internal statement-control result used to propagate eval returns and loops.
 enum EvalControl {
@@ -1221,9 +1222,12 @@ fn eval_positional_expr_call(
         "explode" => eval_builtin_explode(args, context, scope, values),
         "fdiv" | "fmod" => eval_builtin_float_binary(name, args, context, scope, values),
         "file_exists" => eval_builtin_file_probe(name, args, context, scope, values),
+        "fileatime" | "filectime" | "filegroup" | "fileinode" | "filemtime" | "fileowner"
+        | "fileperms" => eval_builtin_file_stat_scalar(name, args, context, scope, values),
         "file_get_contents" => eval_builtin_file_get_contents(args, context, scope, values),
         "file_put_contents" => eval_builtin_file_put_contents(args, context, scope, values),
         "filesize" => eval_builtin_filesize(args, context, scope, values),
+        "filetype" => eval_builtin_filetype(args, context, scope, values),
         "floor" => eval_builtin_floor(args, context, scope, values),
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
@@ -1241,9 +1245,8 @@ fn eval_positional_expr_call(
         "implode" => eval_builtin_implode(args, context, scope, values),
         "inet_ntop" => eval_builtin_inet_ntop(args, context, scope, values),
         "inet_pton" => eval_builtin_inet_pton(args, context, scope, values),
-        "is_dir" | "is_file" | "is_readable" | "is_writable" | "is_writeable" => {
-            eval_builtin_file_probe(name, args, context, scope, values)
-        }
+        "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable" | "is_writable"
+        | "is_writeable" => eval_builtin_file_probe(name, args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
@@ -1580,9 +1583,17 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "explode"
             | "fdiv"
             | "file_exists"
+            | "fileatime"
+            | "filectime"
+            | "filegroup"
             | "file_get_contents"
+            | "fileinode"
+            | "filemtime"
+            | "fileowner"
+            | "fileperms"
             | "file_put_contents"
             | "filesize"
+            | "filetype"
             | "floor"
             | "floatval"
             | "fmod"
@@ -1603,7 +1614,9 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "inet_pton"
             | "ip2long"
             | "is_dir"
+            | "is_executable"
             | "is_file"
+            | "is_link"
             | "is_readable"
             | "is_writable"
             | "is_writeable"
@@ -1780,8 +1793,10 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "dirname" => Some(&["path", "levels"]),
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
-        "file_get_contents" | "file_exists" | "filesize" | "is_dir" | "is_file"
-        | "is_readable" | "is_writable" | "is_writeable" | "unlink" => Some(&["filename"]),
+        "file_get_contents" | "file_exists" | "fileatime" | "filectime" | "filegroup"
+        | "fileinode" | "filemtime" | "fileowner" | "fileperms" | "filesize" | "filetype"
+        | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable"
+        | "is_writable" | "is_writeable" | "unlink" => Some(&["filename"]),
         "file_put_contents" => Some(&["filename", "data"]),
         "function_exists" => Some(&["function"]),
         "gethostbyname" => Some(&["hostname"]),
@@ -2063,11 +2078,19 @@ fn eval_builtin_with_values(
             };
             eval_float_binary_result(name, *left, *right, values)?
         }
-        "file_exists" | "is_dir" | "is_file" | "is_readable" | "is_writable" | "is_writeable" => {
+        "file_exists" | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable"
+        | "is_writable" | "is_writeable" => {
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_file_probe_result(name, *filename, values)?
+        }
+        "fileatime" | "filectime" | "filegroup" | "fileinode" | "filemtime" | "fileowner"
+        | "fileperms" => {
+            let [filename] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_file_stat_scalar_result(name, *filename, values)?
         }
         "file_get_contents" => {
             let [filename] = evaluated_args else {
@@ -2086,6 +2109,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_filesize_result(*filename, values)?
+        }
+        "filetype" => {
+            let [filename] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_filetype_result(*filename, values)?
         }
         "pi" => {
             if !evaluated_args.is_empty() {
@@ -4053,12 +4082,57 @@ fn eval_file_probe_result(
     let result = match name {
         "file_exists" => path.exists(),
         "is_dir" => path.is_dir(),
+        "is_executable" => eval_path_is_executable(path),
         "is_file" => path.is_file(),
+        "is_link" => std::fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false),
         "is_readable" => eval_path_is_readable(path),
         "is_writable" | "is_writeable" => eval_path_is_writable(path),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     values.bool_value(result)
+}
+
+/// Evaluates one scalar PHP stat metadata builtin over an eval expression.
+fn eval_builtin_file_stat_scalar(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    eval_file_stat_scalar_result(name, filename, values)
+}
+
+/// Returns scalar stat metadata, using PHP false for failure where native elephc does.
+fn eval_file_stat_scalar_result(
+    name: &str,
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) if name == "filemtime" => return values.int(0),
+        Err(_) => return values.bool_value(false),
+    };
+    match name {
+        "fileatime" => values.int(metadata.atime()),
+        "filectime" => values.int(metadata.ctime()),
+        "filegroup" => values.int(i64::from(metadata.gid())),
+        "fileinode" => {
+            values.int(i64::try_from(metadata.ino()).map_err(|_| EvalStatus::RuntimeFatal)?)
+        }
+        "filemtime" => values.int(metadata.mtime()),
+        "fileowner" => values.int(i64::from(metadata.uid())),
+        "fileperms" => values.int(i64::from(metadata.mode())),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Evaluates PHP `file_get_contents($filename)` over one eval expression.
@@ -4143,6 +4217,50 @@ fn eval_filesize_result(
     values.int(i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?)
 }
 
+/// Evaluates PHP `filetype($filename)` over one eval expression.
+fn eval_builtin_filetype(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    eval_filetype_result(filename, values)
+}
+
+/// Returns the PHP filetype string for one path, or false when lstat fails.
+fn eval_filetype_result(
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let file_type = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata.file_type(),
+        Err(_) => return values.bool_value(false),
+    };
+    let label = if file_type.is_file() {
+        "file"
+    } else if file_type.is_dir() {
+        "dir"
+    } else if file_type.is_symlink() {
+        "link"
+    } else if file_type.is_char_device() {
+        "char"
+    } else if file_type.is_block_device() {
+        "block"
+    } else if file_type.is_fifo() {
+        "fifo"
+    } else if file_type.is_socket() {
+        "socket"
+    } else {
+        "unknown"
+    };
+    values.string(label)
+}
+
 /// Evaluates PHP `unlink($filename)` over one eval expression.
 fn eval_builtin_unlink(
     args: &[EvalExpr],
@@ -4178,6 +4296,13 @@ fn eval_path_string(
 /// Returns whether a path can be opened for reading by the current process.
 fn eval_path_is_readable(path: &std::path::Path) -> bool {
     std::fs::File::open(path).is_ok() || std::fs::read_dir(path).is_ok()
+}
+
+/// Returns whether a path has any executable bit set in its Unix mode.
+fn eval_path_is_executable(path: &std::path::Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 /// Returns whether a path can be written by the current process.
@@ -9217,6 +9342,61 @@ return function_exists("unlink");"#
         assert_eq!(
             values.output,
             "5:hello:exists:file:dir:readable:writable:writeable:5:missing-false:call-exists:5:unlinked:gone:111111111"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval stat metadata builtins expose scalar file metadata and link probes.
+    #[test]
+    fn execute_program_dispatches_stat_metadata_builtins() {
+        let filename = format!("elephc_eval_stat_probe_{}.txt", std::process::id());
+        let missing = format!("elephc_eval_stat_missing_{}.txt", std::process::id());
+        let link = format!("elephc_eval_stat_link_{}.txt", std::process::id());
+        let source = format!(
+            r#"echo filemtime("{filename}") > 0 ? "mtime" : "bad"; echo ":";
+echo fileatime("{filename}") > 0 ? "atime" : "bad"; echo ":";
+echo filectime("{filename}") > 0 ? "ctime" : "bad"; echo ":";
+echo fileperms("{filename}") > 0 ? "perms" : "bad"; echo ":";
+echo fileowner("{filename}") >= 0 ? "owner" : "bad"; echo ":";
+echo filegroup("{filename}") >= 0 ? "group" : "bad"; echo ":";
+echo fileinode("{filename}") > 0 ? "inode" : "bad"; echo ":";
+echo filetype("{filename}") . ":";
+echo filetype(".") . ":";
+echo filetype("{link}") . ":";
+echo is_executable("{filename}") ? "bad" : "noexec"; echo ":";
+echo is_link("{link}") ? "link" : "bad"; echo ":";
+echo fileatime("{missing}") === false ? "missing-atime" : "bad"; echo ":";
+echo filectime("{missing}") === false ? "missing-ctime" : "bad"; echo ":";
+echo fileperms("{missing}") === false ? "missing-perms" : "bad"; echo ":";
+echo fileowner("{missing}") === false ? "missing-owner" : "bad"; echo ":";
+echo filegroup("{missing}") === false ? "missing-group" : "bad"; echo ":";
+echo fileinode("{missing}") === false ? "missing-inode" : "bad"; echo ":";
+echo filetype("{missing}") === false ? "missing-type" : "bad"; echo ":";
+echo filemtime("{missing}") === 0 ? "missing-mtime" : "bad"; echo ":";
+echo call_user_func("filetype", "{filename}") . ":";
+echo call_user_func_array("fileinode", ["filename" => "{filename}"]) > 0 ? "callinode" : "bad"; echo ":";
+echo function_exists("filemtime"); echo function_exists("fileatime");
+echo function_exists("filectime"); echo function_exists("fileperms");
+echo function_exists("fileowner"); echo function_exists("filegroup");
+echo function_exists("fileinode"); echo function_exists("filetype");
+echo function_exists("is_executable"); echo function_exists("is_link");
+return true;"#
+        );
+        let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(&link);
+        std::fs::write(&filename, b"hello").expect("write stat fixture");
+        std::os::unix::fs::symlink(&filename, &link).expect("create stat symlink");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(&link);
+        assert_eq!(
+            values.output,
+            "mtime:atime:ctime:perms:owner:group:inode:file:dir:link:noexec:link:missing-atime:missing-ctime:missing-perms:missing-owner:missing-group:missing-inode:missing-type:missing-mtime:file:callinode:1111111111"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
