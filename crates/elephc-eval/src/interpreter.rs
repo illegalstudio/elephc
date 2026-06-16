@@ -21,6 +21,7 @@ use crate::json_validate::{self, JsonValue};
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
+use regex::bytes::{Captures, Regex, RegexBuilder};
 use std::ffi::{CStr, CString};
 use std::mem::MaybeUninit;
 use std::net::ToSocketAddrs;
@@ -549,6 +550,13 @@ const EVAL_ARRAY_FILTER_USE_BOTH: i64 = 1;
 const EVAL_ARRAY_FILTER_USE_KEY: i64 = 2;
 const EVAL_COUNT_NORMAL: i64 = 0;
 const EVAL_COUNT_RECURSIVE: i64 = 1;
+const EVAL_PREG_SPLIT_NO_EMPTY: i64 = 1;
+const EVAL_PREG_SPLIT_DELIM_CAPTURE: i64 = 2;
+const EVAL_PREG_SPLIT_OFFSET_CAPTURE: i64 = 4;
+const EVAL_PREG_PATTERN_ORDER: i64 = 1;
+const EVAL_PREG_SET_ORDER: i64 = 2;
+const EVAL_PREG_OFFSET_CAPTURE: i64 = 256;
+const EVAL_PREG_UNMATCHED_AS_NULL: i64 = 512;
 
 unsafe extern "C" {
     /// Sets the process file-creation mask and returns the previous mask.
@@ -1561,6 +1569,13 @@ fn eval_positional_expr_call(
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
+        "preg_match" => eval_builtin_preg_match(args, context, scope, values),
+        "preg_match_all" => eval_builtin_preg_match_all(args, context, scope, values),
+        "preg_replace" => eval_builtin_preg_replace(args, context, scope, values),
+        "preg_replace_callback" => {
+            eval_builtin_preg_replace_callback(args, context, scope, values)
+        }
+        "preg_split" => eval_builtin_preg_split(args, context, scope, values),
         "print_r" => eval_builtin_print_r(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
         "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
@@ -2042,6 +2057,11 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "pow"
             | "php_uname"
             | "phpversion"
+            | "preg_match"
+            | "preg_match_all"
+            | "preg_replace"
+            | "preg_replace_callback"
+            | "preg_split"
             | "putenv"
             | "print_r"
             | "rand"
@@ -2301,6 +2321,11 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "php_uname" => Some(&["mode"]),
         "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
+        "preg_match" => Some(&["pattern", "subject", "matches", "flags", "offset"]),
+        "preg_match_all" => Some(&["pattern", "subject", "matches", "flags", "offset"]),
+        "preg_replace" => Some(&["pattern", "replacement", "subject", "limit", "count"]),
+        "preg_replace_callback" => Some(&["pattern", "callback", "subject", "limit", "count"]),
+        "preg_split" => Some(&["pattern", "subject", "limit", "flags"]),
         "print_r" | "var_dump" => Some(&["value"]),
         "putenv" => Some(&["assignment"]),
         "rand" | "mt_rand" | "random_int" => Some(&["min", "max"]),
@@ -2861,6 +2886,36 @@ fn eval_builtin_with_values(
             };
             values.pow(*left, *right)?
         }
+        "preg_match" => match evaluated_args {
+            [pattern, subject] => eval_preg_match_result(*pattern, *subject, values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "preg_match_all" => match evaluated_args {
+            [pattern, subject] => eval_preg_match_all_result(*pattern, *subject, values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "preg_replace" => match evaluated_args {
+            [pattern, replacement, subject] => {
+                eval_preg_replace_result(*pattern, *replacement, *subject, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "preg_replace_callback" => match evaluated_args {
+            [pattern, callback, subject] => {
+                eval_preg_replace_callback_result(*pattern, *callback, *subject, context, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "preg_split" => match evaluated_args {
+            [pattern, subject] => eval_preg_split_result(*pattern, *subject, None, None, values)?,
+            [pattern, subject, limit] => {
+                eval_preg_split_result(*pattern, *subject, Some(*limit), None, values)?
+            }
+            [pattern, subject, limit, flags] => {
+                eval_preg_split_result(*pattern, *subject, Some(*limit), Some(*flags), values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "print_r" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -9790,6 +9845,544 @@ fn eval_fnmatch_fold(byte: u8, flags: i64) -> u8 {
     }
 }
 
+/// Evaluates PHP `preg_match()` over eval expressions.
+fn eval_builtin_preg_match(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [pattern, subject] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            eval_preg_match_result(pattern, subject, values)
+        }
+        [pattern, subject, matches] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            let EvalExpr::LoadVar(matches_name) = matches else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let (result, matches_array) = eval_preg_match_capture_result(pattern, subject, values)?;
+            for replaced in set_scope_cell(
+                context,
+                scope,
+                matches_name.clone(),
+                matches_array,
+                ScopeCellOwnership::Owned,
+            )? {
+                values.release(replaced)?;
+            }
+            Ok(result)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Returns whether one regex matches the subject string.
+fn eval_preg_match_result(
+    pattern: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let regex = eval_preg_regex(pattern, values)?;
+    let subject = values.string_bytes(subject)?;
+    values.int(i64::from(regex.is_match(&subject)))
+}
+
+/// Returns the match flag plus PHP `$matches` capture array for one regex search.
+fn eval_preg_match_capture_result(
+    pattern: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
+    let regex = eval_preg_regex(pattern, values)?;
+    let subject = values.string_bytes(subject)?;
+    if let Some(captures) = regex.captures(&subject) {
+        let matches = eval_preg_capture_array(&subject, Some(&captures), values)?;
+        let matched = values.int(1)?;
+        return Ok((matched, matches));
+    }
+    let matches = eval_preg_capture_array(&subject, None, values)?;
+    let matched = values.int(0)?;
+    Ok((matched, matches))
+}
+
+/// Evaluates PHP `preg_match_all()` count-only calls over eval expressions.
+fn eval_builtin_preg_match_all(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [pattern, subject] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let pattern = eval_expr(pattern, context, scope, values)?;
+    let subject = eval_expr(subject, context, scope, values)?;
+    eval_preg_match_all_result(pattern, subject, values)
+}
+
+/// Counts all non-overlapping regex matches in one subject string.
+fn eval_preg_match_all_result(
+    pattern: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let regex = eval_preg_regex(pattern, values)?;
+    let subject = values.string_bytes(subject)?;
+    let count = regex.captures_iter(&subject).count();
+    values.int(i64::try_from(count).map_err(|_| EvalStatus::RuntimeFatal)?)
+}
+
+/// Evaluates PHP `preg_replace()` over eval expressions.
+fn eval_builtin_preg_replace(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [pattern, replacement, subject] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let pattern = eval_expr(pattern, context, scope, values)?;
+    let replacement = eval_expr(replacement, context, scope, values)?;
+    let subject = eval_expr(subject, context, scope, values)?;
+    eval_preg_replace_result(pattern, replacement, subject, values)
+}
+
+/// Replaces every regex match with a PHP-style backreference-expanded replacement.
+fn eval_preg_replace_result(
+    pattern: RuntimeCellHandle,
+    replacement: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let regex = eval_preg_regex(pattern, values)?;
+    let replacement = values.string_bytes(replacement)?;
+    let subject = values.string_bytes(subject)?;
+    let mut result = Vec::with_capacity(subject.len());
+    let mut cursor = 0;
+    for captures in regex.captures_iter(&subject) {
+        let Some(matched) = captures.get(0) else {
+            continue;
+        };
+        result.extend_from_slice(&subject[cursor..matched.start()]);
+        eval_preg_expand_replacement(&replacement, &subject, &captures, &mut result);
+        cursor = matched.end();
+    }
+    result.extend_from_slice(&subject[cursor..]);
+    values.string_bytes_value(&result)
+}
+
+/// Evaluates PHP `preg_replace_callback()` over eval expressions.
+fn eval_builtin_preg_replace_callback(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [pattern, callback, subject] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let pattern = eval_expr(pattern, context, scope, values)?;
+    let callback = eval_expr(callback, context, scope, values)?;
+    let subject = eval_expr(subject, context, scope, values)?;
+    eval_preg_replace_callback_result(pattern, callback, subject, context, values)
+}
+
+/// Replaces every regex match by invoking an eval-supported callback with `$matches`.
+fn eval_preg_replace_callback_result(
+    pattern: RuntimeCellHandle,
+    callback: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let regex = eval_preg_regex(pattern, values)?;
+    let callback = eval_callable_name(callback, values)?;
+    let subject = values.string_bytes(subject)?;
+    let mut result = Vec::with_capacity(subject.len());
+    let mut cursor = 0;
+    for captures in regex.captures_iter(&subject) {
+        let Some(matched) = captures.get(0) else {
+            continue;
+        };
+        result.extend_from_slice(&subject[cursor..matched.start()]);
+        let matches = eval_preg_capture_array(&subject, Some(&captures), values)?;
+        let callback_result = eval_callable_with_values(&callback, vec![matches], context, values)?;
+        let callback_result = values.cast_string(callback_result)?;
+        let callback_bytes = values.string_bytes(callback_result)?;
+        result.extend_from_slice(&callback_bytes);
+        cursor = matched.end();
+    }
+    result.extend_from_slice(&subject[cursor..]);
+    values.string_bytes_value(&result)
+}
+
+/// Evaluates PHP `preg_split()` over eval expressions.
+fn eval_builtin_preg_split(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [pattern, subject] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            eval_preg_split_result(pattern, subject, None, None, values)
+        }
+        [pattern, subject, limit] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            let limit = eval_expr(limit, context, scope, values)?;
+            eval_preg_split_result(pattern, subject, Some(limit), None, values)
+        }
+        [pattern, subject, limit, flags] => {
+            let pattern = eval_expr(pattern, context, scope, values)?;
+            let subject = eval_expr(subject, context, scope, values)?;
+            let limit = eval_expr(limit, context, scope, values)?;
+            let flags = eval_expr(flags, context, scope, values)?;
+            eval_preg_split_result(pattern, subject, Some(limit), Some(flags), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Splits a subject string with eval-supported `preg_split()` flags.
+fn eval_preg_split_result(
+    pattern: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    limit: Option<RuntimeCellHandle>,
+    flags: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let regex = eval_preg_regex(pattern, values)?;
+    let subject = values.string_bytes(subject)?;
+    let limit = eval_preg_split_limit(limit, values)?;
+    let flags = eval_preg_split_flags(flags, values)?;
+    let no_empty = flags & EVAL_PREG_SPLIT_NO_EMPTY != 0;
+    let capture_delimiters = flags & EVAL_PREG_SPLIT_DELIM_CAPTURE != 0;
+    let mut pieces = Vec::<Vec<u8>>::new();
+    let mut cursor = 0;
+
+    for captures in regex.captures_iter(&subject) {
+        let Some(matched) = captures.get(0) else {
+            continue;
+        };
+        if eval_preg_split_reached_limit(&pieces, limit) {
+            break;
+        }
+        eval_preg_split_push_piece(&mut pieces, &subject[cursor..matched.start()], no_empty);
+        if capture_delimiters {
+            eval_preg_split_push_captures(&mut pieces, &subject, &captures, no_empty);
+        }
+        cursor = matched.end();
+    }
+    eval_preg_split_push_piece(&mut pieces, &subject[cursor..], no_empty);
+
+    let mut result = values.array_new(pieces.len())?;
+    for (index, piece) in pieces.iter().enumerate() {
+        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        let value = values.string_bytes_value(piece)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Compiles one eval PCRE-style delimited pattern into a Rust regex.
+fn eval_preg_regex(
+    pattern: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Regex, EvalStatus> {
+    let pattern = values.string_bytes(pattern)?;
+    let (body, modifiers) = eval_preg_pattern_parts(&pattern)?;
+    let body = String::from_utf8(body).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let mut builder = RegexBuilder::new(&body);
+    builder
+        .case_insensitive(modifiers.case_insensitive)
+        .multi_line(modifiers.multi_line)
+        .dot_matches_new_line(modifiers.dot_matches_new_line)
+        .swap_greed(modifiers.swap_greed);
+    builder.build().map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Regex modifiers supported by eval `preg_*` pattern stripping.
+#[derive(Default)]
+struct EvalPregModifiers {
+    case_insensitive: bool,
+    multi_line: bool,
+    dot_matches_new_line: bool,
+    swap_greed: bool,
+}
+
+/// Splits a PHP delimited regex into body bytes and supported modifiers.
+fn eval_preg_pattern_parts(pattern: &[u8]) -> Result<(Vec<u8>, EvalPregModifiers), EvalStatus> {
+    if pattern.len() < 2 || pattern[0].is_ascii_alphanumeric() || pattern[0].is_ascii_whitespace()
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let delimiter = pattern[0];
+    if delimiter == b'\\' {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let closing = eval_preg_closing_delimiter(delimiter);
+    let close_index =
+        eval_preg_find_closing_delimiter(pattern, closing).ok_or(EvalStatus::RuntimeFatal)?;
+    let body = eval_preg_unescape_delimiter(&pattern[1..close_index], delimiter, closing);
+    let modifiers = eval_preg_modifiers(&pattern[close_index + 1..])?;
+    Ok((body, modifiers))
+}
+
+/// Returns the closing regex delimiter for PHP's paired delimiter forms.
+fn eval_preg_closing_delimiter(delimiter: u8) -> u8 {
+    match delimiter {
+        b'(' => b')',
+        b'[' => b']',
+        b'{' => b'}',
+        b'<' => b'>',
+        _ => delimiter,
+    }
+}
+
+/// Finds the first unescaped closing regex delimiter.
+fn eval_preg_find_closing_delimiter(pattern: &[u8], closing: u8) -> Option<usize> {
+    let mut escaped = false;
+    for (index, byte) in pattern.iter().copied().enumerate().skip(1) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        if byte == closing {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// Removes escapes that only protect the PHP regex delimiter from pattern stripping.
+fn eval_preg_unescape_delimiter(body: &[u8], delimiter: u8, closing: u8) -> Vec<u8> {
+    let mut result = Vec::with_capacity(body.len());
+    let mut index = 0;
+    while index < body.len() {
+        if body[index] == b'\\'
+            && index + 1 < body.len()
+            && matches!(body[index + 1], byte if byte == delimiter || byte == closing)
+        {
+            result.push(body[index + 1]);
+            index += 2;
+        } else {
+            result.push(body[index]);
+            index += 1;
+        }
+    }
+    result
+}
+
+/// Parses eval-supported PHP regex modifiers.
+fn eval_preg_modifiers(modifiers: &[u8]) -> Result<EvalPregModifiers, EvalStatus> {
+    let mut parsed = EvalPregModifiers::default();
+    for modifier in modifiers {
+        match *modifier {
+            b'i' => parsed.case_insensitive = true,
+            b'm' => parsed.multi_line = true,
+            b's' => parsed.dot_matches_new_line = true,
+            b'U' => parsed.swap_greed = true,
+            b'u' => {}
+            _ => return Err(EvalStatus::RuntimeFatal),
+        }
+    }
+    Ok(parsed)
+}
+
+/// Builds PHP's indexed `$matches` capture array for one regex result.
+fn eval_preg_capture_array(
+    subject: &[u8],
+    captures: Option<&Captures<'_>>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = captures.map_or(0, eval_preg_visible_capture_len);
+    let mut result = values.array_new(len)?;
+    if let Some(captures) = captures {
+        for index in 0..len {
+            let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            let bytes = eval_preg_capture_bytes(subject, captures, index).unwrap_or(b"");
+            let value = values.string_bytes_value(bytes)?;
+            result = values.array_set(result, key, value)?;
+        }
+    }
+    Ok(result)
+}
+
+/// Returns the capture count PHP should expose, dropping trailing unmatched groups.
+fn eval_preg_visible_capture_len(captures: &Captures<'_>) -> usize {
+    let mut len = captures.len();
+    while len > 1 && captures.get(len - 1).is_none() {
+        len -= 1;
+    }
+    len
+}
+
+/// Returns one captured byte range from the original subject.
+fn eval_preg_capture_bytes<'a>(
+    subject: &'a [u8],
+    captures: &Captures<'_>,
+    index: usize,
+) -> Option<&'a [u8]> {
+    captures
+        .get(index)
+        .map(|matched| &subject[matched.start()..matched.end()])
+}
+
+/// Appends one replacement string after expanding `$n`, `${n}`, and `\n` captures.
+fn eval_preg_expand_replacement(
+    replacement: &[u8],
+    subject: &[u8],
+    captures: &Captures<'_>,
+    result: &mut Vec<u8>,
+) {
+    let mut index = 0;
+    while index < replacement.len() {
+        match replacement[index] {
+            b'$' => {
+                if let Some((capture_index, next_index)) =
+                    eval_preg_replacement_capture_index(replacement, index + 1)
+                {
+                    if let Some(bytes) = eval_preg_capture_bytes(subject, captures, capture_index) {
+                        result.extend_from_slice(bytes);
+                    }
+                    index = next_index;
+                } else {
+                    result.push(replacement[index]);
+                    index += 1;
+                }
+            }
+            b'\\' if index + 1 < replacement.len() && replacement[index + 1].is_ascii_digit() => {
+                let (capture_index, next_index) =
+                    eval_preg_decimal_capture_index(replacement, index + 1);
+                if let Some(bytes) = eval_preg_capture_bytes(subject, captures, capture_index) {
+                    result.extend_from_slice(bytes);
+                }
+                index = next_index;
+            }
+            byte => {
+                result.push(byte);
+                index += 1;
+            }
+        }
+    }
+}
+
+/// Parses a dollar-style replacement capture reference.
+fn eval_preg_replacement_capture_index(bytes: &[u8], index: usize) -> Option<(usize, usize)> {
+    if bytes.get(index).copied() == Some(b'{') {
+        let mut cursor = index + 1;
+        let start = cursor;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+            cursor += 1;
+        }
+        if cursor == start || bytes.get(cursor).copied() != Some(b'}') {
+            return None;
+        }
+        let capture = eval_preg_decimal_bytes_to_usize(&bytes[start..cursor])?;
+        return Some((capture, cursor + 1));
+    }
+    if bytes.get(index).is_some_and(u8::is_ascii_digit) {
+        let (capture, next) = eval_preg_decimal_capture_index(bytes, index);
+        return Some((capture, next));
+    }
+    None
+}
+
+/// Parses a one- or two-digit replacement capture reference.
+fn eval_preg_decimal_capture_index(bytes: &[u8], index: usize) -> (usize, usize) {
+    let mut cursor = index;
+    let end = usize::min(bytes.len(), index + 2);
+    while cursor < end && bytes[cursor].is_ascii_digit() {
+        cursor += 1;
+    }
+    (
+        eval_preg_decimal_bytes_to_usize(&bytes[index..cursor]).unwrap_or(0),
+        cursor,
+    )
+}
+
+/// Converts ASCII decimal bytes into a `usize` capture index.
+fn eval_preg_decimal_bytes_to_usize(bytes: &[u8]) -> Option<usize> {
+    let mut value = 0usize;
+    for byte in bytes {
+        value = value.checked_mul(10)?;
+        value = value.checked_add(usize::from(byte - b'0'))?;
+    }
+    Some(value)
+}
+
+/// Returns the PHP `preg_split()` limit, treating zero as unlimited.
+fn eval_preg_split_limit(
+    limit: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<usize>, EvalStatus> {
+    let Some(limit) = limit else {
+        return Ok(None);
+    };
+    let limit = eval_int_value(limit, values)?;
+    if limit <= 0 {
+        return Ok(None);
+    }
+    usize::try_from(limit)
+        .map(Some)
+        .map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Returns supported `preg_split()` flags and rejects offset-capture shape changes.
+fn eval_preg_split_flags(
+    flags: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let Some(flags) = flags else {
+        return Ok(0);
+    };
+    let flags = eval_int_value(flags, values)?;
+    let supported = EVAL_PREG_SPLIT_NO_EMPTY | EVAL_PREG_SPLIT_DELIM_CAPTURE;
+    if flags & EVAL_PREG_SPLIT_OFFSET_CAPTURE != 0 || flags & !supported != 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(flags)
+}
+
+/// Returns whether `preg_split()` should stop splitting and emit the remaining subject.
+fn eval_preg_split_reached_limit(pieces: &[Vec<u8>], limit: Option<usize>) -> bool {
+    matches!(limit, Some(limit) if limit > 0 && pieces.len() + 1 >= limit)
+}
+
+/// Pushes one `preg_split()` output piece, honoring `PREG_SPLIT_NO_EMPTY`.
+fn eval_preg_split_push_piece(pieces: &mut Vec<Vec<u8>>, piece: &[u8], no_empty: bool) {
+    if no_empty && piece.is_empty() {
+        return;
+    }
+    pieces.push(piece.to_vec());
+}
+
+/// Pushes captured delimiters for `PREG_SPLIT_DELIM_CAPTURE`.
+fn eval_preg_split_push_captures(
+    pieces: &mut Vec<Vec<u8>>,
+    subject: &[u8],
+    captures: &Captures<'_>,
+    no_empty: bool,
+) {
+    for index in 1..captures.len() {
+        if let Some(bytes) = eval_preg_capture_bytes(subject, captures, index) {
+            eval_preg_split_push_piece(pieces, bytes, no_empty);
+        }
+    }
+}
+
 /// Evaluates PHP `gethostbyaddr($ip)` over one eval expression.
 fn eval_builtin_gethostbyaddr(
     args: &[EvalExpr],
@@ -12744,6 +13337,19 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "ARRAY_FILTER_USE_KEY" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_KEY)),
         "COUNT_NORMAL" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_NORMAL)),
         "COUNT_RECURSIVE" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_RECURSIVE)),
+        "PREG_SPLIT_NO_EMPTY" => Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_NO_EMPTY)),
+        "PREG_SPLIT_DELIM_CAPTURE" => {
+            Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_DELIM_CAPTURE))
+        }
+        "PREG_SPLIT_OFFSET_CAPTURE" => {
+            Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_OFFSET_CAPTURE))
+        }
+        "PREG_PATTERN_ORDER" => Some(EvalPredefinedConstant::Int(EVAL_PREG_PATTERN_ORDER)),
+        "PREG_SET_ORDER" => Some(EvalPredefinedConstant::Int(EVAL_PREG_SET_ORDER)),
+        "PREG_OFFSET_CAPTURE" => Some(EvalPredefinedConstant::Int(EVAL_PREG_OFFSET_CAPTURE)),
+        "PREG_UNMATCHED_AS_NULL" => {
+            Some(EvalPredefinedConstant::Int(EVAL_PREG_UNMATCHED_AS_NULL))
+        }
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
         "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
@@ -16157,6 +16763,41 @@ return function_exists("str_ireplace");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "Hell0 W0rld:bb:abc:yello ye:heLLo:YY:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval regex builtins handle captures, replacement, callbacks, and splitting.
+    #[test]
+    fn execute_program_dispatches_preg_builtins() {
+        let program = parse_fragment(
+            br#"$ok = preg_match("/([a-z]+)([0-9]+)/", "id42", $matches);
+echo $ok . ":" . count($matches) . ":" . $matches[0] . ":" . $matches[1] . ":" . $matches[2] . ":";
+echo preg_match("/xyz/", "id42") . ":";
+echo preg_match_all("/[0-9]+/", "a1b22c333") . ":";
+echo preg_replace("/([a-z])([0-9])/", "$2-$1", "a1 b2") . ":";
+function eval_regex_wrap($matches) { return "[" . $matches[0] . "]"; }
+echo preg_replace_callback("/[A-Z]/", "eval_regex_wrap", "AB") . ":";
+$limited = preg_split("/,/", "a,b,c", 2);
+echo count($limited) . ":" . $limited[0] . ":" . $limited[1] . ":";
+$kept = preg_split("/,/", "a,,b", 0, PREG_SPLIT_NO_EMPTY);
+echo count($kept) . ":" . $kept[1] . ":";
+echo call_user_func("preg_match", "/x/", "x") . ":";
+$replaced = call_user_func_array("preg_replace", ["pattern" => "/[0-9]+/", "replacement" => "N", "subject" => "a12"]);
+echo $replaced . ":";
+$captured = preg_split("/(,)/", "a,b", 0, PREG_SPLIT_DELIM_CAPTURE);
+echo count($captured) . ":" . $captured[1] . ":";
+return function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "1:3:id42:id:42:0:3:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

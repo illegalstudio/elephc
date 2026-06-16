@@ -2271,6 +2271,36 @@ echo ":"; echo function_exists("realpath");');
     assert_eq!(out, "resolved:false:call:array-false:1");
 }
 
+/// Verifies eval regex builtins handle captures, replacement, callbacks, and splitting.
+#[test]
+fn test_eval_dispatches_preg_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$ok = preg_match("/([a-z]+)([0-9]+)/", "id42", $matches);
+echo $ok . ":" . count($matches) . ":" . $matches[0] . ":" . $matches[1] . ":" . $matches[2] . ":";
+echo preg_match("/xyz/", "id42") . ":";
+echo preg_match_all("/[0-9]+/", "a1b22c333") . ":";
+echo preg_replace("/([a-z])([0-9])/", "$2-$1", "a1 b2") . ":";
+function eval_regex_wrap($matches) { return "[" . $matches[0] . "]"; }
+echo preg_replace_callback("/[A-Z]/", "eval_regex_wrap", "AB") . ":";
+$limited = preg_split("/,/", "a,b,c", 2);
+echo count($limited) . ":" . $limited[0] . ":" . $limited[1] . ":";
+$kept = preg_split("/,/", "a,,b", 0, PREG_SPLIT_NO_EMPTY);
+echo count($kept) . ":" . $kept[1] . ":";
+echo call_user_func("preg_match", "/x/", "x") . ":";
+$replaced = call_user_func_array("preg_replace", ["pattern" => "/[0-9]+/", "replacement" => "N", "subject" => "a12"]);
+echo $replaced . ":";
+$captured = preg_split("/(,)/", "a,b", 0, PREG_SPLIT_DELIM_CAPTURE);
+echo count($captured) . ":" . $captured[1] . ":";
+echo function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:3:id42:id:42:0:3:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:1"
+    );
+}
+
 /// Verifies eval `fnmatch()` supports wildcards, classes, flags, constants, and callables.
 #[test]
 fn test_eval_dispatches_fnmatch_builtin_call() {
