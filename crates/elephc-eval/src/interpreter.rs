@@ -1228,6 +1228,7 @@ fn eval_positional_expr_call(
         "eval" => eval_nested_eval(args, context, scope, values),
         "explode" => eval_builtin_explode(args, context, scope, values),
         "fdiv" | "fmod" => eval_builtin_float_binary(name, args, context, scope, values),
+        "file" => eval_builtin_file(args, context, scope, values),
         "file_exists" => eval_builtin_file_probe(name, args, context, scope, values),
         "fileatime" | "filectime" | "filegroup" | "fileinode" | "filemtime" | "fileowner"
         | "fileperms" => eval_builtin_file_stat_scalar(name, args, context, scope, values),
@@ -1277,11 +1278,13 @@ fn eval_positional_expr_call(
         "rawurlencode" | "urlencode" => {
             eval_builtin_url_encode(name, args, context, scope, values)
         }
+        "readfile" => eval_builtin_readfile(args, context, scope, values),
         "readlink" => eval_builtin_readlink(args, context, scope, values),
         "realpath" => eval_builtin_realpath(args, context, scope, values),
         "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
         "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
         "round" => eval_builtin_round(args, context, scope, values),
+        "scandir" => eval_builtin_scandir(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sleep" => eval_builtin_sleep(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
@@ -1594,6 +1597,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "dirname"
             | "explode"
             | "fdiv"
+            | "file"
             | "file_exists"
             | "fileatime"
             | "filectime"
@@ -1665,6 +1669,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "putenv"
             | "rawurldecode"
             | "rawurlencode"
+            | "readfile"
             | "readlink"
             | "realpath"
             | "realpath_cache_get"
@@ -1673,6 +1678,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "rtrim"
             | "round"
             | "rmdir"
+            | "scandir"
             | "sleep"
             | "sqrt"
             | "strcasecmp"
@@ -1802,7 +1808,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_exists" => Some(&["class", "autoload"]),
-        "chdir" | "mkdir" | "rmdir" => Some(&["directory"]),
+        "chdir" | "mkdir" | "rmdir" | "scandir" => Some(&["directory"]),
         "chr" => Some(&["codepoint"]),
         "clearstatcache" => Some(&["clear_realpath_cache", "filename"]),
         "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
@@ -1815,10 +1821,10 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "dirname" => Some(&["path", "levels"]),
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
-        "file_get_contents" | "file_exists" | "fileatime" | "filectime" | "filegroup"
+        "file" | "file_get_contents" | "file_exists" | "fileatime" | "filectime" | "filegroup"
         | "fileinode" | "filemtime" | "fileowner" | "fileperms" | "filesize" | "filetype"
-        | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable"
-        | "is_writable" | "is_writeable" | "unlink" => Some(&["filename"]),
+        | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable" | "is_writable"
+        | "is_writeable" | "readfile" | "unlink" => Some(&["filename"]),
         "file_put_contents" => Some(&["filename", "data"]),
         "function_exists" => Some(&["function"]),
         "gethostbyname" => Some(&["hostname"]),
@@ -2120,6 +2126,12 @@ fn eval_builtin_with_values(
             };
             eval_float_binary_result(name, *left, *right, values)?
         }
+        "file" => {
+            let [filename] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_file_result(*filename, values)?
+        }
         "file_exists" | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable"
         | "is_writable" | "is_writeable" => {
             let [filename] = evaluated_args else {
@@ -2164,6 +2176,12 @@ fn eval_builtin_with_values(
             };
             eval_linkinfo_result(*path, values)?
         }
+        "readfile" => {
+            let [filename] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_readfile_result(*filename, values)?
+        }
         "pi" => {
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);
@@ -2193,6 +2211,12 @@ fn eval_builtin_with_values(
             [value, precision] => values.round(*value, Some(*precision))?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "scandir" => {
+            let [directory] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_scandir_result(*directory, values)?
+        }
         "sqrt" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -4218,6 +4242,92 @@ fn eval_file_get_contents_result(
     }
 }
 
+/// Evaluates PHP `file($filename)` over one eval expression.
+fn eval_builtin_file(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    eval_file_result(filename, values)
+}
+
+/// Reads one local file and returns an indexed array of line byte strings.
+fn eval_file_result(
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
+            return values.array_new(0);
+        }
+    };
+    eval_file_lines_array(&bytes, values)
+}
+
+/// Splits file payload bytes into runtime array entries, preserving trailing newlines.
+fn eval_file_lines_array(
+    bytes: &[u8],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(0)?;
+    let mut line_start = 0;
+    let mut line_index = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'\n' {
+            continue;
+        }
+        result =
+            eval_array_set_indexed_bytes(result, line_index, &bytes[line_start..=index], values)?;
+        line_start = index + 1;
+        line_index += 1;
+    }
+    if line_start < bytes.len() {
+        result = eval_array_set_indexed_bytes(result, line_index, &bytes[line_start..], values)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `readfile($filename)` over one eval expression.
+fn eval_builtin_readfile(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    eval_readfile_result(filename, values)
+}
+
+/// Streams one local file to eval output and returns a byte count, false, or -1.
+fn eval_readfile_result(
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let path = std::path::Path::new(&path);
+    if path.is_dir() {
+        return values.int(-1);
+    }
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(_) => return values.bool_value(false),
+    };
+    let output = values.string_bytes_value(&bytes)?;
+    values.echo(output)?;
+    values.int(i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?)
+}
+
 /// Evaluates PHP `file_put_contents($filename, $data)` over one eval expression.
 fn eval_builtin_file_put_contents(
     args: &[EvalExpr],
@@ -4379,6 +4489,54 @@ fn eval_binary_path_bool_result(
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     values.bool_value(ok)
+}
+
+/// Evaluates PHP `scandir($directory)` over one eval expression.
+fn eval_builtin_scandir(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [directory] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let directory = eval_expr(directory, context, scope, values)?;
+    eval_scandir_result(directory, values)
+}
+
+/// Lists one local directory into an indexed string array, or an empty array on failure.
+fn eval_scandir_result(
+    directory: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(directory, values)?;
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return values.array_new(0);
+    };
+    let mut names = vec![".".to_string(), "..".to_string()];
+    for entry in entries {
+        let entry = entry.map_err(|_| EvalStatus::RuntimeFatal)?;
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    names.sort();
+    let mut result = values.array_new(names.len())?;
+    for (index, name) in names.iter().enumerate() {
+        result = eval_array_set_indexed_bytes(result, index, name.as_bytes(), values)?;
+    }
+    Ok(result)
+}
+
+/// Writes one byte-string value into an indexed runtime array at a zero-based position.
+fn eval_array_set_indexed_bytes(
+    array: RuntimeCellHandle,
+    index: usize,
+    value: &[u8],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+    let value = values.string_bytes_value(value)?;
+    values.array_set(array, key, value)
 }
 
 /// Evaluates PHP `readlink($path)` over one eval expression.
@@ -9644,6 +9802,65 @@ return true;"#,
         assert_eq!(
             values.output,
             "mkdir:dir:copy:rename:symlink:readlink:linkinfo:readlink-false:linkinfo-missing:hardlink:cache:cleanup:callmkdir:callrmdir:111111111"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval file-listing builtins build arrays, stream files, and dispatch dynamically.
+    #[test]
+    fn execute_program_dispatches_file_listing_builtins() {
+        let pid = std::process::id();
+        let lines = format!("elephc_eval_listing_lines_{pid}.txt");
+        let empty = format!("elephc_eval_listing_empty_{pid}.txt");
+        let missing = format!("elephc_eval_listing_missing_{pid}.txt");
+        let dir = format!("elephc_eval_listing_dir_{pid}");
+        let source = format!(
+            r#"file_put_contents("{lines}", "one\ntwo");
+file_put_contents("{empty}", "");
+$lines = file("{lines}");
+echo count($lines) . ":";
+echo $lines[0] === "one\n" ? "line0" : "bad"; echo ":";
+echo $lines[1] === "two" ? "line1" : "bad"; echo ":";
+echo "[";
+$bytes = readfile(filename: "{empty}");
+echo "]" . $bytes . ":";
+echo readfile("{missing}") === false ? "missing-readfile" : "bad"; echo ":";
+echo count(file("{missing}")) === 0 ? "missing-file" : "bad"; echo ":";
+mkdir("{dir}");
+file_put_contents("{dir}/a.txt", "a");
+file_put_contents("{dir}/b.txt", "b");
+$scan = scandir(directory: "{dir}");
+echo count($scan) . ":";
+echo in_array(".", $scan) && in_array("..", $scan) && in_array("a.txt", $scan) && in_array("b.txt", $scan) ? "scan" : "bad"; echo ":";
+$call_lines = call_user_func("file", "{lines}");
+echo $call_lines[0] === "one\n" ? "callfile" : "bad"; echo ":";
+$call_scan = call_user_func_array("scandir", ["directory" => "{dir}"]);
+echo count($call_scan) . ":";
+echo unlink("{dir}/a.txt") && unlink("{dir}/b.txt") && rmdir("{dir}") && unlink("{lines}") && unlink("{empty}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("file"); echo function_exists("readfile"); echo function_exists("scandir");
+return true;"#
+        );
+        let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+        for path in [&lines, &empty, &missing] {
+            let _ = std::fs::remove_file(path);
+        }
+        let _ = std::fs::remove_file(format!("{dir}/a.txt"));
+        let _ = std::fs::remove_file(format!("{dir}/b.txt"));
+        let _ = std::fs::remove_dir(&dir);
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        for path in [&lines, &empty, &missing] {
+            let _ = std::fs::remove_file(path);
+        }
+        let _ = std::fs::remove_file(format!("{dir}/a.txt"));
+        let _ = std::fs::remove_file(format!("{dir}/b.txt"));
+        let _ = std::fs::remove_dir(&dir);
+        assert_eq!(
+            values.output,
+            "2:line0:line1:[]0:missing-readfile:missing-file:4:scan:callfile:4:cleanup:111"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }

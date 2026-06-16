@@ -1506,6 +1506,42 @@ echo function_exists("readlink"); echo function_exists("linkinfo"); echo functio
     );
 }
 
+/// Verifies eval file-listing builtins build arrays, stream files, and dispatch dynamically.
+#[test]
+fn test_eval_dispatches_file_listing_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('file_put_contents("eval-lines.txt", "one\ntwo");
+file_put_contents("eval-empty.txt", "");
+$lines = file("eval-lines.txt");
+echo count($lines) . ":";
+echo $lines[0] === "one\n" ? "line0" : "bad"; echo ":";
+echo $lines[1] === "two" ? "line1" : "bad"; echo ":";
+echo "[";
+$bytes = readfile(filename: "eval-empty.txt");
+echo "]" . $bytes . ":";
+echo readfile("eval-missing.txt") === false ? "missing-readfile" : "bad"; echo ":";
+mkdir("eval-list-dir");
+file_put_contents("eval-list-dir/a.txt", "a");
+file_put_contents("eval-list-dir/b.txt", "b");
+$scan = scandir(directory: "eval-list-dir");
+echo count($scan) . ":";
+echo in_array(".", $scan) && in_array("..", $scan) && in_array("a.txt", $scan) && in_array("b.txt", $scan) ? "scan" : "bad"; echo ":";
+$call_lines = call_user_func("file", "eval-lines.txt");
+echo $call_lines[0] === "one\n" ? "callfile" : "bad"; echo ":";
+$call_scan = call_user_func_array("scandir", ["directory" => "eval-list-dir"]);
+echo count($call_scan) . ":";
+echo unlink("eval-list-dir/a.txt") && unlink("eval-list-dir/b.txt") && rmdir("eval-list-dir") && unlink("eval-lines.txt") && unlink("eval-empty.txt") ? "cleanup" : "bad"; echo ":";
+echo function_exists("file"); echo function_exists("readfile"); echo function_exists("scandir");
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "2:line0:line1:[]0:missing-readfile:4:scan:callfile:4:cleanup:111"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
