@@ -776,6 +776,30 @@ echo function_exists("array_flip");');
     assert_eq!(out, "c:b:d:e:4:k:left:n:1");
 }
 
+/// Verifies eval `array_unique()` preserves keys and supports callable dispatch.
+#[test]
+fn test_eval_dispatches_array_unique_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$unique = array_unique(["a", "b", "a", "2", 2]);
+echo count($unique) . ":" . $unique[0] . $unique[1] . $unique[3];
+$assoc = array_unique(["x" => "a", "y" => "b", "z" => "a"]);
+echo ":" . count($assoc) . ":" . $assoc["x"] . $assoc["y"];
+$scalar = array_unique([1, "1", 1.0, true, false, null, ""]);
+echo ":" . count($scalar) . ":" . $scalar[0] . ":";
+echo $scalar[4] ? "bad" : "F";
+$named = array_unique(array: ["k" => "v", "l" => "v"]);
+echo ":" . $named["k"] . ":" . count($named);
+$call = call_user_func("array_unique", ["q", "q", "r"]);
+echo ":" . $call[0] . $call[2];
+$spread = call_user_func_array("array_unique", [["s", "s", "t"]]);
+echo ":" . $spread[0] . $spread[2] . ":";
+echo function_exists("array_unique");');
+"#,
+    );
+    assert_eq!(out, "3:ab2:2:ab:2:1:F:v:1:qr:st:1");
+}
+
 /// Verifies eval array projection builtins return indexed key/value arrays.
 #[test]
 fn test_eval_dispatches_array_projection_builtin_calls() {

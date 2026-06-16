@@ -911,6 +911,7 @@ fn eval_positional_expr_call(
         "array_search" | "in_array" => {
             eval_builtin_array_search(name, args, context, scope, values)
         }
+        "array_unique" => eval_builtin_array_unique(args, context, scope, values),
         "ceil" => eval_builtin_ceil(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
@@ -1056,6 +1057,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_reverse"
             | "array_search"
             | "array_sum"
+            | "array_unique"
             | "array_values"
             | "ceil"
             | "call_user_func"
@@ -1188,9 +1190,8 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "abs" | "ceil" | "floor" | "sqrt" => Some(&["num"]),
         "array_combine" => Some(&["keys", "values"]),
-        "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_values" => {
-            Some(&["array"])
-        }
+        "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_unique"
+        | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
@@ -1393,6 +1394,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_array_search_result(name, *needle, *array, values)?
+        }
+        "array_unique" => {
+            let [array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_unique_result(*array, values)?
         }
         "ceil" => {
             let [value] = evaluated_args else {
@@ -1662,6 +1669,41 @@ fn eval_array_flip_result(
             continue;
         }
         result = values.array_set(result, value, key)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `array_unique()` over one eval array expression.
+fn eval_builtin_array_unique(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = eval_expr(array, context, scope, values)?;
+    eval_array_unique_result(array, values)
+}
+
+/// Builds `array_unique()` by comparing values with PHP's default string comparison mode.
+fn eval_array_unique_result(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut seen = Vec::<Vec<u8>>::with_capacity(len);
+    let mut result = values.assoc_new(len)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        let unique_key = values.string_bytes(value)?;
+        if seen.iter().any(|seen_key| seen_key == &unique_key) {
+            continue;
+        }
+        seen.push(unique_key);
+        result = values.array_set(result, key, value)?;
     }
     Ok(result)
 }
@@ -4891,6 +4933,34 @@ return function_exists("array_flip");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "c:b:d:e:4:k:left:n:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_unique()` preserves first keys using default string comparison.
+    #[test]
+    fn execute_program_dispatches_array_unique_builtin() {
+        let program = parse_fragment(
+            br#"$unique = array_unique(["a", "b", "a", "2", 2]);
+echo count($unique) . ":" . $unique[0] . $unique[1] . $unique[3];
+$assoc = array_unique(["x" => "a", "y" => "b", "z" => "a"]);
+echo ":" . count($assoc) . ":" . $assoc["x"] . $assoc["y"];
+$scalar = array_unique([1, "1", 1.0, true, false, null, ""]);
+echo ":" . count($scalar) . ":" . $scalar[0] . ":";
+echo $scalar[4] ? "bad" : "F";
+$named = array_unique(array: ["k" => "v", "l" => "v"]);
+echo ":" . $named["k"] . ":" . count($named);
+$call = call_user_func("array_unique", ["q", "q", "r"]);
+echo ":" . $call[0] . $call[2];
+$spread = call_user_func_array("array_unique", [["s", "s", "t"]]);
+echo ":" . $spread[0] . $spread[2] . ":";
+return function_exists("array_unique");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "3:ab2:2:ab:2:1:F:v:1:qr:st:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
