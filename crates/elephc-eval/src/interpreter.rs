@@ -469,6 +469,10 @@ fn execute_stmt(
             expr, context, scope, values,
         )?)),
         EvalStmt::Return(None) => Ok(EvalControl::Return(values.null()?)),
+        EvalStmt::StaticVar { name, init } => {
+            execute_static_var_stmt(name, init, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::PropertySet {
             object,
             property,
@@ -513,6 +517,37 @@ fn execute_stmt(
             Ok(EvalControl::None)
         }
     }
+}
+
+/// Executes a PHP `static $name = expr;` declaration in the current eval scope.
+fn execute_static_var_stmt(
+    name: &str,
+    init: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(function_name) = context.current_function().map(str::to_string) else {
+        let value = eval_expr(init, context, scope, values)?;
+        if let Some(replaced) = scope.set(name.to_string(), value, ScopeCellOwnership::Owned) {
+            values.release(replaced)?;
+        }
+        return Ok(());
+    };
+    if scope.contains_visible(name) {
+        return Ok(());
+    }
+    let value = if let Some(value) = context.static_local(&function_name, name) {
+        value
+    } else {
+        let value = eval_expr(init, context, scope, values)?;
+        let _ = context.set_static_local(function_name.clone(), name.to_string(), value);
+        value
+    };
+    if let Some(replaced) = scope.set(name.to_string(), value, ScopeCellOwnership::Borrowed) {
+        values.release(replaced)?;
+    }
+    Ok(())
 }
 
 /// Executes a PHP switch with loose case matching, default fallback, and fallthrough.
@@ -2715,13 +2750,83 @@ fn eval_dynamic_function_with_values(
     for (name, value) in function.params().iter().zip(evaluated_args) {
         function_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);
     }
+    let static_names = static_var_names(function.body());
     context.push_function(function.name());
     let result = execute_statements(function.body(), context, &mut function_scope, values);
+    let persist_result =
+        persist_static_locals(context, function.name(), &static_names, &function_scope, values);
     context.pop_function();
+    persist_result?;
     match result? {
         EvalControl::None => values.null(),
         EvalControl::Return(result) => Ok(result),
         EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Persists static local variables from one eval-declared function activation.
+fn persist_static_locals(
+    context: &mut ElephcEvalContext,
+    function_name: &str,
+    names: &[String],
+    scope: &ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for name in names {
+        if let Some(cell) = scope.visible_cell(name) {
+            if let Some(replaced) =
+                context.set_static_local(function_name.to_string(), name.clone(), cell)
+            {
+                values.release(replaced)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns the distinct static local names declared anywhere in an eval function body.
+fn static_var_names(body: &[EvalStmt]) -> Vec<String> {
+    let mut names = std::collections::HashSet::new();
+    collect_static_var_names(body, &mut names);
+    names.into_iter().collect()
+}
+
+/// Recursively collects static local declaration names from eval statements.
+fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::HashSet<String>) {
+    for stmt in body {
+        match stmt {
+            EvalStmt::StaticVar { name, .. } => {
+                names.insert(name.clone());
+            }
+            EvalStmt::DoWhile { body, .. }
+            | EvalStmt::Foreach { body, .. }
+            | EvalStmt::For { body, .. }
+            | EvalStmt::While { body, .. } => collect_static_var_names(body, names),
+            EvalStmt::FunctionDecl { .. } => {}
+            EvalStmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_static_var_names(then_branch, names);
+                collect_static_var_names(else_branch, names);
+            }
+            EvalStmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_static_var_names(&case.body, names);
+                }
+            }
+            EvalStmt::ArrayAppendVar { .. }
+            | EvalStmt::ArraySetVar { .. }
+            | EvalStmt::Break
+            | EvalStmt::Continue
+            | EvalStmt::Echo(_)
+            | EvalStmt::Expr(_)
+            | EvalStmt::PropertySet { .. }
+            | EvalStmt::Return(_)
+            | EvalStmt::StoreVar { .. }
+            | EvalStmt::UnsetVar { .. } => {}
+        }
     }
 }
 
@@ -4580,6 +4685,40 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.get(result), FakeValue::Int(12));
+    }
+
+    /// Verifies eval-declared function static locals persist between calls.
+    #[test]
+    fn execute_program_static_var_persists_in_declared_function() {
+        let program = parse_fragment(
+            br#"function dyn() { for ($i = 0; $i < 2; $i++) { static $n = 0; $n++; } return $n; }
+return (dyn() * 10) + dyn();"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(24));
+    }
+
+    /// Verifies top-level eval static declarations reinitialize on each eval execution.
+    #[test]
+    fn execute_program_top_level_static_var_reinitializes_per_eval() {
+        let program =
+            parse_fragment(br#"static $n = 0; $n++; return $n;"#).expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let first = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute first eval ir");
+        let second = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute second eval ir");
+
+        assert_eq!(values.get(first), FakeValue::Int(1));
+        assert_eq!(values.get(second), FakeValue::Int(1));
     }
 
     /// Verifies named calls reject positional arguments that follow named arguments.

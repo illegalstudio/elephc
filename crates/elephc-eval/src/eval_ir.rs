@@ -90,6 +90,10 @@ pub enum EvalStmt {
         property: String,
         value: EvalExpr,
     },
+    StaticVar {
+        name: String,
+        init: EvalExpr,
+    },
     StoreVar {
         name: String,
         value: EvalExpr,

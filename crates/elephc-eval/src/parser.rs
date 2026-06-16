@@ -581,6 +581,7 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Return(Some(expr))])
             }
+            TokenKind::Ident(name) if ident_eq(name, "static") => self.parse_static_var_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "switch") => self.parse_switch_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "unset") => self.parse_unset_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
@@ -712,6 +713,20 @@ impl Parser {
         let params = self.parse_function_params()?;
         let body = self.parse_block()?;
         Ok(vec![EvalStmt::FunctionDecl { name, params, body }])
+    }
+
+    /// Parses `static $name = expr;` declarations in eval fragments.
+    fn parse_static_var_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let TokenKind::DollarIdent(name) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let name = name.clone();
+        self.advance();
+        self.expect(TokenKind::Equal)?;
+        let init = self.parse_expr()?;
+        self.expect_semicolon()?;
+        Ok(vec![EvalStmt::StaticVar { name, init }])
     }
 
     /// Parses a dynamic function declaration parameter list after `(`.
@@ -2130,6 +2145,23 @@ mod tests {
                     left: Box::new(EvalExpr::LoadVar("x".to_string())),
                     right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
                 }))],
+            }]
+        );
+    }
+
+    /// Verifies static local declarations preserve the target name and initializer expression.
+    #[test]
+    fn parse_fragment_accepts_static_var_source() {
+        let program = parse_fragment(br#"static $n = 1 + 1;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::StaticVar {
+                name: "n".to_string(),
+                init: EvalExpr::Binary {
+                    op: EvalBinOp::Add,
+                    left: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                },
             }]
         );
     }
