@@ -1487,7 +1487,7 @@ fn eval_positional_expr_call(
         "getenv" => eval_builtin_getenv(args, context, scope, values),
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "glob" => eval_builtin_glob(args, context, scope, values),
-        "hash" | "hash_hmac" | "md5" | "sha1" => {
+        "hash" | "hash_file" | "hash_hmac" | "md5" | "sha1" => {
             eval_builtin_hash_one_shot(name, args, context, scope, values)
         }
         "hash_algos" => eval_builtin_hash_algos(args, values),
@@ -1917,6 +1917,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "hash"
             | "hash_algos"
             | "hash_equals"
+            | "hash_file"
             | "hash_hmac"
             | "hex2bin"
             | "html_entity_decode"
@@ -2188,6 +2189,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "hash" => Some(&["algo", "data", "binary"]),
         "hash_algos" => Some(&[]),
         "hash_equals" => Some(&["known_string", "user_string"]),
+        "hash_file" => Some(&["algo", "filename", "binary"]),
         "hash_hmac" => Some(&["algo", "data", "key", "binary"]),
         "hypot" => Some(&["x", "y"]),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => Some(&["string"]),
@@ -2973,7 +2975,7 @@ fn eval_builtin_with_values(
             };
             eval_glob_result(*pattern, values)?
         }
-        "hash" | "hash_hmac" | "md5" | "sha1" => {
+        "hash" | "hash_file" | "hash_hmac" | "md5" | "sha1" => {
             eval_hash_one_shot_result(name, evaluated_args, values)?
         }
         "hash_algos" => {
@@ -5604,6 +5606,14 @@ fn eval_hash_one_shot_result(
             let data = values.string_bytes(data)?;
             eval_hash_digest_result(&algo, &data, binary, values)
         }
+        "hash_file" => {
+            let (algo, filename, binary) = match evaluated_args {
+                [algo, filename] => (*algo, *filename, false),
+                [algo, filename, binary] => (*algo, *filename, values.truthy(*binary)?),
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            eval_hash_file_result(algo, filename, binary, values)
+        }
         "hash_hmac" => {
             let (algo, data, key, binary) = match evaluated_args {
                 [algo, data, key] => (*algo, *data, *key, false),
@@ -5616,6 +5626,21 @@ fn eval_hash_one_shot_result(
             eval_hash_hmac_result(&algo, &data, &key, binary, values)
         }
         _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Reads a local file and returns its PHP hash digest or false when it cannot be read.
+fn eval_hash_file_result(
+    algo: RuntimeCellHandle,
+    filename: RuntimeCellHandle,
+    binary: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let algo = values.string_bytes(algo)?;
+    let path = eval_path_string(filename, values)?;
+    match std::fs::read(path) {
+        Ok(data) => eval_hash_digest_result(&algo, &data, binary, values),
+        Err(_) => values.bool_value(false),
     }
 }
 
@@ -13202,8 +13227,9 @@ return count($algos);"#,
     /// Verifies eval one-shot hash digest builtins use the crypto bridge and dispatch dynamically.
     #[test]
     fn execute_program_dispatches_hash_digest_builtins() {
-        let program = parse_fragment(
-            br#"echo md5("abc"); echo ":";
+        let filename = format!("elephc_eval_hash_file_{}.txt", std::process::id());
+        let source = format!(
+            r#"echo md5("abc"); echo ":";
 echo sha1(string: "abc"); echo ":";
 echo hash("sha256", "abc"); echo ":";
 echo hash_hmac(algo: "sha256", data: "data", key: "key"); echo ":";
@@ -13211,10 +13237,16 @@ echo bin2hex(md5("abc", true)); echo ":";
 echo bin2hex(call_user_func("sha1", "abc", true)); echo ":";
 echo call_user_func_array("hash", ["algo" => "md5", "data" => "abc"]); echo ":";
 echo call_user_func_array("hash_hmac", ["algo" => "sha256", "data" => "data", "key" => "key"]); echo ":";
-echo function_exists("md5"); echo function_exists("sha1"); echo function_exists("hash");
+file_put_contents("{filename}", "abc");
+echo hash_file("sha256", "{filename}"); echo ":";
+echo bin2hex(hash_file(algo: "md5", filename: "{filename}", binary: true)); echo ":";
+echo call_user_func_array("hash_file", ["algo" => "md5", "filename" => "{filename}"]); echo ":";
+echo hash_file("sha256", "{filename}.missing") === false ? "missing" : "bad"; echo ":";
+unlink("{filename}");
+echo function_exists("md5"); echo function_exists("sha1"); echo function_exists("hash"); echo function_exists("hash_file");
 return function_exists("hash_hmac");"#,
-        )
-        .expect("parse eval fragment");
+        );
+        let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
@@ -13231,7 +13263,11 @@ return function_exists("hash_hmac");"#,
                 "a9993e364706816aba3e25717850c26c9cd0d89d:",
                 "900150983cd24fb0d6963f7d28e17f72:",
                 "5031fe3d989c6d1537a013fa6e739da23463fdaec3b70137d828e36ace221bd0:",
-                "111"
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad:",
+                "900150983cd24fb0d6963f7d28e17f72:",
+                "900150983cd24fb0d6963f7d28e17f72:",
+                "missing:",
+                "1111"
             )
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));

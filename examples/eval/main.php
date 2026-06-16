@@ -164,6 +164,7 @@ $url_codec = eval('return urlencode("a b&=") . ":" . rawurldecode("a%20b%26%3D")
 $checksum = eval('return crc32("hello");');
 $hash_algos = eval('$algos = hash_algos(); return count($algos) . ":" . (in_array("sha256", $algos) ? "sha256" : "missing");');
 $digest = eval('return md5("abc") . ":" . substr(hash("sha256", "abc"), 0, 8) . ":" . substr(hash_hmac("sha256", "data", "key"), 0, 8);');
+$file_digest = eval('file_put_contents("eval-hash-file.txt", "abc"); $digest = hash_file("sha256", "eval-hash-file.txt"); unlink("eval-hash-file.txt"); return substr($digest, 0, 8);');
 $system_info = eval('return (time() > 1000000000 ? "time" : "bad") . ":" . phpversion() . ":" . (strlen(php_uname("s")) > 0 ? "uname" : "bad") . ":" . sys_get_temp_dir() . ":" . (strlen(getcwd()) > 0 ? "cwd" : "bad");');
 $date_sample = eval('$ts = mktime(0, 0, 0, 1, 2, 2024); return date("Y-m-d", $ts);');
 $strtotime_sample = eval('$ts = strtotime("2024-01-02 03:04:05"); return date("Y-m-d H:i:s", $ts);');
@@ -295,6 +296,7 @@ echo "url-codec=" . $url_codec . "\n";
 echo "crc32=" . $checksum . "\n";
 echo "hash-algos=" . $hash_algos . "\n";
 echo "digest=" . $digest . "\n";
+echo "hash-file=" . $file_digest . "\n";
 echo "system-info=" . $system_info . "\n";
 echo "date-sample=" . $date_sample . "\n";
 echo "strtotime-sample=" . $strtotime_sample . "\n";
