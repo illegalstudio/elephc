@@ -1205,6 +1205,33 @@ echo function_exists("hash_algos") ? "exists" : "missing";');
     assert_eq!(out, "28:md2:sha256:crc:whirlpool:joaat:exists");
 }
 
+/// Verifies eval zero-argument system builtins match native runtime conventions.
+#[test]
+fn test_eval_dispatches_zero_arg_system_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo time() > 1000000000 ? "time" : "bad"; echo ":";
+echo phpversion(); echo ":";
+echo sys_get_temp_dir(); echo ":";
+echo strlen(getcwd()) > 0 ? "cwd" : "bad"; echo ":";
+echo call_user_func("time") > 1000000000 ? "call-time" : "bad"; echo ":";
+echo call_user_func("phpversion"); echo ":";
+echo call_user_func_array("getcwd", []) !== "" ? "call-cwd" : "bad"; echo ":";
+echo call_user_func_array("sys_get_temp_dir", []); echo ":";
+echo function_exists("time"); echo function_exists("phpversion"); echo function_exists("getcwd");
+echo function_exists("sys_get_temp_dir");');
+"#,
+    );
+    assert_eq!(
+        out,
+        format!(
+            "time:{}:/tmp:cwd:call-time:{}:call-cwd:/tmp:1111",
+            env!("CARGO_PKG_VERSION"),
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
