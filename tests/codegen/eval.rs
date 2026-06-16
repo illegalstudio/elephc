@@ -1270,6 +1270,24 @@ echo function_exists("putenv");');
     assert_eq!(out, "direct:named:named:set:spread:empty:11");
 }
 
+/// Verifies eval sleep builtins dispatch through direct, named, and callable paths.
+#[test]
+fn test_eval_dispatches_sleep_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo sleep(0) . ":";
+echo sleep(seconds: 0) . ":";
+usleep(0);
+echo "u:";
+echo call_user_func("sleep", 0) . ":";
+echo call_user_func_array("usleep", ["microseconds" => 0]) === null ? "null" : "bad";
+echo ":"; echo function_exists("sleep");
+echo function_exists("usleep");');
+"#,
+    );
+    assert_eq!(out, "0:0:u:0:null:11");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

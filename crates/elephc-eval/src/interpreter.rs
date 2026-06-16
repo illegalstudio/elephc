@@ -1249,6 +1249,7 @@ fn eval_positional_expr_call(
         "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
         "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
+        "sleep" => eval_builtin_sleep(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
         "time" => eval_builtin_time(args, values),
@@ -1273,6 +1274,7 @@ fn eval_positional_expr_call(
         }
         "trim" => eval_builtin_trim_like(name, args, context, scope, values),
         "ucwords" => eval_builtin_ucwords(args, context, scope, values),
+        "usleep" => eval_builtin_usleep(args, context, scope, values),
         "wordwrap" => eval_builtin_wordwrap(args, context, scope, values),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
@@ -1597,6 +1599,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "realpath_cache_size"
             | "rtrim"
             | "round"
+            | "sleep"
             | "sqrt"
             | "strcasecmp"
             | "str_contains"
@@ -1626,6 +1629,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "ucwords"
             | "urldecode"
             | "urlencode"
+            | "usleep"
             | "wordwrap"
     )
 }
@@ -1747,6 +1751,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "putenv" => Some(&["assignment"]),
         "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
         "round" => Some(&["num", "precision"]),
+        "sleep" => Some(&["seconds"]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
         "strstr" => Some(&["haystack", "needle", "before_needle"]),
@@ -1762,6 +1767,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
             Some(&["string"])
         }
         "ucwords" => Some(&["string", "separators"]),
+        "usleep" => Some(&["microseconds"]),
         "wordwrap" => Some(&["string", "width", "break", "cut_long_words"]),
         _ => None,
     }
@@ -2267,11 +2273,23 @@ fn eval_builtin_with_values(
             }
             eval_sys_get_temp_dir_result(values)?
         }
+        "sleep" => {
+            let [seconds] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_sleep_result(*seconds, values)?
+        }
         "time" => {
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_time_result(values)?
+        }
+        "usleep" => {
+            let [microseconds] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_usleep_result(*microseconds, values)?
         }
         "strlen" => {
             let [value] = evaluated_args else {
@@ -3730,6 +3748,56 @@ fn eval_time_result(values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHand
         .as_secs();
     let timestamp = i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.int(timestamp)
+}
+
+/// Evaluates PHP `sleep($seconds)` over one eval expression.
+fn eval_builtin_sleep(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [seconds] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let seconds = eval_expr(seconds, context, scope, values)?;
+    eval_sleep_result(seconds, values)
+}
+
+/// Sleeps for a non-negative number of seconds and returns PHP's remaining-seconds value.
+fn eval_sleep_result(
+    seconds: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let seconds = eval_int_value(seconds, values)?;
+    let seconds = u64::try_from(seconds).map_err(|_| EvalStatus::RuntimeFatal)?;
+    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    values.int(0)
+}
+
+/// Evaluates PHP `usleep($microseconds)` over one eval expression.
+fn eval_builtin_usleep(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [microseconds] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let microseconds = eval_expr(microseconds, context, scope, values)?;
+    eval_usleep_result(microseconds, values)
+}
+
+/// Sleeps for a non-negative number of microseconds and returns PHP null.
+fn eval_usleep_result(
+    microseconds: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let microseconds = eval_int_value(microseconds, values)?;
+    let microseconds = u64::try_from(microseconds).map_err(|_| EvalStatus::RuntimeFatal)?;
+    std::thread::sleep(std::time::Duration::from_micros(microseconds));
+    values.null()
 }
 
 /// Evaluates PHP `phpversion()` with no arguments.
@@ -8106,6 +8174,29 @@ return function_exists("putenv");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "direct:named:named:set:spread:empty:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval sleep builtins dispatch without delaying focused tests.
+    #[test]
+    fn execute_program_dispatches_sleep_builtins() {
+        let program = parse_fragment(
+            br#"echo sleep(0) . ":";
+echo sleep(seconds: 0) . ":";
+usleep(0);
+echo "u:";
+echo call_user_func("sleep", 0) . ":";
+echo call_user_func_array("usleep", ["microseconds" => 0]) === null ? "null" : "bad";
+echo ":"; echo function_exists("sleep");
+return function_exists("usleep");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "0:0:u:0:null:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
