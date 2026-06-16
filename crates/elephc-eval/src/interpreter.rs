@@ -1205,6 +1205,11 @@ fn eval_positional_expr_call(
             eval_builtin_array_search(name, args, context, scope, values)
         }
         "array_unique" => eval_builtin_array_unique(args, context, scope, values),
+        "acos" | "asin" | "atan" | "cos" | "cosh" | "deg2rad" | "exp" | "log2" | "log10"
+        | "rad2deg" | "sin" | "sinh" | "tan" | "tanh" => {
+            eval_builtin_float_unary(name, args, context, scope, values)
+        }
+        "atan2" | "hypot" => eval_builtin_float_pair(name, args, context, scope, values),
         "base64_encode" => eval_builtin_base64_encode(args, context, scope, values),
         "base64_decode" => eval_builtin_base64_decode(args, context, scope, values),
         "basename" => eval_builtin_basename(args, context, scope, values),
@@ -1269,6 +1274,7 @@ fn eval_positional_expr_call(
         "implode" => eval_builtin_implode(args, context, scope, values),
         "inet_ntop" => eval_builtin_inet_ntop(args, context, scope, values),
         "inet_pton" => eval_builtin_inet_pton(args, context, scope, values),
+        "intdiv" => eval_builtin_intdiv(args, context, scope, values),
         "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable" | "is_writable"
         | "is_writeable" => eval_builtin_file_probe(name, args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
@@ -1278,6 +1284,7 @@ fn eval_positional_expr_call(
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
         "linkinfo" => eval_builtin_linkinfo(args, context, scope, values),
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
+        "log" => eval_builtin_log(args, context, scope, values),
         "max" | "min" => eval_builtin_min_max(name, args, context, scope, values),
         "microtime" => eval_builtin_microtime(args, context, scope, values),
         "nl2br" => eval_builtin_nl2br(args, context, scope, values),
@@ -1591,6 +1598,10 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_sum"
             | "array_unique"
             | "array_values"
+            | "acos"
+            | "asin"
+            | "atan"
+            | "atan2"
             | "basename"
             | "base64_decode"
             | "base64_encode"
@@ -1607,6 +1618,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "clearstatcache"
             | "count"
             | "copy"
+            | "cos"
+            | "cosh"
             | "crc32"
             | "ctype_alnum"
             | "ctype_alpha"
@@ -1614,7 +1627,9 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "ctype_space"
             | "define"
             | "defined"
+            | "deg2rad"
             | "dirname"
+            | "exp"
             | "explode"
             | "fdiv"
             | "file"
@@ -1648,10 +1663,12 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "html_entity_decode"
             | "htmlentities"
             | "htmlspecialchars"
+            | "hypot"
             | "implode"
             | "in_array"
             | "inet_ntop"
             | "inet_pton"
+            | "intdiv"
             | "ip2long"
             | "is_dir"
             | "is_executable"
@@ -1678,6 +1695,9 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_resource"
             | "is_string"
             | "lcfirst"
+            | "log"
+            | "log2"
+            | "log10"
             | "long2ip"
             | "max"
             | "md5"
@@ -1692,6 +1712,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "pow"
             | "phpversion"
             | "putenv"
+            | "rad2deg"
             | "rawurldecode"
             | "rawurlencode"
             | "readfile"
@@ -1706,6 +1727,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "scandir"
             | "sleep"
             | "sha1"
+            | "sin"
+            | "sinh"
             | "sqrt"
             | "strcasecmp"
             | "str_contains"
@@ -1731,6 +1754,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "symlink"
             | "sys_get_temp_dir"
             | "tempnam"
+            | "tan"
+            | "tanh"
             | "time"
             | "touch"
             | "trim"
@@ -1828,6 +1853,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_key_exists" => Some(&["key", "array"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
+        "acos" | "asin" | "atan" | "cos" | "cosh" | "deg2rad" | "exp" | "log2" | "log10"
+        | "rad2deg" | "sin" | "sinh" | "tan" | "tanh" => Some(&["num"]),
+        "atan2" => Some(&["y", "x"]),
         "basename" => Some(&["path", "suffix"]),
         "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "hex2bin"
         | "rawurldecode" | "rawurlencode" | "stripslashes" | "urldecode" | "urlencode" => {
@@ -1868,13 +1896,16 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "hash_algos" => Some(&[]),
         "hash_equals" => Some(&["known_string", "user_string"]),
         "hash_hmac" => Some(&["algo", "data", "key", "binary"]),
+        "hypot" => Some(&["x", "y"]),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => Some(&["string"]),
         "implode" => Some(&["separator", "array"]),
         "inet_ntop" => Some(&["ip"]),
         "inet_pton" => Some(&["ip"]),
+        "intdiv" => Some(&["num1", "num2"]),
         "ip2long" => Some(&["ip"]),
         "link" | "symlink" => Some(&["target", "link"]),
         "linkinfo" | "readlink" => Some(&["path"]),
+        "log" => Some(&["num", "base"]),
         "max" | "min" => Some(&["value"]),
         "md5" | "sha1" => Some(&["string", "binary"]),
         "microtime" => Some(&["as_float"]),
@@ -2118,6 +2149,19 @@ fn eval_builtin_with_values(
             };
             eval_base64_decode_result(*value, values)?
         }
+        "acos" | "asin" | "atan" | "cos" | "cosh" | "deg2rad" | "exp" | "log2" | "log10"
+        | "rad2deg" | "sin" | "sinh" | "tan" | "tanh" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_float_unary_result(name, *value, values)?
+        }
+        "atan2" | "hypot" => {
+            let [left, right] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_float_pair_result(name, *left, *right, values)?
+        }
         "bin2hex" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -2235,6 +2279,11 @@ fn eval_builtin_with_values(
             };
             eval_linkinfo_result(*path, values)?
         }
+        "log" => match evaluated_args {
+            [num] => eval_log_result(*num, None, values)?,
+            [num, base] => eval_log_result(*num, Some(*base), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "readfile" => {
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -2517,6 +2566,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_inet_pton_result(*value, values)?
+        }
+        "intdiv" => {
+            let [left, right] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_intdiv_result(*left, *right, values)?
         }
         "ip2long" => {
             let [value] = evaluated_args else {
@@ -6478,6 +6533,146 @@ fn eval_push_base64_decoded_quartet(quartet: &[Option<u8>], output: &mut Vec<u8>
         return;
     };
     output.push(((third & 0x03) << 6) | fourth);
+}
+
+/// Evaluates PHP one-argument floating-point math builtins over one eval expression.
+fn eval_builtin_float_unary(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_float_unary_result(name, value, values)
+}
+
+/// Dispatches an evaluated value through the matching PHP floating-point unary math function.
+fn eval_float_unary_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = eval_float_value(value, values)?;
+    let result = match name {
+        "acos" => value.acos(),
+        "asin" => value.asin(),
+        "atan" => value.atan(),
+        "cos" => value.cos(),
+        "cosh" => value.cosh(),
+        "deg2rad" => value.to_radians(),
+        "exp" => value.exp(),
+        "log2" => value.log2(),
+        "log10" => value.log10(),
+        "rad2deg" => value.to_degrees(),
+        "sin" => value.sin(),
+        "sinh" => value.sinh(),
+        "tan" => value.tan(),
+        "tanh" => value.tanh(),
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    values.float(result)
+}
+
+/// Evaluates PHP two-argument floating-point math builtins over eval expressions.
+fn eval_builtin_float_pair(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [left, right] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let left = eval_expr(left, context, scope, values)?;
+    let right = eval_expr(right, context, scope, values)?;
+    eval_float_pair_result(name, left, right, values)
+}
+
+/// Dispatches an evaluated pair through PHP `atan2()` or `hypot()`.
+fn eval_float_pair_result(
+    name: &str,
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let left = eval_float_value(left, values)?;
+    let right = eval_float_value(right, values)?;
+    let result = match name {
+        "atan2" => left.atan2(right),
+        "hypot" => left.hypot(right),
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    values.float(result)
+}
+
+/// Evaluates PHP `log($num, $base = e)` over eval expressions.
+fn eval_builtin_log(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [num] => {
+            let num = eval_expr(num, context, scope, values)?;
+            eval_log_result(num, None, values)
+        }
+        [num, base] => {
+            let num = eval_expr(num, context, scope, values)?;
+            let base = eval_expr(base, context, scope, values)?;
+            eval_log_result(num, Some(base), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Computes PHP `log()` from already evaluated arguments.
+fn eval_log_result(
+    num: RuntimeCellHandle,
+    base: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let num = eval_float_value(num, values)?;
+    let result = match base {
+        Some(base) => num.log(eval_float_value(base, values)?),
+        None => num.ln(),
+    };
+    values.float(result)
+}
+
+/// Evaluates PHP `intdiv(...)` over two eval expressions.
+fn eval_builtin_intdiv(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [left, right] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let left = eval_expr(left, context, scope, values)?;
+    let right = eval_expr(right, context, scope, values)?;
+    eval_intdiv_result(left, right, values)
+}
+
+/// Computes PHP integer division from already evaluated arguments.
+fn eval_intdiv_result(
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let left = eval_int_value(left, values)?;
+    let right = eval_int_value(right, values)?;
+    if right == 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let result = left.checked_div(right).ok_or(EvalStatus::RuntimeFatal)?;
+    values.int(result)
 }
 
 /// Evaluates PHP floating-point binary math builtins over two eval expressions.
@@ -11506,6 +11701,46 @@ return function_exists("fmod");"#,
         let mut values = FakeOps::default();
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
         assert_eq!(values.output, "2.5:double:0.9:4.5:0.9:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval extended scalar math builtins support direct, named, callable, and probe paths.
+    #[test]
+    fn execute_program_dispatches_extended_math_builtins() {
+        let program = parse_fragment(
+            br#"echo sin(0); echo ":";
+echo cos(0); echo ":";
+echo tan(0); echo ":";
+echo round(asin(1), 2); echo ":";
+echo acos(1); echo ":";
+echo round(atan(1), 2); echo ":";
+echo sinh(0); echo ":";
+echo cosh(0); echo ":";
+echo tanh(0); echo ":";
+echo log2(8); echo ":";
+echo log10(100); echo ":";
+echo exp(0); echo ":";
+echo round(deg2rad(180), 2); echo ":";
+echo round(rad2deg(pi()), 0); echo ":";
+echo log(num: 8, base: 2); echo ":";
+echo atan2(y: 0, x: 1); echo ":";
+echo hypot(3, 4); echo ":";
+echo intdiv(7, 2); echo ":";
+echo round(call_user_func("sin", pi() / 2), 0); echo ":";
+echo call_user_func_array("intdiv", ["num1" => 9, "num2" => 2]); echo ":";
+echo function_exists("sin"); echo function_exists("log"); echo function_exists("intdiv");
+return function_exists("hypot");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "0:1:0:1.57:0:0.79:0:1:0:3:2:1:3.14:180:3:0:5:3:1:4:111"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
