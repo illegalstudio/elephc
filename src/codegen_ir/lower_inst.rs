@@ -184,6 +184,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EvalFunctionCall => builtins::lower_eval_function_call(ctx, &inst),
         Op::EvalFunctionCallArray => builtins::lower_eval_function_call_array(ctx, &inst),
         Op::EvalFunctionExists => builtins::lower_eval_function_exists(ctx, &inst),
+        Op::EvalConstantExists => builtins::lower_eval_constant_exists(ctx, &inst),
         Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),

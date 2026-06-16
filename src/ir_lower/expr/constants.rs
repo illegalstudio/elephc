@@ -48,6 +48,17 @@ pub(super) fn lower_static_defined_call(
         return None;
     };
     let exists = ctx.constant_value(constant_name).is_some();
+    if !exists && ctx.has_eval_barrier() {
+        let data = ctx.intern_global_name(constant_name);
+        return Some(ctx.emit_value(
+            Op::EvalConstantExists,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            PhpType::Bool,
+            Op::EvalConstantExists.default_effects(),
+            Some(expr.span),
+        ));
+    }
     Some(emit_typed_constant(
         ctx,
         Op::ConstBool,

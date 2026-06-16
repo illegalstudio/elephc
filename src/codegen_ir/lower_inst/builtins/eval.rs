@@ -270,6 +270,32 @@ pub(super) fn lower_eval_function_exists(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a post-eval dynamic constant existence probe to the eval bridge ABI.
+pub(super) fn lower_eval_constant_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let constant_name = ctx.global_name_data(expect_data(inst)?)?.to_string();
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    load_eval_context_to_arg(ctx, 0);
+    let (name_label, name_len) = ctx.data.add_string(constant_name.as_bytes());
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_constant_exists");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Returns the aligned scratch size for an eval-declared function call.
 fn eval_function_call_stack_bytes(arg_count: usize) -> usize {
     let bytes = EVAL_STACK_BYTES + arg_count * 8;

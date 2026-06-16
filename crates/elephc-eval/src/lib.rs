@@ -282,6 +282,21 @@ pub unsafe extern "C" fn __elephc_eval_function_exists(
         .unwrap_or(0)
 }
 
+/// Checks whether a constant was previously defined through `eval()`.
+///
+/// # Safety
+/// `ctx` must be null or a valid eval context handle. `name_ptr` must be
+/// readable for `name_len` bytes when `name_len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_constant_exists(
+    ctx: *const ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe { eval_constant_exists_inner(ctx, name_ptr, name_len) })
+        .unwrap_or(0)
+}
+
 /// Registers a generated native PHP function callback in an eval context.
 ///
 /// # Safety
@@ -412,6 +427,28 @@ unsafe fn eval_function_exists_inner(
         return 0;
     };
     i32::from(context.has_function(&name.to_ascii_lowercase()))
+}
+
+/// Runs the eval constant-exists ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_constant_exists`; invalid handles or unreadable name
+/// storage fail closed as `false`.
+unsafe fn eval_constant_exists_inner(
+    ctx: *const ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_ref() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+        return 0;
+    };
+    i32::from(context.has_constant(&name))
 }
 
 /// Runs the native registration ABI body after installing a panic boundary.
@@ -901,6 +938,35 @@ mod tests {
             unsafe { __elephc_eval_function_exists(&ctx, missing.as_ptr(), missing.len() as u64) };
 
         assert_eq!(existing_result, 1);
+        assert_eq!(missing_result, 0);
+    }
+
+    /// Verifies the constant-exists ABI probes eval-defined constants by PHP name.
+    #[test]
+    fn constant_exists_reports_defined_eval_constant() {
+        let mut ctx = ElephcEvalContext::new();
+        let value = RuntimeCellHandle::from_raw(1usize as *mut RuntimeCell);
+        assert!(ctx.define_constant("DynConstProbe", value));
+        let existing = b"DynConstProbe";
+        let qualified = b"\\DynConstProbe";
+        let wrong_case = b"dynconstprobe";
+        let missing = b"missing";
+
+        let existing_result = unsafe {
+            __elephc_eval_constant_exists(&ctx, existing.as_ptr(), existing.len() as u64)
+        };
+        let qualified_result = unsafe {
+            __elephc_eval_constant_exists(&ctx, qualified.as_ptr(), qualified.len() as u64)
+        };
+        let wrong_case_result = unsafe {
+            __elephc_eval_constant_exists(&ctx, wrong_case.as_ptr(), wrong_case.len() as u64)
+        };
+        let missing_result =
+            unsafe { __elephc_eval_constant_exists(&ctx, missing.as_ptr(), missing.len() as u64) };
+
+        assert_eq!(existing_result, 1);
+        assert_eq!(qualified_result, 1);
+        assert_eq!(wrong_case_result, 0);
         assert_eq!(missing_result, 0);
     }
 
