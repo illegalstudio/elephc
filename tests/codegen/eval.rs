@@ -1434,6 +1434,24 @@ echo $g;
     assert_eq!(out, "2");
 }
 
+/// Verifies a function can read a global alias after eval mutates that global.
+#[test]
+fn test_eval_global_alias_read_after_eval_in_same_function() {
+    let out = compile_and_run(
+        r#"<?php
+$g = 1;
+function bump_eval_global_and_read() {
+    global $g;
+    eval('global $g; $g = $g + 1;');
+    echo $g;
+}
+bump_eval_global_and_read();
+echo ":" . $g;
+"#,
+    );
+    assert_eq!(out, "2:2");
+}
+
 /// Verifies unsetting an eval global alias does not unset the actual global value.
 #[test]
 fn test_eval_global_alias_unset_keeps_global_storage() {
