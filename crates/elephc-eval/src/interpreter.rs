@@ -1370,6 +1370,7 @@ fn eval_call(
             | "natcasesort"
             | "natsort"
             | "rsort"
+            | "shuffle"
             | "sort"
     ) {
         return eval_builtin_array_pop_shift_call(name, args, context, scope, values);
@@ -2055,6 +2056,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "scandir"
             | "sleep"
             | "sha1"
+            | "shuffle"
             | "sin"
             | "sinh"
             | "sort"
@@ -2197,9 +2199,8 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_walk" => Some(&["array", "callback"]),
         "array_flip" | "array_keys" | "array_pop" | "array_product" | "array_shift"
         | "array_sum" | "array_unique" | "array_rand" | "array_values" | "arsort"
-        | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort" | "sort" => {
-            Some(&["array"])
-        }
+        | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort"
+        | "shuffle" | "sort" => Some(&["array"]),
         "array_push" | "array_unshift" => Some(&["array", "values"]),
         "array_key_exists" => Some(&["key", "array"]),
         "array_pad" => Some(&["array", "length", "value"]),
@@ -2566,7 +2567,7 @@ fn eval_builtin_with_values(
             result
         }
         "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort"
-        | "sort" => {
+        | "shuffle" | "sort" => {
             let [array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
@@ -3830,7 +3831,7 @@ fn eval_builtin_array_pop_shift_call(
     if matches!(
         name,
         "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort"
-            | "sort"
+            | "shuffle" | "sort"
     ) {
         return eval_builtin_array_sort_call(name, args, context, scope, values);
     }
@@ -4004,6 +4005,7 @@ fn eval_array_sort_replacement(
         "natcasesort" => eval_array_natural_sort_entries(array, true, values)?,
         "natsort" => eval_array_natural_sort_entries(array, false, values)?,
         "arsort" | "asort" | "rsort" | "sort" => eval_array_value_sort_entries(array, values)?,
+        "shuffle" => return eval_array_shuffle_replacement(array, values),
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     entries.sort_by(|left, right| {
@@ -4022,6 +4024,31 @@ fn eval_array_sort_replacement(
         return eval_array_preserve_key_sort_result(entries, values);
     }
     eval_array_reindex_sort_result(entries, values)
+}
+
+/// Builds a shuffled, reindexed replacement array for `shuffle()`.
+fn eval_array_shuffle_replacement(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut entries = Vec::with_capacity(len);
+    for position in 0..len {
+        let source_key = values.array_iter_key(array, position)?;
+        entries.push(values.array_get(array, source_key)?);
+    }
+
+    for index in (1..entries.len()).rev() {
+        let swap_with = (eval_random_u128() % ((index + 1) as u128)) as usize;
+        entries.swap(index, swap_with);
+    }
+
+    let mut result = values.array_new(entries.len())?;
+    for (index, value) in entries.into_iter().enumerate() {
+        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }
 
 /// Builds an indexed result for `sort()` / `rsort()` after value ordering.
@@ -15117,6 +15144,30 @@ return function_exists("natsort") && function_exists("natcasesort");"#,
         assert_eq!(
             values.warnings,
             vec!["natsort(): Argument #1 ($array) must be passed by reference, value given"]
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `shuffle()` reindexes direct variable arrays only.
+    #[test]
+    fn execute_program_dispatches_shuffle_builtin() {
+        let program = parse_fragment(
+            br#"$a = ["x" => 1, "y" => 2];
+echo shuffle($a) . ":" . (isset($a["x"]) ? "bad" : "reindexed") . ":" . count($a) . ":" . array_sum($a) . ":";
+$b = ["x" => 1, "y" => 2];
+echo call_user_func("shuffle", $b) . ":" . $b["x"] . $b["y"] . ":";
+return function_exists("shuffle");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "1:reindexed:2:3:1:12:");
+        assert_eq!(
+            values.warnings,
+            vec!["shuffle(): Argument #1 ($array) must be passed by reference, value given"]
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }

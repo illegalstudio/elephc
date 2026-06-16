@@ -1074,6 +1074,21 @@ echo function_exists("natsort") && function_exists("natcasesort");');
     );
 }
 
+/// Verifies eval `shuffle()` reindexes direct variable arrays only.
+#[test]
+fn test_eval_dispatches_shuffle_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = ["x" => 1, "y" => 2];
+echo shuffle($a) . ":" . (isset($a["x"]) ? "bad" : "reindexed") . ":" . count($a) . ":" . array_sum($a) . ":";
+$b = ["x" => 1, "y" => 2];
+echo call_user_func("shuffle", $b) . ":" . $b["x"] . $b["y"] . ":";
+echo function_exists("shuffle");');
+"#,
+    );
+    assert_eq!(out, "1:reindexed:2:3:1:12:1");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {
