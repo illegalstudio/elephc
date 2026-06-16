@@ -52,6 +52,11 @@ unsafe extern "C" {
         name_len: u64,
         value: *mut RuntimeCell,
     ) -> u64;
+    fn __elephc_eval_value_object_property_len(object: *mut RuntimeCell) -> u64;
+    fn __elephc_eval_value_object_property_iter_key(
+        object: *mut RuntimeCell,
+        position: u64,
+    ) -> *mut RuntimeCell;
     fn __elephc_eval_value_method_call(
         object: *mut RuntimeCell,
         name_ptr: *const u8,
@@ -258,6 +263,26 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         } else {
             Ok(())
         }
+    }
+
+    /// Returns the JSON-visible public property count for a boxed Mixed object.
+    fn object_property_len(
+        &mut self,
+        object: RuntimeCellHandle,
+    ) -> Result<usize, EvalStatus> {
+        let len = unsafe { __elephc_eval_value_object_property_len(object.as_ptr()) };
+        usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)
+    }
+
+    /// Returns one JSON-visible public property key for a boxed Mixed object.
+    fn object_property_iter_key(
+        &mut self,
+        object: RuntimeCellHandle,
+        position: usize,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_value_object_property_iter_key(object.as_ptr(), position as u64)
+        })
     }
 
     /// Calls a boxed Mixed object method through the generated user helper.

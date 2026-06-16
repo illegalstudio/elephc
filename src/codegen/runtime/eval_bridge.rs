@@ -16,6 +16,11 @@ use crate::codegen::platform::Arch;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Builds the x86_64 instruction that installs the Mixed heap-kind marker.
+fn x86_64_mixed_heap_kind_instruction() -> String {
+    format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)
+}
+
 /// Emits every eval value wrapper required by `libelephc-eval`.
 pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
     emitter.blank();
@@ -348,6 +353,82 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __elephc_eval_value_array_len_zero");          // null payloads are treated as empty containers
     emitter.instruction("ldr x0, [x9]");                                        // load the runtime container element count
     emitter.instruction("ret");                                                 // return the element count to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_object_property_len");
+    emitter.instruction("cbz x0, __elephc_eval_value_object_property_len_zero"); // null handles have no JSON-visible object properties
+    emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
+    emitter.instruction("cmp x9, #6");                                          // tag 6 = object
+    emitter.instruction("b.ne __elephc_eval_value_object_property_len_zero");   // non-objects expose no JSON-visible properties here
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
+    emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); // null object payloads have no visible properties
+    abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
+    emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class id
+    emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
+    emitter.instruction("cmp x11, x10");                                        // check whether the object is stdClass
+    emitter.instruction("b.ne __elephc_eval_value_object_property_len_zero");   // non-stdClass objects expose no bridge-visible properties
+    emitter.instruction("ldr x9, [x9, #8]");                                    // load stdClass dynamic-property hash pointer
+    emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); // null property hashes are treated as empty objects
+    emitter.instruction("ldr x0, [x9]");                                        // load the hash entry count
+    emitter.instruction("ret");                                                 // return the public property count to Rust
+    emitter.label("__elephc_eval_value_object_property_len_zero");
+    emitter.instruction("mov x0, #0");                                          // report zero JSON-visible object properties
+    emitter.instruction("ret");                                                 // return the empty property count to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_object_property_iter_key");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for insertion-order property iteration
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable property-iterator frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the boxed object receiver while walking properties
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested zero-based property position
+    emitter.instruction("cbz x0, __elephc_eval_value_object_property_iter_key_null"); // null handles produce a null property key
+    emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
+    emitter.instruction("cmp x9, #6");                                          // tag 6 = object
+    emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_null"); // non-objects have no JSON-visible property key
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
+    emitter.instruction("cbz x9, __elephc_eval_value_object_property_iter_key_null"); // null object payloads produce a null key
+    abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
+    emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class id
+    emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
+    emitter.instruction("cmp x11, x10");                                        // check whether the object is stdClass
+    emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_null"); // non-stdClass objects have no bridge-visible key
+    emitter.instruction("ldr x9, [x9, #8]");                                    // load stdClass dynamic-property hash pointer
+    emitter.instruction("cbz x9, __elephc_eval_value_object_property_iter_key_null"); // null property hashes produce a null key
+    emitter.instruction("str x9, [sp, #16]");                                   // save the hash pointer for repeated iterator helper calls
+    emitter.instruction("str xzr, [sp, #24]");                                  // start the insertion-order property counter at zero
+    emitter.instruction("mov x1, xzr");                                         // cursor 0 starts at the property hash head entry
+    emitter.label("__elephc_eval_value_object_property_iter_key_loop");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the hash pointer before advancing the iterator
+    emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next insertion-order property key
+    emitter.instruction("cmn x0, #1");                                          // did the iterator report the done sentinel?
+    emitter.instruction("b.eq __elephc_eval_value_object_property_iter_key_null"); // out-of-range positions produce a null key
+    emitter.instruction("ldr x10, [sp, #24]");                                  // load the current insertion-order property position
+    emitter.instruction("ldr x11, [sp, #8]");                                   // load the requested property position
+    emitter.instruction("cmp x10, x11");                                        // is this the requested property entry?
+    emitter.instruction("b.eq __elephc_eval_value_object_property_iter_key_box"); // box the current property key when the position matches
+    emitter.instruction("add x10, x10, #1");                                    // advance the insertion-order property counter
+    emitter.instruction("str x10, [sp, #24]");                                  // persist the updated property counter
+    emitter.instruction("mov x1, x0");                                          // use the returned cursor for the next iterator call
+    emitter.instruction("b __elephc_eval_value_object_property_iter_key_loop"); // continue walking until the requested position is reached
+    emitter.label("__elephc_eval_value_object_property_iter_key_box");
+    emitter.instruction("cmn x2, #1");                                          // integer hash keys carry key_hi = -1
+    emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_string"); // string property keys need string-tag boxing
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer key fallback
+    emitter.instruction("mov x2, xzr");                                         // integer keys do not use a high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the integer property key as Mixed
+    emitter.instruction("b __elephc_eval_value_object_property_iter_key_done"); // return the boxed key to Rust
+    emitter.label("__elephc_eval_value_object_property_iter_key_string");
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string property key
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the string property key as Mixed
+    emitter.instruction("b __elephc_eval_value_object_property_iter_key_done"); // return the boxed key to Rust
+    emitter.label("__elephc_eval_value_object_property_iter_key_null");
+    emitter.instruction("mov x0, #8");                                          // runtime tag 8 = null
+    emitter.instruction("mov x1, xzr");                                         // null keys do not use a low payload word
+    emitter.instruction("mov x2, xzr");                                         // null keys do not use a high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box null for invalid property-key requests
+    emitter.label("__elephc_eval_value_object_property_iter_key_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the property-iterator wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed property key to Rust
 
     emitter.label("__elephc_eval_key_normalize");
     emitter.instruction("sub sp, sp, #32");                                     // allocate a helper frame while classifying the boxed eval key
@@ -1241,10 +1322,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned array pointer while allocating the Mixed box
     emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate a boxed Mixed cell without retaining the new array
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 5
-    )); // materialize the mixed-cell heap kind with the x86_64 heap marker
+    emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the mixed-cell heap kind with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
     emitter.instruction("mov QWORD PTR [rax], 4");                              // runtime tag 4 = indexed array
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned indexed-array pointer
@@ -1266,10 +1344,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned hash pointer while allocating the Mixed box
     emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate a boxed Mixed cell without retaining the new hash
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 5
-    )); // materialize the mixed-cell heap kind with the x86_64 heap marker
+    emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the mixed-cell heap kind with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
     emitter.instruction("mov QWORD PTR [rax], 5");                              // runtime tag 5 = associative array
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned hash pointer
@@ -1441,6 +1516,87 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("jz __elephc_eval_value_array_len_zero");               // null payloads are treated as empty containers
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the runtime container element count
     emitter.instruction("ret");                                                 // return the element count to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_object_property_len");
+    emitter.instruction("test rdi, rdi");                                       // null handles have no JSON-visible object properties
+    emitter.instruction("jz __elephc_eval_value_object_property_len_zero");     // report zero properties for null runtime cells
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
+    emitter.instruction("cmp r10, 6");                                          // tag 6 = object
+    emitter.instruction("jne __elephc_eval_value_object_property_len_zero");    // non-objects expose no JSON-visible properties here
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
+    emitter.instruction("test r10, r10");                                       // is the object payload null?
+    emitter.instruction("jz __elephc_eval_value_object_property_len_zero");     // null object payloads have no visible properties
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
+    emitter.instruction("cmp rax, r11");                                        // check whether the object is stdClass
+    emitter.instruction("jne __elephc_eval_value_object_property_len_zero");    // non-stdClass objects expose no bridge-visible properties
+    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load stdClass dynamic-property hash pointer
+    emitter.instruction("test r10, r10");                                       // is the property hash null?
+    emitter.instruction("jz __elephc_eval_value_object_property_len_zero");     // null property hashes are treated as empty objects
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the hash entry count
+    emitter.instruction("ret");                                                 // return the public property count to Rust
+    emitter.label("__elephc_eval_value_object_property_len_zero");
+    emitter.instruction("xor eax, eax");                                        // report zero JSON-visible object properties
+    emitter.instruction("ret");                                                 // return the empty property count to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_object_property_iter_key");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable property-iterator wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for receiver, target position, hash pointer, and counter
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed object receiver while walking properties
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested zero-based property position
+    emitter.instruction("test rdi, rdi");                                       // null handles produce a null property key
+    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // branch to boxed null for null runtime cells
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
+    emitter.instruction("cmp r10, 6");                                          // tag 6 = object
+    emitter.instruction("jne __elephc_eval_value_object_property_iter_key_null"); // non-objects have no JSON-visible property key
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
+    emitter.instruction("test r10, r10");                                       // is the object payload null?
+    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // null object payloads produce a null key
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
+    emitter.instruction("cmp rax, r11");                                        // check whether the object is stdClass
+    emitter.instruction("jne __elephc_eval_value_object_property_iter_key_null"); // non-stdClass objects have no bridge-visible key
+    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load stdClass dynamic-property hash pointer
+    emitter.instruction("test r10, r10");                                       // is the property hash null?
+    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // null property hashes produce a null key
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the hash pointer for repeated iterator helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // start the insertion-order property counter at zero
+    emitter.instruction("xor esi, esi");                                        // cursor 0 starts at the property hash head entry
+    emitter.label("__elephc_eval_value_object_property_iter_key_loop");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the hash pointer before advancing the iterator
+    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next insertion-order property key
+    emitter.instruction("cmp rax, -1");                                         // did the iterator report the done sentinel?
+    emitter.instruction("je __elephc_eval_value_object_property_iter_key_null"); // out-of-range positions produce a null key
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // load the current insertion-order property position
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // load the requested property position
+    emitter.instruction("cmp r10, r11");                                        // is this the requested property entry?
+    emitter.instruction("je __elephc_eval_value_object_property_iter_key_box"); // box the current property key when the position matches
+    emitter.instruction("add r10, 1");                                          // advance the insertion-order property counter
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // persist the updated property counter
+    emitter.instruction("mov rsi, rax");                                        // use the returned cursor for the next iterator call
+    emitter.instruction("jmp __elephc_eval_value_object_property_iter_key_loop"); // continue walking until the requested position is reached
+    emitter.label("__elephc_eval_value_object_property_iter_key_box");
+    emitter.instruction("cmp rdx, -1");                                         // integer hash keys carry key_hi = -1
+    emitter.instruction("jne __elephc_eval_value_object_property_iter_key_string"); // string property keys need string-tag boxing
+    emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer key fallback
+    emitter.instruction("xor esi, esi");                                        // integer keys do not use a high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the integer property key as Mixed
+    emitter.instruction("jmp __elephc_eval_value_object_property_iter_key_done"); // return the boxed key to Rust
+    emitter.label("__elephc_eval_value_object_property_iter_key_string");
+    emitter.instruction("mov rsi, rdx");                                        // move the string key length into the boxing high word
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string property key
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the string property key as Mixed
+    emitter.instruction("jmp __elephc_eval_value_object_property_iter_key_done"); // return the boxed key to Rust
+    emitter.label("__elephc_eval_value_object_property_iter_key_null");
+    emitter.instruction("mov eax, 8");                                          // runtime tag 8 = null
+    emitter.instruction("xor edi, edi");                                        // null keys do not use a low payload word
+    emitter.instruction("xor esi, esi");                                        // null keys do not use a high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box null for invalid property-key requests
+    emitter.label("__elephc_eval_value_object_property_iter_key_done");
+    emitter.instruction("add rsp, 32");                                         // release the property-iterator wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed property key to Rust
 
     emitter.label("__elephc_eval_key_normalize");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while classifying the eval key

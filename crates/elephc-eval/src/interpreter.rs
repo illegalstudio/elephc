@@ -355,6 +355,16 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus>;
 
+    /// Returns the number of public JSON-visible properties on a runtime object.
+    fn object_property_len(&mut self, object: RuntimeCellHandle) -> Result<usize, EvalStatus>;
+
+    /// Returns the public property key at a zero-based JSON object iteration position.
+    fn object_property_iter_key(
+        &mut self,
+        object: RuntimeCellHandle,
+        position: usize,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Calls a named method on a runtime object held in a boxed Mixed cell.
     fn method_call(
         &mut self,
@@ -13810,7 +13820,19 @@ fn eval_json_encode_append(
                 output,
             )?;
         }
-        EVAL_TAG_NULL | EVAL_TAG_OBJECT | EVAL_TAG_RESOURCE => output.extend_from_slice(b"null"),
+        EVAL_TAG_OBJECT => {
+            eval_json_encode_append_object(
+                value,
+                values,
+                flags,
+                depth_limit,
+                depth,
+                arrays_seen,
+                error,
+                output,
+            )?;
+        }
+        EVAL_TAG_NULL | EVAL_TAG_RESOURCE => output.extend_from_slice(b"null"),
         _ => return Err(EvalStatus::UnsupportedConstruct),
     }
     Ok(())
@@ -13957,6 +13979,66 @@ fn eval_json_encode_append_assoc(
         )?;
         eval_json_encode_append_colon(flags, output);
         let element = values.array_get(value, key)?;
+        eval_json_encode_append(
+            element,
+            values,
+            flags,
+            depth_limit,
+            depth + 1,
+            arrays_seen,
+            error,
+            output,
+        )?;
+    }
+    if pretty && len > 0 {
+        output.push(b'\n');
+        eval_json_encode_pretty_indent(output, depth);
+    }
+    output.push(b'}');
+    arrays_seen.pop();
+    Ok(())
+}
+
+/// Appends one eval runtime object as a JSON object.
+fn eval_json_encode_append_object(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+    flags: i64,
+    depth_limit: usize,
+    depth: usize,
+    arrays_seen: &mut Vec<usize>,
+    error: &mut Option<EvalJsonEncodeError>,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
+    let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
+    output.push(b'{');
+    let len = values.object_property_len(value)?;
+    if pretty && len > 0 {
+        output.push(b'\n');
+    }
+    for position in 0..len {
+        if position > 0 {
+            output.push(b',');
+            if pretty {
+                output.push(b'\n');
+            }
+        }
+        if pretty {
+            eval_json_encode_pretty_indent(output, depth + 1);
+        }
+        let key = values.object_property_iter_key(value, position)?;
+        let key_bytes = values.string_bytes(key)?;
+        eval_json_encode_append_string(
+            &key_bytes,
+            flags & !EVAL_JSON_NUMERIC_CHECK,
+            EvalJsonStringPosition::Key,
+            error,
+            output,
+        )?;
+        eval_json_encode_append_colon(flags, output);
+        let property = std::str::from_utf8(&key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let element = values.property_get(value, property)?;
         eval_json_encode_append(
             element,
             values,
@@ -15018,7 +15100,7 @@ mod tests {
         Bytes(Vec<u8>),
         Array(Vec<RuntimeCellHandle>),
         Assoc(Vec<(FakeKey, RuntimeCellHandle)>),
-        Object(HashMap<String, RuntimeCellHandle>),
+        Object(Vec<(String, RuntimeCellHandle)>),
         Iterator { len: i64, position: i64 },
         Resource(i64),
     }
@@ -15073,6 +15155,16 @@ mod tests {
                 FakeKey::Int(value) => self.int(*value),
                 FakeKey::String(value) => self.string(value),
             }
+        }
+
+        /// Finds a fake object property by insertion-order name.
+        fn object_property(
+            properties: &[(String, RuntimeCellHandle)],
+            name: &str,
+        ) -> Option<RuntimeCellHandle> {
+            properties
+                .iter()
+                .find_map(|(property, value)| (property == name).then_some(*value))
         }
     }
 
@@ -15198,8 +15290,8 @@ mod tests {
         ) -> Result<RuntimeCellHandle, EvalStatus> {
             match self.get(object) {
                 FakeValue::Object(properties) => properties
-                    .get(property)
-                    .copied()
+                    .iter()
+                    .find_map(|(name, value)| (name == property).then_some(*value))
                     .map_or_else(|| self.null(), Ok),
                 _ => Err(EvalStatus::UnsupportedConstruct),
             }
@@ -15216,8 +15308,43 @@ mod tests {
             let Some(FakeValue::Object(properties)) = self.values.get_mut(&id) else {
                 return Err(EvalStatus::UnsupportedConstruct);
             };
-            properties.insert(property.to_string(), value);
+            if let Some((_, existing_value)) =
+                properties.iter_mut().find(|(name, _)| name == property)
+            {
+                *existing_value = value;
+            } else {
+                properties.push((property.to_string(), value));
+            }
             Ok(())
+        }
+
+        /// Returns the number of fake object properties in insertion order.
+        fn object_property_len(
+            &mut self,
+            object: RuntimeCellHandle,
+        ) -> Result<usize, EvalStatus> {
+            match self.get(object) {
+                FakeValue::Object(properties) => Ok(properties.len()),
+                FakeValue::Iterator { .. } => Ok(0),
+                _ => Err(EvalStatus::UnsupportedConstruct),
+            }
+        }
+
+        /// Returns one fake object property key by insertion-order position.
+        fn object_property_iter_key(
+            &mut self,
+            object: RuntimeCellHandle,
+            position: usize,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            match self.get(object) {
+                FakeValue::Object(properties) => {
+                    let Some((name, _)) = properties.get(position) else {
+                        return self.null();
+                    };
+                    self.string(name)
+                }
+                _ => Err(EvalStatus::UnsupportedConstruct),
+            }
         }
 
         /// Calls one fake object method by name.
@@ -15254,15 +15381,13 @@ mod tests {
                     if !args.is_empty() {
                         return Err(EvalStatus::UnsupportedConstruct);
                     }
-                    properties.get("x").copied().map_or_else(|| self.null(), Ok)
+                    Self::object_property(&properties, "x").map_or_else(|| self.null(), Ok)
                 }
                 (FakeValue::Object(properties), "add_x") => {
                     let [arg] = args.as_slice() else {
                         return Err(EvalStatus::UnsupportedConstruct);
                     };
-                    let x = properties
-                        .get("x")
-                        .copied()
+                    let x = Self::object_property(&properties, "x")
                         .ok_or(EvalStatus::RuntimeFatal)?;
                     let FakeValue::Int(x) = self.get(x) else {
                         return Err(EvalStatus::UnsupportedConstruct);
@@ -15276,9 +15401,7 @@ mod tests {
                     let [left, right] = args.as_slice() else {
                         return Err(EvalStatus::UnsupportedConstruct);
                     };
-                    let x = properties
-                        .get("x")
-                        .copied()
+                    let x = Self::object_property(&properties, "x")
                         .ok_or(EvalStatus::RuntimeFatal)?;
                     let FakeValue::Int(x) = self.get(x) else {
                         return Err(EvalStatus::UnsupportedConstruct);
@@ -15297,7 +15420,7 @@ mod tests {
 
         /// Creates one fake object for eval `new` unit tests.
         fn new_object(&mut self, _class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
-            Ok(self.alloc(FakeValue::Object(HashMap::new())))
+            Ok(self.alloc(FakeValue::Object(Vec::new())))
         }
 
         /// Applies fake constructor side effects for eval `new` unit tests.
@@ -15311,7 +15434,11 @@ mod tests {
                 return Err(EvalStatus::UnsupportedConstruct);
             };
             if let Some(first) = args.first().copied() {
-                properties.insert("x".to_string(), first);
+                if let Some((_, value)) = properties.iter_mut().find(|(name, _)| name == "x") {
+                    *value = first;
+                } else {
+                    properties.push(("x".to_string(), first));
+                }
             }
             Ok(())
         }
@@ -16502,8 +16629,7 @@ return function_exists("var_dump");"#,
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
         let x = values.int(1).expect("create fake int");
-        let mut properties = HashMap::new();
-        properties.insert("x".to_string(), x);
+        let properties = vec![("x".to_string(), x)];
         let object = values.alloc(FakeValue::Object(properties));
         scope.set("this", object, ScopeCellOwnership::Borrowed);
 
@@ -16525,7 +16651,7 @@ return function_exists("var_dump");"#,
         let program = parse_fragment(br#"return $this->answer();"#).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
-        let object = values.alloc(FakeValue::Object(HashMap::new()));
+        let object = values.alloc(FakeValue::Object(Vec::new()));
         scope.set("this", object, ScopeCellOwnership::Borrowed);
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
@@ -16540,8 +16666,7 @@ return function_exists("var_dump");"#,
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
         let x = values.int(7).expect("create fake int");
-        let mut properties = HashMap::new();
-        properties.insert("x".to_string(), x);
+        let properties = vec![("x".to_string(), x)];
         let object = values.alloc(FakeValue::Object(properties));
         scope.set("this", object, ScopeCellOwnership::Borrowed);
 
@@ -16558,8 +16683,7 @@ return function_exists("var_dump");"#,
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
         let x = values.int(7).expect("create fake int");
-        let mut properties = HashMap::new();
-        properties.insert("x".to_string(), x);
+        let properties = vec![("x".to_string(), x)];
         let object = values.alloc(FakeValue::Object(properties));
         scope.set("this", object, ScopeCellOwnership::Borrowed);
 
@@ -16576,8 +16700,7 @@ return function_exists("var_dump");"#,
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
         let x = values.int(7).expect("create fake int");
-        let mut properties = HashMap::new();
-        properties.insert("x".to_string(), x);
+        let properties = vec![("x".to_string(), x)];
         let object = values.alloc(FakeValue::Object(properties));
         scope.set("this", object, ScopeCellOwnership::Borrowed);
 
@@ -16595,7 +16718,7 @@ return function_exists("var_dump");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.get(result), FakeValue::Object(HashMap::new()));
+        assert_eq!(values.get(result), FakeValue::Object(Vec::new()));
     }
 
     /// Verifies eval object construction passes constructor arguments through runtime hooks.
@@ -16609,8 +16732,9 @@ return function_exists("var_dump");"#,
         let FakeValue::Object(properties) = values.get(result) else {
             panic!("expected fake object");
         };
+        let x = FakeOps::object_property(&properties, "x").expect("constructor should set x");
 
-        assert_eq!(values.get(properties["x"]), FakeValue::Int(1));
+        assert_eq!(values.get(x), FakeValue::Int(1));
     }
 
     /// Verifies if/else executes only the PHP-truthy branch.
@@ -18091,6 +18215,32 @@ return true;"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "1:x:2:3:y:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `json_encode()` serializes stdClass dynamic properties.
+    #[test]
+    fn execute_program_dispatches_json_encode_stdclass_object() {
+        let program = parse_fragment(
+            br#"$object = json_decode("{\"a\":1,\"b\":{\"c\":\"x\"}}");
+echo json_encode($object) . ":";
+echo str_replace("\n", "|", json_encode($object, JSON_PRETTY_PRINT)) . ":";
+$empty = json_decode("{}");
+echo json_encode($empty) . ":";
+$empty->a = 7;
+echo json_encode($empty);
+return true;"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            r#"{"a":1,"b":{"c":"x"}}:{|    "a": 1,|    "b": {|        "c": "x"|    }|}:{}:{"a":7}"#
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

@@ -927,6 +927,26 @@ echo gettype($object) . ":" . $object->a . ":" . $object->b->c;
     assert_eq!(out, "1:x:2:3:y:object:1:x");
 }
 
+/// Verifies eval `json_encode()` serializes stdClass dynamic properties.
+#[test]
+fn test_eval_dispatches_json_encode_stdclass_object() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$object = json_decode("{\"a\":1,\"b\":{\"c\":\"x\"}}");
+echo json_encode($object) . ":";
+echo str_replace("\n", "|", json_encode($object, JSON_PRETTY_PRINT)) . ":";
+$empty = json_decode("{}");
+echo json_encode($empty) . ":";
+$empty->a = 7;
+echo json_encode($empty);');
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"{"a":1,"b":{"c":"x"}}:{|    "a": 1,|    "b": {|        "c": "x"|    }|}:{}:{"a":7}"#
+    );
+}
+
 /// Verifies eval `json_last_error*()` track JSON parse failures and success resets.
 #[test]
 fn test_eval_dispatches_json_last_error_builtin_calls() {
