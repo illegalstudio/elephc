@@ -87,6 +87,7 @@ impl NativeFunction {
 pub struct ElephcEvalContext {
     abi_version: u32,
     classes: HashSet<String>,
+    constants: HashSet<String>,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
@@ -103,6 +104,7 @@ impl ElephcEvalContext {
         Self {
             abi_version: ABI_VERSION,
             classes: HashSet::new(),
+            constants: HashSet::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
@@ -120,6 +122,7 @@ impl ElephcEvalContext {
         Self {
             abi_version,
             classes: HashSet::new(),
+            constants: HashSet::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
@@ -149,6 +152,21 @@ impl ElephcEvalContext {
     /// Returns true when this eval context has a dynamic class with the requested name.
     pub fn has_class(&self, name: &str) -> bool {
         self.classes.contains(&normalize_class_name(name))
+    }
+
+    /// Defines an eval dynamic constant name, failing if it is invalid or already present.
+    pub fn define_constant(&mut self, name: &str) -> bool {
+        let key = normalize_constant_name(name);
+        if key.is_empty() || self.constants.contains(&key) {
+            return false;
+        }
+        self.constants.insert(key);
+        true
+    }
+
+    /// Returns true when this eval context has a dynamic constant with the requested name.
+    pub fn has_constant(&self, name: &str) -> bool {
+        self.constants.contains(&normalize_constant_name(name))
     }
 
     /// Defines a dynamic user function, failing if the name already exists.
@@ -288,4 +306,9 @@ impl Default for ElephcEvalContext {
 /// Normalizes PHP class names for the eval dynamic class registry.
 fn normalize_class_name(name: &str) -> String {
     name.trim_start_matches('\\').to_ascii_lowercase()
+}
+
+/// Normalizes PHP constant names for case-sensitive eval dynamic probes.
+fn normalize_constant_name(name: &str) -> String {
+    name.trim_start_matches('\\').to_string()
 }
