@@ -1232,6 +1232,23 @@ echo function_exists("sys_get_temp_dir");');
     );
 }
 
+/// Verifies eval realpath-cache builtins expose elephc's empty-cache convention.
+#[test]
+fn test_eval_dispatches_realpath_cache_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$cache = realpath_cache_get();
+echo count($cache) . ":" . realpath_cache_size() . ":";
+$call_cache = call_user_func("realpath_cache_get");
+echo count($call_cache) . ":";
+echo call_user_func_array("realpath_cache_size", []) . ":";
+echo function_exists("realpath_cache_get");
+echo function_exists("realpath_cache_size");');
+"#,
+    );
+    assert_eq!(out, "0:0:0:0:11");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

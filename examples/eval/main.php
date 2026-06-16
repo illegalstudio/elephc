@@ -150,6 +150,7 @@ $url_codec = eval('return urlencode("a b&=") . ":" . rawurldecode("a%20b%26%3D")
 $checksum = eval('return crc32("hello");');
 $hash_algos = eval('$algos = hash_algos(); return count($algos) . ":" . (in_array("sha256", $algos) ? "sha256" : "missing");');
 $system_info = eval('return (time() > 1000000000 ? "time" : "bad") . ":" . phpversion() . ":" . sys_get_temp_dir() . ":" . (strlen(getcwd()) > 0 ? "cwd" : "bad");');
+$realpath_cache = eval('return count(realpath_cache_get()) . ":" . realpath_cache_size();');
 $hexed = eval('return bin2hex("Az");');
 $unhexed = eval('return hex2bin("417a");');
 $base64 = eval('return base64_encode("Hello");');
@@ -246,6 +247,7 @@ echo "url-codec=" . $url_codec . "\n";
 echo "crc32=" . $checksum . "\n";
 echo "hash-algos=" . $hash_algos . "\n";
 echo "system-info=" . $system_info . "\n";
+echo "realpath-cache=" . $realpath_cache . "\n";
 echo "bin2hex=" . $hexed . "\n";
 echo "hex2bin=" . $unhexed . "\n";
 echo "base64=" . $base64 . "\n";

@@ -1243,6 +1243,8 @@ fn eval_positional_expr_call(
         "rawurlencode" | "urlencode" => {
             eval_builtin_url_encode(name, args, context, scope, values)
         }
+        "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
+        "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
         "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
@@ -1587,6 +1589,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "phpversion"
             | "rawurldecode"
             | "rawurlencode"
+            | "realpath_cache_get"
+            | "realpath_cache_size"
             | "rtrim"
             | "round"
             | "sqrt"
@@ -1735,6 +1739,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "pi" => Some(&[]),
         "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
+        "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
         "round" => Some(&["num", "precision"]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
@@ -2218,6 +2223,18 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_phpversion_result(values)?
+        }
+        "realpath_cache_get" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_realpath_cache_get_result(values)?
+        }
+        "realpath_cache_size" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_realpath_cache_size_result(values)?
         }
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
@@ -3769,6 +3786,42 @@ fn eval_sys_get_temp_dir_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     values.string("/tmp")
+}
+
+/// Evaluates PHP `realpath_cache_get()` with no arguments.
+fn eval_builtin_realpath_cache_get(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_realpath_cache_get_result(values)
+}
+
+/// Returns elephc's intentionally empty realpath-cache view.
+fn eval_realpath_cache_get_result(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    values.array_new(0)
+}
+
+/// Evaluates PHP `realpath_cache_size()` with no arguments.
+fn eval_builtin_realpath_cache_size(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_realpath_cache_size_result(values)
+}
+
+/// Returns zero because elephc does not maintain a runtime realpath cache.
+fn eval_realpath_cache_size_result(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    values.int(0)
 }
 
 /// Returns the standard zlib/PHP CRC-32 checksum for a byte slice.
@@ -7929,6 +7982,28 @@ return function_exists("sys_get_temp_dir");"#,
                 eval_compiler_php_version()
             )
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval realpath-cache stubs match elephc's empty-cache runtime view.
+    #[test]
+    fn execute_program_dispatches_realpath_cache_builtins() {
+        let program = parse_fragment(
+            br#"$cache = realpath_cache_get();
+echo count($cache) . ":" . realpath_cache_size() . ":";
+$call_cache = call_user_func("realpath_cache_get");
+echo count($call_cache) . ":";
+echo call_user_func_array("realpath_cache_size", []) . ":";
+echo function_exists("realpath_cache_get");
+return function_exists("realpath_cache_size");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "0:0:0:0:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
