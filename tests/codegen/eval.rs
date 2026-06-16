@@ -3025,6 +3025,16 @@ fn test_eval_missing_dynamic_constant_fetch_fails() {
     );
 }
 
+/// Verifies invalid eval fragments report the dedicated parse-error diagnostic.
+#[test]
+fn test_eval_parse_error_reports_eval_parse_diagnostic() {
+    let err = compile_and_run_expect_failure("<?php eval('if (');");
+    assert!(
+        err.contains("Parse error: eval() fragment is invalid"),
+        "stderr did not contain eval parse-error diagnostic: {err}"
+    );
+}
+
 /// Verifies eval `abs()` preserves integer/float result typing through direct and callable calls.
 #[test]
 fn test_eval_dispatches_abs_builtin_call() {
