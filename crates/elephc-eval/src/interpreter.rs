@@ -43,7 +43,10 @@ pub trait RuntimeValueOps {
     /// Creates a runtime associative-array cell with room for at least `capacity` elements.
     fn assoc_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 
-    /// Reads one element from a runtime array-like Mixed cell using an index expression.
+    /// Reads one element from a runtime Mixed cell using PHP array-read semantics.
+    ///
+    /// Missing keys and non-array receivers return PHP null, matching the generated
+    /// `__rt_mixed_array_get` runtime helper.
     fn array_get(
         &mut self,
         array: RuntimeCellHandle,
@@ -2829,7 +2832,7 @@ mod tests {
                     .iter()
                     .find_map(|(entry_key, value)| (entry_key == &key).then_some(*value))
                     .map_or_else(|| self.null(), Ok),
-                _ => Err(EvalStatus::UnsupportedConstruct),
+                _ => self.null(),
             }
         }
 
@@ -5247,6 +5250,44 @@ if (empty($value)) { echo "1"; } else { echo "0"; }"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "111110");
+        assert_eq!(values.get(result), FakeValue::Null);
+    }
+
+    /// Verifies `isset` and `empty` use PHP offset semantics for array reads.
+    #[test]
+    fn execute_program_isset_and_empty_support_array_offsets() {
+        let program = parse_fragment(
+            br#"$map = [
+    "present" => "x",
+    "nullish" => null,
+    "zero" => 0,
+    "empty" => "",
+    "child" => ["leaf" => "ok", "null" => null],
+];
+echo isset($map["present"]) ? "1" : "0";
+echo isset($map["nullish"]) ? "1" : "0";
+echo isset($map["missing"]) ? "1" : "0";
+echo isset($map["zero"]) ? "1" : "0";
+echo isset($map["child"]["leaf"]) ? "1" : "0";
+echo isset($map["child"]["null"]) ? "1" : "0";
+echo isset($map["missing"]["leaf"]) ? "1" : "0";
+echo ":";
+echo empty($map["present"]) ? "1" : "0";
+echo empty($map["nullish"]) ? "1" : "0";
+echo empty($map["missing"]) ? "1" : "0";
+echo empty($map["zero"]) ? "1" : "0";
+echo empty($map["empty"]) ? "1" : "0";
+echo empty($map["child"]["leaf"]) ? "1" : "0";
+echo empty($map["child"]["null"]) ? "1" : "0";
+echo empty($map["missing"]["leaf"]) ? "1" : "0";"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "1001100:01111011");
         assert_eq!(values.get(result), FakeValue::Null);
     }
 
