@@ -1401,6 +1401,7 @@ fn eval_positional_expr_call(
         "array_fill_keys" => eval_builtin_array_fill_keys(args, context, scope, values),
         "array_filter" => eval_builtin_array_filter(args, context, scope, values),
         "array_flip" => eval_builtin_array_flip(args, context, scope, values),
+        "array_map" => eval_builtin_array_map(args, context, scope, values),
         "array_keys" | "array_values" => {
             eval_builtin_array_projection(name, args, context, scope, values)
         }
@@ -1839,6 +1840,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_fill_keys"
             | "array_filter"
             | "array_flip"
+            | "array_map"
             | "array_key_exists"
             | "array_keys"
             | "array_diff"
@@ -2142,6 +2144,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_fill" => Some(&["start_index", "count", "value"]),
         "array_fill_keys" => Some(&["keys", "value"]),
         "array_filter" => Some(&["array", "callback", "mode"]),
+        "array_map" => Some(&["callback", "array"]),
         "array_flip" | "array_keys" | "array_product" | "array_sum" | "array_unique"
         | "array_rand" | "array_values" => Some(&["array"]),
         "array_key_exists" => Some(&["key", "array"]),
@@ -2448,6 +2451,12 @@ fn eval_builtin_with_values(
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "array_map" => {
+            let [callback, array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_array_map_result(*callback, *array, context, values)?
+        }
         "array_flip" => {
             let [array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -3458,6 +3467,48 @@ fn eval_array_fill_keys_result(
         let source_key = values.array_iter_key(keys, position)?;
         let target_key = values.array_get(keys, source_key)?;
         result = values.array_set(result, target_key, value)?;
+    }
+    Ok(result)
+}
+
+/// Evaluates PHP `array_map()` for one source array and a string or null callback.
+fn eval_builtin_array_map(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [callback, array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let callback = eval_expr(callback, context, scope, values)?;
+    let array = eval_expr(array, context, scope, values)?;
+    eval_array_map_result(callback, array, context, values)
+}
+
+/// Maps one eval array with PHP key preservation for the one-array form.
+fn eval_array_map_result(
+    callback: RuntimeCellHandle,
+    array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback = if values.is_null(callback)? {
+        None
+    } else {
+        Some(eval_callable_name(callback, values)?)
+    };
+    let len = values.array_len(array)?;
+    let mut result = values.assoc_new(len)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        let mapped = if let Some(callback) = callback.as_deref() {
+            eval_callable_with_values(callback, vec![value], context, values)?
+        } else {
+            value
+        };
+        result = values.array_set(result, key, mapped)?;
     }
     Ok(result)
 }
@@ -12976,6 +13027,33 @@ return function_exists("array_product");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "6:24:0:1:7:7:10:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_map()` applies callbacks and preserves source keys.
+    #[test]
+    fn execute_program_dispatches_array_map_builtin() {
+        let program = parse_fragment(
+            br#"function eval_map_double($value) { return $value * 2; }
+$mapped = array_map("eval_map_double", [1, 2, 3]);
+echo $mapped[0] . ":" . $mapped[2] . ":";
+$assoc = array_map("strtoupper", ["a" => "x", "b" => "y"]);
+echo $assoc["a"] . ":" . $assoc["b"] . ":";
+$identity = array_map(null, ["k" => "v"]);
+echo $identity["k"] . ":";
+$call = call_user_func("array_map", "intval", ["7"]);
+echo $call[0] . ":";
+$spread = call_user_func_array("array_map", ["callback" => "strval", "array" => [8]]);
+echo $spread[0] . ":";
+return function_exists("array_map");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "2:6:X:Y:v:7:8:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

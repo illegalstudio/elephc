@@ -792,6 +792,28 @@ echo ":"; echo function_exists("array_sum"); echo function_exists("array_product
     assert_eq!(out, "6:24:0:1:7:7:10:11");
 }
 
+/// Verifies eval `array_map()` applies callbacks and preserves source keys.
+#[test]
+fn test_eval_dispatches_array_map_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function eval_map_double($value) { return $value * 2; }
+$mapped = array_map("eval_map_double", [1, 2, 3]);
+echo $mapped[0] . ":" . $mapped[2] . ":";
+$assoc = array_map("strtoupper", ["a" => "x", "b" => "y"]);
+echo $assoc["a"] . ":" . $assoc["b"] . ":";
+$identity = array_map(null, ["k" => "v"]);
+echo $identity["k"] . ":";
+$call = call_user_func("array_map", "intval", ["7"]);
+echo $call[0] . ":";
+$spread = call_user_func_array("array_map", ["callback" => "strval", "array" => [8]]);
+echo $spread[0] . ":";
+echo function_exists("array_map");');
+"#,
+    );
+    assert_eq!(out, "2:6:X:Y:v:7:8:1");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {
