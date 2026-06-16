@@ -1194,6 +1194,12 @@ fn eval_positional_expr_call(
         "ord" => eval_builtin_ord(args, context, scope, values),
         "pi" => eval_builtin_pi(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
+        "rawurldecode" | "urldecode" => {
+            eval_builtin_url_decode(name, args, context, scope, values)
+        }
+        "rawurlencode" | "urlencode" => {
+            eval_builtin_url_encode(name, args, context, scope, values)
+        }
         "round" => eval_builtin_round(args, context, scope, values),
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
@@ -1520,6 +1526,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "ord"
             | "pi"
             | "pow"
+            | "rawurldecode"
+            | "rawurlencode"
             | "rtrim"
             | "round"
             | "sqrt"
@@ -1543,6 +1551,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "trim"
             | "substr_replace"
             | "ucfirst"
+            | "urldecode"
+            | "urlencode"
     )
 }
 
@@ -1628,7 +1638,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
         "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "hex2bin"
-        | "stripslashes" => Some(&["string"]),
+        | "rawurldecode" | "rawurlencode" | "stripslashes" | "urldecode" | "urlencode" => {
+            Some(&["string"])
+        }
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
         | "is_float" | "is_int" | "is_integer" | "is_long" | "is_null" | "is_numeric"
         | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
@@ -1910,6 +1922,18 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.pow(*left, *right)?
+        }
+        "rawurldecode" | "urldecode" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_url_decode_result(name, *value, values)?
+        }
+        "rawurlencode" | "urlencode" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_url_encode_result(name, *value, values)?
         }
         "round" => match evaluated_args {
             [value] => values.round(*value, None)?,
@@ -2986,6 +3010,106 @@ fn eval_html_entity_at(bytes: &[u8]) -> Option<(u8, usize)> {
         }
     }
     None
+}
+
+/// Evaluates PHP URL encode builtins over one eval string expression.
+fn eval_builtin_url_encode(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_url_encode_result(name, value, values)
+}
+
+/// Percent-encodes one PHP string using query-style or RFC 3986 URL rules.
+fn eval_url_encode_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let mut output = Vec::with_capacity(bytes.len());
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in bytes {
+        if eval_url_encode_keeps_byte(name, byte)? {
+            output.push(byte);
+        } else if name == "urlencode" && byte == b' ' {
+            output.push(b'+');
+        } else {
+            output.push(b'%');
+            output.push(HEX[(byte >> 4) as usize]);
+            output.push(HEX[(byte & 0x0f) as usize]);
+        }
+    }
+    values.string_bytes_value(&output)
+}
+
+/// Returns whether a byte remains unescaped for the selected PHP URL encoder.
+fn eval_url_encode_keeps_byte(name: &str, byte: u8) -> Result<bool, EvalStatus> {
+    let common = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.');
+    match name {
+        "urlencode" => Ok(common),
+        "rawurlencode" => Ok(common || byte == b'~'),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Evaluates PHP URL decode builtins over one eval string expression.
+fn eval_builtin_url_decode(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_url_decode_result(name, value, values)
+}
+
+/// Decodes `%XX` sequences and optionally maps `+` to space for `urldecode()`.
+fn eval_url_decode_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let plus_to_space = match name {
+        "urldecode" => true,
+        "rawurldecode" => false,
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    let bytes = values.string_bytes(value)?;
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'+' && plus_to_space {
+            output.push(b' ');
+            index += 1;
+        } else if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) = (
+                eval_hex_nibble(bytes[index + 1]),
+                eval_hex_nibble(bytes[index + 2]),
+            ) {
+                output.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+            output.push(bytes[index]);
+            index += 1;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+    values.string_bytes_value(&output)
 }
 
 /// Casts one eval value to PHP int and returns the scalar payload.
@@ -6729,6 +6853,33 @@ return function_exists("html_entity_decode");"#,
         assert_eq!(
             values.output,
             "&lt;b&gt;&quot;Hi&quot; &amp; &#039;bye&#039;&lt;/b&gt;:&lt;a&gt;:<b>hi</b>:&lt;x&gt;:\"q\":11"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval URL codec builtins dispatch through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_url_codec_builtins() {
+        let program = parse_fragment(
+            br#"echo urlencode("a b&=~"); echo ":";
+echo rawurlencode(string: "a b&=~"); echo ":";
+echo urldecode("a+b%26%3D%7E"); echo ":";
+echo rawurldecode("a+b%26%3D%7E"); echo ":";
+echo call_user_func("urlencode", "%zz"); echo ":";
+echo call_user_func_array("rawurldecode", ["string" => "x%2By%zz"]); echo ":";
+echo function_exists("urlencode"); echo function_exists("rawurlencode");
+echo function_exists("urldecode");
+return function_exists("rawurldecode");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "a+b%26%3D%7E:a%20b%26%3D~:a b&=~:a+b&=~:%25zz:x+y%zz:111"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }

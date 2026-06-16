@@ -1052,6 +1052,29 @@ echo ":"; echo function_exists("html_entity_decode");');
     );
 }
 
+/// Verifies eval URL codec builtins encode, decode, and dispatch as callables.
+#[test]
+fn test_eval_dispatches_url_codec_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo urlencode("a b&=~"); echo ":";
+echo rawurlencode(string: "a b&=~"); echo ":";
+echo urldecode("a+b%26%3D%7E"); echo ":";
+echo rawurldecode("a+b%26%3D%7E"); echo ":";
+echo call_user_func("urlencode", "%zz"); echo ":";
+echo call_user_func_array("rawurldecode", ["string" => "x%2By%zz"]);
+echo ":"; echo function_exists("urlencode");
+echo ":"; echo function_exists("rawurlencode");
+echo ":"; echo function_exists("urldecode");
+echo ":"; echo function_exists("rawurldecode");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "a+b%26%3D%7E:a%20b%26%3D~:a b&=~:a+b&=~:%25zz:x+y%zz:1:1:1:1"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
