@@ -1220,6 +1220,10 @@ fn eval_positional_expr_call(
         "eval" => eval_nested_eval(args, context, scope, values),
         "explode" => eval_builtin_explode(args, context, scope, values),
         "fdiv" | "fmod" => eval_builtin_float_binary(name, args, context, scope, values),
+        "file_exists" => eval_builtin_file_probe(name, args, context, scope, values),
+        "file_get_contents" => eval_builtin_file_get_contents(args, context, scope, values),
+        "file_put_contents" => eval_builtin_file_put_contents(args, context, scope, values),
+        "filesize" => eval_builtin_filesize(args, context, scope, values),
         "floor" => eval_builtin_floor(args, context, scope, values),
         "function_exists" | "is_callable" => {
             eval_builtin_function_probe(args, context, scope, values)
@@ -1237,6 +1241,9 @@ fn eval_positional_expr_call(
         "implode" => eval_builtin_implode(args, context, scope, values),
         "inet_ntop" => eval_builtin_inet_ntop(args, context, scope, values),
         "inet_pton" => eval_builtin_inet_pton(args, context, scope, values),
+        "is_dir" | "is_file" | "is_readable" | "is_writable" | "is_writeable" => {
+            eval_builtin_file_probe(name, args, context, scope, values)
+        }
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
@@ -1268,6 +1275,7 @@ fn eval_positional_expr_call(
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
         "time" => eval_builtin_time(args, values),
+        "unlink" => eval_builtin_unlink(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
         "str_repeat" => eval_builtin_str_repeat(args, context, scope, values),
         "str_replace" | "str_ireplace" => {
@@ -1571,6 +1579,10 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "dirname"
             | "explode"
             | "fdiv"
+            | "file_exists"
+            | "file_get_contents"
+            | "file_put_contents"
+            | "filesize"
             | "floor"
             | "floatval"
             | "fmod"
@@ -1590,6 +1602,11 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "inet_ntop"
             | "inet_pton"
             | "ip2long"
+            | "is_dir"
+            | "is_file"
+            | "is_readable"
+            | "is_writable"
+            | "is_writeable"
             | "intval"
             | "ltrim"
             | "is_callable"
@@ -1653,6 +1670,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "substr_replace"
             | "ucfirst"
             | "ucwords"
+            | "unlink"
             | "urldecode"
             | "urlencode"
             | "usleep"
@@ -1762,6 +1780,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "dirname" => Some(&["path", "levels"]),
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
+        "file_get_contents" | "file_exists" | "filesize" | "is_dir" | "is_file"
+        | "is_readable" | "is_writable" | "is_writeable" | "unlink" => Some(&["filename"]),
+        "file_put_contents" => Some(&["filename", "data"]),
         "function_exists" => Some(&["function"]),
         "gethostbyname" => Some(&["hostname"]),
         "getcwd" => Some(&[]),
@@ -2041,6 +2062,30 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_float_binary_result(name, *left, *right, values)?
+        }
+        "file_exists" | "is_dir" | "is_file" | "is_readable" | "is_writable" | "is_writeable" => {
+            let [filename] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_file_probe_result(name, *filename, values)?
+        }
+        "file_get_contents" => {
+            let [filename] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_file_get_contents_result(*filename, values)?
+        }
+        "file_put_contents" => {
+            let [filename, data] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_file_put_contents_result(*filename, *data, values)?
+        }
+        "filesize" => {
+            let [filename] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_filesize_result(*filename, values)?
         }
         "pi" => {
             if !evaluated_args.is_empty() {
@@ -2375,6 +2420,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_usleep_result(*microseconds, values)?
+        }
+        "unlink" => {
+            let [filename] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_unlink_result(*filename, values)?
         }
         "strlen" => {
             let [value] = evaluated_args else {
@@ -3974,6 +4025,181 @@ fn eval_builtin_getcwd(
 fn eval_getcwd_result(values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
     let cwd = std::env::current_dir().map_err(|_| EvalStatus::RuntimeFatal)?;
     values.string(cwd.to_string_lossy().as_ref())
+}
+
+/// Evaluates one PHP filesystem predicate over an eval expression.
+fn eval_builtin_file_probe(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    eval_file_probe_result(name, filename, values)
+}
+
+/// Computes one local filesystem predicate and returns a PHP boolean.
+fn eval_file_probe_result(
+    name: &str,
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let path = std::path::Path::new(&path);
+    let result = match name {
+        "file_exists" => path.exists(),
+        "is_dir" => path.is_dir(),
+        "is_file" => path.is_file(),
+        "is_readable" => eval_path_is_readable(path),
+        "is_writable" | "is_writeable" => eval_path_is_writable(path),
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.bool_value(result)
+}
+
+/// Evaluates PHP `file_get_contents($filename)` over one eval expression.
+fn eval_builtin_file_get_contents(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    eval_file_get_contents_result(filename, values)
+}
+
+/// Reads a local file into a PHP string, or returns false when it cannot be opened.
+fn eval_file_get_contents_result(
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    match std::fs::read(path) {
+        Ok(bytes) => values.string_bytes_value(&bytes),
+        Err(_) => {
+            values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
+            values.bool_value(false)
+        }
+    }
+}
+
+/// Evaluates PHP `file_put_contents($filename, $data)` over one eval expression.
+fn eval_builtin_file_put_contents(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename, data] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    let data = eval_expr(data, context, scope, values)?;
+    eval_file_put_contents_result(filename, data, values)
+}
+
+/// Writes a PHP string to a local file and returns the written byte count or false.
+fn eval_file_put_contents_result(
+    filename: RuntimeCellHandle,
+    data: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let data = values.string_bytes(data)?;
+    match std::fs::write(path, &data) {
+        Ok(()) => values.int(i64::try_from(data.len()).map_err(|_| EvalStatus::RuntimeFatal)?),
+        Err(_) => values.bool_value(false),
+    }
+}
+
+/// Evaluates PHP `filesize($filename)` over one eval expression.
+fn eval_builtin_filesize(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    eval_filesize_result(filename, values)
+}
+
+/// Returns one local file size in bytes, or zero when stat fails.
+fn eval_filesize_result(
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let len = std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+    values.int(i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?)
+}
+
+/// Evaluates PHP `unlink($filename)` over one eval expression.
+fn eval_builtin_unlink(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    eval_unlink_result(filename, values)
+}
+
+/// Deletes one local file and returns whether it succeeded.
+fn eval_unlink_result(
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    values.bool_value(std::fs::remove_file(path).is_ok())
+}
+
+/// Converts one eval value to a filesystem path string.
+fn eval_path_string(
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let filename = values.string_bytes(filename)?;
+    Ok(String::from_utf8_lossy(&filename).into_owned())
+}
+
+/// Returns whether a path can be opened for reading by the current process.
+fn eval_path_is_readable(path: &std::path::Path) -> bool {
+    std::fs::File::open(path).is_ok() || std::fs::read_dir(path).is_ok()
+}
+
+/// Returns whether a path can be written by the current process.
+fn eval_path_is_writable(path: &std::path::Path) -> bool {
+    if path.is_file() {
+        return std::fs::OpenOptions::new().write(true).open(path).is_ok();
+    }
+    if !path.is_dir() {
+        return false;
+    }
+    let probe = path.join(format!(".elephc_eval_writable_probe_{}", std::process::id()));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Evaluates PHP `basename($path, $suffix = "")` over one eval expression.
@@ -8953,6 +9179,46 @@ return PATHINFO_ALL;"#,
             "/var/log|syslog.log|log|syslog:gz:dotfile:trail:empty-dir:no-ext:b.php:foo.txt:zero:11"
         );
         assert_eq!(values.get(result), FakeValue::Int(EVAL_PATHINFO_ALL));
+    }
+
+    /// Verifies eval local filesystem builtins read, write, stat, delete, and dispatch.
+    #[test]
+    fn execute_program_dispatches_filesystem_builtins() {
+        let filename = format!("elephc_eval_fs_probe_{}.txt", std::process::id());
+        let missing = format!("elephc_eval_fs_missing_{}.txt", std::process::id());
+        let source = format!(
+            r#"echo file_put_contents("{filename}", "hello") . ":";
+echo file_get_contents("{filename}") . ":";
+echo file_exists("{filename}") ? "exists" : "missing"; echo ":";
+echo is_file(filename: "{filename}") ? "file" : "bad"; echo ":";
+echo is_dir(".") ? "dir" : "bad"; echo ":";
+echo is_readable("{filename}") ? "readable" : "bad"; echo ":";
+echo is_writable("{filename}") ? "writable" : "bad"; echo ":";
+echo is_writeable("{filename}") ? "writeable" : "bad"; echo ":";
+echo filesize("{filename}") . ":";
+echo file_get_contents("{missing}") === false ? "missing-false" : "bad"; echo ":";
+echo call_user_func("file_exists", "{filename}") ? "call-exists" : "bad"; echo ":";
+echo call_user_func_array("filesize", ["filename" => "{filename}"]) . ":";
+echo unlink("{filename}") ? "unlinked" : "bad"; echo ":";
+echo file_exists("{filename}") ? "bad" : "gone"; echo ":";
+echo function_exists("file_get_contents"); echo function_exists("file_put_contents");
+echo function_exists("file_exists"); echo function_exists("is_file"); echo function_exists("is_dir");
+echo function_exists("is_readable"); echo function_exists("is_writable"); echo function_exists("is_writeable");
+echo function_exists("filesize");
+return function_exists("unlink");"#
+        );
+        let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        let _ = std::fs::remove_file(&filename);
+        assert_eq!(
+            values.output,
+            "5:hello:exists:file:dir:readable:writable:writeable:5:missing-false:call-exists:5:unlinked:gone:111111111"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
     /// Verifies eval ASCII string case builtins work directly and through callable dispatch.

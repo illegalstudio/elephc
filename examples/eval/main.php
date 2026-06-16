@@ -159,6 +159,7 @@ $ip_conversion = eval('$packed = inet_pton("1.2.3.4"); return long2ip(ip2long("1
 $path_components = eval('return basename("/var/log/syslog.log", ".log") . ":" . dirname("/usr/local/bin/tool", 2);');
 $resolved_path = eval('return realpath(".") !== false ? "resolved" : "missing";');
 $path_info = eval('$info = pathinfo("/var/log/syslog.log"); return $info["basename"] . ":" . pathinfo("archive.tar.gz", PATHINFO_EXTENSION);');
+$filesystem = eval('file_put_contents("eval-example.txt", "hello"); $read = file_get_contents("eval-example.txt"); $size = filesize("eval-example.txt"); $ok = file_exists("eval-example.txt") && is_file("eval-example.txt") && is_readable("eval-example.txt") && is_writable("eval-example.txt") && unlink("eval-example.txt"); return $read . ":" . $size . ":" . ($ok ? "ok" : "bad");');
 $hexed = eval('return bin2hex("Az");');
 $unhexed = eval('return hex2bin("417a");');
 $base64 = eval('return base64_encode("Hello");');
@@ -264,6 +265,7 @@ echo "ip-conversion=" . $ip_conversion . "\n";
 echo "path-components=" . $path_components . "\n";
 echo "realpath=" . $resolved_path . "\n";
 echo "pathinfo=" . $path_info . "\n";
+echo "filesystem=" . $filesystem . "\n";
 echo "bin2hex=" . $hexed . "\n";
 echo "hex2bin=" . $unhexed . "\n";
 echo "base64=" . $base64 . "\n";
