@@ -15865,6 +15865,46 @@ return strlen("abcd");"#,
         assert_eq!(values.get(result), FakeValue::Int(7));
     }
 
+    /// Verifies eval namespace `use function` imports dispatch to qualified dynamic functions.
+    #[test]
+    fn execute_program_namespace_use_function_import_dispatches() {
+        let program = parse_fragment(
+            br#"namespace Eval\Lib;
+function target($x) { return $x + 1; }
+namespace Eval\App;
+use function Eval\Lib\target as AliasTarget;
+return aliastarget(6);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(7));
+    }
+
+    /// Verifies eval namespace `use const` imports fetch qualified dynamic constants.
+    #[test]
+    fn execute_program_namespace_use_const_import_fetches_dynamic_constant() {
+        let program = parse_fragment(
+            br#"namespace Eval\App;
+use const Eval\Lib\VALUE as LocalValue;
+return LocalValue;"#,
+        )
+        .expect("parse eval fragment");
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let value = values.int(11).expect("create fake int");
+        assert!(context.define_constant("Eval\\Lib\\VALUE", value));
+
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::Int(11));
+    }
+
     /// Verifies eval-declared functions bind named arguments by parameter name.
     #[test]
     fn execute_program_calls_declared_function_with_named_args() {

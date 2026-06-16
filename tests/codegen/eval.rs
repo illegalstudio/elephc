@@ -4282,6 +4282,28 @@ echo eval('return (new \EvalDynamicNewNs\Box())->x;');
     assert_eq!(out, "13");
 }
 
+/// Verifies eval namespace imports resolve functions, constants, and AOT class aliases.
+#[test]
+fn test_eval_fragment_namespace_use_imports() {
+    let out = compile_and_run(
+        r#"<?php
+namespace EvalUseBridge;
+class Box {
+    public int $x = 17;
+}
+eval('namespace EvalUseExec;
+function imported_eval_func($x) { return $x + 1; }
+define("EvalUseLib\\\\VALUE", 5);
+use function EvalUseExec\\imported_eval_func as AliasFunc;
+use const EvalUseLib\\VALUE as LocalValue;
+use EvalUseBridge\\Box as BoxAlias;
+$box = new BoxAlias();
+echo AliasFunc(LocalValue) . ":" . $box->x;');
+"#,
+    );
+    assert_eq!(out, "6:17");
+}
+
 /// Verifies eval reference assignments update the referenced caller local.
 #[test]
 fn test_eval_reference_assignment_updates_caller_local() {

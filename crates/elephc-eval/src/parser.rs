@@ -18,6 +18,7 @@ use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalMagicConst, EvalMatchArm,
     EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
+use std::collections::HashMap;
 
 /// Parses an eval fragment into by-name EvalIR statements.
 pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseError> {
@@ -530,12 +531,69 @@ struct Parser {
     pos: usize,
     source_len: usize,
     namespace: String,
+    imports: NamespaceImports,
+    allow_use_imports: bool,
 }
 
 /// A parsed PHP name plus whether it used a leading global namespace separator.
 struct ParsedQualifiedName {
     name: String,
     absolute: bool,
+}
+
+/// Import alias tables active for the current namespace declaration region.
+#[derive(Default)]
+struct NamespaceImports {
+    classes: HashMap<String, String>,
+    functions: HashMap<String, String>,
+    constants: HashMap<String, String>,
+}
+
+/// The `use` declaration namespace being imported.
+#[derive(Copy, Clone)]
+enum UseImportKind {
+    Class,
+    Function,
+    Const,
+}
+
+impl NamespaceImports {
+    /// Stores one class import under PHP's case-insensitive class alias key.
+    fn insert_class(&mut self, alias: String, name: String) {
+        self.classes.insert(alias.to_ascii_lowercase(), name);
+    }
+
+    /// Stores one function import under PHP's case-insensitive function alias key.
+    fn insert_function(&mut self, alias: String, name: String) {
+        self.functions.insert(alias.to_ascii_lowercase(), name);
+    }
+
+    /// Stores one constant import under PHP's case-sensitive constant alias key.
+    fn insert_constant(&mut self, alias: String, name: String) {
+        self.constants.insert(alias, name);
+    }
+
+    /// Resolves a class import, including aliases used as the first segment of a class name.
+    fn resolve_class(&self, name: &str) -> Option<String> {
+        let (first, tail) = split_first_name_segment(name);
+        let imported = self.classes.get(&first.to_ascii_lowercase())?;
+        Some(match tail {
+            Some(tail) => format!("{imported}\\{tail}"),
+            None => imported.clone(),
+        })
+    }
+
+    /// Resolves an unqualified function alias.
+    fn resolve_function(&self, name: &str) -> Option<&str> {
+        self.functions
+            .get(&name.to_ascii_lowercase())
+            .map(String::as_str)
+    }
+
+    /// Resolves a case-sensitive unqualified constant alias.
+    fn resolve_constant(&self, name: &str) -> Option<&str> {
+        self.constants.get(name).map(String::as_str)
+    }
 }
 
 impl Parser {
@@ -546,6 +604,8 @@ impl Parser {
             pos: 0,
             source_len,
             namespace: String::new(),
+            imports: NamespaceImports::default(),
+            allow_use_imports: true,
         }
     }
 
@@ -601,6 +661,12 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "switch") => self.parse_switch_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "throw") => self.parse_throw_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "unset") => self.parse_unset_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "use") && self.allow_use_imports => {
+                self.parse_use_stmt()
+            }
+            TokenKind::Ident(name) if ident_eq(name, "use") => {
+                Err(EvalParseError::UnsupportedConstruct)
+            }
             TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
             TokenKind::Ident(name) if is_unsupported_statement_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
@@ -761,6 +827,7 @@ impl Parser {
         };
         if self.consume_semicolon() {
             self.namespace = namespace;
+            self.imports = NamespaceImports::default();
             return Ok(Vec::new());
         }
         self.expect(TokenKind::LBrace)?;
@@ -770,8 +837,12 @@ impl Parser {
     /// Parses statements inside an already opened namespace block.
     fn parse_namespace_block(&mut self, namespace: String) -> Result<Vec<EvalStmt>, EvalParseError> {
         let previous = std::mem::replace(&mut self.namespace, namespace);
+        let previous_imports = std::mem::take(&mut self.imports);
+        let previous_allow_use_imports = std::mem::replace(&mut self.allow_use_imports, true);
         let result = self.parse_block_contents();
         self.namespace = previous;
+        self.imports = previous_imports;
+        self.allow_use_imports = previous_allow_use_imports;
         result
     }
 
@@ -782,6 +853,58 @@ impl Parser {
             return Err(EvalParseError::UnexpectedToken);
         }
         Ok(name.name)
+    }
+
+    /// Parses PHP `use`, `use function`, and `use const` import declarations.
+    fn parse_use_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let kind = if matches!(
+            self.current(),
+            TokenKind::Ident(name) if ident_eq(name, "function")
+        ) {
+            self.advance();
+            UseImportKind::Function
+        } else if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
+            self.advance();
+            UseImportKind::Const
+        } else {
+            UseImportKind::Class
+        };
+
+        loop {
+            self.parse_use_import(kind)?;
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect_semicolon()?;
+        Ok(Vec::new())
+    }
+
+    /// Parses and registers one comma-separated import entry.
+    fn parse_use_import(&mut self, kind: UseImportKind) -> Result<(), EvalParseError> {
+        let name = self.parse_qualified_name()?.name;
+        let alias = if matches!(
+            self.current(),
+            TokenKind::Ident(keyword) if ident_eq(keyword, "as")
+        ) {
+            self.advance();
+            let TokenKind::Ident(alias) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            let alias = alias.clone();
+            self.advance();
+            alias
+        } else {
+            last_name_segment(&name).to_string()
+        };
+
+        match kind {
+            UseImportKind::Class => self.imports.insert_class(alias, name),
+            UseImportKind::Function => self.imports.insert_function(alias, name),
+            UseImportKind::Const => self.imports.insert_constant(alias, name),
+        }
+        Ok(())
     }
 
     /// Parses `global $name, $other;` declarations in eval fragments.
@@ -1121,14 +1244,30 @@ impl Parser {
         if matches!(self.current(), TokenKind::LBrace) {
             self.parse_block()
         } else {
-            self.parse_stmt()
+            self.parse_nested_stmt()
         }
     }
 
     /// Parses a brace-delimited statement block.
     fn parse_block(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.expect(TokenKind::LBrace)?;
-        self.parse_block_contents()
+        self.parse_nested_block_contents()
+    }
+
+    /// Parses one nested statement where import declarations are not legal.
+    fn parse_nested_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let previous = std::mem::replace(&mut self.allow_use_imports, false);
+        let result = self.parse_stmt();
+        self.allow_use_imports = previous;
+        result
+    }
+
+    /// Parses a nested block while preserving active imports for name resolution.
+    fn parse_nested_block_contents(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let previous = std::mem::replace(&mut self.allow_use_imports, false);
+        let result = self.parse_block_contents();
+        self.allow_use_imports = previous;
+        result
     }
 
     /// Parses statements until the closing brace for the current block.
@@ -1682,7 +1821,7 @@ impl Parser {
     fn parse_new_object_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
         self.advance();
         let class_name = self.parse_qualified_name()?;
-        let class_name = self.resolve_qualified_name(class_name);
+        let class_name = self.resolve_class_name(class_name);
         let args = self.parse_call_args()?;
         Ok(EvalExpr::NewObject { class_name, args })
     }
@@ -1708,6 +1847,12 @@ impl Parser {
 
     /// Builds a call expression, adding namespace fallback for unqualified names.
     fn call_expr(&self, name: String, args: Vec<EvalCallArg>) -> EvalExpr {
+        if let Some(imported) = self.imports.resolve_function(&name) {
+            return EvalExpr::Call {
+                name: imported.to_ascii_lowercase(),
+                args,
+            };
+        }
         let fallback_name = name.to_ascii_lowercase();
         if self.namespace.is_empty() {
             EvalExpr::Call {
@@ -1727,6 +1872,9 @@ impl Parser {
 
     /// Builds a constant fetch expression, adding namespace fallback for unqualified names.
     fn const_fetch_expr(&self, name: String) -> EvalExpr {
+        if let Some(imported) = self.imports.resolve_constant(&name) {
+            return EvalExpr::ConstFetch(imported.to_string());
+        }
         if self.namespace.is_empty() {
             EvalExpr::ConstFetch(name)
         } else {
@@ -1744,6 +1892,17 @@ impl Parser {
         } else {
             format!("{}\\{}", self.namespace, name)
         }
+    }
+
+    /// Resolves a class name through active imports before namespace qualification.
+    fn resolve_class_name(&self, name: ParsedQualifiedName) -> String {
+        if name.absolute {
+            return name.name;
+        }
+        if let Some(imported) = self.imports.resolve_class(&name.name) {
+            return imported;
+        }
+        self.resolve_qualified_name(name)
     }
 
     /// Resolves a parsed PHP name according to the current namespace.
@@ -1973,10 +2132,20 @@ fn is_unsupported_statement_keyword(name: &str) -> bool {
         "include_once",
         "trait",
         "try",
-        "use",
     ]
     .iter()
     .any(|keyword| ident_eq(name, keyword))
+}
+
+/// Returns the first namespace segment and the optional remaining suffix.
+fn split_first_name_segment(name: &str) -> (&str, Option<&str>) {
+    name.split_once('\\')
+        .map_or((name, None), |(first, tail)| (first, Some(tail)))
+}
+
+/// Returns the final segment of a PHP qualified name.
+fn last_name_segment(name: &str) -> &str {
+    name.rsplit('\\').next().unwrap_or(name)
 }
 
 /// Returns true for PHP expression forms that the eval subset intentionally does not parse yet.
@@ -2522,6 +2691,91 @@ return Box;"#,
                 })),
                 EvalStmt::Return(Some(EvalExpr::ConstFetch("Box".to_string()))),
             ]
+        );
+    }
+
+    /// Verifies namespace import declarations resolve functions, constants, and class aliases.
+    #[test]
+    fn parse_fragment_accepts_namespace_use_imports() {
+        let program = parse_fragment(
+            br#"namespace Eval\UseNs;
+use function Lib\strlen as Alias;
+use const Lib\VALUE as LocalValue;
+use Lib\Box as BoxAlias;
+return Alias(LocalValue, new BoxAlias\Inner());"#,
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::Call {
+                name: "lib\\strlen".to_string(),
+                args: vec![
+                    EvalCallArg::positional(EvalExpr::ConstFetch("Lib\\VALUE".to_string())),
+                    EvalCallArg::positional(EvalExpr::NewObject {
+                        class_name: "Lib\\Box\\Inner".to_string(),
+                        args: Vec::new(),
+                    }),
+                ],
+            }))]
+        );
+    }
+
+    /// Verifies namespace blocks restore imports when control returns to the outer namespace.
+    #[test]
+    fn parse_fragment_restores_use_imports_after_namespace_block() {
+        let program = parse_fragment(
+            br#"namespace Eval\Outer;
+use function Lib\outer_func;
+namespace Eval\Block {
+    use function Lib\inner_func as alias;
+    return alias();
+}
+return outer_func();"#,
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[
+                EvalStmt::Return(Some(EvalExpr::Call {
+                    name: "lib\\inner_func".to_string(),
+                    args: Vec::new(),
+                })),
+                EvalStmt::Return(Some(EvalExpr::Call {
+                    name: "lib\\outer_func".to_string(),
+                    args: Vec::new(),
+                })),
+            ]
+        );
+    }
+
+    /// Verifies imported aliases remain visible while parsing eval-declared function bodies.
+    #[test]
+    fn parse_fragment_applies_use_imports_inside_function_body() {
+        let program = parse_fragment(
+            br#"namespace Eval\UseNs;
+use function Lib\target as alias;
+function dyn() { return alias(); }"#,
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::FunctionDecl {
+                name: "Eval\\UseNs\\dyn".to_string(),
+                params: Vec::new(),
+                body: vec![EvalStmt::Return(Some(EvalExpr::Call {
+                    name: "lib\\target".to_string(),
+                    args: Vec::new(),
+                }))],
+            }]
+        );
+    }
+
+    /// Verifies import declarations are rejected inside eval-declared function bodies.
+    #[test]
+    fn parse_fragment_rejects_use_import_inside_function_body() {
+        assert_eq!(
+            parse_fragment(br#"function dyn() { use function Lib\target; }"#),
+            Err(EvalParseError::UnsupportedConstruct)
         );
     }
 
