@@ -77,6 +77,23 @@ fn test_eval_print_return_value_is_one() {
     assert_eq!(out, "x1");
 }
 
+/// Verifies eval `print_r()` writes supported values and returns true.
+#[test]
+fn test_eval_dispatches_print_r_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('print_r("x"); echo ":";
+print_r(value: false); echo ":";
+print_r([1, 2]); echo ":";
+$call = call_user_func("print_r", true);
+$spread = call_user_func_array("print_r", ["value" => "z"]);
+echo ":" . ($call ? "call" : "bad") . ":" . ($spread ? "spread" : "bad") . ":";
+echo function_exists("print_r");');
+"#,
+    );
+    assert_eq!(out, "x::Array\n:1z:call:spread:1");
+}
+
 /// Verifies eval fragments accept PHP comments and keep line metadata aligned.
 #[test]
 fn test_eval_comments_execute_through_bridge() {

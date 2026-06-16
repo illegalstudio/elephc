@@ -1523,6 +1523,7 @@ fn eval_positional_expr_call(
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
+        "print_r" => eval_builtin_print_r(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
         "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
         "random_int" => eval_builtin_random_int(args, context, scope, values),
@@ -1982,6 +1983,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "php_uname"
             | "phpversion"
             | "putenv"
+            | "print_r"
             | "rand"
             | "random_int"
             | "range"
@@ -2218,6 +2220,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "php_uname" => Some(&["mode"]),
         "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
+        "print_r" => Some(&["value"]),
         "putenv" => Some(&["assignment"]),
         "rand" | "mt_rand" | "random_int" => Some(&["min", "max"]),
         "range" => Some(&["start", "end"]),
@@ -2696,6 +2699,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.pow(*left, *right)?
+        }
+        "print_r" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_print_r_result(*value, values)?
         }
         "rand" | "mt_rand" => match evaluated_args {
             [] => eval_rand_result(None, None, values)?,
@@ -9890,6 +9899,34 @@ fn eval_builtin_count(
     values.int(len)
 }
 
+/// Evaluates PHP `print_r()` over one eval expression.
+fn eval_builtin_print_r(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_print_r_result(value, values)
+}
+
+/// Emits one eval value using elephc's supported `print_r()` output shape.
+fn eval_print_r_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        let output = values.string_bytes_value(b"Array\n")?;
+        values.echo(output)?;
+    } else {
+        values.echo(value)?;
+    }
+    values.bool_value(true)
+}
+
 /// Evaluates an eval-declared user function with PHP-style argument binding.
 fn eval_dynamic_function(
     function: &EvalFunction,
@@ -11442,6 +11479,28 @@ return (1 << 4) | ((16 >> 2) ^ (3 & 1));"#,
 
         assert_eq!(values.output, "p");
         assert_eq!(values.get(result), FakeValue::Int(1));
+    }
+
+    /// Verifies eval `print_r()` emits supported values and returns true.
+    #[test]
+    fn execute_program_dispatches_print_r_builtin() {
+        let program = parse_fragment(
+            br#"print_r("x"); echo ":";
+print_r(value: false); echo ":";
+print_r([1, 2]); echo ":";
+$call = call_user_func("print_r", true);
+$spread = call_user_func_array("print_r", ["value" => "z"]);
+echo ":" . ($call ? "call" : "bad") . ":" . ($spread ? "spread" : "bad") . ":";
+return function_exists("print_r");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "x::Array\n:1z:call:spread:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
     /// Verifies eval property reads and writes dispatch through runtime hooks.
