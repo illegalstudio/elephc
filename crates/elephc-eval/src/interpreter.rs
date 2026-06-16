@@ -1180,6 +1180,9 @@ fn eval_positional_expr_call(
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
         "hex2bin" => eval_builtin_hex2bin(args, context, scope, values),
+        "html_entity_decode" | "htmlentities" | "htmlspecialchars" => {
+            eval_builtin_html_entity(name, args, context, scope, values)
+        }
         "implode" => eval_builtin_implode(args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
@@ -1490,6 +1493,9 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "gettype"
             | "hash_equals"
             | "hex2bin"
+            | "html_entity_decode"
+            | "htmlentities"
+            | "htmlspecialchars"
             | "implode"
             | "in_array"
             | "intval"
@@ -1638,6 +1644,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "function_exists" => Some(&["function"]),
         "hash_equals" => Some(&["known_string", "user_string"]),
+        "html_entity_decode" | "htmlentities" | "htmlspecialchars" => Some(&["string"]),
         "implode" => Some(&["separator", "array"]),
         "max" | "min" => Some(&["value"]),
         "nl2br" => Some(&["string", "use_xhtml"]),
@@ -2033,6 +2040,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_hex2bin_result(*value, values)?
+        }
+        "html_entity_decode" | "htmlentities" | "htmlspecialchars" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_html_entity_result(name, *value, values)?
         }
         "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
         | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
@@ -2886,6 +2899,93 @@ fn eval_substr_replace_result(
     output.extend_from_slice(&replacement);
     output.extend_from_slice(&bytes[end..]);
     values.string_bytes_value(&output)
+}
+
+/// Evaluates eval HTML entity encode/decode builtins over one string expression.
+fn eval_builtin_html_entity(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_html_entity_result(name, value, values)
+}
+
+/// Applies the eval-supported HTML entity transform for one PHP string value.
+fn eval_html_entity_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match name {
+        "htmlspecialchars" | "htmlentities" => eval_htmlspecialchars_result(value, values),
+        "html_entity_decode" => eval_html_entity_decode_result(value, values),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Encodes the HTML-special byte characters covered by elephc's static helper.
+fn eval_htmlspecialchars_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let mut output = Vec::with_capacity(bytes.len());
+    for byte in bytes {
+        match byte {
+            b'&' => output.extend_from_slice(b"&amp;"),
+            b'<' => output.extend_from_slice(b"&lt;"),
+            b'>' => output.extend_from_slice(b"&gt;"),
+            b'"' => output.extend_from_slice(b"&quot;"),
+            b'\'' => output.extend_from_slice(b"&#039;"),
+            _ => output.push(byte),
+        }
+    }
+    values.string_bytes_value(&output)
+}
+
+/// Decodes one pass of the HTML entities emitted by the eval/static encoders.
+fn eval_html_entity_decode_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'&' {
+            if let Some((decoded, width)) = eval_html_entity_at(&bytes[index..]) {
+                output.push(decoded);
+                index += width;
+                continue;
+            }
+        }
+        output.push(bytes[index]);
+        index += 1;
+    }
+    values.string_bytes_value(&output)
+}
+
+/// Returns the decoded byte and consumed width for one supported HTML entity.
+fn eval_html_entity_at(bytes: &[u8]) -> Option<(u8, usize)> {
+    for (entity, decoded) in [
+        (b"&lt;".as_slice(), b'<'),
+        (b"&gt;".as_slice(), b'>'),
+        (b"&quot;".as_slice(), b'"'),
+        (b"&#039;".as_slice(), b'\''),
+        (b"&#39;".as_slice(), b'\''),
+        (b"&amp;".as_slice(), b'&'),
+    ] {
+        if bytes.starts_with(entity) {
+            return Some((decoded, entity.len()));
+        }
+    }
+    None
 }
 
 /// Casts one eval value to PHP int and returns the scalar payload.
@@ -6605,6 +6705,31 @@ return function_exists("str_ireplace");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "Hell0 W0rld:bb:abc:yello ye:heLLo:YY:1");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval HTML entity builtins encode, decode, and dispatch as callables.
+    #[test]
+    fn execute_program_dispatches_html_entity_builtins() {
+        let program = parse_fragment(
+            br#"echo htmlspecialchars("<b>\"Hi\" & 'bye'</b>"); echo ":";
+echo htmlentities(string: "<a>"); echo ":";
+echo html_entity_decode("&lt;b&gt;hi&lt;/b&gt;"); echo ":";
+echo call_user_func("htmlspecialchars", "<x>"); echo ":";
+echo call_user_func_array("html_entity_decode", ["string" => "&quot;q&quot;"]); echo ":";
+echo function_exists("htmlspecialchars"); echo function_exists("htmlentities");
+return function_exists("html_entity_decode");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "&lt;b&gt;&quot;Hi&quot; &amp; &#039;bye&#039;&lt;/b&gt;:&lt;a&gt;:<b>hi</b>:&lt;x&gt;:\"q\":11"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

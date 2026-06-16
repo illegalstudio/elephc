@@ -138,6 +138,7 @@ $substring_replaced = eval('return substr_replace("hello world", "PHP", 6, 5);')
 $linebreaks = eval('return bin2hex(nl2br("a\nb", false));');
 $split_joined = eval('$parts = explode(",", "red,green,blue"); return implode("|", $parts);');
 $replaced = eval('return str_replace("green", "lime", "red green blue");');
+$html_escaped = eval('return htmlspecialchars("<b>bold</b>");');
 $hexed = eval('return bin2hex("Az");');
 $unhexed = eval('return hex2bin("417a");');
 $base64 = eval('return base64_encode("Hello");');
@@ -222,6 +223,7 @@ echo "substr-replace=" . $substring_replaced . "\n";
 echo "nl2br-hex=" . $linebreaks . "\n";
 echo "explode-implode=" . $split_joined . "\n";
 echo "str-replace=" . $replaced . "\n";
+echo "htmlspecialchars=" . $html_escaped . "\n";
 echo "bin2hex=" . $hexed . "\n";
 echo "hex2bin=" . $unhexed . "\n";
 echo "base64=" . $base64 . "\n";

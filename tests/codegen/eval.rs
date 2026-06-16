@@ -1031,6 +1031,27 @@ echo ":"; echo function_exists("str_ireplace");');
     assert_eq!(out, "Hell0 W0rld:bb:abc:yello ye:heLLo:YY:1:1");
 }
 
+/// Verifies eval HTML entity builtins encode, decode, and dispatch as callables.
+#[test]
+fn test_eval_dispatches_html_entity_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo htmlspecialchars("<b>\"Hi\" & \'bye\'</b>"); echo ":";
+echo htmlentities(string: "<a>"); echo ":";
+echo html_entity_decode("&lt;b&gt;hi&lt;/b&gt;"); echo ":";
+echo call_user_func("htmlspecialchars", "<x>"); echo ":";
+echo call_user_func_array("html_entity_decode", ["string" => "&quot;q&quot;"]);
+echo ":"; echo function_exists("htmlspecialchars");
+echo ":"; echo function_exists("htmlentities");
+echo ":"; echo function_exists("html_entity_decode");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "&lt;b&gt;&quot;Hi&quot; &amp; &#039;bye&#039;&lt;/b&gt;:&lt;a&gt;:<b>hi</b>:&lt;x&gt;:\"q\":1:1:1"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
