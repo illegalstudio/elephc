@@ -944,6 +944,21 @@ echo ":"; echo function_exists("base64_encode");');
     assert_eq!(out, "SGVsbG8=:SGk=:VGVzdCAxMjMh::1");
 }
 
+/// Verifies eval `base64_decode()` decodes byte strings directly and by callable dispatch.
+#[test]
+fn test_eval_dispatches_base64_decode_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo base64_decode("SGVsbG8="); echo ":";
+echo base64_decode(string: "SGk="); echo ":";
+echo call_user_func("base64_decode", "VGVzdCAxMjMh"); echo ":";
+echo call_user_func_array("base64_decode", ["string" => ""]);
+echo ":"; echo function_exists("base64_decode");');
+"#,
+    );
+    assert_eq!(out, "Hello:Hi:Test 123!::1");
+}
+
 /// Verifies eval `str_contains()` supports direct and callable byte-string search.
 #[test]
 fn test_eval_dispatches_str_contains_builtin_call() {
