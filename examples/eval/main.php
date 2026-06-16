@@ -133,7 +133,7 @@ $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" .
 $eval_class_probe = eval('return class_exists("EvalAotBox") ? "yes" : "no";');
 eval('class EvalDynamicEmptyClass {}');
 $eval_dynamic_class_probe = eval('return class_exists("evaldynamicemptyclass") ? "yes" : "no";');
-$eval_dynamic_const_probe = eval('define("EvalDynamicConst", 1); return defined("EvalDynamicConst") ? "yes" : "no";');
+$eval_dynamic_const_probe = eval('define("EvalDynamicConst", "yes"); return EvalDynamicConst;');
 $eval_dynamic_new = eval('$box = new EvalAotBox(21); return $box->value;');
 eval('function native_add($left, $right) { return $left + $right; }');
 eval('function native_double($value) { return $value * 2; }');

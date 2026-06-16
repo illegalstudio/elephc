@@ -1508,12 +1508,17 @@ impl Parser {
             TokenKind::Ident(name) if is_unsupported_expression_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
             }
-            TokenKind::Backslash => self.parse_qualified_call_expr(),
+            TokenKind::Backslash => self.parse_qualified_name_expr(),
             TokenKind::Ident(_) if matches!(self.peek(), TokenKind::Backslash) => {
-                self.parse_qualified_call_expr()
+                self.parse_qualified_name_expr()
             }
             TokenKind::Ident(name) if matches!(self.peek(), TokenKind::LParen) => {
                 self.parse_call_expr(name.clone())
+            }
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                self.advance();
+                Ok(EvalExpr::ConstFetch(name))
             }
             TokenKind::LBracket => self.parse_array_literal(),
             TokenKind::LParen => {
@@ -1537,14 +1542,17 @@ impl Parser {
         })
     }
 
-    /// Parses an explicitly qualified function-like call expression.
-    fn parse_qualified_call_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+    /// Parses an explicitly qualified call or constant-fetch expression.
+    fn parse_qualified_name_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
         let name = self.parse_qualified_name()?;
-        let args = self.parse_call_args()?;
-        Ok(EvalExpr::Call {
-            name: name.to_ascii_lowercase(),
-            args,
-        })
+        if matches!(self.current(), TokenKind::LParen) {
+            let args = self.parse_call_args()?;
+            return Ok(EvalExpr::Call {
+                name: name.to_ascii_lowercase(),
+                args,
+            });
+        }
+        Ok(EvalExpr::ConstFetch(name))
     }
 
     /// Parses `new ClassName(...)` expressions in eval fragments.
@@ -2675,6 +2683,18 @@ mod tests {
                     "abcd".to_string()
                 )))],
             }))]
+        );
+    }
+
+    /// Verifies bare constant names lower to dynamic constant-fetch expressions.
+    #[test]
+    fn parse_fragment_accepts_constant_fetch_source() {
+        let program = parse_fragment(br#"return \Dyn\EvalConst;"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::ConstFetch(
+                "Dyn\\EvalConst".to_string()
+            )))]
         );
     }
 

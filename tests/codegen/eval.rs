@@ -1080,6 +1080,8 @@ fn test_eval_define_and_defined_dynamic_constants() {
         r#"<?php
 echo eval('return define("DynEvalConst", 7) ? "Y" : "N";');
 echo eval('return defined("DynEvalConst") ? "Y" : "N";');
+echo eval('return DynEvalConst;');
+echo eval('return \DynEvalConst;');
 echo eval('return defined("dynevalconst") ? "bad" : "N";');
 echo eval('return define("DynEvalConst", 8) ? "bad" : "N";');
 echo eval('return define(value: 9, constant_name: "DynEvalNamedConst") ? "Y" : "N";');
@@ -1089,7 +1091,17 @@ echo eval('return call_user_func_array("defined", ["constant_name" => "DynEvalCo
 echo eval('return function_exists("define") && function_exists("defined") ? "Y" : "N";');
 "#,
     );
-    assert_eq!(out, "YYNNYYYYY");
+    assert_eq!(out, "YY77NNYYYYY");
+}
+
+/// Verifies missing eval dynamic constants fail through the eval runtime path.
+#[test]
+fn test_eval_missing_dynamic_constant_fetch_fails() {
+    let err = compile_and_run_expect_failure("<?php eval('return MissingEvalConst;');");
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
 }
 
 /// Verifies eval `abs()` preserves integer/float result typing through direct and callable calls.
