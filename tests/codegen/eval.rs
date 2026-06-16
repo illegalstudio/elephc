@@ -1904,7 +1904,7 @@ fn test_eval_unsupported_class_declaration_fails() {
     );
 }
 
-/// Verifies eval can construct an AOT class with no constructor arguments.
+/// Verifies eval can construct an AOT class with no declared constructor.
 #[test]
 fn test_eval_dynamic_new_constructs_aot_class() {
     let out = compile_and_run(
@@ -1916,6 +1916,50 @@ echo eval('$box = new EvalDynamicNewSupported(); return $box->x;');
 "#,
     );
     assert_eq!(out, "7");
+}
+
+/// Verifies eval object construction runs an AOT zero-argument constructor.
+#[test]
+fn test_eval_dynamic_new_runs_zero_arg_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewZeroArgCtor {
+    public int $x = 0;
+    public function __construct() { $this->x = 9; }
+}
+echo eval('$box = new EvalDynamicNewZeroArgCtor(); return $box->x;');
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+/// Verifies eval object construction passes positional arguments to an AOT constructor.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewOneArgCtor {
+    public int $x = 0;
+    public function __construct(int $x) { $this->x = $x; }
+}
+echo eval('$box = new EvalDynamicNewOneArgCtor(11); return $box->x;');
+"#,
+    );
+    assert_eq!(out, "11");
+}
+
+/// Verifies eval follows PHP by accepting constructor arguments when no constructor exists.
+#[test]
+fn test_eval_dynamic_new_accepts_args_without_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewNoCtorArgs {
+    public int $x = 4;
+}
+echo eval('$box = new EvalDynamicNewNoCtorArgs(99); return $box->x;');
+"#,
+    );
+    assert_eq!(out, "4");
 }
 
 /// Verifies eval reference assignments update the referenced caller local.
