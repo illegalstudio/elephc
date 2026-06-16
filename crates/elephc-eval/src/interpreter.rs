@@ -1367,6 +1367,8 @@ fn eval_call(
             | "asort"
             | "krsort"
             | "ksort"
+            | "natcasesort"
+            | "natsort"
             | "rsort"
             | "sort"
     ) {
@@ -2022,6 +2024,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "mkdir"
             | "mktime"
             | "mt_rand"
+            | "natcasesort"
+            | "natsort"
             | "nl2br"
             | "number_format"
             | "ord"
@@ -2193,7 +2197,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_walk" => Some(&["array", "callback"]),
         "array_flip" | "array_keys" | "array_pop" | "array_product" | "array_shift"
         | "array_sum" | "array_unique" | "array_rand" | "array_values" | "arsort"
-        | "asort" | "krsort" | "ksort" | "rsort" | "sort" => {
+        | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort" | "sort" => {
             Some(&["array"])
         }
         "array_push" | "array_unshift" => Some(&["array", "values"]),
@@ -2561,7 +2565,8 @@ fn eval_builtin_with_values(
             )?;
             result
         }
-        "arsort" | "asort" | "krsort" | "ksort" | "rsort" | "sort" => {
+        "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort"
+        | "sort" => {
             let [array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
@@ -3824,7 +3829,8 @@ fn eval_builtin_array_pop_shift_call(
     }
     if matches!(
         name,
-        "arsort" | "asort" | "krsort" | "ksort" | "rsort" | "sort"
+        "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort"
+            | "sort"
     ) {
         return eval_builtin_array_sort_call(name, args, context, scope, values);
     }
@@ -3976,6 +3982,7 @@ fn eval_array_sort_value_result(
 #[derive(Clone)]
 enum EvalArraySortKey {
     Numeric(f64),
+    Natural(Vec<u8>),
     String(Vec<u8>),
 }
 
@@ -3994,6 +4001,8 @@ fn eval_array_sort_replacement(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut entries = match name {
         "krsort" | "ksort" => eval_array_key_sort_entries(array, values)?,
+        "natcasesort" => eval_array_natural_sort_entries(array, true, values)?,
+        "natsort" => eval_array_natural_sort_entries(array, false, values)?,
         "arsort" | "asort" | "rsort" | "sort" => eval_array_value_sort_entries(array, values)?,
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
@@ -4006,7 +4015,10 @@ fn eval_array_sort_replacement(
         }
     });
 
-    if matches!(name, "arsort" | "asort" | "krsort" | "ksort") {
+    if matches!(
+        name,
+        "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort"
+    ) {
         return eval_array_preserve_key_sort_result(entries, values);
     }
     eval_array_reindex_sort_result(entries, values)
@@ -4066,6 +4078,36 @@ fn eval_array_value_sort_entries(
     Ok(entries)
 }
 
+/// Collects values and natural-sort keys from one eval array.
+fn eval_array_natural_sort_entries(
+    array: RuntimeCellHandle,
+    case_insensitive: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalArraySortEntry>, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut entries = Vec::with_capacity(len);
+    let mut expects_numeric = None;
+
+    for position in 0..len {
+        let source_key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, source_key)?;
+        let sort_key = eval_array_natural_sort_key(value, case_insensitive, values)?;
+        let is_numeric = matches!(sort_key, EvalArraySortKey::Numeric(_));
+        match expects_numeric {
+            Some(expected) if expected != is_numeric => return Err(EvalStatus::RuntimeFatal),
+            Some(_) => {}
+            None => expects_numeric = Some(is_numeric),
+        }
+        entries.push(EvalArraySortEntry {
+            sort_key,
+            source_key,
+            value,
+        });
+    }
+
+    Ok(entries)
+}
+
 /// Collects values and comparable key-sort keys from one eval array.
 fn eval_array_key_sort_entries(
     array: RuntimeCellHandle,
@@ -4086,6 +4128,27 @@ fn eval_array_key_sort_entries(
     }
 
     Ok(entries)
+}
+
+/// Converts one scalar eval value into a natural-sort key.
+fn eval_array_natural_sort_key(
+    value: RuntimeCellHandle,
+    case_insensitive: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalArraySortKey, EvalStatus> {
+    match values.type_tag(value)? {
+        EVAL_TAG_INT | EVAL_TAG_FLOAT => Ok(EvalArraySortKey::Numeric(eval_float_value(
+            value, values,
+        )?)),
+        EVAL_TAG_STRING => {
+            let mut bytes = values.string_bytes(value)?;
+            if case_insensitive {
+                bytes.make_ascii_lowercase();
+            }
+            Ok(EvalArraySortKey::Natural(bytes))
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Converts one scalar eval value into a homogeneous sort key.
@@ -4125,9 +4188,86 @@ fn eval_array_sort_key_cmp(
         (EvalArraySortKey::Numeric(left), EvalArraySortKey::Numeric(right)) => {
             left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
         }
+        (EvalArraySortKey::Natural(left), EvalArraySortKey::Natural(right)) => {
+            eval_natural_bytes_cmp(left, right)
+        }
         (EvalArraySortKey::String(left), EvalArraySortKey::String(right)) => left.cmp(right),
-        (EvalArraySortKey::Numeric(_), EvalArraySortKey::String(_)) => std::cmp::Ordering::Less,
-        (EvalArraySortKey::String(_), EvalArraySortKey::Numeric(_)) => std::cmp::Ordering::Greater,
+        _ => eval_array_sort_key_rank(left).cmp(&eval_array_sort_key_rank(right)),
+    }
+}
+
+/// Returns a deterministic rank for mixed key-sort domains.
+fn eval_array_sort_key_rank(key: &EvalArraySortKey) -> u8 {
+    match key {
+        EvalArraySortKey::Numeric(_) => 0,
+        EvalArraySortKey::Natural(_) => 1,
+        EvalArraySortKey::String(_) => 2,
+    }
+}
+
+/// Compares byte strings with a small PHP-style natural ordering.
+fn eval_natural_bytes_cmp(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
+    let mut left_index = 0;
+    let mut right_index = 0;
+    while left_index < left.len() && right_index < right.len() {
+        if left[left_index].is_ascii_digit() && right[right_index].is_ascii_digit() {
+            let order =
+                eval_natural_digit_run_cmp(left, &mut left_index, right, &mut right_index);
+            if order != std::cmp::Ordering::Equal {
+                return order;
+            }
+            continue;
+        }
+
+        let order = left[left_index].cmp(&right[right_index]);
+        if order != std::cmp::Ordering::Equal {
+            return order;
+        }
+        left_index += 1;
+        right_index += 1;
+    }
+    left.len().cmp(&right.len())
+}
+
+/// Compares two natural-sort digit runs and advances both byte indexes past them.
+fn eval_natural_digit_run_cmp(
+    left: &[u8],
+    left_index: &mut usize,
+    right: &[u8],
+    right_index: &mut usize,
+) -> std::cmp::Ordering {
+    let left_start = *left_index;
+    let right_start = *right_index;
+    while *left_index < left.len() && left[*left_index].is_ascii_digit() {
+        *left_index += 1;
+    }
+    while *right_index < right.len() && right[*right_index].is_ascii_digit() {
+        *right_index += 1;
+    }
+
+    let left_digits = &left[left_start..*left_index];
+    let right_digits = &right[right_start..*right_index];
+    let left_trimmed = eval_trim_leading_zeroes(left_digits);
+    let right_trimmed = eval_trim_leading_zeroes(right_digits);
+    left_trimmed
+        .len()
+        .cmp(&right_trimmed.len())
+        .then_with(|| left_trimmed.cmp(right_trimmed))
+        .then_with(|| left_digits.len().cmp(&right_digits.len()))
+}
+
+/// Drops leading zero bytes while keeping one zero for an all-zero digit run.
+fn eval_trim_leading_zeroes(digits: &[u8]) -> &[u8] {
+    let trimmed = digits
+        .iter()
+        .position(|digit| *digit != b'0')
+        .map_or(&digits[digits.len().saturating_sub(1)..], |index| {
+            &digits[index..]
+        });
+    if trimmed.is_empty() {
+        digits
+    } else {
+        trimmed
     }
 }
 
@@ -14944,6 +15084,39 @@ return function_exists("asort") && function_exists("arsort") && function_exists(
                 "asort(): Argument #1 ($array) must be passed by reference, value given",
                 "krsort(): Argument #1 ($array) must be passed by reference, value given",
             ]
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval natural sort builtins preserve keys and use natural string order.
+    #[test]
+    fn execute_program_dispatches_natural_sort_builtins() {
+        let program = parse_fragment(
+            br#"$a = ["img10", "img2", "img1"];
+echo natsort($a) . ":";
+foreach ($a as $key => $value) { echo $key . $value . ";"; }
+echo ":";
+$b = ["b" => "Img10", "a" => "img2", "c" => "IMG1"];
+echo natcasesort(array: $b) . ":";
+foreach ($b as $key => $value) { echo $key . $value . ";"; }
+echo ":";
+$c = ["x" => "b", "y" => "a"];
+echo call_user_func("natsort", $c) . ":" . $c["x"] . $c["y"] . ":";
+return function_exists("natsort") && function_exists("natcasesort");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "1:2img1;1img2;0img10;:1:cIMG1;aimg2;bImg10;:1:ba:"
+        );
+        assert_eq!(
+            values.warnings,
+            vec!["natsort(): Argument #1 ($array) must be passed by reference, value given"]
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
