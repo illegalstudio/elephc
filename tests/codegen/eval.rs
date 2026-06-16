@@ -1073,6 +1073,25 @@ echo ":"; echo function_exists("gettype");');
     );
 }
 
+/// Verifies eval `define()` and `defined()` share dynamic constant names across fragments.
+#[test]
+fn test_eval_define_and_defined_dynamic_constants() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return define("DynEvalConst", 7) ? "Y" : "N";');
+echo eval('return defined("DynEvalConst") ? "Y" : "N";');
+echo eval('return defined("dynevalconst") ? "bad" : "N";');
+echo eval('return define("DynEvalConst", 8) ? "bad" : "N";');
+echo eval('return define(value: 9, constant_name: "DynEvalNamedConst") ? "Y" : "N";');
+echo eval('return defined(constant_name: "DynEvalNamedConst") ? "Y" : "N";');
+echo eval('return call_user_func("defined", "DynEvalConst") ? "Y" : "N";');
+echo eval('return call_user_func_array("defined", ["constant_name" => "DynEvalConst"]) ? "Y" : "N";');
+echo eval('return function_exists("define") && function_exists("defined") ? "Y" : "N";');
+"#,
+    );
+    assert_eq!(out, "YYNNYYYYY");
+}
+
 /// Verifies eval `abs()` preserves integer/float result typing through direct and callable calls.
 #[test]
 fn test_eval_dispatches_abs_builtin_call() {

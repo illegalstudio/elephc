@@ -1145,6 +1145,8 @@ fn eval_positional_expr_call(
             eval_builtin_cast(name, args, context, scope, values)
         }
         "count" => eval_builtin_count(args, context, scope, values),
+        "define" => eval_builtin_define(args, context, scope, values),
+        "defined" => eval_builtin_defined(args, context, scope, values),
         "empty" => eval_builtin_empty(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
         "fdiv" | "fmod" => eval_builtin_float_binary(name, args, context, scope, values),
@@ -1196,6 +1198,95 @@ fn eval_builtin_function_probe(
     let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
     let name = name.trim_start_matches('\\').to_ascii_lowercase();
     values.bool_value(eval_function_probe_exists(context, &name))
+}
+
+/// Evaluates `define(name, value)` for eval dynamic constant-name registration.
+fn eval_builtin_define(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [name, value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let name = eval_expr(name, context, scope, values)?;
+    let _value = eval_expr(value, context, scope, values)?;
+    let defined = eval_define_name(name, context, values)?;
+    values.bool_value(defined)
+}
+
+/// Evaluates `defined(name)` against eval dynamic constant names.
+fn eval_builtin_defined(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [name] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let name = eval_expr(name, context, scope, values)?;
+    let exists = eval_defined_name(name, context, values)?;
+    values.bool_value(exists)
+}
+
+/// Evaluates `define(...)` from already materialized call arguments.
+fn eval_define_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [name, _value] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let defined = eval_define_name(*name, context, values)?;
+    values.bool_value(defined)
+}
+
+/// Evaluates `defined(...)` from already materialized call arguments.
+fn eval_defined_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [name] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let exists = eval_defined_name(*name, context, values)?;
+    values.bool_value(exists)
+}
+
+/// Normalizes and registers one eval dynamic constant name.
+fn eval_define_name(
+    name: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let name = eval_constant_name(name, values)?;
+    if name.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(context.define_constant(&name))
+}
+
+/// Normalizes and probes one eval dynamic constant name.
+fn eval_defined_name(
+    name: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let name = eval_constant_name(name, values)?;
+    Ok(context.has_constant(&name))
+}
+
+/// Reads a PHP constant name from a runtime cell without changing case.
+fn eval_constant_name(
+    name: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let name = values.string_bytes(name)?;
+    String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Evaluates `class_exists(...)` against dynamic and generated class-name tables.
@@ -1340,6 +1431,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "boolval"
             | "chop"
             | "count"
+            | "define"
+            | "defined"
             | "fdiv"
             | "floor"
             | "floatval"
@@ -1478,6 +1571,8 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "class_exists" => Some(&["class", "autoload"]),
         "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
         "count" => Some(&["value", "mode"]),
+        "define" => Some(&["constant_name", "value"]),
+        "defined" => Some(&["constant_name"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "function_exists" => Some(&["function"]),
         "hash_equals" => Some(&["known_string", "user_string"]),
@@ -1753,6 +1848,8 @@ fn eval_builtin_with_values(
             let len = i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
             values.int(len)?
         }
+        "define" => eval_define_result(evaluated_args, context, values)?,
+        "defined" => eval_defined_result(evaluated_args, context, values)?,
         "ord" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -6163,6 +6260,27 @@ echo function_exists("missing_probe") . "x";"#,
             .expect("execute eval ir");
 
         assert_eq!(values.output, "1x1x1x1xxx");
+    }
+
+    /// Verifies eval `define()` and `defined()` share a dynamic constant-name table.
+    #[test]
+    fn execute_program_define_and_defined_use_dynamic_constant_table() {
+        let program = parse_fragment(
+            br#"echo define("DynEvalConst", 1) ? "Y" : "N";
+echo defined("DynEvalConst") ? "Y" : "N";
+echo defined("\\DynEvalConst") ? "Y" : "N";
+echo defined("dynevalconst") ? "Y" : "N";
+echo define("DynEvalConst", 2) ? "Y" : "N";
+echo call_user_func("defined", "DynEvalConst") ? "Y" : "N";
+echo call_user_func_array("defined", ["constant_name" => "\\DynEvalConst"]) ? "Y" : "N";"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "YYYNNYY");
     }
 
     /// Verifies eval class probes use the runtime class-name table.
