@@ -17,6 +17,7 @@ use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalFunction, EvalMagicConst,
     EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
+use crate::json_validate;
 use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
@@ -1520,6 +1521,7 @@ fn eval_positional_expr_call(
         "json_encode" => eval_builtin_json_encode(args, context, scope, values),
         "json_last_error" => eval_builtin_json_last_error(args, values),
         "json_last_error_msg" => eval_builtin_json_last_error_msg(args, values),
+        "json_validate" => eval_builtin_json_validate(args, context, scope, values),
         "linkinfo" => eval_builtin_linkinfo(args, context, scope, values),
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
         "log" => eval_builtin_log(args, context, scope, values),
@@ -1980,6 +1982,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "json_encode"
             | "json_last_error"
             | "json_last_error_msg"
+            | "json_validate"
             | "lcfirst"
             | "log"
             | "log2"
@@ -2229,6 +2232,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "ip2long" => Some(&["ip"]),
         "json_encode" => Some(&["value", "flags", "depth"]),
         "json_last_error" | "json_last_error_msg" => Some(&[]),
+        "json_validate" => Some(&["json", "depth", "flags"]),
         "link" | "symlink" => Some(&["target", "link"]),
         "linkinfo" | "readlink" => Some(&["path"]),
         "log" => Some(&["num", "base"]),
@@ -3012,6 +3016,14 @@ fn eval_builtin_with_values(
             }
             values.string_bytes_value(b"No error")?
         }
+        "json_validate" => match evaluated_args {
+            [json] => eval_json_validate_result(*json, None, None, values)?,
+            [json, depth] => eval_json_validate_result(*json, Some(*depth), None, values)?,
+            [json, depth, flags] => {
+                eval_json_validate_result(*json, Some(*depth), Some(*flags), values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "gethostbyaddr" => {
             let [ip] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -10321,6 +10333,60 @@ fn eval_builtin_json_last_error_msg(
     values.string_bytes_value(b"No error")
 }
 
+/// Evaluates PHP `json_validate()` for zero-flag JSON text validation.
+fn eval_builtin_json_validate(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [json] => {
+            let json = eval_expr(json, context, scope, values)?;
+            eval_json_validate_result(json, None, None, values)
+        }
+        [json, depth] => {
+            let json = eval_expr(json, context, scope, values)?;
+            let depth = eval_expr(depth, context, scope, values)?;
+            eval_json_validate_result(json, Some(depth), None, values)
+        }
+        [json, depth, flags] => {
+            let json = eval_expr(json, context, scope, values)?;
+            let depth = eval_expr(depth, context, scope, values)?;
+            let flags = eval_expr(flags, context, scope, values)?;
+            eval_json_validate_result(json, Some(depth), Some(flags), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Validates JSON text with eval's current zero-flag JSON subset.
+fn eval_json_validate_result(
+    json: RuntimeCellHandle,
+    depth: Option<RuntimeCellHandle>,
+    flags: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if flags
+        .map(|flags| eval_int_value(flags, values))
+        .transpose()?
+        .unwrap_or(0)
+        != 0
+    {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    let depth = depth
+        .map(|depth| eval_int_value(depth, values))
+        .transpose()?
+        .unwrap_or(512);
+    if depth <= 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+
+    let bytes = values.string_bytes(json)?;
+    values.bool_value(json_validate::bytes(&bytes, depth as usize))
+}
+
 /// Appends one JSON value to the output buffer.
 fn eval_json_encode_append(
     value: RuntimeCellHandle,
@@ -13455,6 +13521,27 @@ return function_exists("json_last_error") && function_exists("json_last_error_ms
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "0:No error:0:No error:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `json_validate()` validates documents, depth, and dynamic calls.
+    #[test]
+    fn execute_program_dispatches_json_validate_builtin() {
+        let program = parse_fragment(
+            br#"echo (json_validate("{\"a\":[1,true,null,\"caf\\u00e9\"]}") ? "Y" : "N") . ":";
+echo (json_validate("bad") ? "bad" : "N") . ":";
+echo (json_validate("[1]", 1) ? "bad" : "D") . ":";
+echo (call_user_func("json_validate", "\"x\"") ? "C" : "bad") . ":";
+echo (call_user_func_array("json_validate", ["json" => "[[1]]", "depth" => 3, "flags" => 0]) ? "A" : "bad") . ":";
+return function_exists("json_validate");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "Y:N:D:C:A:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
