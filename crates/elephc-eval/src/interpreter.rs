@@ -1517,6 +1517,7 @@ fn eval_positional_expr_call(
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
+        "json_encode" => eval_builtin_json_encode(args, context, scope, values),
         "linkinfo" => eval_builtin_linkinfo(args, context, scope, values),
         "ltrim" | "rtrim" => eval_builtin_trim_like(name, args, context, scope, values),
         "log" => eval_builtin_log(args, context, scope, values),
@@ -1974,6 +1975,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_real"
             | "is_resource"
             | "is_string"
+            | "json_encode"
             | "lcfirst"
             | "log"
             | "log2"
@@ -2221,6 +2223,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "inet_pton" => Some(&["ip"]),
         "intdiv" => Some(&["num1", "num2"]),
         "ip2long" => Some(&["ip"]),
+        "json_encode" => Some(&["value", "flags", "depth"]),
         "link" | "symlink" => Some(&["target", "link"]),
         "linkinfo" | "readlink" => Some(&["path"]),
         "log" => Some(&["num", "base"]),
@@ -2984,6 +2987,14 @@ fn eval_builtin_with_values(
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
+        "json_encode" => match evaluated_args {
+            [value] => eval_json_encode_result(*value, None, None, values)?,
+            [value, flags] => eval_json_encode_result(*value, Some(*flags), None, values)?,
+            [value, flags, depth] => {
+                eval_json_encode_result(*value, Some(*flags), Some(*depth), values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "gethostbyaddr" => {
             let [ip] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -10216,6 +10227,184 @@ fn eval_count_recursive_len(
     Ok(total)
 }
 
+/// Evaluates PHP `json_encode()` for zero-flag scalar and array values.
+fn eval_builtin_json_encode(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [value] => {
+            let value = eval_expr(value, context, scope, values)?;
+            eval_json_encode_result(value, None, None, values)
+        }
+        [value, flags] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let flags = eval_expr(flags, context, scope, values)?;
+            eval_json_encode_result(value, Some(flags), None, values)
+        }
+        [value, flags, depth] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let flags = eval_expr(flags, context, scope, values)?;
+            let depth = eval_expr(depth, context, scope, values)?;
+            eval_json_encode_result(value, Some(flags), Some(depth), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Encodes one runtime cell as a JSON string when flags are zero.
+fn eval_json_encode_result(
+    value: RuntimeCellHandle,
+    flags: Option<RuntimeCellHandle>,
+    depth: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if flags
+        .map(|flags| eval_int_value(flags, values))
+        .transpose()?
+        .unwrap_or(0)
+        != 0
+    {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    let depth = depth
+        .map(|depth| eval_int_value(depth, values))
+        .transpose()?
+        .unwrap_or(512);
+    if depth <= 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+
+    let mut output = Vec::new();
+    eval_json_encode_append(value, values, depth as usize, 0, &mut Vec::new(), &mut output)?;
+    values.string_bytes_value(&output)
+}
+
+/// Appends one JSON value to the output buffer.
+fn eval_json_encode_append(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+    depth_limit: usize,
+    depth: usize,
+    arrays_seen: &mut Vec<usize>,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    match values.type_tag(value)? {
+        EVAL_TAG_INT | EVAL_TAG_FLOAT => output.extend_from_slice(&values.string_bytes(value)?),
+        EVAL_TAG_STRING => eval_json_encode_append_string(&values.string_bytes(value)?, output),
+        EVAL_TAG_BOOL => {
+            if values.truthy(value)? {
+                output.extend_from_slice(b"true");
+            } else {
+                output.extend_from_slice(b"false");
+            }
+        }
+        EVAL_TAG_ARRAY => {
+            eval_json_encode_append_indexed_array(value, values, depth_limit, depth, arrays_seen, output)?;
+        }
+        EVAL_TAG_ASSOC => {
+            eval_json_encode_append_assoc(value, values, depth_limit, depth, arrays_seen, output)?;
+        }
+        EVAL_TAG_NULL | EVAL_TAG_OBJECT | EVAL_TAG_RESOURCE => output.extend_from_slice(b"null"),
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    }
+    Ok(())
+}
+
+/// Appends one indexed eval array as a JSON array.
+fn eval_json_encode_append_indexed_array(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+    depth_limit: usize,
+    depth: usize,
+    arrays_seen: &mut Vec<usize>,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
+    output.push(b'[');
+    let len = values.array_len(value)?;
+    for position in 0..len {
+        if position > 0 {
+            output.push(b',');
+        }
+        let key = values.array_iter_key(value, position)?;
+        let element = values.array_get(value, key)?;
+        eval_json_encode_append(element, values, depth_limit, depth + 1, arrays_seen, output)?;
+    }
+    output.push(b']');
+    arrays_seen.pop();
+    Ok(())
+}
+
+/// Appends one associative eval array as a JSON object.
+fn eval_json_encode_append_assoc(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+    depth_limit: usize,
+    depth: usize,
+    arrays_seen: &mut Vec<usize>,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
+    output.push(b'{');
+    let len = values.array_len(value)?;
+    for position in 0..len {
+        if position > 0 {
+            output.push(b',');
+        }
+        let key = values.array_iter_key(value, position)?;
+        eval_json_encode_append_string(&values.string_bytes(key)?, output);
+        output.push(b':');
+        let element = values.array_get(value, key)?;
+        eval_json_encode_append(element, values, depth_limit, depth + 1, arrays_seen, output)?;
+    }
+    output.push(b'}');
+    arrays_seen.pop();
+    Ok(())
+}
+
+/// Records entry into one JSON array/object, rejecting depth overrun and recursion.
+fn eval_json_encode_enter_array(
+    value: RuntimeCellHandle,
+    depth_limit: usize,
+    depth: usize,
+    arrays_seen: &mut Vec<usize>,
+) -> Result<(), EvalStatus> {
+    if depth >= depth_limit {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let address = value.as_ptr() as usize;
+    if arrays_seen.contains(&address) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    arrays_seen.push(address);
+    Ok(())
+}
+
+/// Appends one JSON string with the default PHP slash and control-character escaping.
+fn eval_json_encode_append_string(bytes: &[u8], output: &mut Vec<u8>) {
+    output.push(b'"');
+    for byte in bytes {
+        match *byte {
+            b'"' => output.extend_from_slice(b"\\\""),
+            b'\\' => output.extend_from_slice(b"\\\\"),
+            b'/' => output.extend_from_slice(b"\\/"),
+            b'\x08' => output.extend_from_slice(b"\\b"),
+            b'\x0c' => output.extend_from_slice(b"\\f"),
+            b'\n' => output.extend_from_slice(b"\\n"),
+            b'\r' => output.extend_from_slice(b"\\r"),
+            b'\t' => output.extend_from_slice(b"\\t"),
+            control @ 0x00..=0x1f => {
+                output.extend_from_slice(format!("\\u{control:04x}").as_bytes());
+            }
+            _ => output.push(*byte),
+        }
+    }
+    output.push(b'"');
+}
+
 /// Evaluates PHP `print_r()` over one eval expression.
 fn eval_builtin_print_r(
     args: &[EvalExpr],
@@ -13185,6 +13374,29 @@ return defined("COUNT_RECURSIVE");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "3:3:6:2:3:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `json_encode()` serializes scalar, indexed, and associative values.
+    #[test]
+    fn execute_program_dispatches_json_encode_builtin() {
+        let program = parse_fragment(
+            br#"echo json_encode(["a" => 1, "b" => "x/y"]) . ":";
+echo json_encode([1, "q", true, null]) . ":";
+echo call_user_func("json_encode", "a/b\"c") . ":";
+echo call_user_func_array("json_encode", ["value" => ["k" => false], "flags" => 0, "depth" => 4]) . ":";
+return function_exists("json_encode");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"#
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

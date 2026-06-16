@@ -45,6 +45,8 @@ Eval `number_format()` formats finite numeric cells inside the interpreter, incl
 
 Eval printf-family dispatch formats `sprintf()` and `vsprintf()` inside the interpreter, while `printf()` and `vprintf()` echo the formatted bytes through the eval output hook and return the byte count. The formatter consumes scalar values through the same eval cast hooks and array values in PHP iteration order for the `v*` forms.
 
+Eval `json_encode()` currently runs a zero-flags recursive encoder in the eval interpreter for scalar, indexed-array, and associative-array cells. It uses eval type tags plus array iteration hooks and intentionally rejects non-zero flags until the generated runtime JSON flag/error-state surface is bridged.
+
 Eval `array_map()` iterates source arrays through eval key/value hooks and invokes string callbacks through the shared eval callable dispatcher. The one-array form writes mapped results with original keys and uses PHP's null-callback identity behavior; the multi-array form reindexes output rows, pads missing values with `null`, and materializes zipped row arrays for `array_map(null, ...)`.
 
 Eval `array_reduce()` reads the provided initial carry or creates a `null` carry when the argument is omitted, walks the source array in PHP iteration order, and invokes the shared eval callable dispatcher with carry and current item cells for each entry. The resulting carry cell is returned directly to the eval caller.

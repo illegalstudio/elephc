@@ -749,6 +749,21 @@ echo defined("COUNT_RECURSIVE") ? "C" : "bad";');
     assert_eq!(out, "4:2:3:6:2:3:C");
 }
 
+/// Verifies eval `json_encode()` serializes scalar, indexed, and associative values.
+#[test]
+fn test_eval_dispatches_json_encode_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo json_encode(["a" => 1, "b" => "x/y"]) . ":";
+echo json_encode([1, "q", true, null]) . ":";
+echo call_user_func("json_encode", "a/b\"c") . ":";
+echo call_user_func_array("json_encode", ["value" => ["k" => false], "flags" => 0, "depth" => 4]) . ":";
+echo function_exists("json_encode");');
+"#,
+    );
+    assert_eq!(out, r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:1"#);
+}
+
 /// Verifies eval direct builtin calls bind named arguments and spread arrays.
 #[test]
 fn test_eval_dispatches_named_and_spread_builtin_calls() {
