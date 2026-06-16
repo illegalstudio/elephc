@@ -821,10 +821,15 @@ eval('echo json_encode(["a" => 1, "b" => "x/y"]) . ":";
 echo json_encode([1, "q", true, null]) . ":";
 echo call_user_func("json_encode", "a/b\"c") . ":";
 echo call_user_func_array("json_encode", ["value" => ["k" => false], "flags" => 0, "depth" => 4]) . ":";
+echo json_encode("a/b", JSON_UNESCAPED_SLASHES) . ":";
+echo call_user_func_array("json_encode", ["value" => "x/y", "flags" => JSON_UNESCAPED_SLASHES]) . ":";
 echo function_exists("json_encode");');
 "#,
     );
-    assert_eq!(out, r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:1"#);
+    assert_eq!(
+        out,
+        r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":1"#
+    );
 }
 
 /// Verifies eval `json_decode()` materializes scalar, indexed, and associative values.

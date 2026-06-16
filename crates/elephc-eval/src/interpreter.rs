@@ -593,6 +593,7 @@ const EVAL_JSON_ERROR_INF_OR_NAN: i64 = 7;
 const EVAL_JSON_ERROR_UNSUPPORTED_TYPE: i64 = 8;
 const EVAL_JSON_ERROR_INVALID_PROPERTY_NAME: i64 = 9;
 const EVAL_JSON_ERROR_UTF16: i64 = 10;
+const EVAL_JSON_UNESCAPED_SLASHES: i64 = 64;
 
 unsafe extern "C" {
     /// Sets the process file-creation mask and returns the previous mask.
@@ -13145,7 +13146,7 @@ fn eval_builtin_json_encode(
     }
 }
 
-/// Encodes one runtime cell as a JSON string when flags are zero.
+/// Encodes one runtime cell as a JSON string for eval's supported flag subset.
 fn eval_json_encode_result(
     value: RuntimeCellHandle,
     flags: Option<RuntimeCellHandle>,
@@ -13153,12 +13154,11 @@ fn eval_json_encode_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if flags
+    let flags = flags
         .map(|flags| eval_int_value(flags, values))
         .transpose()?
-        .unwrap_or(0)
-        != 0
-    {
+        .unwrap_or(0);
+    if flags & !EVAL_JSON_UNESCAPED_SLASHES != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
     }
     let depth = depth
@@ -13170,7 +13170,15 @@ fn eval_json_encode_result(
     }
 
     let mut output = Vec::new();
-    eval_json_encode_append(value, values, depth as usize, 0, &mut Vec::new(), &mut output)?;
+    eval_json_encode_append(
+        value,
+        values,
+        flags,
+        depth as usize,
+        0,
+        &mut Vec::new(),
+        &mut output,
+    )?;
     context.clear_json_error();
     values.string_bytes_value(&output)
 }
@@ -13452,6 +13460,7 @@ fn eval_json_error_location(bytes: &[u8], offset: usize) -> (usize, usize) {
 fn eval_json_encode_append(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    flags: i64,
     depth_limit: usize,
     depth: usize,
     arrays_seen: &mut Vec<usize>,
@@ -13459,7 +13468,7 @@ fn eval_json_encode_append(
 ) -> Result<(), EvalStatus> {
     match values.type_tag(value)? {
         EVAL_TAG_INT | EVAL_TAG_FLOAT => output.extend_from_slice(&values.string_bytes(value)?),
-        EVAL_TAG_STRING => eval_json_encode_append_string(&values.string_bytes(value)?, output),
+        EVAL_TAG_STRING => eval_json_encode_append_string(&values.string_bytes(value)?, flags, output),
         EVAL_TAG_BOOL => {
             if values.truthy(value)? {
                 output.extend_from_slice(b"true");
@@ -13468,10 +13477,26 @@ fn eval_json_encode_append(
             }
         }
         EVAL_TAG_ARRAY => {
-            eval_json_encode_append_indexed_array(value, values, depth_limit, depth, arrays_seen, output)?;
+            eval_json_encode_append_indexed_array(
+                value,
+                values,
+                flags,
+                depth_limit,
+                depth,
+                arrays_seen,
+                output,
+            )?;
         }
         EVAL_TAG_ASSOC => {
-            eval_json_encode_append_assoc(value, values, depth_limit, depth, arrays_seen, output)?;
+            eval_json_encode_append_assoc(
+                value,
+                values,
+                flags,
+                depth_limit,
+                depth,
+                arrays_seen,
+                output,
+            )?;
         }
         EVAL_TAG_NULL | EVAL_TAG_OBJECT | EVAL_TAG_RESOURCE => output.extend_from_slice(b"null"),
         _ => return Err(EvalStatus::UnsupportedConstruct),
@@ -13483,6 +13508,7 @@ fn eval_json_encode_append(
 fn eval_json_encode_append_indexed_array(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    flags: i64,
     depth_limit: usize,
     depth: usize,
     arrays_seen: &mut Vec<usize>,
@@ -13497,7 +13523,15 @@ fn eval_json_encode_append_indexed_array(
         }
         let key = values.array_iter_key(value, position)?;
         let element = values.array_get(value, key)?;
-        eval_json_encode_append(element, values, depth_limit, depth + 1, arrays_seen, output)?;
+        eval_json_encode_append(
+            element,
+            values,
+            flags,
+            depth_limit,
+            depth + 1,
+            arrays_seen,
+            output,
+        )?;
     }
     output.push(b']');
     arrays_seen.pop();
@@ -13508,6 +13542,7 @@ fn eval_json_encode_append_indexed_array(
 fn eval_json_encode_append_assoc(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
+    flags: i64,
     depth_limit: usize,
     depth: usize,
     arrays_seen: &mut Vec<usize>,
@@ -13521,10 +13556,18 @@ fn eval_json_encode_append_assoc(
             output.push(b',');
         }
         let key = values.array_iter_key(value, position)?;
-        eval_json_encode_append_string(&values.string_bytes(key)?, output);
+        eval_json_encode_append_string(&values.string_bytes(key)?, flags, output);
         output.push(b':');
         let element = values.array_get(value, key)?;
-        eval_json_encode_append(element, values, depth_limit, depth + 1, arrays_seen, output)?;
+        eval_json_encode_append(
+            element,
+            values,
+            flags,
+            depth_limit,
+            depth + 1,
+            arrays_seen,
+            output,
+        )?;
     }
     output.push(b'}');
     arrays_seen.pop();
@@ -13549,14 +13592,17 @@ fn eval_json_encode_enter_array(
     Ok(())
 }
 
-/// Appends one JSON string with the default PHP slash and control-character escaping.
-fn eval_json_encode_append_string(bytes: &[u8], output: &mut Vec<u8>) {
+/// Appends one JSON string with eval-supported PHP flag handling.
+fn eval_json_encode_append_string(bytes: &[u8], flags: i64, output: &mut Vec<u8>) {
     output.push(b'"');
     for byte in bytes {
         match *byte {
             b'"' => output.extend_from_slice(b"\\\""),
             b'\\' => output.extend_from_slice(b"\\\\"),
-            b'/' => output.extend_from_slice(b"\\/"),
+            b'/' if flags & EVAL_JSON_UNESCAPED_SLASHES == 0 => {
+                output.extend_from_slice(b"\\/");
+            }
+            b'/' => output.push(b'/'),
             b'\x08' => output.extend_from_slice(b"\\b"),
             b'\x0c' => output.extend_from_slice(b"\\f"),
             b'\n' => output.extend_from_slice(b"\\n"),
@@ -14332,6 +14378,7 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
             ))
         }
         "JSON_ERROR_UTF16" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF16)),
+        "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
         "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
@@ -17355,7 +17402,9 @@ return defined("COUNT_RECURSIVE");"#,
 echo json_encode([1, "q", true, null]) . ":";
 echo call_user_func("json_encode", "a/b\"c") . ":";
 echo call_user_func_array("json_encode", ["value" => ["k" => false], "flags" => 0, "depth" => 4]) . ":";
-return function_exists("json_encode");"#,
+echo json_encode("a/b", JSON_UNESCAPED_SLASHES) . ":";
+echo call_user_func_array("json_encode", ["value" => "x/y", "flags" => JSON_UNESCAPED_SLASHES]) . ":";
+return function_exists("json_encode") && defined("JSON_UNESCAPED_SLASHES");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17365,7 +17414,7 @@ return function_exists("json_encode");"#,
 
         assert_eq!(
             values.output,
-            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"#
+            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":"#
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
