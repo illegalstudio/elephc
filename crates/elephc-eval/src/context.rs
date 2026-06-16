@@ -87,6 +87,7 @@ pub struct ElephcEvalContext {
     abi_version: u32,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
+    static_locals: HashMap<(String, String), RuntimeCellHandle>,
     function_stack: Vec<String>,
     call_file: String,
     call_dir: String,
@@ -100,6 +101,7 @@ impl ElephcEvalContext {
             abi_version: ABI_VERSION,
             functions: HashMap::new(),
             native_functions: HashMap::new(),
+            static_locals: HashMap::new(),
             function_stack: Vec::new(),
             call_file: String::new(),
             call_dir: String::new(),
@@ -114,6 +116,7 @@ impl ElephcEvalContext {
             abi_version,
             functions: HashMap::new(),
             native_functions: HashMap::new(),
+            static_locals: HashMap::new(),
             function_stack: Vec::new(),
             call_file: String::new(),
             call_dir: String::new(),
@@ -179,6 +182,26 @@ impl ElephcEvalContext {
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
     pub fn has_function(&self, name: &str) -> bool {
         self.functions.contains_key(name) || self.native_functions.contains_key(name)
+    }
+
+    /// Returns a stored static local cell for an eval-declared function.
+    pub fn static_local(&self, function_name: &str, name: &str) -> Option<RuntimeCellHandle> {
+        self.static_locals
+            .get(&(function_name.to_string(), name.to_string()))
+            .copied()
+    }
+
+    /// Stores one static local cell and returns any replaced distinct cell.
+    pub fn set_static_local(
+        &mut self,
+        function_name: impl Into<String>,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let previous = self
+            .static_locals
+            .insert((function_name.into(), name.into()), cell);
+        previous.filter(|previous| *previous != cell)
     }
 
     /// Pushes an eval-executed function name for magic-constant resolution.

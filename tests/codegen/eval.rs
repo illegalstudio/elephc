@@ -1390,6 +1390,33 @@ echo dyn_eval_native();
     assert_eq!(out, "42");
 }
 
+/// Verifies static locals in eval-declared functions persist between native calls.
+#[test]
+fn test_eval_declared_function_static_local_persists() {
+    let out = compile_and_run(
+        r#"<?php
+eval('function dyn_eval_static_counter() { static $n = 0; $n++; return $n; }');
+echo dyn_eval_static_counter();
+echo ":";
+echo dyn_eval_static_counter();
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+/// Verifies top-level static locals inside separate eval calls are reinitialized like PHP.
+#[test]
+fn test_eval_top_level_static_var_reinitializes_per_eval_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('static $n = 0; $n++; echo $n;');
+echo ":";
+eval('static $n = 0; $n++; echo $n;');
+"#,
+    );
+    assert_eq!(out, "1:1");
+}
+
 /// Verifies functions declared by eval from a namespace are registered globally.
 #[test]
 fn test_eval_declared_function_in_namespace_is_global() {
