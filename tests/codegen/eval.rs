@@ -739,10 +739,14 @@ fn test_eval_nested_eval_return_value_is_expression_result() {
 fn test_eval_dispatches_simple_builtin_calls() {
     let out = compile_and_run(
         r#"<?php
-eval('echo STRLEN("abcd") . ":" . \strlen("xy") . ":" . count([1, 2, 3]);');
+eval('echo STRLEN("abcd") . ":" . \strlen("xy") . ":" . count([1, [2, 3], [4]]) . ":";
+echo count([1, [2, 3], [4]], COUNT_RECURSIVE) . ":";
+echo call_user_func("count", [1, [2]]) . ":";
+echo call_user_func_array("count", ["value" => [1, [2]], "mode" => COUNT_RECURSIVE]) . ":";
+echo defined("COUNT_RECURSIVE") ? "C" : "bad";');
 "#,
     );
-    assert_eq!(out, "4:2:3");
+    assert_eq!(out, "4:2:3:6:2:3:C");
 }
 
 /// Verifies eval direct builtin calls bind named arguments and spread arrays.

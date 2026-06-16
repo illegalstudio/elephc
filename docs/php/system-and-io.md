@@ -63,6 +63,8 @@ Eval `array_walk()` supports the two-argument form with string callbacks. It inv
 
 Eval `array_filter()` supports the PHP default omitted/null callback form, filters falsey values, preserves source keys, and dispatches through direct, named-argument, `call_user_func()`, `call_user_func_array()`, and `function_exists()` paths. String callbacks can target eval-declared functions, registered AOT callbacks, or supported builtins, and the `ARRAY_FILTER_USE_VALUE`, `ARRAY_FILTER_USE_BOTH`, and `ARRAY_FILTER_USE_KEY` modes select value-only, value-and-key, or key-only callback arguments.
 
+Eval `count()` supports normal and recursive modes, including the eval-visible `COUNT_NORMAL` and `COUNT_RECURSIVE` constants.
+
 Eval `crc32()` computes the same non-negative CRC-32 integer as the static runtime helper. Eval one-shot digest calls `hash()`, `hash_file()`, `hash_hmac()`, `md5()`, and `sha1()` use the same supported algorithm table as elephc's crypto bridge, including raw `$binary` output. `hash_file()` reads local host files directly and returns `false` when the file cannot be read. Eval `hash_algos()` returns the same indexed supported-algorithm name list as the native runtime helper.
 
 Eval system and path calls include `time()`, `microtime()`, `date()`, `mktime()`, `strtotime()`, `phpversion()`, `php_uname()`, `getcwd()`, and `sys_get_temp_dir()`. `phpversion()` reports the root elephc package version, `php_uname()` supports the same `a`/`s`/`n`/`r`/`v`/`m` modes as the native runtime helper, and `sys_get_temp_dir()` matches the native static helper's `/tmp` literal.

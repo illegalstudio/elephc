@@ -53,6 +53,8 @@ Eval `array_walk()` iterates keys through the eval value hooks, invokes the shar
 
 Eval `array_filter()` implements PHP's omitted/null callback form by iterating source keys through the eval value hooks, testing each value with PHP truthiness, and inserting key/value pairs into an associative result so numeric and string keys are preserved. String callbacks route through the same eval callable dispatcher as `call_user_func()`, and `ARRAY_FILTER_USE_VALUE`, `ARRAY_FILTER_USE_BOTH`, and `ARRAY_FILTER_USE_KEY` select value-only, value/key, or key-only callback argument lists.
 
+Eval `count()` uses the same array-length hook for normal mode and recursively walks nested array-like cells for `COUNT_RECURSIVE`, with predefined `COUNT_NORMAL` and `COUNT_RECURSIVE` constants materialized by the eval constant table.
+
 Eval `crc32()` uses the same table-free reflected CRC-32 polynomial as the generated runtime helper. Eval one-shot digest calls `hash()`, `hash_file()`, `hash_hmac()`, `md5()`, and `sha1()` call through the same pure-Rust algorithm table as the generated crypto bridge, including raw `$binary` output. `hash_file()` reads local host files directly and boxes PHP false when the file cannot be read. Eval `hash_algos()` builds the same indexed supported-algorithm list as the generated runtime helper.
 
 Eval system and path calls include `time()`, `microtime()`, `date()`, `mktime()`, `strtotime()`, `phpversion()`, `getcwd()`, and `sys_get_temp_dir()`. `phpversion()` mirrors the root compiler package version, and `sys_get_temp_dir()` mirrors the static helper's `/tmp` literal.

@@ -68,7 +68,7 @@ eval('var_dump("var-dump-ok");');
 eval('if (isset($profile["name"])) { echo "isset-name\n"; }');
 eval('if (empty($profile["missing"])) { echo "empty-missing\n"; }');
 $meta = eval('return ["source" => "eval"];');
-$meta_count = eval('return count($meta);');
+$meta_count = eval('return count($meta) . ":" . count([1, [2, 3], [4]], COUNT_RECURSIVE);');
 eval('function plus_one($value) { return $value + 1; }');
 eval('function eval_example_counter() { static $n = 0; $n++; return $n; }');
 $dynamic_call = eval('return plus_one(4);');

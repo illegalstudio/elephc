@@ -546,6 +546,8 @@ const EVAL_FNM_CASEFOLD: i64 = 16;
 const EVAL_ARRAY_FILTER_USE_VALUE: i64 = 0;
 const EVAL_ARRAY_FILTER_USE_BOTH: i64 = 1;
 const EVAL_ARRAY_FILTER_USE_KEY: i64 = 2;
+const EVAL_COUNT_NORMAL: i64 = 0;
+const EVAL_COUNT_RECURSIVE: i64 = 1;
 
 unsafe extern "C" {
     /// Sets the process file-creation mask and returns the previous mask.
@@ -2869,14 +2871,11 @@ fn eval_builtin_with_values(
             };
             eval_cast_result(name, *value, values)?
         }
-        "count" => {
-            let [value] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            let len = values.array_len(*value)?;
-            let len = i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
-            values.int(len)?
-        }
+        "count" => match evaluated_args {
+            [value] => eval_count_result(*value, None, values)?,
+            [value, mode] => eval_count_result(*value, Some(*mode), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "crc32" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -10156,13 +10155,65 @@ fn eval_builtin_count(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [value] = args else {
-        return Err(EvalStatus::RuntimeFatal);
+    match args {
+        [value] => {
+            let value = eval_expr(value, context, scope, values)?;
+            eval_count_result(value, None, values)
+        }
+        [value, mode] => {
+            let value = eval_expr(value, context, scope, values)?;
+            let mode = eval_expr(mode, context, scope, values)?;
+            eval_count_result(value, Some(mode), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Counts an eval array with PHP normal or recursive mode semantics.
+fn eval_count_result(
+    value: RuntimeCellHandle,
+    mode: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mode = match mode {
+        Some(mode) => eval_int_value(mode, values)?,
+        None => EVAL_COUNT_NORMAL,
     };
-    let value = eval_expr(value, context, scope, values)?;
-    let len = values.array_len(value)?;
+    let len = match mode {
+        EVAL_COUNT_NORMAL => values.array_len(value)?,
+        EVAL_COUNT_RECURSIVE => eval_count_recursive_len(value, values, &mut Vec::new())?,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
     let len = i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.int(len)
+}
+
+/// Recursively counts nested eval arrays for `count($value, COUNT_RECURSIVE)`.
+fn eval_count_recursive_len(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+    arrays_seen: &mut Vec<usize>,
+) -> Result<usize, EvalStatus> {
+    let address = value.as_ptr() as usize;
+    if arrays_seen.contains(&address) {
+        return Ok(0);
+    }
+    arrays_seen.push(address);
+
+    let len = values.array_len(value)?;
+    let mut total = len;
+    for position in 0..len {
+        let key = values.array_iter_key(value, position)?;
+        let element = values.array_get(value, key)?;
+        if values.is_array_like(element)? {
+            total = total
+                .checked_add(eval_count_recursive_len(element, values, arrays_seen)?)
+                .ok_or(EvalStatus::RuntimeFatal)?;
+        }
+    }
+
+    arrays_seen.pop();
+    Ok(total)
 }
 
 /// Evaluates PHP `print_r()` over one eval expression.
@@ -10860,6 +10911,8 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "ARRAY_FILTER_USE_VALUE" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_VALUE)),
         "ARRAY_FILTER_USE_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_BOTH)),
         "ARRAY_FILTER_USE_KEY" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_KEY)),
+        "COUNT_NORMAL" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_NORMAL)),
+        "COUNT_RECURSIVE" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_RECURSIVE)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
         "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
@@ -13118,14 +13171,21 @@ return call_user_func_array("dyn", ["y" => 2, 1]);"#,
     /// Verifies dynamic builtin calls inside eval dispatch through runtime value hooks.
     #[test]
     fn execute_program_dispatches_simple_builtins() {
-        let program = parse_fragment(br#"return strlen("abc") + count([1, 2, 3]);"#)
-            .expect("parse eval fragment");
+        let program = parse_fragment(
+            br#"echo strlen("abc") . ":" . count([1, [2, 3], [4]]) . ":";
+echo count([1, [2, 3], [4]], COUNT_RECURSIVE) . ":";
+echo call_user_func("count", [1, [2]]) . ":";
+echo call_user_func_array("count", ["value" => [1, [2]], "mode" => COUNT_RECURSIVE]) . ":";
+return defined("COUNT_RECURSIVE");"#,
+        )
+        .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.get(result), FakeValue::Int(6));
+        assert_eq!(values.output, "3:3:6:2:3:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
     /// Verifies direct eval builtin calls bind named and unpacked arguments.
