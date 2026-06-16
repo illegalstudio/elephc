@@ -607,7 +607,9 @@ const EVAL_JSON_UNESCAPED_UNICODE: i64 = 256;
 const EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR: i64 = 512;
 const EVAL_JSON_PRESERVE_ZERO_FRACTION: i64 = 1024;
 const EVAL_JSON_INVALID_UTF8_IGNORE: i64 = 1_048_576;
+const EVAL_JSON_INVALID_UTF8_SUBSTITUTE: i64 = 2_097_152;
 const EVAL_JSON_INF_OR_NAN_MESSAGE: &str = "Inf and NaN cannot be JSON encoded";
+const EVAL_JSON_UTF8_MESSAGE: &str = "Malformed UTF-8 characters, possibly incorrectly encoded";
 
 unsafe extern "C" {
     /// Sets the process file-creation mask and returns the previous mask.
@@ -13345,7 +13347,9 @@ fn eval_json_encode_result(
         | EVAL_JSON_FORCE_OBJECT
         | EVAL_JSON_PRETTY_PRINT
         | EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR
-        | EVAL_JSON_PRESERVE_ZERO_FRACTION;
+        | EVAL_JSON_PRESERVE_ZERO_FRACTION
+        | EVAL_JSON_INVALID_UTF8_IGNORE
+        | EVAL_JSON_INVALID_UTF8_SUBSTITUTE;
     let supported_flags = supported_flags | EVAL_JSON_NUMERIC_CHECK;
     if flags & !supported_flags != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
@@ -13648,7 +13652,7 @@ fn eval_json_parse_error_status(error: JsonParseErrorKind) -> (i64, &'static str
         ),
         JsonParseErrorKind::Utf8 => (
             EVAL_JSON_ERROR_UTF8,
-            "Malformed UTF-8 characters, possibly incorrectly encoded",
+            EVAL_JSON_UTF8_MESSAGE,
         ),
         JsonParseErrorKind::Utf16 => (
             EVAL_JSON_ERROR_UTF16,
@@ -13699,7 +13703,13 @@ fn eval_json_encode_append(
         EVAL_TAG_FLOAT => {
             eval_json_encode_append_float(value, values, flags, error, output)?;
         }
-        EVAL_TAG_STRING => eval_json_encode_append_string(&values.string_bytes(value)?, flags, output),
+        EVAL_TAG_STRING => eval_json_encode_append_string(
+            &values.string_bytes(value)?,
+            flags,
+            EvalJsonStringPosition::Value,
+            error,
+            output,
+        )?,
         EVAL_TAG_BOOL => {
             if values.truthy(value)? {
                 output.extend_from_slice(b"true");
@@ -13741,6 +13751,13 @@ fn eval_json_encode_append(
 struct EvalJsonEncodeError {
     code: i64,
     message: &'static str,
+}
+
+/// Marks whether a JSON string is being encoded as a value or as an object key.
+#[derive(Clone, Copy)]
+enum EvalJsonStringPosition {
+    Value,
+    Key,
 }
 
 /// Appends one JSON float while preserving a `.0` suffix when requested.
@@ -13806,8 +13823,10 @@ fn eval_json_encode_append_indexed_array(
             eval_json_encode_append_string(
                 &values.string_bytes(key)?,
                 flags & !EVAL_JSON_NUMERIC_CHECK,
+                EvalJsonStringPosition::Key,
+                error,
                 output,
-            );
+            )?;
             eval_json_encode_append_colon(flags, output);
         }
         let element = values.array_get(value, key)?;
@@ -13863,8 +13882,10 @@ fn eval_json_encode_append_assoc(
         eval_json_encode_append_string(
             &values.string_bytes(key)?,
             flags & !EVAL_JSON_NUMERIC_CHECK,
+            EvalJsonStringPosition::Key,
+            error,
             output,
-        );
+        )?;
         eval_json_encode_append_colon(flags, output);
         let element = values.array_get(value, key)?;
         eval_json_encode_append(
@@ -13922,22 +13943,41 @@ fn eval_json_encode_enter_array(
 }
 
 /// Appends one JSON string with eval-supported PHP flag handling.
-fn eval_json_encode_append_string(bytes: &[u8], flags: i64, output: &mut Vec<u8>) {
+fn eval_json_encode_append_string(
+    bytes: &[u8],
+    flags: i64,
+    position: EvalJsonStringPosition,
+    error: &mut Option<EvalJsonEncodeError>,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
     if flags & EVAL_JSON_NUMERIC_CHECK != 0 {
         if let Some(number) = eval_json_numeric_check_bytes(bytes) {
             output.extend_from_slice(&number);
-            return;
+            return Ok(());
         }
     }
+    let start_len = output.len();
     output.push(b'"');
     if let Ok(value) = std::str::from_utf8(bytes) {
         for character in value.chars() {
             eval_json_encode_append_char(character, flags, output);
         }
+    } else if flags & (EVAL_JSON_INVALID_UTF8_IGNORE | EVAL_JSON_INVALID_UTF8_SUBSTITUTE) == 0 {
+        output.truncate(start_len);
+        *error = Some(EvalJsonEncodeError {
+            code: EVAL_JSON_ERROR_UTF8,
+            message: EVAL_JSON_UTF8_MESSAGE,
+        });
+        match position {
+            EvalJsonStringPosition::Value => output.extend_from_slice(b"null"),
+            EvalJsonStringPosition::Key => output.extend_from_slice(b"\"\""),
+        }
+        return Ok(());
     } else {
-        eval_json_encode_append_lossy_bytes(bytes, flags, output);
+        eval_json_encode_append_invalid_utf8_bytes(bytes, flags, output)?;
     }
     output.push(b'"');
+    Ok(())
 }
 
 /// Appends one valid UTF-8 character using PHP JSON string escaping rules.
@@ -13991,15 +14031,37 @@ fn eval_json_encode_append_unicode_escape(codepoint: u32, output: &mut Vec<u8>) 
     output.extend_from_slice(format!("\\u{high:04x}\\u{low:04x}").as_bytes());
 }
 
-/// Preserves existing eval behavior for malformed byte strings while still escaping ASCII.
-fn eval_json_encode_append_lossy_bytes(bytes: &[u8], flags: i64, output: &mut Vec<u8>) {
-    for byte in bytes {
-        if byte.is_ascii() {
-            eval_json_encode_append_ascii_byte(*byte, flags, output);
-        } else {
-            output.push(*byte);
+/// Appends malformed UTF-8 bytes according to PHP's JSON invalid-UTF-8 flags.
+fn eval_json_encode_append_invalid_utf8_bytes(
+    mut bytes: &[u8],
+    flags: i64,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    while !bytes.is_empty() {
+        match std::str::from_utf8(bytes) {
+            Ok(value) => {
+                for character in value.chars() {
+                    eval_json_encode_append_char(character, flags, output);
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                let valid = &bytes[..error.valid_up_to()];
+                for character in std::str::from_utf8(valid)
+                    .map_err(|_| EvalStatus::RuntimeFatal)?
+                    .chars()
+                {
+                    eval_json_encode_append_char(character, flags, output);
+                }
+                let invalid_len = error.error_len().unwrap_or(bytes.len() - valid.len()).max(1);
+                if flags & EVAL_JSON_INVALID_UTF8_IGNORE == 0 {
+                    eval_json_encode_append_char('\u{fffd}', flags, output);
+                }
+                bytes = &bytes[valid.len() + invalid_len.min(bytes.len() - valid.len())..];
+            }
         }
     }
+    Ok(())
 }
 
 /// Returns the JSON number bytes for a PHP numeric string when `JSON_NUMERIC_CHECK` applies.
@@ -14809,6 +14871,11 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "JSON_INVALID_UTF8_IGNORE" => {
             Some(EvalPredefinedConstant::Int(
                 EVAL_JSON_INVALID_UTF8_IGNORE,
+            ))
+        }
+        "JSON_INVALID_UTF8_SUBSTITUTE" => {
+            Some(EvalPredefinedConstant::Int(
+                EVAL_JSON_INVALID_UTF8_SUBSTITUTE,
             ))
         }
         "INF" => Some(EvalPredefinedConstant::Float(f64::INFINITY)),
@@ -17854,10 +17921,23 @@ echo (json_encode(INF) === false ? "false" : "json") . ":";
 echo json_last_error() . ":" . json_last_error_msg() . ":";
 echo json_encode([1.5, INF, NAN], JSON_PARTIAL_OUTPUT_ON_ERROR) . ":";
 echo json_last_error() . ":" . json_last_error_msg() . ":";
+$bad = "a" . hex2bin("80") . "b";
+echo (json_encode($bad) === false ? "utf8-false" : "bad") . ":";
+echo json_last_error() . ":";
+echo bin2hex(json_encode($bad, JSON_PARTIAL_OUTPUT_ON_ERROR)) . ":";
+echo json_last_error() . ":";
+echo json_encode($bad, JSON_INVALID_UTF8_IGNORE) . ":";
+echo json_last_error() . ":";
+echo bin2hex(json_encode($bad, JSON_INVALID_UTF8_SUBSTITUTE)) . ":";
+echo json_last_error() . ":";
+echo bin2hex(json_encode($bad, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE)) . ":";
+echo json_last_error() . ":";
+echo json_encode([hex2bin("6b80") => hex2bin("7680")], JSON_PARTIAL_OUTPUT_ON_ERROR) . ":";
+echo json_last_error() . ":";
 json_encode(3.5);
 echo json_last_error() . ":" . json_last_error_msg() . ":";
 echo str_replace("\n", "|", json_encode(["a" => [1, 2]], JSON_PRETTY_PRINT)) . ":";
-return function_exists("json_encode") && defined("INF") && defined("NAN") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_UNESCAPED_UNICODE") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK") && defined("JSON_PARTIAL_OUTPUT_ON_ERROR") && defined("JSON_PRETTY_PRINT") && defined("JSON_PRESERVE_ZERO_FRACTION");"#,
+return function_exists("json_encode") && defined("INF") && defined("NAN") && defined("JSON_UNESCAPED_SLASHES") && defined("JSON_UNESCAPED_UNICODE") && defined("JSON_FORCE_OBJECT") && defined("JSON_HEX_TAG") && defined("JSON_HEX_AMP") && defined("JSON_HEX_APOS") && defined("JSON_HEX_QUOT") && defined("JSON_NUMERIC_CHECK") && defined("JSON_PARTIAL_OUTPUT_ON_ERROR") && defined("JSON_PRETTY_PRINT") && defined("JSON_PRESERVE_ZERO_FRACTION") && defined("JSON_INVALID_UTF8_IGNORE") && defined("JSON_INVALID_UTF8_SUBSTITUTE");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -17867,7 +17947,7 @@ return function_exists("json_encode") && defined("INF") && defined("NAN") && def
 
         assert_eq!(
             values.output,
-            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":225c75303065395c2f5c75643833645c756465303022:22c3a95c2ff09f988022:7b225c7530306539223a225c75643833645c7564653030227d:7b22c3a9223a22f09f9880227d:{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:false:7:Inf and NaN cannot be JSON encoded:[1.5,0,0]:7:Inf and NaN cannot be JSON encoded:0:No error:{|    "a": [|        1,|        2|    ]|}:"#
+            r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":225c75303065395c2f5c75643833645c756465303022:22c3a95c2ff09f988022:7b225c7530306539223a225c75643833645c7564653030227d:7b22c3a9223a22f09f9880227d:{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:false:7:Inf and NaN cannot be JSON encoded:[1.5,0,0]:7:Inf and NaN cannot be JSON encoded:utf8-false:5:6e756c6c:5:"ab":0:22615c75666666646222:0:2261efbfbd6222:0:{"k\ufffd":null}:5:0:No error:{|    "a": [|        1,|        2|    ]|}:"#
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }

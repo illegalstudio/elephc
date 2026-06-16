@@ -839,6 +839,19 @@ echo (json_encode(INF) === false ? "false" : "json") . ":";
 echo json_last_error() . ":" . json_last_error_msg() . ":";
 echo json_encode([1.5, INF, NAN], JSON_PARTIAL_OUTPUT_ON_ERROR) . ":";
 echo json_last_error() . ":" . json_last_error_msg() . ":";
+$bad = "a" . chr(128) . "b";
+echo (json_encode($bad) === false ? "utf8-false" : "bad") . ":";
+echo json_last_error() . ":";
+echo bin2hex(json_encode($bad, JSON_PARTIAL_OUTPUT_ON_ERROR)) . ":";
+echo json_last_error() . ":";
+echo json_encode($bad, JSON_INVALID_UTF8_IGNORE) . ":";
+echo json_last_error() . ":";
+echo bin2hex(json_encode($bad, JSON_INVALID_UTF8_SUBSTITUTE)) . ":";
+echo json_last_error() . ":";
+echo bin2hex(json_encode($bad, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE)) . ":";
+echo json_last_error() . ":";
+echo json_encode(["k" . chr(128) => "v" . chr(128)], JSON_PARTIAL_OUTPUT_ON_ERROR) . ":";
+echo json_last_error() . ":";
 json_encode(3.5);
 echo json_last_error() . ":" . json_last_error_msg() . ":";
 echo str_replace("\n", "|", json_encode(["a" => [1, 2]], JSON_PRETTY_PRINT)) . ":";
@@ -847,7 +860,7 @@ echo function_exists("json_encode");');
     );
     assert_eq!(
         out,
-        r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":225c75303065395c2f5c75643833645c756465303022:22c3a95c2ff09f988022:7b225c7530306539223a225c75643833645c7564653030227d:7b22c3a9223a22f09f9880227d:{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:false:7:Inf and NaN cannot be JSON encoded:[1.5,0,0]:7:Inf and NaN cannot be JSON encoded:0:No error:{|    "a": [|        1,|        2|    ]|}:1"#
+        r#"{"a":1,"b":"x\/y"}:[1,"q",true,null]:"a\/b\"c":{"k":false}:"a/b":"x/y":225c75303065395c2f5c75643833645c756465303022:22c3a95c2ff09f988022:7b225c7530306539223a225c75643833645c7564653030227d:7b22c3a9223a22f09f9880227d:{"0":1,"1":2}:{}:{"0":1,"1":2}:"\u003C\u003E\u0026\u0022\u0027":[1,12,1000,7,"7x"]:[1.0,2.5,-3.0]:false:7:Inf and NaN cannot be JSON encoded:[1.5,0,0]:7:Inf and NaN cannot be JSON encoded:utf8-false:5:6e756c6c:5:"ab":0:22615c75666666646222:0:2261efbfbd6222:0:{"":null}:5:0:No error:{|    "a": [|        1,|        2|    ]|}:1"#
     );
 }
 
