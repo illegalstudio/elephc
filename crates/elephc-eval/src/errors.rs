@@ -38,6 +38,7 @@ impl EvalStatus {
 pub enum EvalParseError {
     PhpOpenTag,
     InvalidUtf8,
+    UnsupportedConstruct,
     UnexpectedToken,
     UnexpectedEof,
     InvalidNumber,
@@ -45,4 +46,40 @@ pub enum EvalParseError {
     UnterminatedComment,
     ExpectedVariable,
     ExpectedSemicolon,
+}
+
+impl EvalParseError {
+    /// Returns the ABI status that should be reported for this parse failure.
+    pub const fn status(self) -> EvalStatus {
+        match self {
+            Self::UnsupportedConstruct => EvalStatus::UnsupportedConstruct,
+            Self::PhpOpenTag
+            | Self::InvalidUtf8
+            | Self::UnexpectedToken
+            | Self::UnexpectedEof
+            | Self::InvalidNumber
+            | Self::UnterminatedString
+            | Self::UnterminatedComment
+            | Self::ExpectedVariable
+            | Self::ExpectedSemicolon => EvalStatus::ParseError,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies only known unsupported syntax maps to the unsupported ABI status.
+    #[test]
+    fn parse_error_status_distinguishes_unsupported_constructs() {
+        assert_eq!(
+            EvalParseError::UnsupportedConstruct.status(),
+            EvalStatus::UnsupportedConstruct
+        );
+        assert_eq!(
+            EvalParseError::UnexpectedToken.status(),
+            EvalStatus::ParseError
+        );
+    }
 }

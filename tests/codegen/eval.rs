@@ -1882,8 +1882,8 @@ eval('function dyn_eval_dup() { return 2; }');
 fn test_eval_unsupported_class_declaration_fails() {
     let err = compile_and_run_expect_failure("<?php eval('class DynEvalUnsupported {}');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
-        "stderr did not contain eval parse diagnostic: {err}"
+        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+        "stderr did not contain eval unsupported diagnostic: {err}"
     );
 }
 
@@ -1892,8 +1892,8 @@ fn test_eval_unsupported_class_declaration_fails() {
 fn test_eval_unsupported_reference_assignment_fails() {
     let err = compile_and_run_expect_failure("<?php eval('$left =& $right;');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
-        "stderr did not contain eval parse diagnostic: {err}"
+        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+        "stderr did not contain eval unsupported diagnostic: {err}"
     );
 }
 

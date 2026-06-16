@@ -12,7 +12,7 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 use crate::context::{ElephcEvalContext, NativeFunction};
-use crate::errors::EvalStatus;
+use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalFunction, EvalMagicConst,
     EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
@@ -2610,7 +2610,7 @@ fn eval_nested_eval(
     };
     let code = eval_expr(code, context, scope, values)?;
     let code = values.string_bytes(code)?;
-    let program = parse_fragment(&code).map_err(|_| EvalStatus::ParseError)?;
+    let program = parse_fragment(&code).map_err(EvalParseError::status)?;
     execute_program_with_context(context, &program, scope, values)
 }
 

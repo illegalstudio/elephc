@@ -644,8 +644,9 @@ unsafe fn execute_eval_inner(
     } else {
         slice::from_raw_parts(code_ptr, code_len)
     };
-    let Ok(program) = parser::parse_fragment(code) else {
-        return EvalStatus::ParseError.code();
+    let program = match parser::parse_fragment(code) {
+        Ok(program) => program,
+        Err(err) => return err.status().code(),
     };
     if !out.is_null() {
         (*out).clear();

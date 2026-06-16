@@ -586,6 +586,9 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "switch") => self.parse_switch_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "unset") => self.parse_unset_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
+            TokenKind::Ident(name) if is_unsupported_statement_keyword(name) => {
+                Err(EvalParseError::UnsupportedConstruct)
+            }
             TokenKind::PlusPlus | TokenKind::MinusMinus => self.parse_prefix_inc_dec_stmt(true),
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(true)
@@ -842,6 +845,9 @@ impl Parser {
             return Err(EvalParseError::UnexpectedToken);
         };
         self.advance();
+        if op.is_none() && matches!(self.current(), TokenKind::Ampersand) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
         let value = self.parse_expr()?;
         if require_semicolon {
             self.expect_semicolon()?;
@@ -1694,6 +1700,26 @@ fn inc_dec_store(name: String, increment: bool) -> EvalStmt {
 /// Compares a source identifier to a PHP keyword using ASCII case-insensitive rules.
 fn ident_eq(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected)
+}
+
+/// Returns true for PHP statement forms that the eval subset intentionally does not parse yet.
+fn is_unsupported_statement_keyword(name: &str) -> bool {
+    [
+        "class",
+        "enum",
+        "interface",
+        "namespace",
+        "require",
+        "require_once",
+        "include",
+        "include_once",
+        "throw",
+        "trait",
+        "try",
+        "use",
+    ]
+    .iter()
+    .any(|keyword| ident_eq(name, keyword))
 }
 
 #[cfg(test)]
@@ -2876,6 +2902,24 @@ mod tests {
         assert_eq!(
             parse_fragment(b"<?php echo 1;"),
             Err(EvalParseError::PhpOpenTag)
+        );
+    }
+
+    /// Verifies unsupported class declarations report the unsupported construct status.
+    #[test]
+    fn parse_fragment_rejects_class_as_unsupported_construct() {
+        assert_eq!(
+            parse_fragment(b"class DynEvalUnsupported {}"),
+            Err(EvalParseError::UnsupportedConstruct)
+        );
+    }
+
+    /// Verifies unsupported reference assignments report the unsupported construct status.
+    #[test]
+    fn parse_fragment_rejects_reference_assignment_as_unsupported_construct() {
+        assert_eq!(
+            parse_fragment(b"$left =& $right;"),
+            Err(EvalParseError::UnsupportedConstruct)
         );
     }
 
