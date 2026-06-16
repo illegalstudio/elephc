@@ -1056,7 +1056,7 @@ impl Parser {
         Ok(vec![EvalStmt::Throw(expr)])
     }
 
-    /// Parses `try { ... } catch (Throwable $name) { ... }` statements.
+    /// Parses `try { ... } catch (Throwable $name) { ... } finally { ... }` statements.
     fn parse_try_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         let body = self.parse_block()?;
@@ -1064,13 +1064,21 @@ impl Parser {
         while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "catch")) {
             catches.push(self.parse_catch_clause()?);
         }
-        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "finally")) {
-            return Err(EvalParseError::UnsupportedConstruct);
-        }
-        if catches.is_empty() {
+        let finally_body =
+            if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "finally")) {
+                self.advance();
+                self.parse_block()?
+            } else {
+                Vec::new()
+            };
+        if catches.is_empty() && finally_body.is_empty() {
             return Err(EvalParseError::UnexpectedToken);
         }
-        Ok(vec![EvalStmt::Try { body, catches }])
+        Ok(vec![EvalStmt::Try {
+            body,
+            catches,
+            finally_body,
+        }])
     }
 
     /// Parses one supported `catch (Throwable $name) { ... }` clause.
@@ -3939,6 +3947,7 @@ function dyn() { return alias(); }"#,
                     var_name: "caught".to_string(),
                     body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
                 }],
+                finally_body: Vec::new(),
             }]
         );
     }
@@ -3966,6 +3975,7 @@ try {
                         "caught".to_string()
                     )))],
                 }],
+                finally_body: Vec::new(),
             }]
         );
     }
@@ -3995,12 +4005,21 @@ try {
         );
     }
 
-    /// Verifies eval try/finally remains outside the supported EvalIR subset.
+    /// Verifies try/finally statements lower the finalizer block into EvalIR.
     #[test]
-    fn parse_fragment_rejects_eval_finally_source() {
+    fn parse_fragment_accepts_eval_finally_source() {
+        let program =
+            parse_fragment(br#"try { return 1; } finally { echo "finally"; }"#)
+                .expect("fragment should parse");
         assert_eq!(
-            parse_fragment(br#"try { echo "try"; } finally { echo "finally"; }"#),
-            Err(EvalParseError::UnsupportedConstruct)
+            program.statements(),
+            &[EvalStmt::Try {
+                body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
+                catches: Vec::new(),
+                finally_body: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
+                    "finally".to_string()
+                )))],
+            }]
         );
     }
 
