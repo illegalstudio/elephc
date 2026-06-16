@@ -63,6 +63,8 @@ Eval `array_reduce()` supports the two- or three-argument form with string callb
 
 Eval `array_walk()` supports the two-argument form with string callbacks. It invokes the callback with value and key cells in PHP iteration order, ignores the callback return value, and returns `true`.
 
+Eval `array_pop()` and `array_shift()` support direct variable calls with write-back into the eval scope, including named `array:` calls. When reached through `call_user_func()` or `call_user_func_array()`, they follow PHP's by-value callback behavior for non-reference arguments: the returned value is computed from the supplied array, but the caller's original array is not mutated.
+
 Eval `array_filter()` supports the PHP default omitted/null callback form, filters falsey values, preserves source keys, and dispatches through direct, named-argument, `call_user_func()`, `call_user_func_array()`, and `function_exists()` paths. String callbacks can target eval-declared functions, registered AOT callbacks, or supported builtins, and the `ARRAY_FILTER_USE_VALUE`, `ARRAY_FILTER_USE_BOTH`, and `ARRAY_FILTER_USE_KEY` modes select value-only, value-and-key, or key-only callback arguments.
 
 Eval `count()` supports normal and recursive modes, including the eval-visible `COUNT_NORMAL` and `COUNT_RECURSIVE` constants.
