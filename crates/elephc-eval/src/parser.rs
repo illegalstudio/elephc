@@ -2934,6 +2934,21 @@ mod tests {
         );
     }
 
+    /// Verifies unsupported expression keywords report the unsupported construct status.
+    #[test]
+    fn parse_fragment_rejects_expression_keywords_as_unsupported_constructs() {
+        for source in [
+            b"return clone $value;" as &[u8],
+            b"return match ($value) { 1 => 2 };" as &[u8],
+            b"return yield 1;" as &[u8],
+        ] {
+            assert_eq!(
+                parse_fragment(source),
+                Err(EvalParseError::UnsupportedConstruct)
+            );
+        }
+    }
+
     /// Verifies unsupported reference assignments report the unsupported construct status.
     #[test]
     fn parse_fragment_rejects_reference_assignment_as_unsupported_construct() {
