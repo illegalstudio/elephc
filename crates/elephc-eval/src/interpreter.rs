@@ -1167,6 +1167,9 @@ fn eval_positional_expr_call(
             eval_builtin_cast(name, args, context, scope, values)
         }
         "count" => eval_builtin_count(args, context, scope, values),
+        "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => {
+            eval_builtin_ctype(name, args, context, scope, values)
+        }
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "empty" => eval_builtin_empty(args, context, scope, values),
@@ -1488,6 +1491,10 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "chop"
             | "chr"
             | "count"
+            | "ctype_alnum"
+            | "ctype_alpha"
+            | "ctype_digit"
+            | "ctype_space"
             | "define"
             | "defined"
             | "explode"
@@ -1650,6 +1657,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "chr" => Some(&["codepoint"]),
         "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
         "count" => Some(&["value", "mode"]),
+        "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => Some(&["text"]),
         "define" => Some(&["constant_name", "value"]),
         "defined" => Some(&["constant_name"]),
         "explode" => Some(&["separator", "string"]),
@@ -2002,6 +2010,12 @@ fn eval_builtin_with_values(
             let len = values.array_len(*value)?;
             let len = i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?;
             values.int(len)?
+        }
+        "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_ctype_result(name, *value, values)?
         }
         "define" => eval_define_result(evaluated_args, context, values)?,
         "defined" => eval_defined_result(evaluated_args, context, values)?,
@@ -3110,6 +3124,49 @@ fn eval_url_decode_result(
         }
     }
     values.string_bytes_value(&output)
+}
+
+/// Evaluates PHP `ctype_*` predicates over one eval string expression.
+fn eval_builtin_ctype(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_ctype_result(name, value, values)
+}
+
+/// Returns the PHP boolean result for one ASCII `ctype_*` byte-string check.
+fn eval_ctype_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let mut matches = !bytes.is_empty();
+    for byte in bytes {
+        if !eval_ctype_byte_matches(name, byte)? {
+            matches = false;
+            break;
+        }
+    }
+    values.bool_value(matches)
+}
+
+/// Checks one byte against the selected PHP ASCII character class.
+fn eval_ctype_byte_matches(name: &str, byte: u8) -> Result<bool, EvalStatus> {
+    match name {
+        "ctype_alpha" => Ok(byte.is_ascii_alphabetic()),
+        "ctype_digit" => Ok(byte.is_ascii_digit()),
+        "ctype_alnum" => Ok(byte.is_ascii_alphanumeric()),
+        "ctype_space" => Ok(matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
 }
 
 /// Casts one eval value to PHP int and returns the scalar payload.
@@ -6880,6 +6937,34 @@ return function_exists("rawurldecode");"#,
         assert_eq!(
             values.output,
             "a+b%26%3D%7E:a%20b%26%3D~:a b&=~:a+b&=~:%25zz:x+y%zz:111"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `ctype_*` predicates dispatch through direct, named, and callable paths.
+    #[test]
+    fn execute_program_dispatches_ctype_builtins() {
+        let program = parse_fragment(
+            br#"echo ctype_alpha("abc") ? "A" : "-"; echo ":";
+echo ctype_digit(text: "123") ? "D" : "-"; echo ":";
+echo ctype_alnum("a1") ? "N" : "-"; echo ":";
+echo ctype_space(" \t\n" . chr(11) . chr(12) . "\r") ? "S" : "-"; echo ":";
+echo ctype_alpha("") ? "bad" : "empty"; echo ":";
+echo call_user_func("ctype_digit", "12x") ? "bad" : "not-digit"; echo ":";
+echo call_user_func_array("ctype_space", ["text" => " x"]) ? "bad" : "not-space"; echo ":";
+echo function_exists("ctype_alpha"); echo function_exists("ctype_digit");
+echo function_exists("ctype_alnum");
+return function_exists("ctype_space");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "A:D:N:S:empty:not-digit:not-space:111"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }

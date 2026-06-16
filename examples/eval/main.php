@@ -130,6 +130,7 @@ $append_assoc = eval('$items = ["name" => "Ada"]; $items[] = "Grace"; return $it
 $array_key_probe = eval('$m = ["name" => null]; return (array_key_exists("name", $m) ? "present" : "missing") . ":" . (array_key_exists("age", $m) ? "bad" : "absent");');
 $array_search = eval('return (in_array("b", ["a", "b"]) ? "in" : "missing") . ":" . array_search("Grace", ["name" => "Grace"]);');
 $string_compare = eval('return (strcmp("abc", "abd") < 0 ? "lt" : "bad") . ":" . (strcasecmp("Hello", "hello") === 0 ? "ci" : "bad") . ":" . (hash_equals("abc", "abc") ? "hash" : "bad");');
+$ctype_checks = eval('return (ctype_alpha("abc") ? "alpha" : "bad") . ":" . (ctype_digit("123") ? "digit" : "bad") . ":" . (ctype_space(" \t\n") ? "space" : "bad");');
 $slashes = eval('return addslashes("A\"B") . ":" . stripslashes(addslashes("A\"B"));');
 $chr = eval('return chr(65) . ":" . bin2hex(chr(256));');
 $repeated = eval('return str_repeat("ha", 3);');
@@ -216,6 +217,7 @@ echo "append-assoc=" . $append_assoc . "\n";
 echo "array-key-exists=" . $array_key_probe . "\n";
 echo "array-search=" . $array_search . "\n";
 echo "string-compare=" . $string_compare . "\n";
+echo "ctype=" . $ctype_checks . "\n";
 echo "slashes=" . $slashes . "\n";
 echo "chr=" . $chr . "\n";
 echo "str-repeat=" . $repeated . "\n";

@@ -1075,6 +1075,30 @@ echo ":"; echo function_exists("rawurldecode");');
     );
 }
 
+/// Verifies eval `ctype_*` predicates inspect ASCII byte classes.
+#[test]
+fn test_eval_dispatches_ctype_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo ctype_alpha("abc") ? "A" : "-"; echo ":";
+echo ctype_digit(text: "123") ? "D" : "-"; echo ":";
+echo ctype_alnum("a1") ? "N" : "-"; echo ":";
+echo ctype_space(" \t\n" . chr(11) . chr(12) . "\r") ? "S" : "-"; echo ":";
+echo ctype_alpha("") ? "bad" : "empty"; echo ":";
+echo call_user_func("ctype_digit", "12x") ? "bad" : "not-digit"; echo ":";
+echo call_user_func_array("ctype_space", ["text" => " x"]) ? "bad" : "not-space";
+echo ":"; echo function_exists("ctype_alpha");
+echo ":"; echo function_exists("ctype_digit");
+echo ":"; echo function_exists("ctype_alnum");
+echo ":"; echo function_exists("ctype_space");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "A:D:N:S:empty:not-digit:not-space:1:1:1:1"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
