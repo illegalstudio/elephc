@@ -1888,10 +1888,12 @@ class EvalClassExistsProbe {}
 eval('echo class_exists("EvalClassExistsProbe") ? "Y" : "N";
 echo class_exists("evalclassexistsprobe") ? "Y" : "N";
 echo class_exists("\EvalClassExistsProbe") ? "Y" : "N";
+echo call_user_func("class_exists", "EvalClassExistsProbe") ? "Y" : "N";
+echo call_user_func_array("class_exists", ["autoload" => false, "class" => "\EvalClassExistsProbe"]) ? "Y" : "N";
 echo class_exists(class: "MissingEvalClassExistsProbe", autoload: false) ? "Y" : "N";');
 "#,
     );
-    assert_eq!(out, "YYYN");
+    assert_eq!(out, "YYYYYN");
 }
 
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.

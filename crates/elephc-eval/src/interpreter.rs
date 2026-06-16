@@ -1570,7 +1570,11 @@ fn eval_callable_with_call_array_args(
         return eval_callable_with_values(name, evaluated_args, context, values);
     }
     if eval_php_visible_builtin_exists(name) {
-        return Err(EvalStatus::RuntimeFatal);
+        let evaluated_args = bind_evaluated_builtin_args(name, evaluated_args)?;
+        let Some(result) = eval_builtin_with_values(name, &evaluated_args, context, values)? else {
+            return Err(EvalStatus::UnsupportedConstruct);
+        };
+        return Ok(result);
     }
     if let Some(function) = context.function(name).cloned() {
         let evaluated_args = bind_evaluated_function_args(function.params(), evaluated_args)?;
