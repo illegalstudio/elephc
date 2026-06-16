@@ -1921,6 +1921,11 @@ echo is_numeric("-5"); echo is_numeric("3.14");
 echo is_numeric("abc") ? "bad" : "N";
 echo is_numeric(true) ? "bad" : "B";
 echo is_resource(1) ? "bad" : "R";
+echo is_nan(fdiv(0, 0)) ? "N" : "bad";
+echo is_infinite(fdiv(1, 0)) ? "I" : "bad";
+echo is_infinite(fdiv(-1, 0)) ? "i" : "bad";
+echo is_finite(42) ? "F" : "bad";
+echo is_finite(fdiv(1, 0)) ? "bad" : "f";
 echo is_resource($h) ? "H" : "bad";
 echo ":";
 echo call_user_func("is_string", "x");
@@ -1928,10 +1933,13 @@ echo call_user_func_array("is_array", [[1]]);
 echo call_user_func("is_numeric", "12");
 echo call_user_func("is_resource", $h);
 echo call_user_func_array("is_resource", [$h]);
-echo function_exists("is_double"); echo function_exists("is_numeric"); echo function_exists("is_resource");');
+echo call_user_func("is_nan", fdiv(0, 0)) ? "N" : "bad";
+echo call_user_func_array("is_finite", [42]) ? "F" : "bad";
+echo function_exists("is_double"); echo function_exists("is_numeric"); echo function_exists("is_resource");
+echo function_exists("is_nan"); echo function_exists("is_finite"); echo function_exists("is_infinite");');
 "#,
     );
-    assert_eq!(out, "11111111111ok11111NBRH:11111111");
+    assert_eq!(out, "11111111111ok11111NBRNIiFfH:11111NF111111");
 }
 
 /// Verifies eval scalar cast builtins return boxed Mixed cells through direct and callable calls.

@@ -1277,8 +1277,9 @@ fn eval_positional_expr_call(
         "intdiv" => eval_builtin_intdiv(args, context, scope, values),
         "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable" | "is_writable"
         | "is_writeable" => eval_builtin_file_probe(name, args, context, scope, values),
-        "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
-        | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
+        "is_array" | "is_bool" | "is_double" | "is_finite" | "is_float" | "is_infinite"
+        | "is_int" | "is_integer" | "is_long" | "is_nan" | "is_null" | "is_numeric"
+        | "is_real" | "is_resource" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
@@ -1685,10 +1686,13 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_array"
             | "is_bool"
             | "is_double"
+            | "is_finite"
             | "is_float"
+            | "is_infinite"
             | "is_int"
             | "is_integer"
             | "is_long"
+            | "is_nan"
             | "is_null"
             | "is_numeric"
             | "is_real"
@@ -1862,8 +1866,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
             Some(&["string"])
         }
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
-        | "is_float" | "is_int" | "is_integer" | "is_long" | "is_null" | "is_numeric"
-        | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
+        | "is_finite" | "is_float" | "is_infinite" | "is_int" | "is_integer" | "is_long"
+        | "is_nan" | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string"
+        | "is_callable" | "strval" => Some(&["value"]),
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_exists" => Some(&["class", "autoload"]),
@@ -2614,8 +2619,9 @@ fn eval_builtin_with_values(
             }
             eval_realpath_cache_size_result(values)?
         }
-        "is_array" | "is_bool" | "is_double" | "is_float" | "is_int" | "is_integer" | "is_long"
-        | "is_null" | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
+        "is_array" | "is_bool" | "is_double" | "is_finite" | "is_float" | "is_infinite"
+        | "is_int" | "is_integer" | "is_long" | "is_nan" | "is_null" | "is_numeric"
+        | "is_real" | "is_resource" | "is_string" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
@@ -6845,6 +6851,9 @@ fn eval_type_predicate_result(
         "is_null" => tag == EVAL_TAG_NULL,
         "is_array" => matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC),
         "is_resource" => tag == EVAL_TAG_RESOURCE,
+        "is_nan" => eval_float_value(value, values)?.is_nan(),
+        "is_infinite" => eval_float_value(value, values)?.is_infinite(),
+        "is_finite" => eval_float_value(value, values)?.is_finite(),
         "is_numeric" => {
             tag == EVAL_TAG_INT
                 || tag == EVAL_TAG_FLOAT
@@ -11555,11 +11564,17 @@ echo is_numeric("-5"); echo is_numeric("3.14");
 echo is_numeric("abc") ? "bad" : "N";
 echo is_numeric(true) ? "bad" : "B";
 echo is_resource(1) ? "bad" : "R";
+echo is_nan(fdiv(0, 0)) ? "N" : "bad";
+echo is_infinite(fdiv(1, 0)) ? "I" : "bad";
+echo is_infinite(fdiv(-1, 0)) ? "i" : "bad";
+echo is_finite(42) ? "F" : "bad";
+echo is_finite(fdiv(1, 0)) ? "bad" : "f";
 echo ":"; echo call_user_func("is_string", "x");
 echo call_user_func_array("is_array", [[1]]);
 echo call_user_func("is_numeric", "12");
 echo function_exists("is_numeric"); echo function_exists("is_resource");
-return function_exists("is_double");"#,
+echo function_exists("is_double"); echo function_exists("is_nan"); echo function_exists("is_finite");
+return function_exists("is_infinite");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -11567,7 +11582,7 @@ return function_exists("is_double");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "11111111111ok11111NBR:11111");
+        assert_eq!(values.output, "11111111111ok11111NBRNIiFf:11111111");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
