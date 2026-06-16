@@ -1078,6 +1078,43 @@ Then it materializes:
 - source-map comments
 - instruction comments at the repository-required column
 
+## Register Allocation
+
+The `src/ir_passes/` module runs a linear-scan register allocator
+(Poletto-Sarkar) over each function before backend lowering. It is the default;
+`--regalloc=stack` (or `ELEPHC_REGALLOC=stack`) selects the original
+spill-everything path, which keeps every SSA value in a stack slot.
+
+The pass has four stages:
+
+1. **Liveness** (`liveness.rs`): backward dataflow to a fixed point producing
+   per-block live-in/live-out value sets. Block parameters are definitions at
+   block entry; branch arguments are uses at the predecessor's terminator.
+2. **Intervals** (`intervals.rs`): blocks are numbered in reverse postorder and
+   each value gets one contiguous `[start, end]` live interval. A value live
+   across edges or a loop back-edge spans the intervening positions.
+3. **Scan** (`regalloc.rs`): intervals are walked in start order against an
+   active set; a free register from the matching pool is assigned, otherwise the
+   interval with the furthest end point is spilled. Integer and float values
+   draw from separate pools.
+4. **Frame integration** (`codegen_ir/frame.rs`): the allocation is stored in
+   the frame layout, each used callee-saved register gets a save slot, and the
+   value-access chokepoints (`load_value_to_result`, `load_value_to_reg`,
+   `store_result_value`) read and write registers instead of slots.
+
+Only callee-saved registers are allocated, so values survive calls without
+spilling and never collide with the scratch or result registers the emitters
+use. The prologue saves and the epilogue restores exactly the callee-saved
+registers the allocator used. On aarch64 the pools are `x21`–`x28` and
+`d8`–`d14`; on x86_64 they are `rbx`, `r14`, `r15`. SysV x86_64 has no
+callee-saved XMM registers, so float values are never register-allocated there
+and stay in stack slots.
+
+The first cut register-allocates only single-word `NonHeap` scalars (`I64`,
+`F64`) that are neither block parameters nor branch arguments, keeping the
+slot-based block-parameter moves and the ownership/GC cleanup paths unchanged.
+Generators and functions containing exception handlers fall back to all-spilled.
+
 ## Phase 02 Implementation Contract
 
 The `src/ir/` module should implement at least:
