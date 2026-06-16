@@ -108,6 +108,9 @@ pub trait RuntimeValueOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<(), EvalStatus>;
 
+    /// Returns whether a runtime class table contains the requested class name.
+    fn class_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
+
     /// Returns the visible element count for an array-like runtime cell.
     fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus>;
 
@@ -1115,6 +1118,7 @@ fn eval_positional_expr_call(
         "ceil" => eval_builtin_ceil(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
+        "class_exists" => eval_builtin_class_exists(args, context, scope, values),
         "chop" => eval_builtin_trim_like(name, args, context, scope, values),
         "boolval" | "floatval" | "intval" | "strval" => {
             eval_builtin_cast(name, args, context, scope, values)
@@ -1171,6 +1175,49 @@ fn eval_builtin_function_probe(
     let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
     let name = name.trim_start_matches('\\').to_ascii_lowercase();
     values.bool_value(eval_function_probe_exists(context, &name))
+}
+
+/// Evaluates `class_exists(...)` against the generated AOT class-name table.
+fn eval_builtin_class_exists(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let name = match args {
+        [name] => eval_expr(name, context, scope, values)?,
+        [name, autoload] => {
+            let name = eval_expr(name, context, scope, values)?;
+            let _ = eval_expr(autoload, context, scope, values)?;
+            name
+        }
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    let exists = eval_class_exists_name(name, values)?;
+    values.bool_value(exists)
+}
+
+/// Evaluates `class_exists(...)` from already materialized call arguments.
+fn eval_class_exists_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let exists = match evaluated_args {
+        [name] => eval_class_exists_name(*name, values)?,
+        [name, _autoload] => eval_class_exists_name(*name, values)?,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.bool_value(exists)
+}
+
+/// Normalizes a PHP class-name cell and probes the generated class table.
+fn eval_class_exists_name(
+    name: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let name = values.string_bytes(name)?;
+    let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.class_exists(name.trim_start_matches('\\'))
 }
 
 /// Evaluates PHP's `isset(...)` language construct over eval-visible values.
@@ -1262,6 +1309,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "ceil"
             | "call_user_func"
             | "call_user_func_array"
+            | "class_exists"
             | "boolval"
             | "chop"
             | "count"
@@ -1400,6 +1448,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
+        "class_exists" => Some(&["class", "autoload"]),
         "chop" | "ltrim" | "rtrim" | "trim" => Some(&["string", "characters"]),
         "count" => Some(&["value", "mode"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
@@ -1694,6 +1743,7 @@ fn eval_builtin_with_values(
             let name = name.trim_start_matches('\\').to_ascii_lowercase();
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
+        "class_exists" => eval_class_exists_result(evaluated_args, values)?,
         "gettype" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -3491,6 +3541,11 @@ mod tests {
                 properties.insert("x".to_string(), first);
             }
             Ok(())
+        }
+
+        /// Reports one fake AOT class for eval `class_exists` unit tests.
+        fn class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
+            Ok(name.eq_ignore_ascii_case("KnownClass"))
         }
 
         /// Returns the visible element count for fake array values.
@@ -6076,6 +6131,23 @@ echo function_exists("missing_probe") . "x";"#,
             .expect("execute eval ir");
 
         assert_eq!(values.output, "1x1x1x1xxx");
+    }
+
+    /// Verifies eval class probes use the runtime class-name table.
+    #[test]
+    fn execute_program_class_exists_uses_runtime_probe() {
+        let program = parse_fragment(
+            br#"echo class_exists("KnownClass") ? "Y" : "N";
+echo class_exists("\knownclass") ? "Y" : "N";
+echo class_exists(class: "MissingClass", autoload: false) ? "Y" : "N";"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "YYN");
     }
 
     /// Verifies eval fragments can dispatch registered native AOT functions.

@@ -63,6 +63,7 @@ unsafe extern "C" {
         object: *mut RuntimeCell,
         args: *mut RuntimeCell,
     ) -> u64;
+    fn __elephc_eval_class_exists(name_ptr: *const u8, name_len: u64) -> u64;
     fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
@@ -303,6 +304,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         } else {
             Ok(())
         }
+    }
+
+    /// Returns whether the generated AOT class-name table contains the requested class.
+    fn class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_class_exists(name.as_ptr(), name.len() as u64) != 0 })
     }
 
     /// Returns the visible element count for a boxed Mixed array through the generated runtime wrapper.

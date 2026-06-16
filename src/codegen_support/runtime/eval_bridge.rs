@@ -10,6 +10,7 @@
 //!   referenced from Rust object files, while internal `__rt_*` calls keep the
 //!   existing assembly ABI.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -62,6 +63,53 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the dynamic-object wrapper frame
     emitter.instruction("ret");                                                 // return the boxed object or null Mixed cell to Rust
+
+    label_c_global(emitter, "__elephc_eval_class_exists");
+    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class-name lookup state
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address across string compares
+    emitter.instruction("add x29, sp, #48");                                    // establish a stable class-exists frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
+    abi::emit_symbol_address(emitter, "x9", "_classes_by_name_count");
+    emitter.instruction("ldr x9, [x9]");                                        // load the registered class-name count
+    emitter.instruction("cbz x9, __elephc_eval_class_exists_miss");             // an empty table cannot contain the requested class
+    emitter.instruction("str x9, [sp, #16]");                                   // save the table count across string compares
+    abi::emit_symbol_address(emitter, "x10", "_classes_by_name");
+    emitter.instruction("str x10, [sp, #24]");                                  // save the current class-name table cursor
+    emitter.instruction("mov x11, #0");                                         // start scanning at table index zero
+    emitter.label("__elephc_eval_class_exists_loop");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the class-name table count
+    emitter.instruction("cmp x11, x9");                                         // have all class-name entries been scanned?
+    emitter.instruction("b.ge __elephc_eval_class_exists_miss");                // no class matched before the end of the table
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the current class-name table entry
+    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored class-name length
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the requested class-name length
+    emitter.instruction("cmp x12, x2");                                         // compare stored and requested class-name lengths
+    emitter.instruction("b.ne __elephc_eval_class_exists_skip");                // length mismatch means this entry cannot match
+    emitter.instruction("str x11, [sp, #32]");                                  // save the table index across the string compare
+    emitter.instruction("ldr x1, [sp, #0]");                                    // pass the requested class-name pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // pass the requested class-name length
+    emitter.instruction("ldr x3, [x10]");                                       // pass the stored class-name pointer
+    emitter.instruction("mov x4, x12");                                         // pass the stored class-name length
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
+    emitter.instruction("ldr x11, [sp, #32]");                                  // restore the table index after the string compare
+    emitter.instruction("cmp x0, #0");                                          // did the requested class name match this entry?
+    emitter.instruction("b.eq __elephc_eval_class_exists_hit");                 // report true on a class-name match
+    emitter.label("__elephc_eval_class_exists_skip");
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the current class-name table entry
+    emitter.instruction("add x10, x10, #32");                                   // advance to the next class-name table entry
+    emitter.instruction("str x10, [sp, #24]");                                  // persist the advanced table cursor
+    emitter.instruction("add x11, x11, #1");                                    // advance the table index
+    emitter.instruction("b __elephc_eval_class_exists_loop");                   // continue scanning the class-name table
+    emitter.label("__elephc_eval_class_exists_hit");
+    emitter.instruction("mov x0, #1");                                          // return true for a matched class name
+    emitter.instruction("b __elephc_eval_class_exists_done");                   // skip the false result after a match
+    emitter.label("__elephc_eval_class_exists_miss");
+    emitter.instruction("mov x0, #0");                                          // return false when no class-name entry matched
+    emitter.label("__elephc_eval_class_exists_done");
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the class-exists helper frame
+    emitter.instruction("ret");                                                 // return the class-exists flag to Rust
 
     label_c_global(emitter, "__elephc_eval_value_array_new");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for array allocation and boxing
@@ -1067,6 +1115,52 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_value_new_object_done_x86");
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed object or null Mixed cell to Rust
+
+    label_c_global(emitter, "__elephc_eval_class_exists");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable class-exists frame pointer
+    emitter.instruction("sub rsp, 48");                                         // reserve slots for name, count, cursor, and index
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
+    abi::emit_symbol_address(emitter, "r10", "_classes_by_name_count");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the registered class-name count
+    emitter.instruction("test r10, r10");                                       // is the class-name table empty?
+    emitter.instruction("jz __elephc_eval_class_exists_miss_x86");              // an empty table cannot contain the requested class
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the table count across string compares
+    abi::emit_symbol_address(emitter, "r11", "_classes_by_name");
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the current class-name table cursor
+    emitter.instruction("xor r11d, r11d");                                      // start scanning at table index zero
+    emitter.label("__elephc_eval_class_exists_loop_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the class-name table count
+    emitter.instruction("cmp r11, r10");                                        // have all class-name entries been scanned?
+    emitter.instruction("jae __elephc_eval_class_exists_miss_x86");             // no class matched before the end of the table
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current class-name table entry
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
+    emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
+    emitter.instruction("jne __elephc_eval_class_exists_skip_x86");             // length mismatch means this entry cannot match
+    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the table index across the string compare
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
+    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // pass the stored class-name pointer
+    emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // restore the table index after the string compare
+    emitter.instruction("test rax, rax");                                       // did the requested class name match this entry?
+    emitter.instruction("je __elephc_eval_class_exists_hit_x86");               // report true on a class-name match
+    emitter.label("__elephc_eval_class_exists_skip_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current class-name table entry
+    emitter.instruction("add r10, 32");                                         // advance to the next class-name table entry
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // persist the advanced table cursor
+    emitter.instruction("inc r11");                                             // advance the table index
+    emitter.instruction("jmp __elephc_eval_class_exists_loop_x86");             // continue scanning the class-name table
+    emitter.label("__elephc_eval_class_exists_hit_x86");
+    emitter.instruction("mov eax, 1");                                          // return true for a matched class name
+    emitter.instruction("jmp __elephc_eval_class_exists_done_x86");             // skip the false result after a match
+    emitter.label("__elephc_eval_class_exists_miss_x86");
+    emitter.instruction("xor eax, eax");                                        // return false when no class-name entry matched
+    emitter.label("__elephc_eval_class_exists_done_x86");
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the class-exists flag to Rust
 
     label_c_global(emitter, "__elephc_eval_value_array_new");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
