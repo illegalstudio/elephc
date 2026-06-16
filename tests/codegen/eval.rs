@@ -94,6 +94,47 @@ echo function_exists("print_r");');
     assert_eq!(out, "x::Array\n:1z:call:spread:1");
 }
 
+/// Verifies eval `var_dump()` writes PHP-style diagnostics and returns null.
+#[test]
+fn test_eval_dispatches_var_dump_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('var_dump(42);
+var_dump("hi");
+var_dump(false);
+var_dump(null);
+var_dump([10, 20]);
+var_dump(["x" => true]);
+$call = call_user_func("var_dump", 3.5);
+$spread = call_user_func_array("var_dump", ["value" => "z"]);
+echo ($call === null ? "call-null" : "bad") . ":" . ($spread === null ? "spread-null" : "bad") . ":";
+echo function_exists("var_dump");');
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(42)\n",
+            "string(2) \"hi\"\n",
+            "bool(false)\n",
+            "NULL\n",
+            "array(2) {\n",
+            "  [0]=>\n",
+            "  int(10)\n",
+            "  [1]=>\n",
+            "  int(20)\n",
+            "}\n",
+            "array(1) {\n",
+            "  [\"x\"]=>\n",
+            "  bool(true)\n",
+            "}\n",
+            "float(3.5)\n",
+            "string(1) \"z\"\n",
+            "call-null:spread-null:1",
+        )
+    );
+}
+
 /// Verifies eval fragments accept PHP comments and keep line metadata aligned.
 #[test]
 fn test_eval_comments_execute_through_bridge() {
