@@ -274,7 +274,8 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | EvalFunctionCallArray
-        | EvalFunctionExists | EnumBackingStringToInt | EnumBackingMixedToInt => {
+        | EvalFunctionExists | EvalConstantExists | EnumBackingStringToInt
+        | EnumBackingMixedToInt => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
@@ -354,7 +355,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
         | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
-        | ConcatReset | GcCollect | Nop => {
+        | EvalConstantExists | ConcatReset | GcCollect | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
         EvalFunctionCallArray => check_count(inst_id, inst, 1, "1"),

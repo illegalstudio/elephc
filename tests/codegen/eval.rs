@@ -1116,6 +1116,21 @@ echo eval('return DynEvalSuppressedConst;');
     assert_eq!(out.stderr, "");
 }
 
+/// Verifies native `defined()` probes can see constants defined by eval after the barrier.
+#[test]
+fn test_eval_defined_constant_is_visible_to_native_defined_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+echo defined("DynEvalNativeDefinedConst") ? "bad" : "N";
+eval('define("DynEvalNativeDefinedConst", 5);');
+echo defined("DynEvalNativeDefinedConst") ? "Y" : "N";
+echo defined("\\DynEvalNativeDefinedConst") ? "Y" : "N";
+echo defined("dynevalnativedefinedconst") ? "bad" : "N";
+"#,
+    );
+    assert_eq!(out, "NYYN");
+}
+
 /// Verifies missing eval dynamic constants fail through the eval runtime path.
 #[test]
 fn test_eval_missing_dynamic_constant_fetch_fails() {
