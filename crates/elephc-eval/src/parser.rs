@@ -97,6 +97,7 @@ enum TokenKind {
     RBrace,
     Comma,
     Colon,
+    Backslash,
     Eof,
 }
 
@@ -368,6 +369,10 @@ impl<'a> Lexer<'a> {
             ':' => {
                 self.bump_char();
                 Ok(TokenKind::Colon)
+            }
+            '\\' => {
+                self.bump_char();
+                Ok(TokenKind::Backslash)
             }
             _ if is_ident_start(ch) => {
                 let ident = self.lex_ident();
@@ -1514,13 +1519,28 @@ impl Parser {
     /// Parses `new ClassName(...)` expressions in eval fragments.
     fn parse_new_object_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
         self.advance();
-        let TokenKind::Ident(class_name) = self.current() else {
-            return Err(EvalParseError::UnexpectedToken);
-        };
-        let class_name = class_name.clone();
-        self.advance();
+        let class_name = self.parse_class_name()?;
         let args = self.parse_call_args()?;
         Ok(EvalExpr::NewObject { class_name, args })
+    }
+
+    /// Parses a simple or explicitly qualified class name after `new`.
+    fn parse_class_name(&mut self) -> Result<String, EvalParseError> {
+        self.consume(TokenKind::Backslash);
+        let TokenKind::Ident(first) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let mut class_name = first.clone();
+        self.advance();
+        while self.consume(TokenKind::Backslash) {
+            let TokenKind::Ident(part) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            class_name.push('\\');
+            class_name.push_str(part);
+            self.advance();
+        }
+        Ok(class_name)
     }
 
     /// Parses a parenthesized source-order argument list.
@@ -2804,6 +2824,20 @@ mod tests {
             program.statements(),
             &[EvalStmt::Return(Some(EvalExpr::NewObject {
                 class_name: "Box".to_string(),
+                args: Vec::new(),
+            }))]
+        );
+    }
+
+    /// Verifies object construction accepts explicitly qualified class names.
+    #[test]
+    fn parse_fragment_accepts_qualified_new_object_source() {
+        let program =
+            parse_fragment(br#"return new \EvalNs\Box();"#).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::NewObject {
+                class_name: "EvalNs\\Box".to_string(),
                 args: Vec::new(),
             }))]
         );

@@ -1962,6 +1962,21 @@ echo eval('$box = new EvalDynamicNewNoCtorArgs(99); return $box->x;');
     assert_eq!(out, "4");
 }
 
+/// Verifies eval can construct explicitly qualified namespaced AOT classes.
+#[test]
+fn test_eval_dynamic_new_constructs_qualified_aot_class() {
+    let out = compile_and_run(
+        r#"<?php
+namespace EvalDynamicNewNs;
+class Box {
+    public int $x = 13;
+}
+echo eval('return (new \EvalDynamicNewNs\Box())->x;');
+"#,
+    );
+    assert_eq!(out, "13");
+}
+
 /// Verifies eval reference assignments update the referenced caller local.
 #[test]
 fn test_eval_reference_assignment_updates_caller_local() {
