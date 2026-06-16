@@ -1192,6 +1192,7 @@ fn eval_positional_expr_call(
         "array_unique" => eval_builtin_array_unique(args, context, scope, values),
         "base64_encode" => eval_builtin_base64_encode(args, context, scope, values),
         "base64_decode" => eval_builtin_base64_decode(args, context, scope, values),
+        "basename" => eval_builtin_basename(args, context, scope, values),
         "bin2hex" => eval_builtin_bin2hex(args, context, scope, values),
         "ceil" => eval_builtin_ceil(args, context, scope, values),
         "chr" => eval_builtin_chr(args, context, scope, values),
@@ -1209,6 +1210,7 @@ fn eval_positional_expr_call(
         }
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
+        "dirname" => eval_builtin_dirname(args, context, scope, values),
         "empty" => eval_builtin_empty(args, context, scope, values),
         "eval" => eval_nested_eval(args, context, scope, values),
         "explode" => eval_builtin_explode(args, context, scope, values),
@@ -1540,6 +1542,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_sum"
             | "array_unique"
             | "array_values"
+            | "basename"
             | "base64_decode"
             | "base64_encode"
             | "bin2hex"
@@ -1558,6 +1561,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "ctype_space"
             | "define"
             | "defined"
+            | "dirname"
             | "explode"
             | "fdiv"
             | "floor"
@@ -1728,6 +1732,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_key_exists" => Some(&["key", "array"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
+        "basename" => Some(&["path", "suffix"]),
         "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "hex2bin"
         | "rawurldecode" | "rawurlencode" | "stripslashes" | "urldecode" | "urlencode" => {
             Some(&["string"])
@@ -1745,6 +1750,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => Some(&["text"]),
         "define" => Some(&["constant_name", "value"]),
         "defined" => Some(&["constant_name"]),
+        "dirname" => Some(&["path", "levels"]),
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "function_exists" => Some(&["function"]),
@@ -2200,6 +2206,16 @@ fn eval_builtin_with_values(
                 Some(*thousands_separator),
                 values,
             )?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "basename" => match evaluated_args {
+            [path] => eval_basename_result(*path, None, values)?,
+            [path, suffix] => eval_basename_result(*path, Some(*suffix), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "dirname" => match evaluated_args {
+            [path] => eval_dirname_result(*path, None, values)?,
+            [path, levels] => eval_dirname_result(*path, Some(*levels), values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "trim" | "ltrim" | "rtrim" | "chop" => match evaluated_args {
@@ -3936,6 +3952,135 @@ fn eval_builtin_getcwd(
 fn eval_getcwd_result(values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
     let cwd = std::env::current_dir().map_err(|_| EvalStatus::RuntimeFatal)?;
     values.string(cwd.to_string_lossy().as_ref())
+}
+
+/// Evaluates PHP `basename($path, $suffix = "")` over one eval expression.
+fn eval_builtin_basename(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [path] => {
+            let path = eval_expr(path, context, scope, values)?;
+            eval_basename_result(path, None, values)
+        }
+        [path, suffix] => {
+            let path = eval_expr(path, context, scope, values)?;
+            let suffix = eval_expr(suffix, context, scope, values)?;
+            eval_basename_result(path, Some(suffix), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Computes PHP `basename()` bytes and returns them as a runtime string.
+fn eval_basename_result(
+    path: RuntimeCellHandle,
+    suffix: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = values.string_bytes(path)?;
+    let suffix = suffix
+        .map(|suffix| values.string_bytes(suffix))
+        .transpose()?;
+    let result = eval_basename_bytes(&path, suffix.as_deref());
+    values.string_bytes_value(&result)
+}
+
+/// Extracts a PHP basename from one path byte string.
+fn eval_basename_bytes(path: &[u8], suffix: Option<&[u8]>) -> Vec<u8> {
+    let mut end = path.len();
+    while end > 0 && path[end - 1] == b'/' {
+        end -= 1;
+    }
+    if end == 0 {
+        return Vec::new();
+    }
+    let mut start = end;
+    while start > 0 && path[start - 1] != b'/' {
+        start -= 1;
+    }
+    let mut result = path[start..end].to_vec();
+    if let Some(suffix) = suffix {
+        if !suffix.is_empty() && suffix.len() < result.len() && result.ends_with(suffix) {
+            result.truncate(result.len() - suffix.len());
+        }
+    }
+    result
+}
+
+/// Evaluates PHP `dirname($path, $levels = 1)` over one eval expression.
+fn eval_builtin_dirname(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [path] => {
+            let path = eval_expr(path, context, scope, values)?;
+            eval_dirname_result(path, None, values)
+        }
+        [path, levels] => {
+            let path = eval_expr(path, context, scope, values)?;
+            let levels = eval_expr(levels, context, scope, values)?;
+            eval_dirname_result(path, Some(levels), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Computes PHP `dirname()` bytes and returns them as a runtime string.
+fn eval_dirname_result(
+    path: RuntimeCellHandle,
+    levels: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = values.string_bytes(path)?;
+    let levels = match levels {
+        Some(levels) => eval_int_value(levels, values)?,
+        None => 1,
+    };
+    if levels < 1 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let mut current = path;
+    for _ in 0..levels {
+        current = eval_dirname_once(&current);
+    }
+    values.string_bytes_value(&current)
+}
+
+/// Applies one PHP `dirname()` parent traversal to a path byte string.
+fn eval_dirname_once(path: &[u8]) -> Vec<u8> {
+    if path.is_empty() {
+        return b".".to_vec();
+    }
+    let mut end = path.len();
+    while end > 0 && path[end - 1] == b'/' {
+        end -= 1;
+    }
+    if end == 0 {
+        return b"/".to_vec();
+    }
+    let mut cursor = end;
+    while cursor > 0 {
+        cursor -= 1;
+        if path[cursor] == b'/' {
+            let mut parent_end = cursor;
+            while parent_end > 0 && path[parent_end - 1] == b'/' {
+                parent_end -= 1;
+            }
+            return if parent_end == 0 {
+                b"/".to_vec()
+            } else {
+                path[..parent_end].to_vec()
+            };
+        }
+    }
+    b".".to_vec()
 }
 
 /// Evaluates PHP `gethostbyname($hostname)` over one eval expression.
@@ -8534,6 +8679,33 @@ return function_exists("inet_ntop");"#,
         assert_eq!(
             values.output,
             "192.168.1.1:255.255.255.255:3232235777:bad-ip:01020304:bad-pton:1.2.3.4:bad-ntop:127.0.0.1:0:111"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval path component builtins mirror static basename/dirname edge cases.
+    #[test]
+    fn execute_program_dispatches_path_component_builtins() {
+        let program = parse_fragment(
+            br#"echo basename("/var/log/syslog.log", ".log") . ":";
+echo basename(path: "/usr///") . ":";
+echo basename("/", "x") === "" ? "root" : "bad"; echo ":";
+echo dirname("/usr/local/bin/tool", 2) . ":";
+echo dirname(path: "/usr///local///bin") . ":";
+echo call_user_func("basename", "foo.tar.gz", ".bz2") . ":";
+echo call_user_func_array("dirname", ["path" => "/usr", "levels" => 3]) . ":";
+echo function_exists("basename");
+return function_exists("dirname");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "syslog:usr:root:/usr/local:/usr///local:foo.tar.gz:/:1"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }

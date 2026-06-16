@@ -1344,6 +1344,27 @@ echo function_exists("inet_pton"); echo function_exists("inet_ntop");');
     );
 }
 
+/// Verifies eval `basename()` and `dirname()` preserve static path edge-case behavior.
+#[test]
+fn test_eval_dispatches_path_component_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo basename("/var/log/syslog.log", ".log") . ":";
+echo basename(path: "/usr///") . ":";
+echo basename("/", "x") === "" ? "root" : "bad"; echo ":";
+echo dirname("/usr/local/bin/tool", 2) . ":";
+echo dirname(path: "/usr///local///bin") . ":";
+echo call_user_func("basename", "foo.tar.gz", ".bz2") . ":";
+echo call_user_func_array("dirname", ["path" => "/usr", "levels" => 3]) . ":";
+echo function_exists("basename"); echo function_exists("dirname");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "syslog:usr:root:/usr/local:/usr///local:foo.tar.gz:/:11"
+    );
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {
