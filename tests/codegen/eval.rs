@@ -1365,6 +1365,21 @@ echo function_exists("basename"); echo function_exists("dirname");');
     );
 }
 
+/// Verifies eval `realpath()` returns strings for existing paths and false for missing paths.
+#[test]
+fn test_eval_dispatches_realpath_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo realpath(".") !== false ? "resolved" : "bad"; echo ":";
+echo realpath(path: "elephc-eval-missing-path") === false ? "false" : "bad"; echo ":";
+echo call_user_func("realpath", ".") !== false ? "call" : "bad"; echo ":";
+echo call_user_func_array("realpath", ["path" => "elephc-eval-missing-path"]) === false ? "array-false" : "bad";
+echo ":"; echo function_exists("realpath");');
+"#,
+    );
+    assert_eq!(out, "resolved:false:call:array-false:1");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

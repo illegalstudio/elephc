@@ -1253,6 +1253,7 @@ fn eval_positional_expr_call(
         "rawurlencode" | "urlencode" => {
             eval_builtin_url_encode(name, args, context, scope, values)
         }
+        "realpath" => eval_builtin_realpath(args, context, scope, values),
         "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
         "realpath_cache_size" => eval_builtin_realpath_cache_size(args, values),
         "round" => eval_builtin_round(args, context, scope, values),
@@ -1612,6 +1613,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "putenv"
             | "rawurldecode"
             | "rawurlencode"
+            | "realpath"
             | "realpath_cache_get"
             | "realpath_cache_size"
             | "rtrim"
@@ -1773,6 +1775,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
         "putenv" => Some(&["assignment"]),
+        "realpath" => Some(&["path"]),
         "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
         "round" => Some(&["num", "precision"]),
         "sleep" => Some(&["seconds"]),
@@ -2310,6 +2313,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_putenv_result(*assignment, values)?
+        }
+        "realpath" => {
+            let [path] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_realpath_result(*path, values)?
         }
         "realpath_cache_get" => {
             if !evaluated_args.is_empty() {
@@ -4081,6 +4090,34 @@ fn eval_dirname_once(path: &[u8]) -> Vec<u8> {
         }
     }
     b".".to_vec()
+}
+
+/// Evaluates PHP `realpath($path)` over one eval expression.
+fn eval_builtin_realpath(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [path] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let path = eval_expr(path, context, scope, values)?;
+    eval_realpath_result(path, values)
+}
+
+/// Canonicalizes one path or returns PHP false when the path cannot be resolved.
+fn eval_realpath_result(
+    path: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = values.string_bytes(path)?;
+    let path = String::from_utf8_lossy(&path);
+    let Ok(canonical) = std::fs::canonicalize(path.as_ref()) else {
+        return values.bool_value(false);
+    };
+    let canonical = canonical.to_string_lossy();
+    values.string(canonical.as_ref())
 }
 
 /// Evaluates PHP `gethostbyname($hostname)` over one eval expression.
@@ -8707,6 +8744,27 @@ return function_exists("dirname");"#,
             values.output,
             "syslog:usr:root:/usr/local:/usr///local:foo.tar.gz:/:1"
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `realpath()` resolves existing paths and returns false for misses.
+    #[test]
+    fn execute_program_dispatches_realpath_builtin() {
+        let program = parse_fragment(
+            br#"echo realpath(".") !== false ? "resolved" : "bad"; echo ":";
+echo realpath(path: "elephc-eval-missing-path") === false ? "false" : "bad"; echo ":";
+echo call_user_func("realpath", ".") !== false ? "call" : "bad"; echo ":";
+echo call_user_func_array("realpath", ["path" => "elephc-eval-missing-path"]) === false ? "array-false" : "bad";
+echo ":";
+return function_exists("realpath");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "resolved:false:call:array-false:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
