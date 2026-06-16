@@ -277,7 +277,8 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         | FunctionVariantDispatch
         | EvalFunctionCallArray
         | EvalFunctionExists
-        | EvalConstantExists => {
+        | EvalConstantExists
+        | EvalConstantFetch => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
@@ -360,6 +361,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         | FunctionVariantDispatch
         | EvalFunctionExists
         | EvalConstantExists
+        | EvalConstantFetch
         | ConcatReset
         | Nop => {
             check_count(inst_id, inst, 0, "0")

@@ -552,6 +552,14 @@ pub(super) fn lower_eval_constant_exists(
     eval::lower_eval_constant_exists(ctx, inst)
 }
 
+/// Lowers post-eval dynamic constant fetches to the optional eval bridge.
+pub(super) fn lower_eval_constant_fetch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_constant_fetch(ctx, inst)
+}
+
 /// Lowers `define("NAME", value)` with the legacy duplicate-name runtime guard.
 fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "define", 2)?;

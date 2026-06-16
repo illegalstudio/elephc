@@ -1131,6 +1131,28 @@ echo defined("dynevalnativedefinedconst") ? "bad" : "N";
     assert_eq!(out, "NYYN");
 }
 
+/// Verifies native constant fetch can read eval-defined constants after the barrier.
+#[test]
+fn test_eval_defined_constant_is_visible_to_native_constant_fetch_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('define("DynEvalNativeFetchConst", "dynamic");');
+echo DynEvalNativeFetchConst;
+"#,
+    );
+    assert_eq!(out, "dynamic");
+}
+
+/// Verifies native constant fetch misses after eval fail through the eval runtime path.
+#[test]
+fn test_eval_missing_native_dynamic_constant_fetch_fails() {
+    let err = compile_and_run_expect_failure("<?php eval(''); echo MissingNativeEvalConst;");
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies missing eval dynamic constants fail through the eval runtime path.
 #[test]
 fn test_eval_missing_dynamic_constant_fetch_fails() {

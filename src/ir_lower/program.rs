@@ -128,7 +128,8 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 Op::EvalFunctionCall
                 | Op::EvalFunctionCallArray
                 | Op::EvalFunctionExists
-                | Op::EvalConstantExists => {
+                | Op::EvalConstantExists
+                | Op::EvalConstantFetch => {
                     features.eval = true;
                 }
                 Op::ExprCall | Op::CallableDescriptorInvoke => {
