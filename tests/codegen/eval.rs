@@ -2399,6 +2399,8 @@ echo preg_match("/xyz/", "id42") . ":";
 echo preg_match_all("/[0-9]+/", "a1b22c333") . ":";
 $allCount = preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $all);
 echo $allCount . ":" . count($all) . ":" . $all[0][1] . ":" . $all[1][0] . ":" . $all[2][1] . ":";
+$setCount = preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $set, PREG_SET_ORDER);
+echo $setCount . ":" . count($set) . ":" . $set[0][0] . ":" . $set[0][1] . ":" . $set[1][2] . ":";
 preg_match_all("/(x)(y)/", "abc", $none);
 echo count($none) . ":" . count($none[0]) . ":" . count($none[1]) . ":" . count($none[2]) . ":";
 echo preg_replace("/([a-z])([0-9])/", "$2-$1", "a1 b2") . ":";
@@ -2413,12 +2415,12 @@ $replaced = call_user_func_array("preg_replace", ["pattern" => "/[0-9]+/", "repl
 echo $replaced . ":";
 $captured = preg_split("/(,)/", "a,b", 0, PREG_SPLIT_DELIM_CAPTURE);
 echo count($captured) . ":" . $captured[1] . ":";
-echo function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY");');
+echo function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY") && defined("PREG_SET_ORDER");');
 "#,
     );
     assert_eq!(
         out,
-        "1:3:id42:id:42:0:3:2:3:b22:a:22:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:1"
+        "1:3:id42:id:42:0:3:2:3:b22:a:22:2:2:a1:a:22:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:1"
     );
 }
 
