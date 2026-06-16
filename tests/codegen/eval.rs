@@ -782,6 +782,33 @@ echo function_exists("array_pad"); echo function_exists("array_chunk");');
     assert_eq!(out, "5:1200:9912:2:78:3:25:b:8:2:11");
 }
 
+/// Verifies eval `array_slice()` observes PHP offset and length bounds.
+#[test]
+fn test_eval_dispatches_array_slice_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$mid = array_slice([10, 20, 30, 40, 50], 1, 3);
+echo count($mid) . ":" . $mid[0] . $mid[1] . $mid[2];
+$tail = array_slice([10, 20, 30, 40], -2, 1);
+echo ":" . $tail[0];
+$open = array_slice([10, 20, 30, 40, 50], 2);
+echo ":" . count($open) . ":" . $open[0] . $open[2];
+$null_len = array_slice([5, 6, 7], 1, null);
+echo ":" . $null_len[0] . $null_len[1];
+$negative_len = array_slice([10, 20, 30, 40, 50], 1, -1);
+echo ":" . count($negative_len) . ":" . $negative_len[0] . $negative_len[2];
+$named = array_slice(array: [1, 2, 3], offset: 1, length: 1);
+echo ":" . $named[0];
+$call = call_user_func("array_slice", [6, 7, 8], 1, 2);
+echo ":" . $call[1];
+$spread = call_user_func_array("array_slice", [[9, 10, 11], 1]);
+echo ":" . $spread[0] . ":";
+echo function_exists("array_slice");');
+"#,
+    );
+    assert_eq!(out, "3:203040:30:3:3050:67:3:2040:2:8:10:1");
+}
+
 /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
 #[test]
 fn test_eval_dispatches_array_fill_builtin_calls() {

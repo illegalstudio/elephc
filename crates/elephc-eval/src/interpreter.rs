@@ -1208,6 +1208,7 @@ fn eval_positional_expr_call(
         "array_search" | "in_array" => {
             eval_builtin_array_search(name, args, context, scope, values)
         }
+        "array_slice" => eval_builtin_array_slice(args, context, scope, values),
         "array_unique" => eval_builtin_array_unique(args, context, scope, values),
         "acos" | "asin" | "atan" | "cos" | "cosh" | "deg2rad" | "exp" | "log2" | "log10"
         | "rad2deg" | "sin" | "sinh" | "tan" | "tanh" => {
@@ -1604,6 +1605,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_product"
             | "array_reverse"
             | "array_search"
+            | "array_slice"
             | "array_sum"
             | "array_unique"
             | "array_values"
@@ -1869,6 +1871,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_pad" => Some(&["array", "length", "value"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
+        "array_slice" => Some(&["array", "offset", "length"]),
         "acos" | "asin" | "atan" | "cos" | "cosh" | "deg2rad" | "exp" | "log2" | "log10"
         | "rad2deg" | "sin" | "sinh" | "tan" | "tanh" => Some(&["num"]),
         "atan2" => Some(&["y", "x"]),
@@ -2172,6 +2175,13 @@ fn eval_builtin_with_values(
             };
             eval_array_search_result(name, *needle, *array, values)?
         }
+        "array_slice" => match evaluated_args {
+            [array, offset] => eval_array_slice_result(*array, *offset, None, values)?,
+            [array, offset, length] => {
+                eval_array_slice_result(*array, *offset, Some(*length), values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "array_unique" => {
             let [array] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -3002,6 +3012,86 @@ fn eval_array_chunk_result(
     }
 
     Ok(result)
+}
+
+/// Evaluates PHP `array_slice()` over array, offset, and optional length expressions.
+fn eval_builtin_array_slice(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [array, offset] => {
+            let array = eval_expr(array, context, scope, values)?;
+            let offset = eval_expr(offset, context, scope, values)?;
+            eval_array_slice_result(array, offset, None, values)
+        }
+        [array, offset, length] => {
+            let array = eval_expr(array, context, scope, values)?;
+            let offset = eval_expr(offset, context, scope, values)?;
+            let length = eval_expr(length, context, scope, values)?;
+            eval_array_slice_result(array, offset, Some(length), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Builds an `array_slice()` result with PHP offset and length bounds.
+fn eval_array_slice_result(
+    array: RuntimeCellHandle,
+    offset: RuntimeCellHandle,
+    length: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let offset = eval_int_value(offset, values)?;
+    let start = eval_slice_start(len, offset)?;
+    let end = match length {
+        Some(length) if values.type_tag(length)? != EVAL_TAG_NULL => {
+            eval_slice_end(len, start, eval_int_value(length, values)?)?
+        }
+        _ => len,
+    };
+
+    let mut result = values.array_new(end.saturating_sub(start))?;
+    for source_position in start..end {
+        let source_key = values.array_iter_key(array, source_position)?;
+        let source_value = values.array_get(array, source_key)?;
+        let target_key = i64::try_from(source_position - start)
+            .map_err(|_| EvalStatus::RuntimeFatal)?;
+        let target_key = values.int(target_key)?;
+        result = values.array_set(result, target_key, source_value)?;
+    }
+    Ok(result)
+}
+
+/// Converts a PHP array-slice offset into a bounded source position.
+fn eval_slice_start(len: usize, offset: i64) -> Result<usize, EvalStatus> {
+    if offset >= 0 {
+        let offset = usize::try_from(offset).map_err(|_| EvalStatus::RuntimeFatal)?;
+        return Ok(usize::min(offset, len));
+    }
+
+    let tail = offset
+        .checked_abs()
+        .ok_or(EvalStatus::RuntimeFatal)
+        .and_then(|value| usize::try_from(value).map_err(|_| EvalStatus::RuntimeFatal))?;
+    Ok(len.saturating_sub(tail))
+}
+
+/// Converts a PHP array-slice length into a bounded exclusive end position.
+fn eval_slice_end(len: usize, start: usize, length: i64) -> Result<usize, EvalStatus> {
+    if length >= 0 {
+        let length = usize::try_from(length).map_err(|_| EvalStatus::RuntimeFatal)?;
+        return Ok(usize::min(start.saturating_add(length), len));
+    }
+
+    let tail = length
+        .checked_abs()
+        .ok_or(EvalStatus::RuntimeFatal)
+        .and_then(|value| usize::try_from(value).map_err(|_| EvalStatus::RuntimeFatal))?;
+    Ok(usize::max(start, len.saturating_sub(tail)))
 }
 
 /// Evaluates PHP `array_pad()` over array, target length, and pad value expressions.
@@ -10486,6 +10576,38 @@ return function_exists("array_pad") && function_exists("array_chunk");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "5:1200:9912:2:78:3:25:b:8:2:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_slice()` observes PHP offset and length bounds.
+    #[test]
+    fn execute_program_dispatches_array_slice_builtin() {
+        let program = parse_fragment(
+            br#"$mid = array_slice([10, 20, 30, 40, 50], 1, 3);
+echo count($mid) . ":" . $mid[0] . $mid[1] . $mid[2];
+$tail = array_slice([10, 20, 30, 40], -2, 1);
+echo ":" . $tail[0];
+$open = array_slice([10, 20, 30, 40, 50], 2);
+echo ":" . count($open) . ":" . $open[0] . $open[2];
+$null_len = array_slice([5, 6, 7], 1, null);
+echo ":" . $null_len[0] . $null_len[1];
+$negative_len = array_slice([10, 20, 30, 40, 50], 1, -1);
+echo ":" . count($negative_len) . ":" . $negative_len[0] . $negative_len[2];
+$named = array_slice(array: [1, 2, 3], offset: 1, length: 1);
+echo ":" . $named[0];
+$call = call_user_func("array_slice", [6, 7, 8], 1, 2);
+echo ":" . $call[1];
+$spread = call_user_func_array("array_slice", [[9, 10, 11], 1]);
+echo ":" . $spread[0] . ":";
+return function_exists("array_slice");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "3:203040:30:3:3050:67:3:2040:2:8:10:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
