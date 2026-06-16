@@ -915,6 +915,26 @@ echo ":"; echo function_exists("ucwords");');
     assert_eq!(out, "Hello World:Hello-World:Hello\tWorld:A B:A-B:1");
 }
 
+/// Verifies eval `wordwrap()` wraps at word boundaries and can cut long words.
+#[test]
+fn test_eval_dispatches_wordwrap_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo wordwrap("The quick brown fox", 10, "|"); echo ":";
+echo wordwrap(string: "A verylongword here", width: 8, break: "|"); echo ":";
+echo wordwrap("abcdefghij", 4, "|", true); echo ":";
+echo wordwrap("preserve\nnewlines here ok", 10, "|"); echo ":";
+echo call_user_func("wordwrap", "aaa bbb ccc", 3, "<br>"); echo ":";
+echo call_user_func_array("wordwrap", ["string" => "hello world", "width" => 5, "break" => "|"]);
+echo ":"; echo function_exists("wordwrap");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "The quick|brown fox:A|verylongword|here:abcd|efgh|ij:preserve\nnewlines|here ok:aaa<br>bbb<br>ccc:hello|world:1"
+    );
+}
+
 /// Verifies eval `strrev()` reverses byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_strrev_builtin_call() {

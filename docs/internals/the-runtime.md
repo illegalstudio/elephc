@@ -31,13 +31,15 @@ Eval `str_split()` builds indexed chunk arrays through the eval value hooks so l
 
 Eval `str_pad()` computes left/right pad budgets in the interpreter and emits a boxed string through the eval value hooks.
 
+Eval `wordwrap()` performs the same word-aware byte scan as the static helper, preserving existing newlines and honoring `cut_long_words`.
+
 Dynamic eval constants store case-sensitive names and retained boxed Mixed values for `define()` / `defined()` probes and bare constant-fetch expressions across eval fragments. Native `defined("Name")` after an eval barrier lowers to an eval-context constant-exists probe for names that were not known AOT constants, and native unknown constant fetches after the barrier lower to an eval-context fetch that returns a retained boxed Mixed cell. Duplicate eval `define()` attempts keep the first value, return `false`, and route the suppressible duplicate-constant warning through the eval bridge to `__rt_diag_warning`.
 
 Argument unpacking (`...`) and `call_user_func_array()` argument arrays are supported for eval-declared functions, registered AOT function calls, and supported PHP-visible builtin calls inside eval when the argument source is an array. Indexed elements bind positionally, string-keyed elements bind by parameter name, and a positional element after a named argument is rejected. Direct unpacking after a named argument is rejected before the unpacked expression is evaluated. Eval method calls reuse this path for numeric unpacking, but reject named method arguments because the method hook receives positional cells only.
 
 Eval associative array literals and `$array[] = value` append writes use PHP's next automatic integer key rule. Hash appends scan existing integer keys through the eval value hooks before delegating to the shared mixed-array setter; mixed literal construction advances the same automatic key when explicit keys normalize to integers, while `null` keys remain the empty-string key.
 
-Eval builtin dispatch also covers string and byte helpers including `chr()`, `strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `ucwords()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, and `base64_decode()`, plus `fdiv()` / `fmod()` through target-aware bridge wrappers that return boxed double cells.
+Eval builtin dispatch also covers string and byte helpers including `chr()`, `strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `ucwords()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, and `base64_decode()`, plus `fdiv()` / `fmod()` through target-aware bridge wrappers that return boxed double cells.
 
 ## Why a runtime?
 
