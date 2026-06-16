@@ -12,6 +12,7 @@
 
 mod allocation;
 mod cfg;
+mod clobber;
 mod intervals;
 mod liveness;
 mod regalloc;
