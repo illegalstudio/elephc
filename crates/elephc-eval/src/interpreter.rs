@@ -21,6 +21,7 @@ use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
 use std::ffi::{CStr, CString};
+use std::mem::MaybeUninit;
 use std::net::ToSocketAddrs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,6 +114,41 @@ const EVAL_STREAM_FILTERS: &[&str] = &[
     "bzip2.compress",
     "bzip2.decompress",
 ];
+
+/// Full English month names used by eval `date()`.
+const EVAL_MONTH_NAMES: &[&str; 12] = &[
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+/// Short English month names used by eval `date()`.
+const EVAL_MONTH_SHORT_NAMES: &[&str; 12] = &[
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// Full English weekday names used by eval `date()`.
+const EVAL_WEEKDAY_NAMES: &[&str; 7] = &[
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+];
+
+/// Short English weekday names used by eval `date()`.
+const EVAL_WEEKDAY_SHORT_NAMES: &[&str; 7] = &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /// Root package manifest used to mirror native `phpversion()` in the eval crate.
 const EVAL_ROOT_CARGO_TOML: &str = include_str!("../../../Cargo.toml");
@@ -1328,6 +1364,7 @@ fn eval_positional_expr_call(
         "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => {
             eval_builtin_ctype(name, args, context, scope, values)
         }
+        "date" => eval_builtin_date(args, context, scope, values),
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "dirname" => eval_builtin_dirname(args, context, scope, values),
@@ -1389,6 +1426,7 @@ fn eval_positional_expr_call(
         "log" => eval_builtin_log(args, context, scope, values),
         "max" | "min" => eval_builtin_min_max(name, args, context, scope, values),
         "microtime" => eval_builtin_microtime(args, context, scope, values),
+        "mktime" => eval_builtin_mktime(args, context, scope, values),
         "nl2br" => eval_builtin_nl2br(args, context, scope, values),
         "number_format" => eval_builtin_number_format(args, context, scope, values),
         "ord" => eval_builtin_ord(args, context, scope, values),
@@ -1746,6 +1784,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "ctype_alpha"
             | "ctype_digit"
             | "ctype_space"
+            | "date"
             | "define"
             | "defined"
             | "deg2rad"
@@ -1837,6 +1876,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "microtime"
             | "min"
             | "mkdir"
+            | "mktime"
             | "mt_rand"
             | "nl2br"
             | "number_format"
@@ -2024,6 +2064,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "copy" | "rename" => Some(&["from", "to"]),
         "crc32" => Some(&["string"]),
         "ctype_alnum" | "ctype_alpha" | "ctype_digit" | "ctype_space" => Some(&["text"]),
+        "date" => Some(&["format", "timestamp"]),
         "define" => Some(&["constant_name", "value"]),
         "defined" => Some(&["constant_name"]),
         "dirname" => Some(&["path", "levels"]),
@@ -2064,6 +2105,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "max" | "min" => Some(&["value"]),
         "md5" | "sha1" => Some(&["string", "binary"]),
         "microtime" => Some(&["as_float"]),
+        "mktime" => Some(&["hour", "minute", "second", "month", "day", "year"]),
         "nl2br" => Some(&["string", "use_xhtml"]),
         "number_format" => Some(&["num", "decimals", "decimal_separator", "thousands_separator"]),
         "ord" => Some(&["character"]),
@@ -2661,6 +2703,11 @@ fn eval_builtin_with_values(
             };
             eval_ctype_result(name, *value, values)?
         }
+        "date" => match evaluated_args {
+            [format] => eval_date_result(*format, None, values)?,
+            [format, timestamp] => eval_date_result(*format, Some(*timestamp), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "define" => eval_define_result(evaluated_args, context, values)?,
         "defined" => eval_defined_result(evaluated_args, context, values)?,
         "explode" => {
@@ -2685,6 +2732,12 @@ fn eval_builtin_with_values(
         "microtime" => match evaluated_args {
             [] | [_] => eval_microtime_result(values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "mktime" => {
+            let [hour, minute, second, month, day, year] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_mktime_result(*hour, *minute, *second, *month, *day, *year, values)?
         },
         "nl2br" => match evaluated_args {
             [value] => eval_nl2br_result(*value, true, values)?,
@@ -5193,12 +5246,207 @@ fn eval_builtin_time(
 
 /// Returns the current Unix timestamp as a boxed PHP integer.
 fn eval_time_result(values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    values.int(eval_current_unix_timestamp()?)
+}
+
+/// Returns the current Unix timestamp as an integer payload.
+fn eval_current_unix_timestamp() -> Result<i64, EvalStatus> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map_err(|_| EvalStatus::RuntimeFatal)?
         .as_secs();
+    i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Evaluates PHP `date($format, $timestamp = time())` for the eval subset.
+fn eval_builtin_date(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [format] => {
+            let format = eval_expr(format, context, scope, values)?;
+            eval_date_result(format, None, values)
+        }
+        [format, timestamp] => {
+            let format = eval_expr(format, context, scope, values)?;
+            let timestamp = eval_expr(timestamp, context, scope, values)?;
+            eval_date_result(format, Some(timestamp), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Formats one Unix timestamp through PHP `date()` token rules supported by elephc.
+fn eval_date_result(
+    format: RuntimeCellHandle,
+    timestamp: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let format = values.string_bytes(format)?;
+    let timestamp = match timestamp {
+        Some(timestamp) => eval_int_value(timestamp, values)?,
+        None => eval_current_unix_timestamp()?,
+    };
+    let tm = eval_localtime(timestamp)?;
+    let output = eval_format_date_bytes(&format, &tm, timestamp)?;
+    values.string_bytes_value(&output)
+}
+
+/// Converts one Unix timestamp to local broken-down time through libc.
+fn eval_localtime(timestamp: i64) -> Result<libc::tm, EvalStatus> {
+    let raw: libc::time_t = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
+    let mut tm = MaybeUninit::<libc::tm>::uninit();
+    let result = unsafe { libc::localtime_r(&raw, tm.as_mut_ptr()) };
+    if result.is_null() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(unsafe { tm.assume_init() })
+}
+
+/// Applies PHP `date()` tokens to one local broken-down timestamp.
+fn eval_format_date_bytes(
+    format: &[u8],
+    tm: &libc::tm,
+    timestamp: i64,
+) -> Result<Vec<u8>, EvalStatus> {
+    let mut output = Vec::new();
+    let mut escaped = false;
+    for byte in format {
+        if escaped {
+            output.push(*byte);
+            escaped = false;
+            continue;
+        }
+        if *byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        eval_push_date_token(&mut output, *byte, tm, timestamp)?;
+    }
+    if escaped {
+        output.push(b'\\');
+    }
+    Ok(output)
+}
+
+/// Appends the expansion for one PHP `date()` token, or the token literal.
+fn eval_push_date_token(
+    output: &mut Vec<u8>,
+    token: u8,
+    tm: &libc::tm,
+    timestamp: i64,
+) -> Result<(), EvalStatus> {
+    match token {
+        b'Y' => eval_push_padded_number(output, i64::from(tm.tm_year) + 1900, 4),
+        b'm' => eval_push_padded_number(output, i64::from(tm.tm_mon) + 1, 2),
+        b'd' => eval_push_padded_number(output, i64::from(tm.tm_mday), 2),
+        b'H' => eval_push_padded_number(output, i64::from(tm.tm_hour), 2),
+        b'i' => eval_push_padded_number(output, i64::from(tm.tm_min), 2),
+        b's' => eval_push_padded_number(output, i64::from(tm.tm_sec), 2),
+        b'l' => output.extend_from_slice(EVAL_WEEKDAY_NAMES[eval_tm_weekday_index(tm)?].as_bytes()),
+        b'F' => output.extend_from_slice(EVAL_MONTH_NAMES[eval_tm_month_index(tm)?].as_bytes()),
+        b'D' => {
+            output.extend_from_slice(EVAL_WEEKDAY_SHORT_NAMES[eval_tm_weekday_index(tm)?].as_bytes())
+        }
+        b'M' => {
+            output.extend_from_slice(EVAL_MONTH_SHORT_NAMES[eval_tm_month_index(tm)?].as_bytes())
+        }
+        b'N' => {
+            let weekday = tm.tm_wday;
+            let iso_weekday = if weekday == 0 { 7 } else { weekday };
+            output.extend_from_slice(iso_weekday.to_string().as_bytes());
+        }
+        b'j' => output.extend_from_slice(tm.tm_mday.to_string().as_bytes()),
+        b'n' => output.extend_from_slice((tm.tm_mon + 1).to_string().as_bytes()),
+        b'G' => output.extend_from_slice(tm.tm_hour.to_string().as_bytes()),
+        b'g' => {
+            let hour = tm.tm_hour % 12;
+            let hour = if hour == 0 { 12 } else { hour };
+            output.extend_from_slice(hour.to_string().as_bytes());
+        }
+        b'A' => output.extend_from_slice(if tm.tm_hour < 12 { b"AM" } else { b"PM" }),
+        b'a' => output.extend_from_slice(if tm.tm_hour < 12 { b"am" } else { b"pm" }),
+        b'U' => output.extend_from_slice(timestamp.to_string().as_bytes()),
+        _ => output.push(token),
+    }
+    Ok(())
+}
+
+/// Returns a checked month index for PHP `date()` name tables.
+fn eval_tm_month_index(tm: &libc::tm) -> Result<usize, EvalStatus> {
+    let index = usize::try_from(tm.tm_mon).map_err(|_| EvalStatus::RuntimeFatal)?;
+    if index >= EVAL_MONTH_NAMES.len() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(index)
+}
+
+/// Returns a checked weekday index for PHP `date()` name tables.
+fn eval_tm_weekday_index(tm: &libc::tm) -> Result<usize, EvalStatus> {
+    let index = usize::try_from(tm.tm_wday).map_err(|_| EvalStatus::RuntimeFatal)?;
+    if index >= EVAL_WEEKDAY_NAMES.len() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(index)
+}
+
+/// Appends one zero-padded decimal value with the requested minimum width.
+fn eval_push_padded_number(output: &mut Vec<u8>, value: i64, width: usize) {
+    output.extend_from_slice(format!("{value:0width$}").as_bytes());
+}
+
+/// Evaluates PHP `mktime(hour, minute, second, month, day, year)`.
+fn eval_builtin_mktime(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [hour, minute, second, month, day, year] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let hour = eval_expr(hour, context, scope, values)?;
+    let minute = eval_expr(minute, context, scope, values)?;
+    let second = eval_expr(second, context, scope, values)?;
+    let month = eval_expr(month, context, scope, values)?;
+    let day = eval_expr(day, context, scope, values)?;
+    let year = eval_expr(year, context, scope, values)?;
+    eval_mktime_result(hour, minute, second, month, day, year, values)
+}
+
+/// Converts PHP date components to a local Unix timestamp through libc `mktime`.
+fn eval_mktime_result(
+    hour: RuntimeCellHandle,
+    minute: RuntimeCellHandle,
+    second: RuntimeCellHandle,
+    month: RuntimeCellHandle,
+    day: RuntimeCellHandle,
+    year: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut tm = unsafe { MaybeUninit::<libc::tm>::zeroed().assume_init() };
+    tm.tm_hour = eval_int_cell_as_c_int(hour, values)?;
+    tm.tm_min = eval_int_cell_as_c_int(minute, values)?;
+    tm.tm_sec = eval_int_cell_as_c_int(second, values)?;
+    tm.tm_mon = eval_int_cell_as_c_int(month, values)? - 1;
+    tm.tm_mday = eval_int_cell_as_c_int(day, values)?;
+    tm.tm_year = eval_int_cell_as_c_int(year, values)? - 1900;
+    tm.tm_isdst = -1;
+    let timestamp = unsafe { libc::mktime(&mut tm) };
     let timestamp = i64::try_from(timestamp).map_err(|_| EvalStatus::RuntimeFatal)?;
     values.int(timestamp)
+}
+
+/// Casts one eval cell to a PHP int and checks it fits a libc `c_int`.
+fn eval_int_cell_as_c_int(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<libc::c_int, EvalStatus> {
+    let value = eval_int_value(value, values)?;
+    libc::c_int::try_from(value).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Evaluates PHP `microtime()` with an optional ignored argument.
@@ -12316,6 +12564,33 @@ return function_exists("sys_get_temp_dir");"#,
                 eval_compiler_php_version(),
                 eval_compiler_php_version()
             )
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `date()` formats libc local timestamps and `mktime()` builds them.
+    #[test]
+    fn execute_program_dispatches_date_mktime_builtins() {
+        let program = parse_fragment(
+            br#"$ts = mktime(13, 2, 3, 1, 2, 2024);
+echo date("Y-m-d H:i:s", $ts);
+echo ":" . date("j-n-G-g-A-a-N-D-M-l-F", $ts);
+echo ":" . (date("U", $ts) === strval($ts) ? "U" : "bad");
+echo ":" . call_user_func("date", "Y", $ts);
+$named = call_user_func_array("mktime", ["hour" => 0, "minute" => 0, "second" => 0, "month" => 1, "day" => 1, "year" => 2000]);
+echo ":" . date(format: "Y", timestamp: $named);
+echo ":"; echo function_exists("date");
+return function_exists("mktime");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:1"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }

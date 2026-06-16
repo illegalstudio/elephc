@@ -1495,6 +1495,27 @@ echo function_exists("sys_get_temp_dir");');
     );
 }
 
+/// Verifies eval `date()` formats timestamps and `mktime()` creates them.
+#[test]
+fn test_eval_dispatches_date_mktime_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$ts = mktime(13, 2, 3, 1, 2, 2024);
+echo date("Y-m-d H:i:s", $ts);
+echo ":" . date("j-n-G-g-A-a-N-D-M-l-F", $ts);
+echo ":" . (date("U", $ts) === strval($ts) ? "U" : "bad");
+echo ":" . call_user_func("date", "Y", $ts);
+$named = call_user_func_array("mktime", ["hour" => 0, "minute" => 0, "second" => 0, "month" => 1, "day" => 1, "year" => 2000]);
+echo ":" . date(format: "Y", timestamp: $named);
+echo ":"; echo function_exists("date"); echo function_exists("mktime");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:11"
+    );
+}
+
 /// Verifies eval `microtime()` returns a plausible floating timestamp by all call paths.
 #[test]
 fn test_eval_dispatches_microtime_builtin_call() {
