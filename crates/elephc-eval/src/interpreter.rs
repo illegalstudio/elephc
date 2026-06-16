@@ -15854,6 +15854,19 @@ return function_exists("var_dump");"#,
         assert_eq!(values.get(result), FakeValue::String("b".to_string()));
     }
 
+    /// Verifies legacy `array(...)` literals execute through the existing array runtime hooks.
+    #[test]
+    fn execute_program_reads_legacy_array_literal() {
+        let program = parse_fragment(br#"return array("a", "b" => "bee",)[0];"#)
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.get(result), FakeValue::String("a".to_string()));
+    }
+
     /// Verifies associative array literals and string-key reads execute through runtime hooks.
     #[test]
     fn execute_program_reads_assoc_array_literal() {

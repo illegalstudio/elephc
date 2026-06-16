@@ -1729,6 +1729,9 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 Ok(EvalExpr::Print(Box::new(expr)))
             }
+            TokenKind::Ident(_) if self.current_starts_legacy_array_literal() => {
+                self.parse_legacy_array_literal()
+            }
             TokenKind::Ident(name) if is_include_construct_name(name) => self.parse_include_expr(),
             TokenKind::Ident(name) if ident_eq(name, "match") => self.parse_match_expr(),
             TokenKind::Ident(name) if ident_eq(name, "new") => self.parse_new_object_expr(),
@@ -1994,8 +1997,26 @@ impl Parser {
     /// Parses an array literal with source-order optional key/value element expressions.
     fn parse_array_literal(&mut self) -> Result<EvalExpr, EvalParseError> {
         self.expect(TokenKind::LBracket)?;
+        self.parse_array_elements_until(TokenKind::RBracket)
+    }
+
+    /// Parses PHP's legacy `array(...)` literal into the same EvalIR node as `[...]`.
+    fn parse_legacy_array_literal(&mut self) -> Result<EvalExpr, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        self.parse_array_elements_until(TokenKind::RParen)
+    }
+
+    /// Returns whether the current token starts PHP's legacy `array(...)` literal syntax.
+    fn current_starts_legacy_array_literal(&self) -> bool {
+        matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "array"))
+            && matches!(self.peek(), TokenKind::LParen)
+    }
+
+    /// Parses comma-separated array elements until the supplied closing delimiter.
+    fn parse_array_elements_until(&mut self, close: TokenKind) -> Result<EvalExpr, EvalParseError> {
         let mut elements = Vec::new();
-        if self.consume(TokenKind::RBracket) {
+        if self.consume(close.clone()) {
             return Ok(EvalExpr::Array(elements));
         }
         loop {
@@ -2009,11 +2030,11 @@ impl Parser {
             if !self.consume(TokenKind::Comma) {
                 break;
             }
-            if self.consume(TokenKind::RBracket) {
+            if self.consume(close.clone()) {
                 return Ok(EvalExpr::Array(elements));
             }
         }
-        self.expect(TokenKind::RBracket)?;
+        self.expect(close)?;
         Ok(EvalExpr::Array(elements))
     }
 
@@ -3404,6 +3425,26 @@ function dyn() { return alias(); }"#,
                     EvalArrayElement::Value(EvalExpr::Const(EvalConst::Int(2))),
                 ])),
                 index: Box::new(EvalExpr::Const(EvalConst::Int(0))),
+            }))]
+        );
+    }
+
+    /// Verifies legacy `array(...)` literals parse through the same EvalIR array node.
+    #[test]
+    fn parse_fragment_accepts_legacy_array_literal_source() {
+        let program = parse_fragment(br#"return array(1, "name" => "Ada",)[1];"#)
+            .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::ArrayGet {
+                array: Box::new(EvalExpr::Array(vec![
+                    EvalArrayElement::Value(EvalExpr::Const(EvalConst::Int(1))),
+                    EvalArrayElement::KeyValue {
+                        key: EvalExpr::Const(EvalConst::String("name".to_string())),
+                        value: EvalExpr::Const(EvalConst::String("Ada".to_string())),
+                    },
+                ])),
+                index: Box::new(EvalExpr::Const(EvalConst::Int(1))),
             }))]
         );
     }
