@@ -1595,6 +1595,42 @@ echo function_exists("file"); echo function_exists("readfile"); echo function_ex
     );
 }
 
+/// Verifies eval `glob()` expands local patterns and dispatches dynamically.
+#[test]
+fn test_eval_dispatches_glob_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('mkdir("eval-glob-dir");
+file_put_contents("eval-glob-dir/a.txt", "a");
+file_put_contents("eval-glob-dir/b.log", "b");
+file_put_contents("eval-glob-dir/c.txt", "c");
+file_put_contents("eval-glob-dir/.hidden.txt", "h");
+$matches = glob("eval-glob-dir/*.txt");
+echo count($matches) === 2 && basename($matches[0]) === "a.txt" && basename($matches[1]) === "c.txt" ? "glob" : "bad"; echo ":";
+echo count(glob("eval-glob-dir/*.none")) === 0 ? "empty" : "bad"; echo ":";
+$literal = glob("eval-glob-dir/a.txt");
+echo count($literal) === 1 && $literal[0] === "eval-glob-dir/a.txt" ? "literal" : "bad"; echo ":";
+$all = glob("eval-glob-dir/*");
+echo in_array("eval-glob-dir/.hidden.txt", $all) ? "bad" : "hidden"; echo ":";
+$call = call_user_func("glob", "eval-glob-dir/*.log");
+echo count($call) === 1 && basename($call[0]) === "b.log" ? "callglob" : "bad"; echo ":";
+$call_array = call_user_func_array("glob", ["pattern" => "eval-glob-dir/*.txt"]);
+echo count($call_array) === 2 ? "callarray" : "bad"; echo ":";
+unlink("eval-glob-dir/.hidden.txt");
+unlink("eval-glob-dir/c.txt");
+unlink("eval-glob-dir/b.log");
+unlink("eval-glob-dir/a.txt");
+echo rmdir("eval-glob-dir") ? "cleanup" : "bad"; echo ":";
+echo function_exists("glob");
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "glob:empty:literal:hidden:callglob:callarray:cleanup:1"
+    );
+}
+
 /// Verifies eval file-modification builtins update modes, masks, temp files, and dispatch.
 #[test]
 fn test_eval_dispatches_file_modify_builtin_calls() {
