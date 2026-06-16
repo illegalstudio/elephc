@@ -1451,6 +1451,43 @@ echo $g;
     assert_eq!(out, "1");
 }
 
+/// Verifies top-level eval fragments can read CLI `$argc` and `$argv`.
+#[test]
+fn test_eval_top_level_reads_argc_argv() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo $argc . ":" . count($argv) . ":" . (strlen($argv[0]) > 0 ? "Y" : "N");');
+"#,
+    );
+    assert_eq!(out, "1:1:Y");
+}
+
+/// Verifies top-level eval can replace `$argc` after the eval barrier widens it.
+#[test]
+fn test_eval_top_level_can_replace_argc_type() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$argc = "changed";');
+echo $argc;
+"#,
+    );
+    assert_eq!(out, "changed");
+}
+
+/// Verifies eval `global` aliases can read CLI argument globals inside functions.
+#[test]
+fn test_eval_global_alias_reads_argc_argv_in_function() {
+    let out = compile_and_run(
+        r#"<?php
+function show_eval_process_args() {
+    eval('global $argc, $argv; echo $argc . ":" . count($argv) . ":" . (strlen($argv[0]) > 0 ? "Y" : "N");');
+}
+show_eval_process_args();
+"#,
+    );
+    assert_eq!(out, "1:1:Y");
+}
+
 /// Verifies functions declared by eval from a namespace are registered globally.
 #[test]
 fn test_eval_declared_function_in_namespace_is_global() {

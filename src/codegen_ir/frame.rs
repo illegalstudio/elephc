@@ -21,6 +21,7 @@ use crate::codegen::{
 use crate::codegen::context::TRY_HANDLER_SLOT_SIZE;
 use crate::codegen::platform::Arch;
 use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, Terminator, ValueDef};
+use crate::names::ir_global_symbol;
 use crate::types::PhpType;
 
 use super::context::FunctionContext;
@@ -100,12 +101,14 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
     }
-    store_argc_local_if_present(ctx);
-    store_argv_local_if_present(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
+    store_argc_global_if_needed(ctx);
+    store_argv_global_if_needed(ctx);
+    store_argc_local_if_present(ctx);
+    store_argv_local_if_present(ctx);
 }
 
 /// Emits a callable function prologue using an already-resolved entry label.
@@ -696,40 +699,86 @@ fn align_to_16(bytes: usize) -> usize {
 
 /// Stores the OS argument count into `$argc` when the EIR main function has that local.
 fn store_argc_local_if_present(ctx: &mut FunctionContext<'_>) {
-    let Some(argc_slot) = ctx
+    let Some((argc_slot, argc_ty)) = ctx
         .function
         .locals
         .iter()
         .find(|local| local.name.as_deref() == Some("argc"))
-        .map(|local| local.id)
+        .map(|local| (local.id, local.php_type.codegen_repr()))
     else {
         return;
     };
     let Ok(offset) = ctx.local_offset(argc_slot) else {
         return;
     };
-    abi::store_at_offset(ctx.emitter, abi::process_argc_reg(ctx.emitter.target), offset);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
+    if matches!(argc_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    }
+    abi::store_at_offset(ctx.emitter, result_reg, offset);
 }
 
 /// Builds and stores the PHP `$argv` array when the EIR main function has that local.
 fn store_argv_local_if_present(ctx: &mut FunctionContext<'_>) {
-    let Some(argv_slot) = ctx
+    let Some((argv_slot, argv_ty)) = ctx
         .function
         .locals
         .iter()
         .find(|local| local.name.as_deref() == Some("argv"))
-        .map(|local| local.id)
+        .map(|local| (local.id, local.php_type.codegen_repr()))
     else {
         return;
     };
     let Ok(offset) = ctx.local_offset(argv_slot) else {
         return;
     };
+    let array_ty = argv_array_type();
     ctx.emitter.comment("build $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
-    abi::emit_store(
-        ctx.emitter,
-        &PhpType::Array(Box::new(PhpType::Str)),
-        offset,
-    );
+    if matches!(argv_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_box_current_value_as_mixed(ctx.emitter, &array_ty);
+    }
+    abi::emit_store(ctx.emitter, &argv_ty, offset);
+}
+
+/// Initializes program-global `$argc` storage for eval or static `global $argc`.
+fn store_argc_global_if_needed(ctx: &mut FunctionContext<'_>) {
+    if !superglobal_storage_needed(ctx, "argc") {
+        return;
+    }
+    let symbol = ir_global_symbol("argc");
+    ctx.data.add_comm(symbol.clone(), PhpType::Int.stack_size().max(8));
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Int, false);
+}
+
+/// Initializes program-global `$argv` storage for eval or static `global $argv`.
+fn store_argv_global_if_needed(ctx: &mut FunctionContext<'_>) {
+    if !superglobal_storage_needed(ctx, "argv") {
+        return;
+    }
+    let symbol = ir_global_symbol("argv");
+    let array_ty = argv_array_type();
+    ctx.data.add_comm(symbol.clone(), array_ty.stack_size().max(8));
+    ctx.emitter.comment("build global $argv array from OS argv");
+    abi::emit_call_label(ctx.emitter, "__rt_build_argv");
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &array_ty, false);
+}
+
+/// Returns true when a process superglobal needs program-global storage.
+fn superglobal_storage_needed(ctx: &FunctionContext<'_>, name: &str) -> bool {
+    ctx.module.required_runtime_features.eval
+        || ctx
+            .module
+            .data
+            .global_names
+            .iter()
+            .any(|candidate| candidate == name)
+}
+
+/// Returns the PHP storage type for `$argv`.
+fn argv_array_type() -> PhpType {
+    PhpType::Array(Box::new(PhpType::Str))
 }

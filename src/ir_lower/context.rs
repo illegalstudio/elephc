@@ -83,6 +83,8 @@ pub(crate) struct ClosureCapture {
 const EVAL_CONTEXT_LOCAL_NAME: &str = "__eir_eval_context";
 const EVAL_SCOPE_LOCAL_NAME: &str = "__eir_eval_scope";
 const EVAL_GLOBAL_SCOPE_LOCAL_NAME: &str = "__eir_eval_global_scope";
+const EVAL_ARGC_LOCAL_NAME: &str = "argc";
+const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 
 /// Mutable state for one function body while it is lowered.
 pub(crate) struct LoweringContext<'m, 'f> {
@@ -420,6 +422,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.declare_eval_context_local();
         self.declare_eval_scope_local();
         self.declare_eval_global_scope_local();
+        self.declare_eval_main_superglobals();
         let local_names = self
             .local_slots
             .iter()
@@ -447,6 +450,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 self.local_types.insert(name, PhpType::Mixed);
             }
         }
+    }
+
+    /// Ensures top-level eval fragments can see `$argc` and `$argv` by name.
+    fn declare_eval_main_superglobals(&mut self) {
+        if !self.in_main {
+            return;
+        }
+        self.declare_local(EVAL_ARGC_LOCAL_NAME, PhpType::Int);
+        self.mark_local_initialized(EVAL_ARGC_LOCAL_NAME);
+        self.declare_local(EVAL_ARGV_LOCAL_NAME, PhpType::Array(Box::new(PhpType::Str)));
+        self.mark_local_initialized(EVAL_ARGV_LOCAL_NAME);
     }
 
     /// Returns true after this function has lowered an `eval()` call.

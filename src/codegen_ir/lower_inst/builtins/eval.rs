@@ -596,7 +596,8 @@ fn local_uses_eval_global_sync(ctx: &FunctionContext<'_>, name: Option<&str>) ->
 
 /// Collects program globals that can be boxed into the eval global scope.
 fn eval_sync_globals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncGlobal> {
-    ctx.module
+    let mut globals = ctx
+        .module
         .data
         .global_names
         .iter()
@@ -607,7 +608,21 @@ fn eval_sync_globals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncGlobal> {
                 ty,
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    push_eval_process_superglobal(&mut globals, "argc", PhpType::Int);
+    push_eval_process_superglobal(&mut globals, "argv", PhpType::Array(Box::new(PhpType::Str)));
+    globals
+}
+
+/// Adds a process superglobal to eval global sync unless normal globals already include it.
+fn push_eval_process_superglobal(globals: &mut Vec<EvalSyncGlobal>, name: &str, ty: PhpType) {
+    if globals.iter().any(|global| global.name == name) {
+        return;
+    }
+    globals.push(EvalSyncGlobal {
+        name: name.to_string(),
+        ty,
+    });
 }
 
 /// Returns one unambiguous codegen type used for a program global, if available.
@@ -667,6 +682,8 @@ fn eval_sync_global_type_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
             | PhpType::Mixed
             | PhpType::Union(_)
     )
@@ -873,12 +890,12 @@ fn emit_branch_if_scope_entry_missing(ctx: &mut FunctionContext<'_>, label: &str
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("b.eq {}", label)); // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // skip reload when eval unset or omitted the local
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("je {}", label)); // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("je {}", label));                  // skip reload when eval unset or omitted the local
         }
     }
 }
@@ -944,7 +961,7 @@ fn store_mixed_scope_cell_to_global(
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
-    match ty {
+    match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
             emit_retain_scope_cell_if_owned(ctx);
             abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Mixed, false);
@@ -965,6 +982,18 @@ fn store_mixed_scope_cell_to_global(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Str, false);
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let payload_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x1",
+                Arch::X86_64 => "rdi",
+            };
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed array payload into the ABI result register
+            abi::emit_incref_if_refcounted(ctx.emitter, &ty);
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "eval global reload for PHP type {:?}",
@@ -984,12 +1013,12 @@ fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("b.eq {}", skip)); // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // borrowed scope entries can be copied back without retaining
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("je {}", skip)); // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("je {}", skip));                   // borrowed scope entries can be copied back without retaining
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -1046,7 +1075,7 @@ fn store_missing_scope_entry_to_global(
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
-    match ty {
+    match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
             let symbol_name = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol_name);
@@ -1070,6 +1099,10 @@ fn store_missing_scope_entry_to_global(
             abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
             abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Str, false);
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -1104,12 +1137,12 @@ fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: i64, label:
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, #{}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("b.eq {}", label)); // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching eval status handler
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching eval status handler
         }
     }
 }
@@ -1119,7 +1152,7 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the eval runtime diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the eval runtime diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
@@ -1128,12 +1161,12 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the eval runtime diagnostic to Linux stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the eval runtime diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the eval runtime diagnostic byte length
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the eval runtime diagnostic before exiting
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the eval runtime diagnostic before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }
