@@ -1187,6 +1187,24 @@ echo ":"; echo function_exists("crc32");');
     assert_eq!(out, "0:3421780262:907060870:1095738169:1");
 }
 
+/// Verifies eval `hash_algos()` exposes the native supported hash algorithm list.
+#[test]
+fn test_eval_dispatches_hash_algos_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$algos = hash_algos();
+echo count($algos) . ":" . $algos[0] . ":" . $algos[5] . ":";
+echo in_array("crc32c", $algos) ? "crc" : "bad";
+$call = call_user_func("hash_algos");
+echo ":" . $call[18];
+$spread = call_user_func_array("hash_algos", []);
+echo ":" . $spread[27] . ":";
+echo function_exists("hash_algos") ? "exists" : "missing";');
+"#,
+    );
+    assert_eq!(out, "28:md2:sha256:crc:whirlpool:joaat:exists");
+}
+
 /// Verifies eval `bin2hex()` converts byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_bin2hex_builtin_call() {

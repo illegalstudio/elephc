@@ -35,6 +35,38 @@ struct EvaluatedCallArg {
     value: RuntimeCellHandle,
 }
 
+/// Hash algorithm names supported by eval `hash_algos()`, matching native runtime order.
+const EVAL_HASH_ALGOS: &[&str] = &[
+    "md2",
+    "md4",
+    "md5",
+    "sha1",
+    "sha224",
+    "sha256",
+    "sha384",
+    "sha512",
+    "sha512/224",
+    "sha512/256",
+    "sha3-224",
+    "sha3-256",
+    "sha3-384",
+    "sha3-512",
+    "ripemd128",
+    "ripemd160",
+    "ripemd256",
+    "ripemd320",
+    "whirlpool",
+    "crc32",
+    "crc32b",
+    "crc32c",
+    "adler32",
+    "fnv132",
+    "fnv1a32",
+    "fnv164",
+    "fnv1a64",
+    "joaat",
+];
+
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
     /// Creates a runtime indexed-array cell with room for at least `capacity` elements.
@@ -1182,6 +1214,7 @@ fn eval_positional_expr_call(
             eval_builtin_function_probe(args, context, scope, values)
         }
         "gettype" => eval_builtin_gettype(args, context, scope, values),
+        "hash_algos" => eval_builtin_hash_algos(args, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
         "hex2bin" => eval_builtin_hex2bin(args, context, scope, values),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => {
@@ -1512,6 +1545,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "fmod"
             | "function_exists"
             | "gettype"
+            | "hash_algos"
             | "hash_equals"
             | "hex2bin"
             | "html_entity_decode"
@@ -1678,6 +1712,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "function_exists" => Some(&["function"]),
+        "hash_algos" => Some(&[]),
         "hash_equals" => Some(&["known_string", "user_string"]),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => Some(&["string"]),
         "implode" => Some(&["separator", "array"]),
@@ -2133,6 +2168,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_gettype_result(*value, values)?
+        }
+        "hash_algos" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_hash_algos_result(values)?
         }
         "hash_equals" => {
             let [known, user] = evaluated_args else {
@@ -3570,6 +3611,31 @@ fn eval_crc32_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(value)?;
     values.int(i64::from(eval_crc32_bytes(&bytes)))
+}
+
+/// Evaluates PHP `hash_algos()` with no arguments.
+fn eval_builtin_hash_algos(
+    args: &[EvalExpr],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_hash_algos_result(values)
+}
+
+/// Builds the indexed array returned by eval `hash_algos()`.
+fn eval_hash_algos_result(
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(EVAL_HASH_ALGOS.len())?;
+    for (index, algo) in EVAL_HASH_ALGOS.iter().enumerate() {
+        let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let key = values.int(index)?;
+        let value = values.string(algo)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }
 
 /// Returns the standard zlib/PHP CRC-32 checksum for a byte slice.
@@ -7672,6 +7738,33 @@ return function_exists("crc32");"#,
 
         assert_eq!(values.output, "0:3421780262:907060870:1095738169:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `hash_algos()` returns supported hash names through callable dispatch too.
+    #[test]
+    fn execute_program_dispatches_hash_algos_builtin() {
+        let program = parse_fragment(
+            br#"$algos = hash_algos();
+echo count($algos) . ":" . $algos[0] . ":" . $algos[5] . ":";
+echo in_array("crc32c", $algos) ? "crc" : "bad";
+$call = call_user_func("hash_algos");
+echo ":" . $call[18];
+$spread = call_user_func_array("hash_algos", []);
+echo ":" . $spread[27] . ":";
+echo function_exists("hash_algos") ? "exists" : "missing";
+return count($algos);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "28:md2:sha256:crc:whirlpool:joaat:exists"
+        );
+        assert_eq!(values.get(result), FakeValue::Int(28));
     }
 
     /// Verifies eval ASCII string case builtins work directly and through callable dispatch.
