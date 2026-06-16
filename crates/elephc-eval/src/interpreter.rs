@@ -10793,7 +10793,8 @@ fn eval_preg_split_result(
     let flags = eval_preg_split_flags(flags, values)?;
     let no_empty = flags & EVAL_PREG_SPLIT_NO_EMPTY != 0;
     let capture_delimiters = flags & EVAL_PREG_SPLIT_DELIM_CAPTURE != 0;
-    let mut pieces = Vec::<Vec<u8>>::new();
+    let offset_capture = flags & EVAL_PREG_SPLIT_OFFSET_CAPTURE != 0;
+    let mut pieces = Vec::<EvalPregSplitPiece>::new();
     let mut cursor = 0;
 
     for captures in regex.captures_iter(&subject) {
@@ -10803,18 +10804,23 @@ fn eval_preg_split_result(
         if eval_preg_split_reached_limit(&pieces, limit) {
             break;
         }
-        eval_preg_split_push_piece(&mut pieces, &subject[cursor..matched.start()], no_empty);
+        eval_preg_split_push_piece(
+            &mut pieces,
+            &subject[cursor..matched.start()],
+            cursor,
+            no_empty,
+        );
         if capture_delimiters {
             eval_preg_split_push_captures(&mut pieces, &subject, &captures, no_empty);
         }
         cursor = matched.end();
     }
-    eval_preg_split_push_piece(&mut pieces, &subject[cursor..], no_empty);
+    eval_preg_split_push_piece(&mut pieces, &subject[cursor..], cursor, no_empty);
 
     let mut result = values.array_new(pieces.len())?;
     for (index, piece) in pieces.iter().enumerate() {
         let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        let value = values.string_bytes_value(piece)?;
+        let value = eval_preg_split_piece_value(piece, offset_capture, values)?;
         result = values.array_set(result, key, value)?;
     }
     Ok(result)
@@ -10844,6 +10850,12 @@ struct EvalPregModifiers {
     multi_line: bool,
     dot_matches_new_line: bool,
     swap_greed: bool,
+}
+
+/// One `preg_split()` output segment plus its byte offset in the subject.
+struct EvalPregSplitPiece {
+    bytes: Vec<u8>,
+    offset: usize,
 }
 
 /// Splits a PHP delimited regex into body bytes and supported modifiers.
@@ -11096,7 +11108,7 @@ fn eval_preg_split_limit(
         .map_err(|_| EvalStatus::RuntimeFatal)
 }
 
-/// Returns supported `preg_split()` flags and rejects offset-capture shape changes.
+/// Returns supported `preg_split()` flags.
 fn eval_preg_split_flags(
     flags: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
@@ -11105,38 +11117,73 @@ fn eval_preg_split_flags(
         return Ok(0);
     };
     let flags = eval_int_value(flags, values)?;
-    let supported = EVAL_PREG_SPLIT_NO_EMPTY | EVAL_PREG_SPLIT_DELIM_CAPTURE;
-    if flags & EVAL_PREG_SPLIT_OFFSET_CAPTURE != 0 || flags & !supported != 0 {
+    let supported = EVAL_PREG_SPLIT_NO_EMPTY
+        | EVAL_PREG_SPLIT_DELIM_CAPTURE
+        | EVAL_PREG_SPLIT_OFFSET_CAPTURE;
+    if flags & !supported != 0 {
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(flags)
 }
 
 /// Returns whether `preg_split()` should stop splitting and emit the remaining subject.
-fn eval_preg_split_reached_limit(pieces: &[Vec<u8>], limit: Option<usize>) -> bool {
+fn eval_preg_split_reached_limit(pieces: &[EvalPregSplitPiece], limit: Option<usize>) -> bool {
     matches!(limit, Some(limit) if limit > 0 && pieces.len() + 1 >= limit)
 }
 
 /// Pushes one `preg_split()` output piece, honoring `PREG_SPLIT_NO_EMPTY`.
-fn eval_preg_split_push_piece(pieces: &mut Vec<Vec<u8>>, piece: &[u8], no_empty: bool) {
+fn eval_preg_split_push_piece(
+    pieces: &mut Vec<EvalPregSplitPiece>,
+    piece: &[u8],
+    offset: usize,
+    no_empty: bool,
+) {
     if no_empty && piece.is_empty() {
         return;
     }
-    pieces.push(piece.to_vec());
+    pieces.push(EvalPregSplitPiece {
+        bytes: piece.to_vec(),
+        offset,
+    });
 }
 
 /// Pushes captured delimiters for `PREG_SPLIT_DELIM_CAPTURE`.
 fn eval_preg_split_push_captures(
-    pieces: &mut Vec<Vec<u8>>,
+    pieces: &mut Vec<EvalPregSplitPiece>,
     subject: &[u8],
     captures: &Captures<'_>,
     no_empty: bool,
 ) {
     for index in 1..captures.len() {
-        if let Some(bytes) = eval_preg_capture_bytes(subject, captures, index) {
-            eval_preg_split_push_piece(pieces, bytes, no_empty);
+        if let Some(matched) = captures.get(index) {
+            eval_preg_split_push_piece(
+                pieces,
+                &subject[matched.start()..matched.end()],
+                matched.start(),
+                no_empty,
+            );
         }
     }
+}
+
+/// Converts one split segment to a string or PHP `[string, byte_offset]` pair.
+fn eval_preg_split_piece_value(
+    piece: &EvalPregSplitPiece,
+    offset_capture: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = values.string_bytes_value(&piece.bytes)?;
+    if !offset_capture {
+        return Ok(value);
+    }
+
+    let offset = i64::try_from(piece.offset).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let offset = values.int(offset)?;
+    let mut pair = values.array_new(2)?;
+    let value_key = values.int(0)?;
+    pair = values.array_set(pair, value_key, value)?;
+    let offset_key = values.int(1)?;
+    values.array_set(pair, offset_key, offset)
 }
 
 /// Evaluates PHP `gethostbyaddr($ip)` over one eval expression.
@@ -18916,7 +18963,13 @@ $replaced = call_user_func_array("preg_replace", ["pattern" => "/[0-9]+/", "repl
 echo $replaced . ":";
 $captured = preg_split("/(,)/", "a,b", 0, PREG_SPLIT_DELIM_CAPTURE);
 echo count($captured) . ":" . $captured[1] . ":";
-return function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY") && defined("PREG_SET_ORDER") && defined("PREG_OFFSET_CAPTURE");"#,
+$splitOffsets = preg_split("/,/", "a,b,c", 2, PREG_SPLIT_OFFSET_CAPTURE);
+echo $splitOffsets[0][0] . ":" . $splitOffsets[0][1] . ":" . $splitOffsets[1][0] . ":" . $splitOffsets[1][1] . ":";
+$splitBoth = preg_split("/(,)/", "a,b", 0, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_OFFSET_CAPTURE);
+echo count($splitBoth) . ":" . $splitBoth[1][0] . ":" . $splitBoth[1][1] . ":";
+$splitNoEmpty = preg_split("/,/", "a,,b", 0, PREG_SPLIT_NO_EMPTY | PREG_SPLIT_OFFSET_CAPTURE);
+echo $splitNoEmpty[1][0] . ":" . $splitNoEmpty[1][1] . ":";
+return function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY") && defined("PREG_SET_ORDER") && defined("PREG_OFFSET_CAPTURE") && defined("PREG_SPLIT_OFFSET_CAPTURE");"#,
         )
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
@@ -18926,7 +18979,7 @@ return function_exists("preg_match") && function_exists("preg_match_all") && fun
 
         assert_eq!(
             values.output,
-            "1:3:id42:id:42:0:3:2:3:b22:a:22:2:2:a1:a:22:b:0::-1:b:0:b22:3:0:4:b22:3:1:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:"
+            "1:3:id42:id:42:0:3:2:3:b22:a:22:2:2:a1:a:22:b:0::-1:b:0:b22:3:0:4:b22:3:1:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:a:0:b,c:2:3:,:1:b:3:"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
