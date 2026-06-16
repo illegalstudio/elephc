@@ -943,6 +943,29 @@ echo function_exists("array_rand");');
     assert_eq!(out, "idx:assoc:named:call:spread:1");
 }
 
+/// Verifies eval `rand()` and `mt_rand()` produce values in their PHP-visible ranges.
+#[test]
+fn test_eval_dispatches_rand_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$plain = rand();
+echo ($plain >= 0 && $plain <= 2147483647) ? "plain" : "bad";
+$bounded = rand(2, 4);
+echo ":" . (($bounded >= 2 && $bounded <= 4) ? "range" : "bad");
+$same = mt_rand(max: 6, min: 6);
+echo ":" . ($same === 6 ? "same" : "bad");
+$swapped = rand(10, 1);
+echo ":" . (($swapped >= 1 && $swapped <= 10) ? "swap" : "bad");
+$call = call_user_func("mt_rand", 1, 1);
+echo ":" . ($call === 1 ? "call" : "bad");
+$spread = call_user_func_array("rand", ["min" => 3, "max" => 3]);
+echo ":" . ($spread === 3 ? "spread" : "bad") . ":";
+echo function_exists("rand"); echo function_exists("mt_rand");');
+"#,
+    );
+    assert_eq!(out, "plain:range:same:swap:call:spread:11");
+}
+
 /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
 #[test]
 fn test_eval_dispatches_array_fill_builtin_calls() {

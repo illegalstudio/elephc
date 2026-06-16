@@ -23,6 +23,7 @@ use crate::value::RuntimeCellHandle;
 use std::ffi::{CStr, CString};
 use std::net::ToSocketAddrs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Internal statement-control result used to propagate eval returns and loops.
@@ -91,6 +92,9 @@ const EVAL_STREAM_TRANSPORTS: &[&str] = &[
     "tcp", "udp", "unix", "udg", "tls", "ssl", "sslv2", "sslv3", "tlsv1.0", "tlsv1.1",
     "tlsv1.2", "tlsv1.3",
 ];
+
+/// Monotonic salt mixed into eval `rand()`/`mt_rand()` and array key sampling.
+static EVAL_RANDOM_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Built-in stream filters reported by eval `stream_get_filters()`.
 const EVAL_STREAM_FILTERS: &[&str] = &[
@@ -1394,6 +1398,7 @@ fn eval_positional_expr_call(
         "phpversion" => eval_builtin_phpversion(args, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
+        "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
         "range" => eval_builtin_range(args, context, scope, values),
         "rawurldecode" | "urldecode" => {
             eval_builtin_url_decode(name, args, context, scope, values)
@@ -1832,6 +1837,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "microtime"
             | "min"
             | "mkdir"
+            | "mt_rand"
             | "nl2br"
             | "number_format"
             | "ord"
@@ -1841,6 +1847,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "php_uname"
             | "phpversion"
             | "putenv"
+            | "rand"
             | "range"
             | "rad2deg"
             | "rawurldecode"
@@ -2066,6 +2073,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "phpversion" => Some(&[]),
         "pow" => Some(&["num", "exponent"]),
         "putenv" => Some(&["assignment"]),
+        "rand" | "mt_rand" => Some(&["min", "max"]),
         "range" => Some(&["start", "end"]),
         "realpath" => Some(&["path"]),
         "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
@@ -2531,6 +2539,11 @@ fn eval_builtin_with_values(
             };
             values.pow(*left, *right)?
         }
+        "rand" | "mt_rand" => match evaluated_args {
+            [] => eval_rand_result(None, None, values)?,
+            [min, max] => eval_rand_result(Some(*min), Some(*max), values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "rawurldecode" | "urldecode" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -3780,11 +3793,61 @@ fn eval_array_rand_result(
 
 /// Chooses a pseudo-random array position within `[0, len)`.
 fn eval_random_position(len: usize) -> usize {
+    (eval_random_u128() % (len as u128)) as usize
+}
+
+/// Produces a process-local pseudo-random word for non-cryptographic eval builtins.
+fn eval_random_u128() -> u128 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    (nanos % (len as u128)) as usize
+    let counter = u128::from(EVAL_RANDOM_COUNTER.fetch_add(1, Ordering::Relaxed));
+    let pid = u128::from(std::process::id());
+    let mut value = nanos ^ (counter.wrapping_mul(0x9e37_79b9_7f4a_7c15)) ^ (pid << 64);
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+/// Evaluates PHP `rand()` and `mt_rand()` over zero args or an inclusive range.
+fn eval_builtin_rand(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match args {
+        [] => eval_rand_result(None, None, values),
+        [min, max] => {
+            let min = eval_expr(min, context, scope, values)?;
+            let max = eval_expr(max, context, scope, values)?;
+            eval_rand_result(Some(min), Some(max), values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Returns one non-cryptographic random integer using PHP's inclusive range rules.
+fn eval_rand_result(
+    min: Option<RuntimeCellHandle>,
+    max: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (min, max) = match (min, max) {
+        (None, None) => (0, i64::from(i32::MAX)),
+        (Some(min), Some(max)) => (eval_int_value(min, values)?, eval_int_value(max, values)?),
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    let low = min.min(max);
+    let high = min.max(max);
+    let width = (i128::from(high) - i128::from(low) + 1) as u128;
+    let offset = (eval_random_u128() % width) as i128;
+    let sampled = i128::from(low) + offset;
+    let sampled = i64::try_from(sampled).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.int(sampled)
 }
 
 /// Evaluates PHP `range()` over integer-compatible start and end expressions.
@@ -11751,6 +11814,35 @@ return function_exists("array_rand");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "idx:assoc:named:call:spread:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `rand()` and `mt_rand()` return values inside PHP inclusive ranges.
+    #[test]
+    fn execute_program_dispatches_rand_builtins() {
+        let program = parse_fragment(
+            br#"$plain = rand();
+echo ($plain >= 0 && $plain <= 2147483647) ? "plain" : "bad";
+$bounded = rand(2, 4);
+echo ":" . (($bounded >= 2 && $bounded <= 4) ? "range" : "bad");
+$same = mt_rand(max: 6, min: 6);
+echo ":" . ($same === 6 ? "same" : "bad");
+$swapped = rand(10, 1);
+echo ":" . (($swapped >= 1 && $swapped <= 10) ? "swap" : "bad");
+$call = call_user_func("mt_rand", 1, 1);
+echo ":" . ($call === 1 ? "call" : "bad");
+$spread = call_user_func_array("rand", ["min" => 3, "max" => 3]);
+echo ":" . ($spread === 3 ? "spread" : "bad") . ":";
+echo function_exists("rand");
+return function_exists("mt_rand");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "plain:range:same:swap:call:spread:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
