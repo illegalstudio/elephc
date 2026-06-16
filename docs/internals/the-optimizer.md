@@ -417,7 +417,11 @@ The current optimizer is still intentionally local. It does not yet implement:
 - broader control-flow normalization beyond the current local AST shell rewrites
 - backend-specific peephole cleanup
 - runtime dead stripping
-- register allocation
 - elimination of the `adrp/add/stur` instruction triple at the FCC assignment site when the wrapper is stubbed (the stub address still gets loaded and stored even though both are dead)
 
 Those remain roadmap items for later optimization work.
+
+Note that **register allocation** is no longer on this list: the EIR backend now
+runs a linear-scan register allocator (`src/ir_passes/`), described in
+[The IR](the-ir.md). It is a backend pass over EIR rather than an AST-level
+optimization, so it lives outside `src/optimize/`.

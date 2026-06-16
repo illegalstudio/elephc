@@ -94,7 +94,7 @@ This means normal CLI builds no longer concatenate the runtime text into every o
 
 The source-map file is intentionally simple. Today it stores a list of `(asm_line, php_line, php_col)` entries so tools and humans can correlate generated assembly back to the original PHP statements without needing full DWARF debug info.
 
-The AST optimizer intentionally still runs before backend selection. By the time the default EIR backend runs, constant expressions and some dead control-flow have already been removed, and EIR adds the function-wide value and control-flow shape needed for later register allocation and IR optimizations. The legacy AST backend sees the same optimized AST when `--ast-backend` is selected.
+The AST optimizer intentionally still runs before backend selection. By the time the default EIR backend runs, constant expressions and some dead control-flow have already been removed, and EIR adds the function-wide value and control-flow shape that the linear-scan register allocator (`src/ir_passes/`, see [The IR](the-ir.md)) and future IR optimizations rely on. The legacy AST backend sees the same optimized AST when `--ast-backend` is selected.
 
 ## Emit modes: executable vs cdylib
 
