@@ -1133,6 +1133,9 @@ fn eval_positional_expr_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "abs" => eval_builtin_abs(args, context, scope, values),
+        "addslashes" | "stripslashes" => {
+            eval_builtin_slashes(name, args, context, scope, values)
+        }
         "array_combine" => eval_builtin_array_combine(args, context, scope, values),
         "array_flip" => eval_builtin_array_flip(args, context, scope, values),
         "array_keys" | "array_values" => {
@@ -1438,7 +1441,8 @@ fn eval_function_probe_exists(context: &ElephcEvalContext, name: &str) -> bool {
 fn eval_php_visible_builtin_exists(name: &str) -> bool {
     matches!(
         name,
-        "abs"
+            "abs"
+            | "addslashes"
             | "array_combine"
             | "array_flip"
             | "array_key_exists"
@@ -1502,6 +1506,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "strpos"
             | "strrpos"
             | "strrev"
+            | "stripslashes"
             | "strtolower"
             | "strtoupper"
             | "strval"
@@ -1591,7 +1596,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_key_exists" => Some(&["key", "array"]),
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
-        "base64_decode" | "base64_encode" | "bin2hex" => Some(&["string"]),
+        "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "stripslashes" => {
+            Some(&["string"])
+        }
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
         | "is_float" | "is_int" | "is_integer" | "is_long" | "is_null" | "is_numeric"
         | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
@@ -1754,6 +1761,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             values.abs(*value)?
+        }
+        "addslashes" | "stripslashes" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_slashes_result(name, *value, values)?
         }
         "array_combine" => {
             let [keys, values_array] = evaluated_args else {
@@ -2415,6 +2428,77 @@ fn eval_bin2hex_result(
         output.push(HEX[(byte & 0x0f) as usize] as char);
     }
     values.string(&output)
+}
+
+/// Evaluates PHP's `addslashes(...)` or `stripslashes(...)` over one eval expression.
+fn eval_builtin_slashes(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = eval_expr(value, context, scope, values)?;
+    eval_slashes_result(name, value, values)
+}
+
+/// Applies PHP byte-string escaping or unescaping for addslashes/stripslashes.
+fn eval_slashes_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match name {
+        "addslashes" => eval_addslashes_result(value, values),
+        "stripslashes" => eval_stripslashes_result(value, values),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Escapes NUL, quotes, and backslashes using PHP `addslashes()` byte semantics.
+fn eval_addslashes_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let mut output = Vec::with_capacity(bytes.len());
+    for byte in bytes {
+        match byte {
+            0 => output.extend_from_slice(b"\\0"),
+            b'\'' | b'"' | b'\\' => {
+                output.push(b'\\');
+                output.push(byte);
+            }
+            _ => output.push(byte),
+        }
+    }
+    values.string_bytes_value(&output)
+}
+
+/// Removes backslash quoting using PHP `stripslashes()` byte semantics.
+fn eval_stripslashes_result(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            index += 1;
+            if let Some(byte) = bytes.get(index).copied() {
+                output.push(if byte == b'0' { 0 } else { byte });
+                index += 1;
+            }
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+    values.string_bytes_value(&output)
 }
 
 /// Evaluates PHP's `base64_encode(...)` over one eval expression.
@@ -6380,6 +6464,29 @@ return function_exists("bin2hex");"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "417a:410a:213f:6f6b:");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval slash escaping builtins use PHP byte-string semantics.
+    #[test]
+    fn execute_program_dispatches_slash_escape_builtins() {
+        let program = parse_fragment(
+            br#"$escaped = addslashes($source);
+echo bin2hex($escaped); echo ":";
+echo bin2hex(stripslashes($escaped)); echo ":";
+echo call_user_func("addslashes", "x\"y"); echo ":";
+echo call_user_func_array("stripslashes", [addslashes("o\"k")]); echo ":";
+return function_exists("addslashes") && function_exists("stripslashes");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let source = values.string("a\0b\\c\"d'").expect("create source");
+        scope.set("source", source, ScopeCellOwnership::Owned);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "615c30625c5c635c22645c27:6100625c63226427:x\\\"y:o\"k:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

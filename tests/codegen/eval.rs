@@ -929,6 +929,22 @@ echo ":"; echo function_exists("bin2hex");');
     assert_eq!(out, "417a:410a:213f:6f6b:1");
 }
 
+/// Verifies eval `addslashes()` and `stripslashes()` use PHP byte escaping semantics.
+#[test]
+fn test_eval_dispatches_slash_escape_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$escaped = addslashes("a\"b");
+echo bin2hex($escaped); echo ":";
+echo bin2hex(stripslashes($escaped)); echo ":";
+echo call_user_func("addslashes", "x\"y"); echo ":";
+echo call_user_func_array("stripslashes", [addslashes("o\"k")]);
+echo ":"; echo function_exists("addslashes") && function_exists("stripslashes");');
+"#,
+    );
+    assert_eq!(out, "615c2262:612262:x\\\"y:o\"k:1");
+}
+
 /// Verifies eval `base64_encode()` encodes byte strings directly and by callable dispatch.
 #[test]
 fn test_eval_dispatches_base64_encode_builtin_call() {
