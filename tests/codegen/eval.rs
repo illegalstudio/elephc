@@ -971,6 +971,29 @@ echo function_exists("array_push") && function_exists("array_unshift");');
     assert_eq!(out, "3:3:3:1:A:4:0:3:4:A:1:2:3:2:1:5:2:1:7:1");
 }
 
+/// Verifies eval `array_splice()` mutates direct variable arguments only.
+#[test]
+fn test_eval_dispatches_array_splice_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a = [10, 20, 30, 40];
+$removed = array_splice($a, 1, 2);
+echo count($removed) . ":" . $removed[0] . ":" . $removed[1] . ":" . count($a) . ":" . $a[1] . ":";
+$b = ["x" => 1, 10 => 2, "y" => 3, 11 => 4];
+$cut = array_splice(array: $b, offset: 1, length: 2);
+echo $cut[0] . ":" . $cut["y"] . ":" . $b["x"] . ":" . $b[0] . ":";
+$c = [1, 2, 3, 4];
+$tail = call_user_func("array_splice", $c, -2, 1);
+echo $tail[0] . ":" . count($c) . ":" . $c[2] . ":";
+$d = [5, 6, 7];
+$all = call_user_func_array("array_splice", ["array" => $d, "offset" => 1]);
+echo count($all) . ":" . $all[0] . ":" . $all[1] . ":" . count($d) . ":";
+echo function_exists("array_splice");');
+"#,
+    );
+    assert_eq!(out, "2:20:30:2:40:2:3:1:4:3:4:3:2:6:7:3:1");
+}
+
 /// Verifies eval `array_filter()` removes falsey values and preserves source keys.
 #[test]
 fn test_eval_dispatches_array_filter_builtin_call() {

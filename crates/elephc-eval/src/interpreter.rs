@@ -1358,7 +1358,7 @@ fn eval_call(
     }
     if matches!(
         name,
-        "array_pop" | "array_push" | "array_shift" | "array_unshift"
+        "array_pop" | "array_push" | "array_shift" | "array_splice" | "array_unshift"
     ) {
         return eval_builtin_array_pop_shift_call(name, args, context, scope, values);
     }
@@ -1875,6 +1875,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "array_search"
             | "array_shift"
             | "array_slice"
+            | "array_splice"
             | "array_sum"
             | "array_unique"
             | "array_unshift"
@@ -2182,6 +2183,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
         "array_slice" => Some(&["array", "offset", "length"]),
+        "array_splice" => Some(&["array", "offset", "length"]),
         "acos" | "asin" | "atan" | "cos" | "cosh" | "deg2rad" | "exp" | "log2" | "log10"
         | "rad2deg" | "sin" | "sinh" | "tan" | "tanh" => Some(&["num"]),
         "atan2" => Some(&["y", "x"]),
@@ -2524,6 +2526,21 @@ fn eval_builtin_with_values(
                 "{name}(): Argument #1 ($array) must be passed by reference, value given"
             ))?;
             eval_array_push_unshift_count_result(*array, inserted.len(), values)?
+        }
+        "array_splice" => {
+            let result = match evaluated_args {
+                [array, offset] => {
+                    eval_array_splice_value_result(*array, *offset, None, values)?
+                }
+                [array, offset, length] => {
+                    eval_array_splice_value_result(*array, *offset, Some(*length), values)?
+                }
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            values.warning(
+                "array_splice(): Argument #1 ($array) must be passed by reference, value given",
+            )?;
+            result
         }
         "array_flip" => {
             let [array] = evaluated_args else {
@@ -3774,6 +3791,9 @@ fn eval_builtin_array_pop_shift_call(
     if matches!(name, "array_push" | "array_unshift") {
         return eval_builtin_array_push_unshift_call(name, args, context, scope, values);
     }
+    if name == "array_splice" {
+        return eval_builtin_array_splice_call(args, context, scope, values);
+    }
 
     let [arg] = args else {
         return Err(EvalStatus::RuntimeFatal);
@@ -3835,6 +3855,263 @@ fn eval_builtin_array_push_unshift_call(
         values.release(replaced)?;
     }
     Ok(result)
+}
+
+/// Evaluates direct by-reference `array_splice()` calls in eval's supported 2/3-argument form.
+fn eval_builtin_array_splice_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (array_name, offset, length) =
+        eval_array_splice_direct_args(args, context, scope, values)?;
+    let Some(entry) =
+        scope_entry(context, scope, &array_name).filter(|entry| entry.flags().is_visible())
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let array = entry.cell();
+    let ownership = entry.flags().ownership;
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+
+    let (removed, replacement) =
+        eval_array_splice_removed_and_replacement(array, offset, length, values)?;
+    for replaced in set_scope_cell(context, scope, array_name, replacement, ownership)? {
+        values.release(replaced)?;
+    }
+    Ok(removed)
+}
+
+/// Evaluates and binds direct `array_splice()` arguments while preserving source order.
+fn eval_array_splice_direct_args(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(String, RuntimeCellHandle, Option<RuntimeCellHandle>), EvalStatus> {
+    let mut array = None;
+    let mut offset = None;
+    let mut length = None;
+    let mut positional_index = 0;
+    let mut saw_named = false;
+
+    for arg in args {
+        if arg.is_spread() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let parameter = if let Some(name) = arg.name() {
+            saw_named = true;
+            name
+        } else {
+            if saw_named {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let parameter = match positional_index {
+                0 => "array",
+                1 => "offset",
+                2 => "length",
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            positional_index += 1;
+            parameter
+        };
+
+        match parameter {
+            "array" => {
+                if array.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                let EvalExpr::LoadVar(name) = arg.value() else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                array = Some(name.clone());
+            }
+            "offset" => {
+                if offset.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                offset = Some(eval_expr(arg.value(), context, scope, values)?);
+            }
+            "length" => {
+                if length.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                length = Some(eval_expr(arg.value(), context, scope, values)?);
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
+    let array = array.ok_or(EvalStatus::RuntimeFatal)?;
+    let offset = offset.ok_or(EvalStatus::RuntimeFatal)?;
+    Ok((array, offset, length))
+}
+
+/// Returns the removed elements that `array_splice()` would produce without mutating the source.
+fn eval_array_splice_value_result(
+    array: RuntimeCellHandle,
+    offset: RuntimeCellHandle,
+    length: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let (start, end) = eval_array_splice_bounds(array, offset, length, values)?;
+    eval_array_splice_removed(array, start, end, values)
+}
+
+/// Builds both removed and replacement arrays for direct `array_splice()` write-back.
+fn eval_array_splice_removed_and_replacement(
+    array: RuntimeCellHandle,
+    offset: RuntimeCellHandle,
+    length: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
+    let (start, end) = eval_array_splice_bounds(array, offset, length, values)?;
+    let removed = eval_array_splice_removed(array, start, end, values)?;
+    let replacement = eval_array_splice_replacement(array, start, end, values)?;
+    Ok((removed, replacement))
+}
+
+/// Converts splice offset and length cells into bounded source positions.
+fn eval_array_splice_bounds(
+    array: RuntimeCellHandle,
+    offset: RuntimeCellHandle,
+    length: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(usize, usize), EvalStatus> {
+    let len = values.array_len(array)?;
+    let offset = eval_int_value(offset, values)?;
+    let start = eval_slice_start(len, offset)?;
+    let end = match length {
+        Some(length) if values.type_tag(length)? != EVAL_TAG_NULL => {
+            eval_slice_end(len, start, eval_int_value(length, values)?)?
+        }
+        _ => len,
+    };
+    Ok((start, end))
+}
+
+/// Builds the reindexed/string-key-preserving removed array returned by `array_splice()`.
+fn eval_array_splice_removed(
+    array: RuntimeCellHandle,
+    start: usize,
+    end: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = end.saturating_sub(start);
+    if eval_array_range_keys_are_int(array, start, end, values)? {
+        let mut result = values.array_new(len)?;
+        let mut target = 0_i64;
+        for position in start..end {
+            let key = values.array_iter_key(array, position)?;
+            let value = values.array_get(array, key)?;
+            let target_key = values.int(target)?;
+            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            result = values.array_set(result, target_key, value)?;
+        }
+        return Ok(result);
+    }
+
+    let mut result = values.assoc_new(len)?;
+    let mut next_int_key = 0_i64;
+    for position in start..end {
+        let source_key = values.array_iter_key(array, position)?;
+        let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
+            let key = values.int(next_int_key)?;
+            next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            key
+        } else {
+            source_key
+        };
+        let value = values.array_get(array, source_key)?;
+        result = values.array_set(result, target_key, value)?;
+    }
+    Ok(result)
+}
+
+/// Builds the source replacement after removing the requested splice range.
+fn eval_array_splice_replacement(
+    array: RuntimeCellHandle,
+    start: usize,
+    end: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    if eval_array_splice_remaining_keys_are_int(array, start, end, len, values)? {
+        let mut result = values.array_new(len.saturating_sub(end.saturating_sub(start)))?;
+        let mut target = 0_i64;
+        for position in 0..len {
+            if (start..end).contains(&position) {
+                continue;
+            }
+            let key = values.array_iter_key(array, position)?;
+            let value = values.array_get(array, key)?;
+            let target_key = values.int(target)?;
+            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            result = values.array_set(result, target_key, value)?;
+        }
+        return Ok(result);
+    }
+
+    let mut result = values.assoc_new(len.saturating_sub(end.saturating_sub(start)))?;
+    let mut next_int_key = 0_i64;
+    for position in 0..len {
+        if (start..end).contains(&position) {
+            continue;
+        }
+        let source_key = values.array_iter_key(array, position)?;
+        let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
+            let key = values.int(next_int_key)?;
+            next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            key
+        } else {
+            source_key
+        };
+        let value = values.array_get(array, source_key)?;
+        result = values.array_set(result, target_key, value)?;
+    }
+    Ok(result)
+}
+
+/// Returns true when every key in one source position range is integer-shaped.
+fn eval_array_range_keys_are_int(
+    array: RuntimeCellHandle,
+    start: usize,
+    end: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    for position in start..end {
+        let key = values.array_iter_key(array, position)?;
+        if values.type_tag(key)? != EVAL_TAG_INT {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Returns true when every key outside the removed splice range is integer-shaped.
+fn eval_array_splice_remaining_keys_are_int(
+    array: RuntimeCellHandle,
+    start: usize,
+    end: usize,
+    len: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    for position in 0..len {
+        if (start..end).contains(&position) {
+            continue;
+        }
+        let key = values.array_iter_key(array, position)?;
+        if values.type_tag(key)? != EVAL_TAG_INT {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Returns the value produced by `array_pop()` / `array_shift()` without mutating the source.
@@ -14305,6 +14582,41 @@ return function_exists("array_push") && function_exists("array_unshift");"#,
             vec![
                 "array_push(): Argument #1 ($array) must be passed by reference, value given",
                 "array_unshift(): Argument #1 ($array) must be passed by reference, value given",
+            ]
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `array_splice()` returns removed values and writes back direct variable calls.
+    #[test]
+    fn execute_program_dispatches_array_splice_builtin() {
+        let program = parse_fragment(
+            br#"$a = [10, 20, 30, 40];
+$removed = array_splice($a, 1, 2);
+echo count($removed) . ":" . $removed[0] . ":" . $removed[1] . ":" . count($a) . ":" . $a[1] . ":";
+$b = ["x" => 1, 10 => 2, "y" => 3, 11 => 4];
+$cut = array_splice(array: $b, offset: 1, length: 2);
+echo $cut[0] . ":" . $cut["y"] . ":" . $b["x"] . ":" . $b[0] . ":";
+$c = [1, 2, 3, 4];
+$tail = call_user_func("array_splice", $c, -2, 1);
+echo $tail[0] . ":" . count($c) . ":" . $c[2] . ":";
+$d = [5, 6, 7];
+$all = call_user_func_array("array_splice", ["array" => $d, "offset" => 1]);
+echo count($all) . ":" . $all[0] . ":" . $all[1] . ":" . count($d) . ":";
+return function_exists("array_splice");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "2:20:30:2:40:2:3:1:4:3:4:3:2:6:7:3:");
+        assert_eq!(
+            values.warnings,
+            vec![
+                "array_splice(): Argument #1 ($array) must be passed by reference, value given",
+                "array_splice(): Argument #1 ($array) must be passed by reference, value given",
             ]
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));

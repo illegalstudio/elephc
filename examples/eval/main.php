@@ -141,6 +141,7 @@ $array_reduce = eval('function eval_example_sum($carry, $item) { return $carry +
 $array_walk = eval('function eval_example_walk($value, $key) { echo "walk-" . $key . "=" . $value . "\n"; } return array_walk(["a" => 2, "b" => 3], "eval_example_walk") ? "ok" : "bad";');
 $array_pop_shift = eval('$items = ["first", "middle", "last"]; $popped = array_pop($items); $shifted = array_shift($items); return $popped . ":" . $shifted . ":" . count($items) . ":" . $items[0];');
 $array_push_unshift = eval('$items = ["middle"]; array_push($items, "last"); array_unshift($items, "first"); return count($items) . ":" . $items[0] . ":" . $items[2];');
+$array_splice = eval('$items = [10, 20, 30, 40]; $removed = array_splice($items, 1, 2); return count($removed) . ":" . $removed[0] . ":" . count($items) . ":" . $items[1];');
 $array_filter = eval('$items = array_filter([0, 1, "", "ok"]); return count($items) . ":" . $items[1] . ":" . $items[3];');
 $array_filter_callback = eval('function eval_example_keep_pair($value, $key) { return $key === "b" || $value === 3; } $items = array_filter(["a" => 1, "b" => 2, "c" => 3], "eval_example_keep_pair", ARRAY_FILTER_USE_BOTH); return count($items) . ":" . $items["b"] . ":" . $items["c"];');
 $named_builtins = eval('return strlen(string: "eval") . ":" . (str_contains(...["haystack" => "dynamic eval", "needle" => "eval"]) ? "yes" : "no");');
@@ -284,6 +285,7 @@ echo "array-reduce=" . $array_reduce . "\n";
 echo "array-walk=" . $array_walk . "\n";
 echo "array-pop-shift=" . $array_pop_shift . "\n";
 echo "array-push-unshift=" . $array_push_unshift . "\n";
+echo "array-splice=" . $array_splice . "\n";
 echo "array-filter=" . $array_filter . "\n";
 echo "array-filter-callback=" . $array_filter_callback . "\n";
 echo "named-builtins=" . $named_builtins . "\n";
