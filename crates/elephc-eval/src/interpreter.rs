@@ -1175,7 +1175,7 @@ fn execute_matching_catch(
 ) -> Result<EvalControl, EvalStatus> {
     let mut matched = None;
     for catch in catches {
-        if catch_type_matches_thrown(thrown, &catch.class_name, values)? {
+        if catch_types_match_thrown(thrown, &catch.class_names, values)? {
             matched = Some(catch);
             break;
         }
@@ -1199,17 +1199,22 @@ fn execute_matching_catch(
     execute_statements(&catch.body, context, scope, values)
 }
 
-/// Returns true when a catch type accepts the thrown object.
-fn catch_type_matches_thrown(
+/// Returns true when any type in one catch clause accepts the thrown object.
+fn catch_types_match_thrown(
     thrown: RuntimeCellHandle,
-    class_name: &str,
+    class_names: &[String],
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let class_name = class_name.trim_start_matches('\\');
-    if class_name.eq_ignore_ascii_case("Throwable") {
-        return Ok(true);
+    for class_name in class_names {
+        let class_name = class_name.trim_start_matches('\\');
+        if class_name.eq_ignore_ascii_case("Throwable") {
+            return Ok(true);
+        }
+        if values.object_is_a(thrown, class_name, false)? {
+            return Ok(true);
+        }
     }
-    values.object_is_a(thrown, class_name, false)
+    Ok(false)
 }
 
 /// Registers an eval-declared class in the dynamic class table.
@@ -16994,6 +16999,29 @@ mod tests {
 
         assert_eq!(scope.visible_cell("wrong"), None);
         assert_eq!(values.get(result), FakeValue::Int(2));
+    }
+
+    /// Verifies union catch clauses test later types in the same catch clause.
+    #[test]
+    fn execute_program_catches_union_type_inside_eval() {
+        let program = parse_fragment(
+            br#"try {
+    throw new Exception("eval boom");
+} catch (RuntimeException|Exception $caught) {
+    return $caught->answer();
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let caught = scope
+            .visible_cell("caught")
+            .expect("scope should contain catch variable");
+
+        assert_eq!(values.type_tag(caught), Ok(EVAL_TAG_OBJECT));
+        assert_eq!(values.get(result), FakeValue::Int(42));
     }
 
     /// Verifies eval `finally` runs before a pending try-body return is observed.

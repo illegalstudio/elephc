@@ -129,7 +129,7 @@ pub enum EvalStmt {
 /// One `catch` block attached to an eval `try` statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalCatch {
-    pub class_name: String,
+    pub class_names: Vec<String>,
     pub var_name: Option<String>,
     pub body: Vec<EvalStmt>,
 }
