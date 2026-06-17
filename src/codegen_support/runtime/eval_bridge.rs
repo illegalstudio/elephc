@@ -170,6 +170,89 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x0, xzr");                                         // report failure as a null C pointer to Rust
     emitter.instruction("ret");                                                 // return the failure sentinel
 
+    label_c_global(emitter, "__elephc_eval_value_parent_class_name");
+    emitter.instruction("sub sp, sp, #80");                                     // reserve lookup state and a call-preserving wrapper frame
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #64");                                    // establish a stable parent-class lookup frame pointer
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the eval value tag and payload words
+    emitter.instruction("cmp x0, #6");                                          // tag 6 is an object payload
+    emitter.instruction("b.eq __elephc_eval_value_parent_class_name_object");   // derive the parent from the object's runtime class id
+    emitter.instruction("cmp x0, #1");                                          // tag 1 is a class-name string payload
+    emitter.instruction("b.eq __elephc_eval_value_parent_class_name_string");   // resolve a class string through generated metadata
+    emitter.instruction("b __elephc_eval_value_parent_class_name_empty");       // unsupported input types have no parent class name
+    emitter.label("__elephc_eval_value_parent_class_name_object");
+    emitter.instruction("cbz x1, __elephc_eval_value_parent_class_name_empty"); // malformed object payloads have no parent class
+    emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
+    emitter.instruction("b __elephc_eval_value_parent_class_name_from_id");     // convert the class id to its parent class name
+    emitter.label("__elephc_eval_value_parent_class_name_string");
+    emitter.instruction("str x1, [sp, #0]");                                    // save the requested class-name pointer
+    emitter.instruction("str x2, [sp, #8]");                                    // save the requested class-name length
+    abi::emit_symbol_address(emitter, "x9", "_classes_by_name_count");
+    emitter.instruction("ldr x9, [x9]");                                        // load the registered class-name count
+    emitter.instruction("cbz x9, __elephc_eval_value_parent_class_name_empty"); // an empty class table cannot resolve a parent name
+    emitter.instruction("str x9, [sp, #16]");                                   // save the table count across string compares
+    abi::emit_symbol_address(emitter, "x10", "_classes_by_name");
+    emitter.instruction("str x10, [sp, #24]");                                  // save the current class-name table cursor
+    emitter.instruction("mov x11, #0");                                         // start scanning generated class-name entries at index zero
+    emitter.label("__elephc_eval_value_parent_class_name_loop");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the class-name table count
+    emitter.instruction("cmp x11, x9");                                         // have all generated class names been checked?
+    emitter.instruction("b.ge __elephc_eval_value_parent_class_name_empty");    // no generated class matched the requested string
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the current class-name metadata entry
+    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored class-name length
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the requested class-name length
+    emitter.instruction("cmp x12, x2");                                         // compare stored and requested name lengths first
+    emitter.instruction("b.ne __elephc_eval_value_parent_class_name_skip");     // length mismatch means this class entry cannot match
+    emitter.instruction("str x11, [sp, #32]");                                  // preserve the scan index across the string compare
+    emitter.instruction("ldr x1, [sp, #0]");                                    // pass the requested class-name pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // pass the requested class-name length
+    emitter.instruction("ldr x3, [x10]");                                       // pass the generated class-name pointer
+    emitter.instruction("mov x4, x12");                                         // pass the generated class-name length
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
+    emitter.instruction("ldr x11, [sp, #32]");                                  // restore the scan index after the string compare
+    emitter.instruction("cmp x0, #0");                                          // did the requested class name match this entry?
+    emitter.instruction("b.eq __elephc_eval_value_parent_class_name_hit");      // resolve the matched class entry to its parent id
+    emitter.label("__elephc_eval_value_parent_class_name_skip");
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the current class-name table entry
+    emitter.instruction("add x10, x10, #32");                                   // advance to the next class-name table entry
+    emitter.instruction("str x10, [sp, #24]");                                  // persist the advanced table cursor
+    emitter.instruction("add x11, x11, #1");                                    // advance the class-name scan index
+    emitter.instruction("b __elephc_eval_value_parent_class_name_loop");        // continue scanning generated class names
+    emitter.label("__elephc_eval_value_parent_class_name_hit");
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the matched class-name table entry
+    emitter.instruction("ldr x9, [x10, #16]");                                  // load the matched runtime class id
+    emitter.label("__elephc_eval_value_parent_class_name_from_id");
+    abi::emit_symbol_address(emitter, "x10", "_class_name_count");
+    emitter.instruction("ldr x10, [x10]");                                      // load the dense class-name table length
+    emitter.instruction("cmp x9, x10");                                         // check that the class id can index parent metadata
+    emitter.instruction("b.hs __elephc_eval_value_parent_class_name_empty");    // unknown class ids have no parent class name
+    abi::emit_symbol_address(emitter, "x11", "_class_parent_ids");
+    emitter.instruction("lsl x12, x9, #3");                                     // convert class id to a parent-id table byte offset
+    emitter.instruction("ldr x9, [x11, x12]");                                  // load the parent runtime class id
+    emitter.instruction("mov x13, #-1");                                        // materialize the parentless class sentinel
+    emitter.instruction("cmp x9, x13");                                         // check whether the runtime class has no parent
+    emitter.instruction("b.eq __elephc_eval_value_parent_class_name_empty");    // parentless runtime classes produce an empty string
+    emitter.instruction("cmp x9, x10");                                         // check that the parent class id can index name metadata
+    emitter.instruction("b.hs __elephc_eval_value_parent_class_name_empty");    // invalid parent ids produce an empty string
+    abi::emit_symbol_address(emitter, "x11", "_class_name_entries");
+    emitter.instruction("lsl x12, x9, #4");                                     // convert parent id to a 16-byte name-entry offset
+    emitter.instruction("add x11, x11, x12");                                   // address the parent class-name metadata row
+    emitter.instruction("ldr x1, [x11]");                                       // load the parent class-name string pointer
+    emitter.instruction("ldr x2, [x11, #8]");                                   // load the parent class-name string length
+    emitter.instruction("cbz x2, __elephc_eval_value_parent_class_name_empty"); // table holes represent missing parent names
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the parent class-name string
+    emitter.instruction("b __elephc_eval_value_parent_class_name_done");        // restore the wrapper frame before returning to Rust
+    emitter.label("__elephc_eval_value_parent_class_name_empty");
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("mov x1, xzr");                                         // missing parent names use an empty string pointer
+    emitter.instruction("mov x2, xzr");                                         // missing parent names use an empty string length
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the empty parent class-name string
+    emitter.label("__elephc_eval_value_parent_class_name_done");
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the parent-class lookup wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed parent class-name string to Rust
+
     label_c_global(emitter, "__elephc_eval_value_array_new");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for array allocation and boxing
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across runtime calls
@@ -1352,6 +1435,89 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_value_object_class_name_miss_x86");
     emitter.instruction("xor eax, eax");                                        // report failure as a null C pointer to Rust
     emitter.instruction("ret");                                                 // return the failure sentinel
+
+    label_c_global(emitter, "__elephc_eval_value_parent_class_name");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable parent-class lookup frame pointer
+    emitter.instruction("sub rsp, 48");                                         // reserve lookup state while keeping the stack call-aligned
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_unbox input
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the eval value tag and payload words
+    emitter.instruction("cmp rax, 6");                                          // tag 6 is an object payload
+    emitter.instruction("je __elephc_eval_value_parent_class_name_object_x86"); // derive the parent from the object's runtime class id
+    emitter.instruction("cmp rax, 1");                                          // tag 1 is a class-name string payload
+    emitter.instruction("je __elephc_eval_value_parent_class_name_string_x86"); // resolve a class string through generated metadata
+    emitter.instruction("jmp __elephc_eval_value_parent_class_name_empty_x86"); // unsupported input types have no parent class name
+    emitter.label("__elephc_eval_value_parent_class_name_object_x86");
+    emitter.instruction("test rdi, rdi");                                       // check the unboxed object pointer before reading its header
+    emitter.instruction("jz __elephc_eval_value_parent_class_name_empty_x86");  // malformed object payloads have no parent class
+    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
+    emitter.instruction("jmp __elephc_eval_value_parent_class_name_from_id_x86"); // convert the class id to its parent class name
+    emitter.label("__elephc_eval_value_parent_class_name_string_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested class-name length
+    abi::emit_symbol_address(emitter, "r10", "_classes_by_name_count");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the registered class-name count
+    emitter.instruction("test r10, r10");                                       // is the generated class-name table empty?
+    emitter.instruction("jz __elephc_eval_value_parent_class_name_empty_x86");  // an empty class table cannot resolve a parent name
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the table count across string compares
+    abi::emit_symbol_address(emitter, "r11", "_classes_by_name");
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the current class-name table cursor
+    emitter.instruction("xor r11d, r11d");                                      // start scanning generated class-name entries at index zero
+    emitter.label("__elephc_eval_value_parent_class_name_loop_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the class-name table count
+    emitter.instruction("cmp r11, r10");                                        // have all generated class names been checked?
+    emitter.instruction("jae __elephc_eval_value_parent_class_name_empty_x86"); // no generated class matched the requested string
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current class-name metadata entry
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
+    emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested name lengths first
+    emitter.instruction("jne __elephc_eval_value_parent_class_name_skip_x86");  // length mismatch means this class entry cannot match
+    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // preserve the scan index across the string compare
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
+    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // pass the generated class-name pointer
+    emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // restore the scan index after the string compare
+    emitter.instruction("test rax, rax");                                       // did the requested class name match this entry?
+    emitter.instruction("je __elephc_eval_value_parent_class_name_hit_x86");    // resolve the matched class entry to its parent id
+    emitter.label("__elephc_eval_value_parent_class_name_skip_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current class-name table entry
+    emitter.instruction("add r10, 32");                                         // advance to the next class-name table entry
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // persist the advanced table cursor
+    emitter.instruction("inc r11");                                             // advance the class-name scan index
+    emitter.instruction("jmp __elephc_eval_value_parent_class_name_loop_x86");  // continue scanning generated class names
+    emitter.label("__elephc_eval_value_parent_class_name_hit_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the matched class-name table entry
+    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // load the matched runtime class id
+    emitter.label("__elephc_eval_value_parent_class_name_from_id_x86");
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_class_name_count", 0);
+    emitter.instruction("cmp r11, rdx");                                        // check that the class id can index parent metadata
+    emitter.instruction("jae __elephc_eval_value_parent_class_name_empty_x86"); // unknown class ids have no parent class name
+    abi::emit_symbol_address(emitter, "rdx", "_class_parent_ids");
+    emitter.instruction("mov r11, QWORD PTR [rdx + r11 * 8]");                  // load the parent runtime class id
+    emitter.instruction("cmp r11, -1");                                         // check whether the runtime class has no parent
+    emitter.instruction("je __elephc_eval_value_parent_class_name_empty_x86");  // parentless runtime classes produce an empty string
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_class_name_count", 0);
+    emitter.instruction("cmp r11, rdx");                                        // check that the parent class id can index name metadata
+    emitter.instruction("jae __elephc_eval_value_parent_class_name_empty_x86"); // invalid parent ids produce an empty string
+    abi::emit_symbol_address(emitter, "rdx", "_class_name_entries");
+    emitter.instruction("shl r11, 4");                                          // convert parent id to a 16-byte name-entry offset
+    emitter.instruction("add rdx, r11");                                        // address the parent class-name metadata row
+    emitter.instruction("mov rdi, QWORD PTR [rdx]");                            // load the parent class-name string pointer
+    emitter.instruction("mov rsi, QWORD PTR [rdx + 8]");                        // load the parent class-name string length
+    emitter.instruction("test rsi, rsi");                                       // table holes represent missing parent names
+    emitter.instruction("jz __elephc_eval_value_parent_class_name_empty_x86");  // missing parent names produce an empty string
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the parent class-name string
+    emitter.instruction("jmp __elephc_eval_value_parent_class_name_done_x86");  // restore the wrapper frame before returning to Rust
+    emitter.label("__elephc_eval_value_parent_class_name_empty_x86");
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("xor edi, edi");                                        // missing parent names use an empty string pointer
+    emitter.instruction("xor esi, esi");                                        // missing parent names use an empty string length
+    emitter.instruction("call __rt_mixed_from_value");                          // box the empty parent class-name string
+    emitter.label("__elephc_eval_value_parent_class_name_done_x86");
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed parent class-name string to Rust
 
     label_c_global(emitter, "__elephc_eval_value_array_new");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls

@@ -392,6 +392,12 @@ pub trait RuntimeValueOps {
         object: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns the PHP-visible parent class name for an object or class-name cell.
+    fn parent_class_name(
+        &mut self,
+        object_or_class: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Returns the visible element count for an array-like runtime cell.
     fn array_len(&mut self, array: RuntimeCellHandle) -> Result<usize, EvalStatus>;
 
@@ -1843,6 +1849,7 @@ fn eval_positional_expr_call(
         "getservbyname" => eval_builtin_getservbyname(args, context, scope, values),
         "getservbyport" => eval_builtin_getservbyport(args, context, scope, values),
         "get_class" => eval_builtin_get_class(args, context, scope, values),
+        "get_parent_class" => eval_builtin_get_parent_class(args, context, scope, values),
         "getcwd" => eval_builtin_getcwd(args, values),
         "getenv" => eval_builtin_getenv(args, context, scope, values),
         "gettype" => eval_builtin_gettype(args, context, scope, values),
@@ -2300,6 +2307,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "getservbyname"
             | "getservbyport"
             | "get_class"
+            | "get_parent_class"
             | "getcwd"
             | "getenv"
             | "gettype"
@@ -2593,6 +2601,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
             Some(&["value"])
         }
         "get_class" => Some(&["object"]),
+        "get_parent_class" => Some(&["object_or_class"]),
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_exists" => Some(&["class", "autoload"]),
@@ -3685,6 +3694,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_get_class_result(*object, values)?
+        }
+        "get_parent_class" => {
+            let [object_or_class] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_get_parent_class_result(*object_or_class, values)?
         }
         "gettype" => {
             let [value] = evaluated_args else {
@@ -12472,6 +12487,28 @@ fn eval_get_class_result(
     values.object_class_name(object)
 }
 
+/// Evaluates PHP's `get_parent_class(...)` over one eval object or class-name expression.
+fn eval_builtin_get_parent_class(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [object_or_class] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let object_or_class = eval_expr(object_or_class, context, scope, values)?;
+    eval_get_parent_class_result(object_or_class, values)
+}
+
+/// Resolves the PHP-visible parent class name for one object or class-name cell.
+fn eval_get_parent_class_result(
+    object_or_class: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    values.parent_class_name(object_or_class)
+}
+
 /// Returns the PHP-visible type name for a concrete eval runtime tag.
 fn eval_gettype_name(tag: u64) -> &'static str {
     match tag {
@@ -15498,6 +15535,20 @@ mod tests {
                 FakeValue::Object(_) => self.string("stdClass"),
                 FakeValue::Iterator { .. } => self.string("Iterator"),
                 _ => Err(EvalStatus::RuntimeFatal),
+            }
+        }
+
+        /// Returns fake parent-class names for eval introspection unit tests.
+        fn parent_class_name(
+            &mut self,
+            object_or_class: RuntimeCellHandle,
+        ) -> Result<RuntimeCellHandle, EvalStatus> {
+            match self.get(object_or_class) {
+                FakeValue::Object(_) => self.string("ParentClass"),
+                FakeValue::String(name) if name.eq_ignore_ascii_case("ChildClass") => {
+                    self.string("ParentClass")
+                }
+                _ => self.string(""),
             }
         }
 
@@ -21050,6 +21101,30 @@ return call_user_func_array("get_class", ["object" => $object]);"#,
 
         assert_eq!(values.output, "stdClass:stdClass:");
         assert_eq!(values.get(result), FakeValue::String("stdClass".to_string()));
+    }
+
+    /// Verifies eval `get_parent_class()` reads object and class-string parents by callable.
+    #[test]
+    fn execute_program_dispatches_get_parent_class_builtin() {
+        let program = parse_fragment(
+            br#"echo get_parent_class($object); echo ":";
+echo get_parent_class("ChildClass"); echo ":";
+echo call_user_func("get_parent_class", $object); echo ":";
+return call_user_func_array("get_parent_class", ["object_or_class" => "ChildClass"]);"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let object = values.alloc(FakeValue::Object(Vec::new()));
+        scope.set("object".to_string(), object, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "ParentClass:ParentClass:ParentClass:"
+        );
+        assert_eq!(values.get(result), FakeValue::String("ParentClass".to_string()));
     }
 
     /// Verifies eval `abs()` dispatches through runtime numeric hooks directly and by callable.
