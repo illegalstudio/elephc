@@ -5013,6 +5013,24 @@ return "miss";');
     assert_eq!(out, "caught");
 }
 
+/// Verifies eval-internal union catch clauses match any listed class.
+#[test]
+fn test_eval_try_catch_matches_union_type_inside_eval() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('try {
+    throw new RuntimeException("eval boom");
+} catch (LogicException|RuntimeException $caught) {
+    return is_a($caught, "RuntimeException") ? "union" : "bad-type";
+} catch (Exception $fallback) {
+    return "fallback";
+}
+return "miss";');
+"#,
+    );
+    assert_eq!(out, "union");
+}
+
 /// Verifies eval-internal finally runs before returning from the fragment.
 #[test]
 fn test_eval_finally_runs_before_eval_return() {

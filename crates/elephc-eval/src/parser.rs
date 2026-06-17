@@ -1142,7 +1142,7 @@ impl Parser {
         Ok(vec![EvalStmt::Throw(expr)])
     }
 
-    /// Parses `try { ... } catch (Throwable $name) { ... } finally { ... }` statements.
+    /// Parses `try { ... } catch (Type|Other $name) { ... } finally { ... }` statements.
     fn parse_try_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         let body = self.parse_block()?;
@@ -1167,11 +1167,11 @@ impl Parser {
         }])
     }
 
-    /// Parses one single-type `catch (ClassName [$name]) { ... }` clause.
+    /// Parses one `catch (ClassName|Other [$name]) { ... }` clause.
     fn parse_catch_clause(&mut self) -> Result<EvalCatch, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let class_name = self.parse_catch_type()?;
+        let class_names = self.parse_catch_types()?;
         let var_name = if let TokenKind::DollarIdent(var_name) = self.current() {
             let var_name = var_name.clone();
             self.advance();
@@ -1182,19 +1182,21 @@ impl Parser {
         self.expect(TokenKind::RParen)?;
         let body = self.parse_block()?;
         Ok(EvalCatch {
-            class_name,
+            class_names,
             var_name,
             body,
         })
     }
 
-    /// Parses a single catch type and keeps union catches outside the current EvalIR subset.
-    fn parse_catch_type(&mut self) -> Result<String, EvalParseError> {
+    /// Parses one or more unioned catch types in source order.
+    fn parse_catch_types(&mut self) -> Result<Vec<String>, EvalParseError> {
         let class_name = self.parse_qualified_name()?;
-        if matches!(self.current(), TokenKind::Pipe) {
-            return Err(EvalParseError::UnsupportedConstruct);
+        let mut class_names = vec![self.resolve_class_name(class_name)];
+        while self.consume(TokenKind::Pipe) {
+            let class_name = self.parse_qualified_name()?;
+            class_names.push(self.resolve_class_name(class_name));
         }
-        Ok(self.resolve_class_name(class_name))
+        Ok(class_names)
     }
 
     /// Parses a dynamic function declaration parameter list after `(`.
@@ -4031,7 +4033,7 @@ function dyn() { return alias(); }"#,
                     )))],
                 })],
                 catches: vec![EvalCatch {
-                    class_name: "Throwable".to_string(),
+                    class_names: vec!["Throwable".to_string()],
                     var_name: Some("caught".to_string()),
                     body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
                 }],
@@ -4057,7 +4059,7 @@ try {
             &[EvalStmt::Try {
                 body: vec![EvalStmt::Throw(EvalExpr::LoadVar("e".to_string()))],
                 catches: vec![EvalCatch {
-                    class_name: "Throwable".to_string(),
+                    class_names: vec!["Throwable".to_string()],
                     var_name: Some("caught".to_string()),
                     body: vec![EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
                         "caught".to_string()
@@ -4089,7 +4091,7 @@ try {
                     )))],
                 })],
                 catches: vec![EvalCatch {
-                    class_name: "Throwable".to_string(),
+                    class_names: vec!["Throwable".to_string()],
                     var_name: None,
                     body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
                 }],
@@ -4119,7 +4121,7 @@ try {
                     )))],
                 })],
                 catches: vec![EvalCatch {
-                    class_name: "Exception".to_string(),
+                    class_names: vec!["Exception".to_string()],
                     var_name: Some("caught".to_string()),
                     body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
                 }],
@@ -4128,18 +4130,33 @@ try {
         );
     }
 
-    /// Verifies union catch type narrowing stays explicit until runtime matching exists.
+    /// Verifies union catch type narrowing lowers all source-order types into one clause.
     #[test]
-    fn parse_fragment_rejects_union_eval_catch_type() {
-        assert_eq!(
-            parse_fragment(
-                br#"try {
+    fn parse_fragment_accepts_union_eval_catch_type() {
+        let program = parse_fragment(
+            br#"try {
     throw new Exception("eval boom");
 } catch (Throwable|Exception $caught) {
     return 1;
 }"#,
-            ),
-            Err(EvalParseError::UnsupportedConstruct)
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Try {
+                body: vec![EvalStmt::Throw(EvalExpr::NewObject {
+                    class_name: "Exception".to_string(),
+                    args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                        "eval boom".to_string()
+                    )))],
+                })],
+                catches: vec![EvalCatch {
+                    class_names: vec!["Throwable".to_string(), "Exception".to_string()],
+                    var_name: Some("caught".to_string()),
+                    body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
+                }],
+                finally_body: Vec::new(),
+            }]
         );
     }
 
