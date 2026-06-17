@@ -3107,6 +3107,9 @@ echo is_numeric("-5"); echo is_numeric("3.14");
 echo is_numeric("abc") ? "bad" : "N";
 echo is_numeric(true) ? "bad" : "B";
 echo is_resource(1) ? "bad" : "R";
+$object = json_decode("{}");
+echo is_object($object) ? "O" : "bad";
+echo is_object([1]) ? "bad" : "o";
 echo is_nan(fdiv(0, 0)) ? "N" : "bad";
 echo is_infinite(fdiv(1, 0)) ? "I" : "bad";
 echo is_infinite(fdiv(-1, 0)) ? "i" : "bad";
@@ -3121,13 +3124,15 @@ echo call_user_func("is_iterable", [1]);
 echo call_user_func_array("is_iterable", ["value" => 1]) ? "bad" : "t";
 echo call_user_func("is_resource", $h);
 echo call_user_func_array("is_resource", [$h]);
+echo call_user_func("is_object", $object) ? "O" : "bad";
+echo call_user_func_array("is_object", ["value" => 1]) ? "bad" : "o";
 echo call_user_func("is_nan", fdiv(0, 0)) ? "N" : "bad";
 echo call_user_func_array("is_finite", [42]) ? "F" : "bad";
-echo function_exists("is_double"); echo function_exists("is_numeric"); echo function_exists("is_resource");
+echo function_exists("is_double"); echo function_exists("is_numeric"); echo function_exists("is_object"); echo function_exists("is_resource");
 echo function_exists("is_nan"); echo function_exists("is_finite"); echo function_exists("is_iterable"); echo function_exists("is_infinite");');
 "#,
     );
-    assert_eq!(out, "1111111111111Tok11111NBRNIiFfH:1111t11NF1111111");
+    assert_eq!(out, "1111111111111Tok11111NBROoNIiFfH:1111t11OoNF11111111");
 }
 
 /// Verifies eval scalar cast builtins return boxed Mixed cells through direct and callable calls.

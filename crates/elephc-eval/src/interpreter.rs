@@ -1860,7 +1860,7 @@ fn eval_positional_expr_call(
         | "is_writeable" => eval_builtin_file_probe(name, args, context, scope, values),
         "is_array" | "is_bool" | "is_double" | "is_finite" | "is_float" | "is_infinite"
         | "is_int" | "is_integer" | "is_iterable" | "is_long" | "is_nan" | "is_null"
-        | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
+        | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_string" => {
             eval_builtin_type_predicate(name, args, context, scope, values)
         }
         "ip2long" => eval_builtin_ip2long(args, context, scope, values),
@@ -2337,6 +2337,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "is_nan"
             | "is_null"
             | "is_numeric"
+            | "is_object"
             | "is_real"
             | "is_resource"
             | "is_string"
@@ -2579,8 +2580,10 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         }
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
         | "is_finite" | "is_float" | "is_infinite" | "is_int" | "is_integer"
-        | "is_iterable" | "is_long" | "is_nan" | "is_null" | "is_numeric" | "is_real"
-        | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
+        | "is_iterable" | "is_long" | "is_nan" | "is_null" | "is_numeric" | "is_object"
+        | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => {
+            Some(&["value"])
+        }
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_exists" => Some(&["class", "autoload"]),
@@ -3794,7 +3797,7 @@ fn eval_builtin_with_values(
         }
         "is_array" | "is_bool" | "is_double" | "is_finite" | "is_float" | "is_infinite"
         | "is_int" | "is_integer" | "is_iterable" | "is_long" | "is_nan" | "is_null"
-        | "is_numeric" | "is_real" | "is_resource" | "is_string" => {
+        | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_string" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
@@ -12476,6 +12479,7 @@ fn eval_type_predicate_result(
         "is_bool" => tag == EVAL_TAG_BOOL,
         "is_null" => tag == EVAL_TAG_NULL,
         "is_array" | "is_iterable" => matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC),
+        "is_object" => tag == EVAL_TAG_OBJECT,
         "is_resource" => tag == EVAL_TAG_RESOURCE,
         "is_nan" => eval_float_value(value, values)?.is_nan(),
         "is_infinite" => eval_float_value(value, values)?.is_infinite(),
@@ -20876,6 +20880,8 @@ echo is_numeric("-5"); echo is_numeric("3.14");
 echo is_numeric("abc") ? "bad" : "N";
 echo is_numeric(true) ? "bad" : "B";
 echo is_resource(1) ? "bad" : "R";
+echo is_object($object) ? "O" : "bad";
+echo is_object([1]) ? "bad" : "o";
 echo is_nan(fdiv(0, 0)) ? "N" : "bad";
 echo is_infinite(fdiv(1, 0)) ? "I" : "bad";
 echo is_infinite(fdiv(-1, 0)) ? "i" : "bad";
@@ -20886,7 +20892,9 @@ echo call_user_func_array("is_array", [[1]]);
 echo call_user_func("is_numeric", "12");
 echo call_user_func("is_iterable", [1]);
 echo call_user_func_array("is_iterable", ["value" => 1]) ? "bad" : "t";
-echo function_exists("is_numeric"); echo function_exists("is_resource");
+echo call_user_func("is_object", $object) ? "O" : "bad";
+echo call_user_func_array("is_object", ["value" => 1]) ? "bad" : "o";
+echo function_exists("is_numeric"); echo function_exists("is_object"); echo function_exists("is_resource");
 echo function_exists("is_double"); echo function_exists("is_nan"); echo function_exists("is_finite");
 echo function_exists("is_iterable");
 return function_exists("is_infinite");"#,
@@ -20894,12 +20902,14 @@ return function_exists("is_infinite");"#,
         .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
+        let object = values.alloc(FakeValue::Object(Vec::new()));
+        scope.set("object".to_string(), object, ScopeCellOwnership::Borrowed);
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(
             values.output,
-            "1111111111111Tok11111NBRNIiFf:1111t111111"
+            "1111111111111Tok11111NBROoNIiFf:1111tOo1111111"
         );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
