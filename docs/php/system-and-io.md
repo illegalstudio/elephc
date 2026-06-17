@@ -109,7 +109,9 @@ Eval stream introspection calls include `stream_get_filters()`, `stream_get_tran
 
 Eval SPL class introspection supports `spl_classes()` with direct, callable, and
 `function_exists()` dispatch paths. It returns the same static registry snapshot
-documented in [SPL](spl.md).
+documented in [SPL](spl.md). Eval SPL object identity supports
+`spl_object_id()` and `spl_object_hash()` for object cells through direct,
+named-argument, callable, and `function_exists()` paths.
 
 Eval host-name calls include `gethostname()`, `gethostbyname()`, and `gethostbyaddr()` with direct, named-argument, callable, and `function_exists()` dispatch paths. `gethostbyname()` resolves IPv4 host names and returns the original string when no IPv4 address is available. `gethostbyaddr()` reverse-resolves IPv4 dotted-quad addresses, returns the original address when no record exists, and returns `false` for malformed addresses.
 

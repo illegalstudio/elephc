@@ -421,6 +421,9 @@ pub trait RuntimeValueOps {
     /// Returns the concrete boxed Mixed runtime tag after unwrapping nested Mixed cells.
     fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 
+    /// Returns the unboxed object payload pointer used for PHP object identity.
+    fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus>;
+
     /// Releases one owned runtime cell that is no longer held by the eval scope.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
@@ -1943,6 +1946,9 @@ fn eval_positional_expr_call(
         "sleep" => eval_builtin_sleep(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "spl_classes" => eval_builtin_spl_classes(args, values),
+        "spl_object_id" | "spl_object_hash" => {
+            eval_builtin_spl_object_identity(name, args, context, scope, values)
+        }
         "sscanf" => eval_builtin_sscanf(args, context, scope, values),
         "sprintf" | "printf" => eval_builtin_sprintf_like(name, args, context, scope, values),
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
@@ -2530,6 +2536,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "sort"
             | "sqrt"
             | "spl_classes"
+            | "spl_object_hash"
+            | "spl_object_id"
             | "sscanf"
             | "sprintf"
             | "strcasecmp"
@@ -2801,6 +2809,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "round" => Some(&["num", "precision"]),
         "sleep" => Some(&["seconds"]),
         "spl_classes" => Some(&[]),
+        "spl_object_id" | "spl_object_hash" => Some(&["object"]),
         "sscanf" => Some(&["string", "format", "vars"]),
         "sprintf" | "printf" => Some(&["format", "values"]),
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
@@ -3512,6 +3521,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_spl_classes_result(values)?
+        }
+        "spl_object_id" | "spl_object_hash" => {
+            let [object] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_spl_object_identity_result(name, *object, values)?
         }
         "sscanf" => {
             let [input, format, ..] = evaluated_args else {
@@ -12885,6 +12900,38 @@ fn eval_get_class_result(
     values.object_class_name(object)
 }
 
+/// Evaluates PHP's SPL object identity builtins over one eval object expression.
+fn eval_builtin_spl_object_identity(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [object] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let object = eval_expr(object, context, scope, values)?;
+    eval_spl_object_identity_result(name, object, values)
+}
+
+/// Returns the unboxed object-payload identity in the native SPL builtin spelling.
+fn eval_spl_object_identity_result(
+    name: &str,
+    object: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.type_tag(object)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let identity = values.object_identity(object)? as i64;
+    match name {
+        "spl_object_id" => values.int(identity),
+        "spl_object_hash" => values.string(&identity.to_string()),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
 /// Evaluates PHP's `get_parent_class(...)` over one eval object or class-name expression.
 fn eval_builtin_get_parent_class(
     args: &[EvalExpr],
@@ -16037,6 +16084,14 @@ mod tests {
                 FakeValue::Resource(_) => EVAL_TAG_RESOURCE,
                 FakeValue::Null => EVAL_TAG_NULL,
             })
+        }
+
+        /// Returns the fake object handle as a stable object identity.
+        fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+            match self.get(object) {
+                FakeValue::Object(_) | FakeValue::Iterator { .. } => Ok(object.as_ptr() as u64),
+                _ => Err(EvalStatus::RuntimeFatal),
+            }
         }
 
         /// Records fake releases without freeing handles needed for assertions.
@@ -20448,6 +20503,35 @@ return is_callable("spl_classes");"#,
             values.output,
             "61:AppendIterator:Throwable:exception:list:call:spread:1"
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval SPL object identity builtins are stable, unique, and callable.
+    #[test]
+    fn execute_program_dispatches_spl_object_identity_builtins() {
+        let program = parse_fragment(
+            br#"$a = new KnownClass();
+$b = new KnownClass();
+echo (spl_object_id($a) === spl_object_id($a)) ? "stable" : "drift";
+echo ":";
+echo (spl_object_id($a) !== spl_object_id($b)) ? "unique" : "same";
+echo ":";
+echo (spl_object_hash(object: $a) === spl_object_hash($a)) ? "hash" : "bad";
+echo ":";
+echo (call_user_func("spl_object_id", $a) === spl_object_id($a)) ? "call" : "bad";
+echo ":";
+echo (call_user_func_array("spl_object_hash", ["object" => $b]) === spl_object_hash($b)) ? "array" : "bad";
+echo ":";
+echo function_exists("spl_object_id");
+return function_exists("spl_object_hash");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "stable:unique:hash:call:array:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 

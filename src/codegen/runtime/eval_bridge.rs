@@ -658,6 +658,17 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the type-tag wrapper frame
     emitter.instruction("ret");                                                 // return the unboxed runtime tag to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_object_identity");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while unboxing the object cell
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across mixed_unbox
+    emitter.instruction("mov x29, sp");                                         // establish a stable object-identity wrapper frame
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unwrap nested Mixed cells to tag and object payload
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means PHP object
+    emitter.instruction("csel x0, x1, xzr, eq");                                // return the object payload pointer or zero on mismatch
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the object-identity wrapper frame
+    emitter.instruction("ret");                                                 // return the object identity pointer to Rust
+
     label_c_global(emitter, "__elephc_eval_value_cast_int");
     emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while casting and boxing the value
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across helper calls
@@ -1991,6 +2002,21 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells and return the concrete runtime tag
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the unboxed runtime tag to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_object_identity");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable object-identity wrapper frame
+    emitter.instruction("mov rax, rdi");                                        // pass the boxed Mixed argument to mixed_unbox
+    emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells to tag and object payload
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means PHP object
+    emitter.instruction("je __elephc_eval_value_object_identity_object_x86");   // return the payload pointer for object values
+    emitter.instruction("xor eax, eax");                                        // return zero for non-object values
+    emitter.instruction("jmp __elephc_eval_value_object_identity_done_x86");    // skip the object-payload result
+    emitter.label("__elephc_eval_value_object_identity_object_x86");
+    emitter.instruction("mov rax, rdi");                                        // return the unboxed object payload pointer
+    emitter.label("__elephc_eval_value_object_identity_done_x86");
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the object identity pointer to Rust
 
     label_c_global(emitter, "__elephc_eval_value_cast_int");
     emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer

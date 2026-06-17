@@ -82,6 +82,8 @@ unsafe extern "C" {
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_type_tag(value: *mut RuntimeCell) -> u64;
+    /// Returns the unboxed object payload pointer for object-tagged eval values.
+    fn __elephc_eval_value_object_identity(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);
     fn __elephc_eval_value_null() -> *mut RuntimeCell;
     fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
@@ -415,6 +417,16 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Returns the unboxed Mixed runtime tag for PHP type-predicate builtins.
     fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_type_tag(value.as_ptr()) })
+    }
+
+    /// Returns the unboxed object payload pointer for SPL object identity builtins.
+    fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        let identity = unsafe { __elephc_eval_value_object_identity(object.as_ptr()) };
+        if identity == 0 {
+            Err(EvalStatus::RuntimeFatal)
+        } else {
+            Ok(identity)
+        }
     }
 
     /// Releases one boxed Mixed cell through the generated runtime wrapper.

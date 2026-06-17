@@ -3185,6 +3185,31 @@ echo function_exists("settype");');
     assert_eq!(out, "string:42:boolean:false:1");
 }
 
+/// Verifies eval SPL object identity builtins inspect AOT object cells.
+#[test]
+fn test_eval_dispatches_spl_object_identity_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalObjectIdentityProbe {}
+
+eval('$a = new EvalObjectIdentityProbe();
+$b = new EvalObjectIdentityProbe();
+echo (spl_object_id($a) === spl_object_id($a)) ? "stable" : "drift";
+echo ":";
+echo (spl_object_id($a) !== spl_object_id($b)) ? "unique" : "same";
+echo ":";
+echo (spl_object_hash(object: $a) === spl_object_hash($a)) ? "hash" : "bad";
+echo ":";
+echo (call_user_func("spl_object_id", $a) === spl_object_id($a)) ? "call" : "bad";
+echo ":";
+echo (call_user_func_array("spl_object_hash", ["object" => $b]) === spl_object_hash($b)) ? "array" : "bad";
+echo ":";
+echo function_exists("spl_object_id"); echo function_exists("spl_object_hash");');
+"#,
+    );
+    assert_eq!(out, "stable:unique:hash:call:array:11");
+}
+
 /// Verifies eval `gettype()` maps boxed Mixed runtime tags to PHP type names.
 #[test]
 fn test_eval_dispatches_gettype_builtin_call() {

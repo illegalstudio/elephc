@@ -39,7 +39,10 @@ Eval `var_dump()` formats scalar tags and array contents inside the interpreter,
 
 Eval SPL class introspection dispatch includes `spl_classes()` through direct
 calls, callable dispatch, and `function_exists()` probes. The interpreter builds
-the same static class-name snapshot as the native SPL builtin.
+the same static class-name snapshot as the native SPL builtin. Eval SPL object
+identity dispatch includes `spl_object_id()` and `spl_object_hash()` by deriving
+the integer or decimal-string identity from the unboxed object payload after the
+normal runtime tag check.
 
 Eval `ucwords()` performs ASCII word-start capitalization and honors the optional `separators` argument.
 
