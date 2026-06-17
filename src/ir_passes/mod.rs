@@ -19,6 +19,7 @@ mod driver;
 mod identity_arith;
 mod intervals;
 mod liveness;
+mod peephole;
 mod regalloc;
 mod rewrite;
 

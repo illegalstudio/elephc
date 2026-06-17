@@ -230,9 +230,9 @@ Do not list every builtin in this guide. `src/types/checker/builtins/catalog.rs`
 
 IR-level transformations run after EIR lowering/validation through a fixed-point driver, not in the AST optimizer.
 
-1. Implement the `IrPass` trait (`name()`, `run(&mut Function) -> bool`) in a new `src/ir_passes/<pass>.rs`; `run` mutates the function in place and returns whether it changed anything.
+1. Implement the `IrPass` trait (`name()`, `run(&mut Function, &mut DataPool) -> bool`) in a new `src/ir_passes/<pass>.rs`; `run` mutates the function in place and returns whether it changed anything. The `DataPool` is the module's shared literal pool for passes that intern new constants (e.g. peephole string-literal concat folding); ignore it (`_data`) otherwise.
 2. Register the pass in `default_passes()` in `src/ir_passes/driver.rs`. Order matters: the driver re-runs the whole set per function until none reports a change, capped by `MAX_PASS_ITERATIONS`.
-3. Reuse `src/ir_passes/rewrite.rs::replace_all_uses` for value redirection (RAUW) instead of re-walking operands/terminators. Keep rewrites dominance-safe and PHP-equivalent; cross-check edge cases (division by zero, signed-zero/`NaN` floats) with `php -r`.
+3. Reuse `src/ir_passes/rewrite.rs` for value redirection (`replace_all_uses` for RAUW) and the shared fold helpers (`resolve_chains`, `neutralize_to_nop`, `defining_instruction`, `count_value_uses`) instead of re-walking operands/terminators. Keep rewrites dominance-safe and PHP-equivalent; cross-check edge cases (division by zero, signed-zero/`NaN` floats) with `php -r`.
 4. The driver re-validates each function with `validate_function` after every pass in debug/test builds and panics (naming the pass) on malformed IR or non-convergence; both guards compile out of `--release`. Rely on this during development.
 5. Add unit tests under `src/ir_passes/tests/` (hand-built EIR via `crate::ir::Builder`) and end-to-end tests under `tests/codegen/optimizer/`. In e2e fixtures, use runtime-unknown values (e.g. `$argc`) so the targeted IR construct survives AST-level folding and actually reaches EIR.
 6. Passes are gated by `--ir-opt=on|off` / `--no-ir-opt` (env `ELEPHC_IR_OPT`), default on. Behavior must be identical with the flag on or off except for performance; verify with `--emit-ir` and `--emit-ir --no-ir-opt`.
@@ -521,6 +521,29 @@ sidebar:
 - **Never remove completed items** from a version section. Mark them as `[x]` and leave them under the version they belong to. This preserves the history of what was delivered in each release.
 - New work items go under the appropriate future version.
 - When all items in a version are completed, the version is considered done — do not move items elsewhere.
+
+## Changelog management
+
+`CHANGELOG.md` records every released version, newest first, in *Keep a Changelog* style.
+
+When cutting a release:
+
+- Add a new section at the top (under the header), above the previous version:
+
+  ```
+  ## [X.Y.Z] - YYYY-MM-DD
+  - One terse, user-facing bullet per notable change.
+  ```
+
+  Keep entries concise (usually one or two bullets), describe what shipped — not the implementation — and use the absolute release date.
+- Add a matching compare link at the **bottom** of the file, also newest first, immediately above the previous version's link:
+
+  ```
+  [X.Y.Z]: https://github.com/illegalstudio/elephc/compare/v<previous>...vX.Y.Z
+  ```
+
+  The first-ever release uses the `releases/tag/v0.1.0` form instead of a compare range. Every version section must have its link; do not leave the link out.
+- The changelog version, the `[X.Y.Z]` link, and `version` in `Cargo.toml` must agree. The `Cargo.toml` bump is a separate `chore: bump version to X.Y.Z` commit.
 
 ## Conventions
 

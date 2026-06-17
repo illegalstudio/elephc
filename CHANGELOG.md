@@ -3,6 +3,9 @@
 All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
+## [0.24.3] - 2026-06-17
+- EIR peephole optimization pass: box/unbox cancellation, scalar load/store forwarding, paired acquire/release cancellation, string-literal concat folding, and redundant move/borrow cleanup.
+
 ## [0.24.2] - 2026-06-17
 - Add a fixed-point EIR optimization pass driver with identity arithmetic folding.
 - Document the pass driver and add the Compiling docs section.
@@ -374,6 +377,7 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
+[0.24.3]: https://github.com/illegalstudio/elephc/compare/v0.24.2...v0.24.3
 [0.24.2]: https://github.com/illegalstudio/elephc/compare/v0.24.1...v0.24.2
 [0.24.1]: https://github.com/illegalstudio/elephc/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/illegalstudio/elephc/compare/v0.23.14...v0.24.0

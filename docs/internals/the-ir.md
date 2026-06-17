@@ -875,8 +875,11 @@ IR-level transformations live — the rewrites the AST optimizer could not expre
 because they need value identity, basic blocks, or dominance.
 
 A pass implements the `IrPass` trait: a stable `name()` and a
-`run(&mut Function) -> bool` that mutates the function in place and reports
-whether it changed anything. The driver runs the registered passes over each
+`run(&mut Function, &mut DataPool) -> bool` that mutates the function in place and
+reports whether it changed anything. The `DataPool` is the module's shared
+literal pool, threaded through so passes that materialize new constants (the
+peephole string-literal fold interns the joined string) can do so; passes that
+need no new literals ignore it. The driver runs the registered passes over each
 function-like body (functions, methods, closures, trampolines, invokers)
 repeatedly until a full sweep reports no change, capped at a fixed iteration
 budget.
@@ -912,6 +915,38 @@ to trap at runtime, and float additive-zero and `x * 0.0` are excluded because
 signed zero and `NaN` make them observable. Fold-to-operand chains within one
 sweep (`a = x + 0; b = a * 1`) are resolved transitively so a neutralized,
 dead value is never used as a replacement target.
+
+### Peephole Patterns
+
+The second registered transform (`src/ir_passes/peephole/`) applies local
+rewrites to the shape of lowered EIR. Each pattern collects rewrite intents into
+a shared accumulator (a fold-to-operand RAUW map, instructions to neutralize, and
+`str_concat` instructions to convert to interned `const_str`), and a single apply
+phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
+`neutralize_to_nop` with the identity pass.
+
+- **Box/unbox cancellation** — `unbox(box(x)) → x`, only for scalar (`NonHeap`)
+  payloads with matching ir/php type, so boxing a heap value (where unbox
+  extracts a borrowed reference) is never folded.
+- **Redundant `move`/`borrow`** — these pure forwarding ops fold to their operand
+  only when the result shares the operand's ownership and type, so RAUW cannot
+  shift cleanup responsibility. (Current lowering does not emit them; the rewrite
+  keeps them correct if it ever does.)
+- **Load/store forwarding and dead stores** — a per-block value-numbering tracks
+  the value resident in each scalar (`NonHeap`) `PhpLocal`/`HiddenTemp`/
+  `NamedArgTemp` slot. A `load_local` of a slot with a known resident value folds
+  to it; a `store_local` of the resident value is dropped. Any instruction naming
+  the slot (unset, ref-cell promote/alias/release/store) invalidates it, and state
+  resets at block boundaries — writes through aliases are never crossed. By-ref
+  locals use ref cells, not plain load/store, so plain scalar slots are not
+  aliased.
+- **Paired acquire/release cancellation** — an `acquire` whose result is used
+  exactly once, by its `release`, drops both. The single-use guard makes this
+  refcount-neutral on every path regardless of distance between the two ops.
+- **String-literal concat folding** — `str_concat(const_str a, const_str b)`
+  interns `a ++ b` into the data pool and becomes a single `const_str` marked
+  `persistent` so cleanup never frees the literal. Nested concats converge across
+  driver sweeps.
 
 ## AST Lowering Catalogue
 

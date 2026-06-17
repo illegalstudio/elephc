@@ -17,9 +17,10 @@
 //!   test builds". In release, hitting the iteration cap simply stops and
 //!   proceeds with the current IR.
 
-use crate::ir::{Function, Module};
+use crate::ir::{DataPool, Function, Module};
 
 use super::identity_arith::IdentityArith;
+use super::peephole::Peephole;
 
 /// Maximum fixed-point sweeps before the driver gives up on a function. Real
 /// passes are idempotent and converge in a couple of sweeps; exceeding this cap
@@ -35,50 +36,65 @@ pub trait IrPass {
     fn name(&self) -> &'static str;
 
     /// Runs the pass over one function, returning true if it changed the IR.
-    fn run(&self, function: &mut Function) -> bool;
+    /// `data` is the module's shared literal pool, used by passes that materialize
+    /// new constants (e.g. peephole string-literal concat folding interns the
+    /// folded string); passes that need no new literals ignore it.
+    fn run(&self, function: &mut Function, data: &mut DataPool) -> bool;
 }
 
 /// Builds the ordered set of transformation passes run on every function. Later
-/// v0.25.x passes (peephole, DCE, branch simplification, CSE, LICM, …) register
-/// here.
+/// v0.25.x passes (DCE, branch simplification, CSE, LICM, …) register here.
 fn default_passes() -> Vec<Box<dyn IrPass>> {
-    vec![Box::new(IdentityArith)]
+    vec![Box::new(IdentityArith), Box::new(Peephole)]
 }
 
 /// Runs the default pass pipeline over every function-like body in the module.
+///
+/// The module is destructured so the function tables and the shared literal
+/// `data` pool can be borrowed disjointly: each function is mutated in place
+/// while passes intern new literals into the same pool.
 pub fn optimize_module(module: &mut Module) {
     let passes = default_passes();
     if passes.is_empty() {
         return;
     }
-    for function in all_functions_mut(module) {
-        run_function_passes(function, &passes);
-    }
-}
-
-/// Iterates every function-like body in the module mutably, mirroring the
-/// read-only `all_lowered_functions` traversal used during lowering.
-fn all_functions_mut(module: &mut Module) -> impl Iterator<Item = &mut Function> {
-    module
-        .functions
+    let Module {
+        functions,
+        class_methods,
+        closures,
+        fiber_wrappers,
+        callback_wrappers,
+        extern_callback_trampolines,
+        runtime_callable_invokers,
+        data,
+        ..
+    } = module;
+    let all_functions = functions
         .iter_mut()
-        .chain(module.class_methods.iter_mut())
-        .chain(module.closures.iter_mut())
-        .chain(module.fiber_wrappers.iter_mut())
-        .chain(module.callback_wrappers.iter_mut())
-        .chain(module.extern_callback_trampolines.iter_mut())
-        .chain(module.runtime_callable_invokers.iter_mut())
+        .chain(class_methods.iter_mut())
+        .chain(closures.iter_mut())
+        .chain(fiber_wrappers.iter_mut())
+        .chain(callback_wrappers.iter_mut())
+        .chain(extern_callback_trampolines.iter_mut())
+        .chain(runtime_callable_invokers.iter_mut());
+    for function in all_functions {
+        run_function_passes(function, &passes, data);
+    }
 }
 
 /// Runs the given passes over one function to a fixed point. After each pass, in
 /// debug/test builds, the function is re-validated and any malformed IR panics
 /// naming the offending pass. Non-convergence within the cap panics in debug and
 /// stops (keeping current IR) in release.
-pub fn run_function_passes(function: &mut Function, passes: &[Box<dyn IrPass>]) {
+pub fn run_function_passes(
+    function: &mut Function,
+    passes: &[Box<dyn IrPass>],
+    data: &mut DataPool,
+) {
     for _ in 0..MAX_PASS_ITERATIONS {
         let mut changed = false;
         for pass in passes {
-            let pass_changed = pass.run(function);
+            let pass_changed = pass.run(function, data);
             #[cfg(debug_assertions)]
             if let Err(error) = crate::ir::validate_function(function) {
                 panic!(

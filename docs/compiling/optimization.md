@@ -74,10 +74,34 @@ elephc --emit-ir --no-ir-opt app.php
 
 This is a peephole-level optimization. It speeds up code that contains redundant
 identity operations in hot paths and is a no-op on code that does not — unlike
-register allocation, which helps broadly. Later releases add more EIR passes
-(peephole, dead-store elimination, branch simplification, common-subexpression
-elimination, loop-invariant code motion, small-function inlining) to this same
-driver.
+register allocation, which helps broadly.
+
+### Peephole patterns
+
+The second registered pass applies local rewrites that clean up the shape of
+lowered EIR. Each is refcount-balanced and produces output identical to PHP:
+
+| Pattern | Rewrite |
+|---|---|
+| Box/unbox cancellation | `unbox(box(x))` → `x` for scalar (`NonHeap`) payloads |
+| Redundant `move`/`borrow` | a forwarding op whose result has the same ownership and type as its operand folds to the operand |
+| Load/store forwarding | a `load` of a scalar local right after a `store` to it reads the stored value directly |
+| Dead store | storing a scalar local the value it already holds is removed |
+| Acquire/release cancellation | an `acquire` whose result is consumed only by its `release` drops both |
+| String-literal concat folding | `concat("a", "b")` → the single literal `"ab"` |
+
+Load/store forwarding and dead-store removal apply only to non-aliased scalar
+locals, so reference semantics and copy-on-write are never affected. The
+remaining patterns only fold when ownership and type are preserved, so cleanup
+and refcounting stay balanced.
+
+You can see the effect with [`--emit-ir`](output-and-diagnostics.md#--emit-ir):
+`$x = $argc; echo $x;` forwards the load so the `echo` reads the stored value and
+the `load_local` becomes a `nop`.
+
+Later releases add more EIR passes (dead-store elimination, branch
+simplification, common-subexpression elimination, loop-invariant code motion,
+small-function inlining) to this same driver.
 
 ## Register allocation
 

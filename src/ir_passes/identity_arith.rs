@@ -20,10 +20,10 @@
 
 use std::collections::HashMap;
 
-use crate::ir::{Function, Immediate, InstId, Instruction, IrType, Op, ValueDef, ValueId};
+use crate::ir::{Function, Immediate, InstId, Instruction, IrType, Op, ValueId};
 
 use super::driver::IrPass;
-use super::rewrite::replace_all_uses;
+use super::rewrite::{defining_instruction, neutralize_to_nop, replace_all_uses, resolve_chains};
 
 /// Identity arithmetic folding pass. See the module docs for the rewrite rules.
 pub struct IdentityArith;
@@ -35,7 +35,9 @@ impl IrPass for IdentityArith {
     }
 
     /// Folds algebraic identities in one function, returning true on any change.
-    fn run(&self, function: &mut Function) -> bool {
+    /// The literal pool is unused: every fold reuses an existing operand or the
+    /// in-place `const_i64 0` rewrite, so no new literal is interned.
+    fn run(&self, function: &mut Function, _data: &mut crate::ir::DataPool) -> bool {
         // Phase 1: detect folds without mutating (immutable borrow of operands).
         let mut to_operand: Vec<(InstId, ValueId, ValueId)> = Vec::new();
         let mut to_zero: Vec<InstId> = Vec::new();
@@ -230,44 +232,6 @@ fn is_const_f64(function: &Function, value: ValueId, expected: f64) -> bool {
             if inst.op == Op::ConstF64
                 && matches!(inst.immediate, Some(Immediate::F64(n)) if n == expected)
     )
-}
-
-/// Returns the instruction that defines `value`, if it is instruction-defined.
-fn defining_instruction(function: &Function, value: ValueId) -> Option<&Instruction> {
-    let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
-        return None;
-    };
-    function.instruction(inst)
-}
-
-/// Resolves a fold-to-operand map so each value maps to its terminal target,
-/// chasing chains like `a -> b -> x` down to `x`. SSA forward-definition ordering
-/// makes cycles impossible; the length guard is a defensive backstop.
-fn resolve_chains(raw: &HashMap<ValueId, ValueId>) -> HashMap<ValueId, ValueId> {
-    let mut resolved = HashMap::with_capacity(raw.len());
-    for (&key, &start) in raw {
-        let mut target = start;
-        let mut steps = 0;
-        while let Some(&next) = raw.get(&target) {
-            target = next;
-            steps += 1;
-            if steps > raw.len() {
-                break;
-            }
-        }
-        resolved.insert(key, target);
-    }
-    resolved
-}
-
-/// Neutralizes a folded instruction into a `Nop`, preserving its result value so
-/// the value table stays consistent while clearing operands, immediate, and
-/// effects to match `Nop`.
-fn neutralize_to_nop(inst: &mut Instruction) {
-    inst.op = Op::Nop;
-    inst.operands.clear();
-    inst.immediate = None;
-    inst.effects = Op::Nop.default_effects();
 }
 
 /// Converts a folded instruction in place into `ConstI64 0`, keeping its result
