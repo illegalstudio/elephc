@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
-use crate::eval_ir::EvalFunction;
+use crate::eval_ir::{EvalClass, EvalFunction};
 use crate::scope::ElephcEvalScope;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
@@ -86,12 +86,13 @@ impl NativeFunction {
 /// grow dynamic registries without exposing them to generated assembly.
 pub struct ElephcEvalContext {
     abi_version: u32,
-    classes: HashSet<String>,
+    classes: HashMap<String, EvalClass>,
     constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
     included_files: HashSet<String>,
+    dynamic_objects: HashMap<u64, String>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     pending_throw: Option<RuntimeCellHandle>,
@@ -108,12 +109,13 @@ impl ElephcEvalContext {
     pub fn new() -> Self {
         Self {
             abi_version: ABI_VERSION,
-            classes: HashSet::new(),
+            classes: HashMap::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
             included_files: HashSet::new(),
+            dynamic_objects: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             pending_throw: None,
@@ -131,12 +133,13 @@ impl ElephcEvalContext {
     pub fn for_abi_version(abi_version: u32) -> Self {
         Self {
             abi_version,
-            classes: HashSet::new(),
+            classes: HashMap::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
             included_files: HashSet::new(),
+            dynamic_objects: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             pending_throw: None,
@@ -154,19 +157,37 @@ impl ElephcEvalContext {
         self.abi_version
     }
 
-    /// Defines an eval-declared class name, failing if this context already has it.
-    pub fn define_class(&mut self, name: &str) -> bool {
-        let key = normalize_class_name(name);
-        if self.classes.contains(&key) {
+    /// Defines an eval-declared class, failing if this context already has it.
+    pub fn define_class(&mut self, class: EvalClass) -> bool {
+        let key = normalize_class_name(class.name());
+        if self.classes.contains_key(&key) {
             return false;
         }
-        self.classes.insert(key);
+        self.classes.insert(key, class);
         true
     }
 
     /// Returns true when this eval context has a dynamic class with the requested name.
     pub fn has_class(&self, name: &str) -> bool {
-        self.classes.contains(&normalize_class_name(name))
+        self.classes.contains_key(&normalize_class_name(name))
+    }
+
+    /// Returns a dynamic eval class by PHP case-insensitive class name.
+    pub fn class(&self, name: &str) -> Option<&EvalClass> {
+        self.classes.get(&normalize_class_name(name))
+    }
+
+    /// Records that one runtime object handle was created for an eval-declared class.
+    pub fn register_dynamic_object(&mut self, identity: u64, class_name: &str) {
+        self.dynamic_objects
+            .insert(identity, normalize_class_name(class_name));
+    }
+
+    /// Returns the dynamic eval class metadata associated with one object identity.
+    pub fn dynamic_object_class(&self, identity: u64) -> Option<&EvalClass> {
+        self.dynamic_objects
+            .get(&identity)
+            .and_then(|class_key| self.classes.get(class_key))
     }
 
     /// Defines an eval dynamic constant value, failing if the name is invalid or already present.

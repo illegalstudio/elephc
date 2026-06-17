@@ -1101,7 +1101,11 @@ mod tests {
     #[test]
     fn dynamic_class_exists_reports_declared_eval_class() {
         let mut ctx = ElephcEvalContext::new();
-        assert!(ctx.define_class("DynClassProbe"));
+        assert!(ctx.define_class(crate::eval_ir::EvalClass::new(
+            "DynClassProbe",
+            Vec::new(),
+            Vec::new()
+        )));
         let existing = b"DynClassProbe";
         let qualified = b"\\DynClassProbe";
         let folded = b"dynclassprobe";

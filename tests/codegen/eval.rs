@@ -4586,16 +4586,27 @@ eval('class dynevalaotclassdup {}');
     );
 }
 
-/// Verifies non-empty eval class declarations remain unsupported until dynamic class bodies exist.
+/// Verifies eval-declared classes support public properties, constructors, and methods.
 #[test]
-fn test_eval_unsupported_non_empty_class_declaration_fails() {
-    let err = compile_and_run_expect_failure(
-        "<?php eval('class DynEvalUnsupported { public int $x = 1; }');",
+fn test_eval_declared_class_constructs_object_with_method() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalSupported {
+    public int $x = 1;
+    public function __construct($x) { $this->x = $x; }
+    public function bump($n) { $this->x = $this->x + $n; return $this->x; }
+}');
+echo eval('$box = new DynEvalSupported(5);
+echo get_class($box) . ":";
+echo $box->bump(4) . ":";
+echo is_a($box, "DynEvalSupported") ? "Y" : "N";
+$call = [$box, "bump"];
+echo call_user_func($call, 1) . ":";
+echo call_user_func_array($call, [2]) . ":";
+return $box->x;');
+"#,
     );
-    assert!(
-        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-        "stderr did not contain eval unsupported diagnostic: {err}"
-    );
+    assert_eq!(out, "DynEvalSupported:9:Y10:12:12");
 }
 
 /// Verifies eval can construct an AOT class with no declared constructor.

@@ -14,8 +14,9 @@
 use crate::context::{ElephcEvalContext, NativeFunction};
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalCallArg, EvalCatch, EvalConst, EvalExpr, EvalFunction,
-    EvalMagicConst, EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalCatch, EvalClass, EvalClassMethod, EvalConst,
+    EvalExpr, EvalFunction, EvalMagicConst, EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase,
+    EvalUnaryOp,
 };
 use crate::json_validate::{self, JsonParseError, JsonParseErrorKind, JsonValue};
 use crate::parser::parse_fragment;
@@ -992,8 +993,8 @@ fn execute_stmt(
             scope,
             values,
         ),
-        EvalStmt::ClassDecl { name } => {
-            execute_class_decl_stmt(name, context, values)?;
+        EvalStmt::ClassDecl(class) => {
+            execute_class_decl_stmt(class, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::Foreach {
@@ -1199,21 +1200,132 @@ fn catch_type_matches_throwable(class_name: &str) -> bool {
     class_name.eq_ignore_ascii_case("Throwable")
 }
 
-/// Registers an empty eval-declared class name in the dynamic class table.
+/// Registers an eval-declared class in the dynamic class table.
 fn execute_class_decl_stmt(
-    name: &str,
+    class: &EvalClass,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let name = name.trim_start_matches('\\');
+    let name = class.name().trim_start_matches('\\');
     if context.has_class(name) || values.class_exists(name)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if context.define_class(name) {
+    if context.define_class(class.clone()) {
         Ok(())
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Creates a backing object for an eval-declared class and runs its constructor.
+fn eval_dynamic_class_new_object(
+    class: &EvalClass,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let object = values.new_object("stdClass")?;
+    let identity = values.object_identity(object)?;
+    context.register_dynamic_object(identity, class.name());
+    for property in class.properties() {
+        let value = if let Some(default) = property.default() {
+            eval_expr(default, context, caller_scope, values)?
+        } else {
+            values.null()?
+        };
+        values.property_set(object, property.name(), value)?;
+    }
+    if let Some(constructor) = class.method("__construct") {
+        eval_dynamic_method_with_values(
+            class.name(),
+            constructor,
+            object,
+            evaluated_args,
+            context,
+            values,
+        )?;
+    } else if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(object)
+}
+
+/// Dispatches a method call to an eval-declared class method or to the runtime hook.
+fn eval_method_call_result(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        return values.method_call(object, method_name, evaluated_args);
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return values.method_call(object, method_name, evaluated_args);
+    };
+    let class_name = class.name().to_string();
+    let method = class
+        .method(method_name)
+        .cloned()
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    eval_dynamic_method_with_values(
+        &class_name,
+        &method,
+        object,
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Executes one eval-declared class method with `$this` bound in method scope.
+fn eval_dynamic_method_with_values(
+    class_name: &str,
+    method: &EvalClassMethod,
+    object: RuntimeCellHandle,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args =
+        bind_evaluated_function_args(method.params(), positional_args(evaluated_args))?;
+    let mut method_scope = ElephcEvalScope::new();
+    method_scope.set("this", object, ScopeCellOwnership::Borrowed);
+    for (name, value) in method.params().iter().zip(evaluated_args) {
+        method_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);
+    }
+    let qualified_method_name =
+        format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
+    let static_names = static_var_names(method.body());
+    context.push_function(qualified_method_name.clone());
+    let result = execute_statements(method.body(), context, &mut method_scope, values);
+    let persist_result = persist_static_locals(
+        context,
+        &qualified_method_name,
+        &static_names,
+        &method_scope,
+        values,
+    );
+    context.pop_function();
+    persist_result?;
+    match result? {
+        EvalControl::None => values.null(),
+        EvalControl::Return(result) => Ok(result),
+        EvalControl::Throw(result) => {
+            context.set_pending_throw(result);
+            Err(EvalStatus::UncaughtThrowable)
+        }
+        EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Wraps positional method arguments into the shared dynamic-call binding shape.
+fn positional_args(args: Vec<RuntimeCellHandle>) -> Vec<EvaluatedCallArg> {
+    args.into_iter()
+        .map(|value| EvaluatedCallArg { name: None, value })
+        .collect()
 }
 
 /// Executes a PHP `static $name = expr;` declaration in the current eval scope.
@@ -1476,9 +1588,13 @@ fn eval_expr(
         } => eval_namespaced_const_fetch(name, fallback_name, context, values),
         EvalExpr::NewObject { class_name, args } => {
             let args = eval_method_call_arg_values(args, context, scope, values)?;
-            values
-                .new_object(class_name)
-                .and_then(|object| values.construct_object(object, args).map(|()| object))
+            if let Some(class) = context.class(class_name).cloned() {
+                eval_dynamic_class_new_object(&class, args, context, scope, values)
+            } else {
+                values
+                    .new_object(class_name)
+                    .and_then(|object| values.construct_object(object, args).map(|()| object))
+            }
         }
         EvalExpr::MethodCall {
             object,
@@ -1487,7 +1603,7 @@ fn eval_expr(
         } => {
             let object = eval_expr(object, context, scope, values)?;
             let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            values.method_call(object, method, evaluated_args)
+            eval_method_call_result(object, method, evaluated_args, context, values)
         }
         EvalExpr::NullCoalesce { value, default } => {
             let value = eval_expr(value, context, scope, values)?;
@@ -2272,34 +2388,53 @@ fn eval_builtin_is_a_relation(
     for arg in args {
         evaluated_args.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_is_a_relation_result(name, &evaluated_args, values)
+    eval_is_a_relation_result(name, &evaluated_args, context, values)
 }
 
 /// Evaluates materialized `is_a(...)` or `is_subclass_of(...)` builtin arguments.
 fn eval_is_a_relation_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (object_or_class, target_class, allow_string) = match evaluated_args {
         [object_or_class, target_class] => {
             (*object_or_class, *target_class, name == "is_subclass_of")
         }
-        [object_or_class, target_class, allow_string] => {
-            (*object_or_class, *target_class, values.truthy(*allow_string)?)
-        }
+        [object_or_class, target_class, allow_string] => (
+            *object_or_class,
+            *target_class,
+            values.truthy(*allow_string)?,
+        ),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     let target_class = values.string_bytes(target_class)?;
     let target_class = String::from_utf8(target_class).map_err(|_| EvalStatus::RuntimeFatal)?;
     let target_class = target_class.trim_start_matches('\\');
     let is_object = values.type_tag(object_or_class)? == 6;
-    let result = if is_object || allow_string {
-        values.object_is_a(object_or_class, target_class, name == "is_subclass_of")?
-    } else {
-        false
-    };
+    let result =
+        if is_object && dynamic_object_is_a(object_or_class, target_class, context, values)? {
+            !matches!(name, "is_subclass_of")
+        } else if is_object || allow_string {
+            values.object_is_a(object_or_class, target_class, name == "is_subclass_of")?
+        } else {
+            false
+        };
     values.bool_value(result)
+}
+
+/// Returns whether an eval-created object matches a dynamic class name exactly.
+fn dynamic_object_is_a(
+    object: RuntimeCellHandle,
+    target_class: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    Ok(context
+        .dynamic_object_class(identity)
+        .is_some_and(|class| class.name().eq_ignore_ascii_case(target_class)))
 }
 
 /// Evaluates PHP's `isset(...)` language construct over eval-visible values.
@@ -3021,7 +3156,7 @@ fn eval_evaluated_callable_with_values(
             eval_callable_with_values(name, evaluated_args, context, values)
         }
         EvaluatedCallable::ObjectMethod { object, method } => {
-            values.method_call(*object, method, evaluated_args)
+            eval_method_call_result(*object, method, evaluated_args, context, values)
         }
     }
 }
@@ -3042,7 +3177,7 @@ fn eval_evaluated_callable_with_call_array_args(
                 return Err(EvalStatus::RuntimeFatal);
             }
             let evaluated_args = evaluated_args.into_iter().map(|arg| arg.value).collect();
-            values.method_call(*object, method, evaluated_args)
+            eval_method_call_result(*object, method, evaluated_args, context, values)
         }
     }
 }
@@ -3790,7 +3925,9 @@ fn eval_builtin_with_values(
             eval_class_like_exists_result(name, evaluated_args, values)?
         }
         "interface_exists" => eval_interface_exists_result(evaluated_args, values)?,
-        "is_a" | "is_subclass_of" => eval_is_a_relation_result(name, evaluated_args, values)?,
+        "is_a" | "is_subclass_of" => {
+            eval_is_a_relation_result(name, evaluated_args, context, values)?
+        }
         "json_decode" => match evaluated_args {
             [json] => eval_json_decode_result(*json, None, None, None, context, values)?,
             [json, associative] => {
@@ -3904,7 +4041,7 @@ fn eval_builtin_with_values(
             let [object] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_get_class_result(*object, values)?
+            eval_get_class_result(*object, context, values)?
         }
         "get_parent_class" => {
             let [object_or_class] = evaluated_args else {
@@ -12956,14 +13093,20 @@ fn eval_builtin_get_class(
         return Err(EvalStatus::RuntimeFatal);
     };
     let object = eval_expr(object, context, scope, values)?;
-    eval_get_class_result(object, values)
+    eval_get_class_result(object, context, values)
 }
 
 /// Resolves the PHP-visible class name for one already materialized object cell.
 fn eval_get_class_result(
     object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Ok(identity) = values.object_identity(object) {
+        if let Some(class) = context.dynamic_object_class(identity) {
+            return values.string(class.name().trim_start_matches('\\'));
+        }
+    }
     values.object_class_name(object)
 }
 
@@ -15324,7 +15467,7 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
             EvalStmt::ArrayAppendVar { .. }
             | EvalStmt::ArraySetVar { .. }
             | EvalStmt::Break
-            | EvalStmt::ClassDecl { .. }
+            | EvalStmt::ClassDecl(_)
             | EvalStmt::Continue
             | EvalStmt::Echo(_)
             | EvalStmt::Expr(_)
@@ -17421,6 +17564,38 @@ return function_exists("var_dump");"#,
         let x = FakeOps::object_property(&properties, "x").expect("constructor should set x");
 
         assert_eq!(values.get(x), FakeValue::Int(1));
+    }
+
+    /// Verifies eval-declared classes create objects with properties and methods.
+    #[test]
+    fn execute_program_constructs_eval_declared_class_with_method() {
+        let program = parse_fragment(
+            br#"class DynBox {
+    public int $x = 1;
+    public function __construct($x) { $this->x = $x; }
+    public function bump($n) { $this->x = $this->x + $n; return $this->x; }
+}
+$box = new DynBox(4);
+echo get_class($box);
+echo ":";
+echo $box->bump(3);
+echo ":";
+echo is_a($box, "DynBox") ? "Y" : "N";
+$call = [$box, "bump"];
+echo call_user_func($call, 1);
+echo ":";
+echo call_user_func_array($call, [2]);
+echo ":";
+return $box->x;"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "DynBox:7:Y8:10:");
+        assert_eq!(values.get(result), FakeValue::Int(10));
     }
 
     /// Verifies if/else executes only the PHP-truthy branch.

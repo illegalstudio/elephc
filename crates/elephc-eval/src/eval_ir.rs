@@ -68,9 +68,7 @@ pub enum EvalStmt {
         update: Vec<EvalStmt>,
         body: Vec<EvalStmt>,
     },
-    ClassDecl {
-        name: String,
-    },
+    ClassDecl(EvalClass),
     Foreach {
         array: EvalExpr,
         key_name: Option<String>,
@@ -165,6 +163,112 @@ impl EvalFunction {
     }
 
     /// Returns the dynamic EvalIR statements that form the function body.
+    pub fn body(&self) -> &[EvalStmt] {
+        &self.body
+    }
+}
+
+/// Runtime class declared by an eval fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalClass {
+    name: String,
+    properties: Vec<EvalClassProperty>,
+    methods: Vec<EvalClassMethod>,
+}
+
+impl EvalClass {
+    /// Creates a dynamic eval class with public properties and methods.
+    pub fn new(
+        name: impl Into<String>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            properties,
+            methods,
+        }
+    }
+
+    /// Returns the original source spelling of this eval-declared class name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns public properties declared directly by this eval class.
+    pub fn properties(&self) -> &[EvalClassProperty] {
+        &self.properties
+    }
+
+    /// Returns public methods declared directly by this eval class.
+    pub fn methods(&self) -> &[EvalClassMethod] {
+        &self.methods
+    }
+
+    /// Returns a public method by PHP case-insensitive method name.
+    pub fn method(&self, name: &str) -> Option<&EvalClassMethod> {
+        self.methods()
+            .iter()
+            .find(|method| method.name().eq_ignore_ascii_case(name))
+    }
+}
+
+/// Public property metadata for a runtime eval class.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalClassProperty {
+    name: String,
+    default: Option<EvalExpr>,
+}
+
+impl EvalClassProperty {
+    /// Creates a public eval class property with an optional initializer.
+    pub fn new(name: impl Into<String>, default: Option<EvalExpr>) -> Self {
+        Self {
+            name: name.into(),
+            default,
+        }
+    }
+
+    /// Returns the PHP-visible property name without `$`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the property initializer expression, when one was declared.
+    pub fn default(&self) -> Option<&EvalExpr> {
+        self.default.as_ref()
+    }
+}
+
+/// Public method metadata for a runtime eval class.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalClassMethod {
+    name: String,
+    params: Vec<String>,
+    body: Vec<EvalStmt>,
+}
+
+impl EvalClassMethod {
+    /// Creates a public eval class method with source-order parameters and body.
+    pub fn new(name: impl Into<String>, params: Vec<String>, body: Vec<EvalStmt>) -> Self {
+        Self {
+            name: name.into(),
+            params,
+            body,
+        }
+    }
+
+    /// Returns the PHP-visible method name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns source-order parameter names without leading `$`.
+    pub fn params(&self) -> &[String] {
+        &self.params
+    }
+
+    /// Returns the dynamic EvalIR statements that form the method body.
     pub fn body(&self) -> &[EvalStmt] {
         &self.body
     }

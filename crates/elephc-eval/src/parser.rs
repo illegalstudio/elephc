@@ -15,8 +15,9 @@
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalCallArg, EvalCatch, EvalConst, EvalExpr, EvalMagicConst,
-    EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalCatch, EvalClass, EvalClassMethod,
+    EvalClassProperty, EvalConst, EvalExpr, EvalMagicConst, EvalMatchArm, EvalProgram, EvalStmt,
+    EvalSwitchCase, EvalUnaryOp,
 };
 use std::collections::HashMap;
 
@@ -805,7 +806,7 @@ impl Parser {
         }])
     }
 
-    /// Parses an empty `class Name {}` declaration for dynamic class-name registration.
+    /// Parses `class Name { ... }` declarations for dynamic class metadata.
     fn parse_class_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
@@ -814,11 +815,96 @@ impl Parser {
         let name = self.qualify_name_in_current_namespace(name);
         self.advance();
         self.expect(TokenKind::LBrace)?;
-        if !self.consume(TokenKind::RBrace) {
-            return Err(EvalParseError::UnsupportedConstruct);
+        let mut properties = Vec::new();
+        let mut methods = Vec::new();
+        while !self.consume(TokenKind::RBrace) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            self.parse_class_member(&mut properties, &mut methods)?;
         }
         self.consume_semicolon();
-        Ok(vec![EvalStmt::ClassDecl { name }])
+        Ok(vec![EvalStmt::ClassDecl(EvalClass::new(
+            name, properties, methods,
+        ))])
+    }
+
+    /// Parses one public property or method from an eval class body.
+    fn parse_class_member(
+        &mut self,
+        properties: &mut Vec<EvalClassProperty>,
+        methods: &mut Vec<EvalClassMethod>,
+    ) -> Result<(), EvalParseError> {
+        let public = if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "public"))
+        {
+            self.advance();
+            true
+        } else if matches!(self.current(), TokenKind::Ident(name) if is_unsupported_class_member_modifier(name))
+        {
+            return Err(EvalParseError::UnsupportedConstruct);
+        } else {
+            false
+        };
+
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
+            methods.push(self.parse_class_method_decl()?);
+            return Ok(());
+        }
+
+        if !public {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        properties.push(self.parse_class_property_decl()?);
+        Ok(())
+    }
+
+    /// Parses `function name($param, ...) { ... }` inside a dynamic eval class.
+    fn parse_class_method_decl(&mut self) -> Result<EvalClassMethod, EvalParseError> {
+        self.advance();
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let name = name.clone();
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let params = self.parse_function_params()?;
+        let body = self.parse_block()?;
+        Ok(EvalClassMethod::new(name, params, body))
+    }
+
+    /// Parses one public property declaration with an optional initializer.
+    fn parse_class_property_decl(&mut self) -> Result<EvalClassProperty, EvalParseError> {
+        self.skip_optional_property_type()?;
+        let TokenKind::DollarIdent(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let name = name.clone();
+        self.advance();
+        let default = if self.consume(TokenKind::Equal) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        self.expect_semicolon()?;
+        Ok(EvalClassProperty::new(name, default))
+    }
+
+    /// Consumes a simple declared property type before the `$property` token.
+    fn skip_optional_property_type(&mut self) -> Result<(), EvalParseError> {
+        if matches!(self.current(), TokenKind::DollarIdent(_)) {
+            return Ok(());
+        }
+        if self.consume(TokenKind::Question) && matches!(self.current(), TokenKind::DollarIdent(_))
+        {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        match self.current() {
+            TokenKind::Ident(_) | TokenKind::Backslash => {
+                let _ = self.parse_qualified_name()?;
+                Ok(())
+            }
+            _ => Err(EvalParseError::UnexpectedToken),
+        }
     }
 
     /// Parses `function name($param, ...) { ... }` declarations.
@@ -2340,6 +2426,13 @@ fn is_unsupported_statement_keyword(name: &str) -> bool {
         .any(|keyword| ident_eq(name, keyword))
 }
 
+/// Returns true for class member modifiers outside the current eval class subset.
+fn is_unsupported_class_member_modifier(name: &str) -> bool {
+    ["private", "protected", "static", "abstract", "final"]
+        .iter()
+        .any(|modifier| ident_eq(name, modifier))
+}
+
 /// Returns true when an eval catch type can be matched without runtime class tests.
 fn is_supported_catch_type(class_name: &str) -> bool {
     class_name.eq_ignore_ascii_case("Throwable")
@@ -2902,9 +2995,11 @@ return Box;"#,
         assert_eq!(
             program.statements(),
             &[
-                EvalStmt::ClassDecl {
-                    name: "Eval\\Block\\Box".to_string(),
-                },
+                EvalStmt::ClassDecl(EvalClass::new(
+                    "Eval\\Block\\Box",
+                    Vec::new(),
+                    Vec::new()
+                )),
                 EvalStmt::Return(Some(EvalExpr::NewObject {
                     class_name: "Eval\\Block\\Box".to_string(),
                     args: Vec::new(),
@@ -4087,18 +4182,38 @@ try {
         let program = parse_fragment(b"class DynEvalClass {};").expect("fragment should parse");
         assert_eq!(
             program.statements(),
-            &[EvalStmt::ClassDecl {
-                name: "DynEvalClass".to_string(),
-            }]
+            &[EvalStmt::ClassDecl(EvalClass::new(
+                "DynEvalClass",
+                Vec::new(),
+                Vec::new()
+            ))]
         );
     }
 
-    /// Verifies non-empty class declarations stay outside the supported eval subset.
+    /// Verifies public property and method class members lower into dynamic class metadata.
     #[test]
-    fn parse_fragment_rejects_non_empty_class_as_unsupported_construct() {
+    fn parse_fragment_accepts_public_class_members() {
+        let program = parse_fragment(
+            b"class DynEvalSupported { public int $x = 1; public function read() { return $this->x; } }",
+        )
+        .expect("fragment should parse");
         assert_eq!(
-            parse_fragment(b"class DynEvalUnsupported { public int $x = 1; }"),
-            Err(EvalParseError::UnsupportedConstruct)
+            program.statements(),
+            &[EvalStmt::ClassDecl(EvalClass::new(
+                "DynEvalSupported",
+                vec![EvalClassProperty::new(
+                    "x",
+                    Some(EvalExpr::Const(EvalConst::Int(1)))
+                )],
+                vec![EvalClassMethod::new(
+                    "read",
+                    Vec::new(),
+                    vec![EvalStmt::Return(Some(EvalExpr::PropertyGet {
+                        object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                        property: "x".to_string(),
+                    }))]
+                )]
+            ))]
         );
     }
 
