@@ -1167,11 +1167,11 @@ impl Parser {
         }])
     }
 
-    /// Parses one supported `catch (Throwable [$name]) { ... }` clause.
+    /// Parses one single-type `catch (ClassName [$name]) { ... }` clause.
     fn parse_catch_clause(&mut self) -> Result<EvalCatch, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let class_name = self.parse_supported_catch_type()?;
+        let class_name = self.parse_catch_type()?;
         let var_name = if let TokenKind::DollarIdent(var_name) = self.current() {
             let var_name = var_name.clone();
             self.advance();
@@ -1188,17 +1188,13 @@ impl Parser {
         })
     }
 
-    /// Parses the catch type currently implemented by the EvalIR interpreter.
-    fn parse_supported_catch_type(&mut self) -> Result<String, EvalParseError> {
+    /// Parses a single catch type and keeps union catches outside the current EvalIR subset.
+    fn parse_catch_type(&mut self) -> Result<String, EvalParseError> {
         let class_name = self.parse_qualified_name()?;
         if matches!(self.current(), TokenKind::Pipe) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let class_name = self.resolve_class_name(class_name);
-        if !is_supported_catch_type(&class_name) {
-            return Err(EvalParseError::UnsupportedConstruct);
-        }
-        Ok(class_name)
+        Ok(self.resolve_class_name(class_name))
     }
 
     /// Parses a dynamic function declaration parameter list after `(`.
@@ -2431,11 +2427,6 @@ fn is_unsupported_class_member_modifier(name: &str) -> bool {
     ["private", "protected", "static", "abstract", "final"]
         .iter()
         .any(|modifier| ident_eq(name, modifier))
-}
-
-/// Returns true when an eval catch type can be matched without runtime class tests.
-fn is_supported_catch_type(class_name: &str) -> bool {
-    class_name.eq_ignore_ascii_case("Throwable")
 }
 
 /// Returns true when an identifier is an include/require expression construct.
@@ -4107,19 +4098,39 @@ try {
         );
     }
 
-    /// Verifies unsupported catch type narrowing stays explicit until runtime matching exists.
+    /// Verifies single catch type narrowing lowers into EvalIR.
     #[test]
-    fn parse_fragment_rejects_specific_eval_catch_type() {
-        assert_eq!(
-            parse_fragment(
-                br#"try {
+    fn parse_fragment_accepts_specific_eval_catch_type() {
+        let program = parse_fragment(
+            br#"try {
     throw new Exception("eval boom");
 } catch (Exception $caught) {
     return 1;
 }"#,
-            ),
-            Err(EvalParseError::UnsupportedConstruct)
+        )
+        .expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Try {
+                body: vec![EvalStmt::Throw(EvalExpr::NewObject {
+                    class_name: "Exception".to_string(),
+                    args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                        "eval boom".to_string()
+                    )))],
+                })],
+                catches: vec![EvalCatch {
+                    class_name: "Exception".to_string(),
+                    var_name: Some("caught".to_string()),
+                    body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))],
+                }],
+                finally_body: Vec::new(),
+            }]
         );
+    }
+
+    /// Verifies union catch type narrowing stays explicit until runtime matching exists.
+    #[test]
+    fn parse_fragment_rejects_union_eval_catch_type() {
         assert_eq!(
             parse_fragment(
                 br#"try {

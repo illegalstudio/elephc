@@ -1173,10 +1173,14 @@ fn execute_matching_catch(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let Some(catch) = catches
-        .iter()
-        .find(|catch| catch_type_matches_throwable(&catch.class_name))
-    else {
+    let mut matched = None;
+    for catch in catches {
+        if catch_type_matches_thrown(thrown, &catch.class_name, values)? {
+            matched = Some(catch);
+            break;
+        }
+    }
+    let Some(catch) = matched else {
         return Ok(EvalControl::Throw(thrown));
     };
     if let Some(var_name) = &catch.var_name {
@@ -1195,9 +1199,17 @@ fn execute_matching_catch(
     execute_statements(&catch.body, context, scope, values)
 }
 
-/// Returns true for catch types that are known to accept any valid thrown object.
-fn catch_type_matches_throwable(class_name: &str) -> bool {
-    class_name.eq_ignore_ascii_case("Throwable")
+/// Returns true when a catch type accepts the thrown object.
+fn catch_type_matches_thrown(
+    thrown: RuntimeCellHandle,
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let class_name = class_name.trim_start_matches('\\');
+    if class_name.eq_ignore_ascii_case("Throwable") {
+        return Ok(true);
+    }
+    values.object_is_a(thrown, class_name, false)
 }
 
 /// Registers an eval-declared class in the dynamic class table.
@@ -16235,6 +16247,12 @@ mod tests {
             exclude_self: bool,
         ) -> Result<bool, EvalStatus> {
             match self.get(object_or_class) {
+                FakeValue::Object(_)
+                    if target_class.eq_ignore_ascii_case("Exception")
+                        || target_class.eq_ignore_ascii_case("Throwable") =>
+                {
+                    Ok(!exclude_self)
+                }
                 FakeValue::Object(_) if target_class.eq_ignore_ascii_case("KnownClass") => {
                     Ok(!exclude_self)
                 }
@@ -16931,6 +16949,51 @@ mod tests {
         assert_eq!(scope.visible_cell("caught"), None);
         assert_eq!(values.type_tag(released), Ok(EVAL_TAG_OBJECT));
         assert_eq!(values.get(result), FakeValue::Int(9));
+    }
+
+    /// Verifies eval `catch (Exception)` matches thrown exception objects.
+    #[test]
+    fn execute_program_catches_specific_exception_inside_eval() {
+        let program = parse_fragment(
+            br#"try {
+    throw new Exception("eval boom");
+} catch (Exception $caught) {
+    return $caught->answer();
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+        let caught = scope
+            .visible_cell("caught")
+            .expect("scope should contain catch variable");
+
+        assert_eq!(values.type_tag(caught), Ok(EVAL_TAG_OBJECT));
+        assert_eq!(values.get(result), FakeValue::Int(42));
+    }
+
+    /// Verifies eval catch clauses keep source order and skip non-matching types.
+    #[test]
+    fn execute_program_skips_non_matching_specific_catch_inside_eval() {
+        let program = parse_fragment(
+            br#"try {
+    throw new Exception("eval boom");
+} catch (RuntimeException $wrong) {
+    return 1;
+} catch (Exception $caught) {
+    return 2;
+}"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(scope.visible_cell("wrong"), None);
+        assert_eq!(values.get(result), FakeValue::Int(2));
     }
 
     /// Verifies eval `finally` runs before a pending try-body return is observed.
