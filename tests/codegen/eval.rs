@@ -3135,6 +3135,22 @@ echo function_exists("is_nan"); echo function_exists("is_finite"); echo function
     assert_eq!(out, "1111111111111Tok11111NBROoNIiFfH:1111t11OoNF11111111");
 }
 
+/// Verifies eval resource introspection builtins inspect boxed runtime resources.
+#[test]
+fn test_eval_dispatches_resource_introspection_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+eval('echo get_resource_type($h);
+echo ":"; echo get_resource_id($h) > 0 ? "id" : "bad";
+echo ":"; echo call_user_func("get_resource_type", $h);
+echo ":"; echo call_user_func_array("get_resource_id", ["resource" => $h]) > 0 ? "id" : "bad";
+echo ":"; echo function_exists("get_resource_type"); echo function_exists("get_resource_id");');
+"#,
+    );
+    assert_eq!(out, "stream:id:stream:id:11");
+}
+
 /// Verifies eval scalar cast builtins return boxed Mixed cells through direct and callable calls.
 #[test]
 fn test_eval_dispatches_cast_builtin_calls() {

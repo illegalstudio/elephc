@@ -1863,6 +1863,9 @@ fn eval_positional_expr_call(
         "getservbyport" => eval_builtin_getservbyport(args, context, scope, values),
         "get_class" => eval_builtin_get_class(args, context, scope, values),
         "get_parent_class" => eval_builtin_get_parent_class(args, context, scope, values),
+        "get_resource_id" | "get_resource_type" => {
+            eval_builtin_resource_introspection(name, args, context, scope, values)
+        }
         "getcwd" => eval_builtin_getcwd(args, values),
         "getenv" => eval_builtin_getenv(args, context, scope, values),
         "gettype" => eval_builtin_gettype(args, context, scope, values),
@@ -2409,6 +2412,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "getservbyport"
             | "get_class"
             | "get_parent_class"
+            | "get_resource_id"
+            | "get_resource_type"
             | "getcwd"
             | "getenv"
             | "gettype"
@@ -2739,6 +2744,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "getprotobynumber" => Some(&["protocol"]),
         "getservbyname" => Some(&["service", "protocol"]),
         "getservbyport" => Some(&["port", "protocol"]),
+        "get_resource_id" | "get_resource_type" => Some(&["resource"]),
         "getcwd" => Some(&[]),
         "getenv" => Some(&["name"]),
         "glob" => Some(&["pattern"]),
@@ -3805,6 +3811,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_get_parent_class_result(*object_or_class, values)?
+        }
+        "get_resource_id" | "get_resource_type" => {
+            let [resource] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_resource_introspection_result(name, *resource, values)?
         }
         "gettype" => {
             let [value] = evaluated_args else {
@@ -12614,6 +12626,37 @@ fn eval_get_parent_class_result(
     values.parent_class_name(object_or_class)
 }
 
+/// Evaluates `get_resource_type(...)` and `get_resource_id(...)` over one eval value.
+fn eval_builtin_resource_introspection(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [resource] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let resource = eval_expr(resource, context, scope, values)?;
+    eval_resource_introspection_result(name, resource, values)
+}
+
+/// Evaluates a materialized resource introspection builtin argument.
+fn eval_resource_introspection_result(
+    name: &str,
+    resource: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.type_tag(resource)? != EVAL_TAG_RESOURCE {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    match name {
+        "get_resource_type" => values.string("stream"),
+        "get_resource_id" => values.cast_int(resource),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
 /// Returns the PHP-visible type name for a concrete eval runtime tag.
 fn eval_gettype_name(tag: u64) -> &'static str {
     match tag {
@@ -21157,6 +21200,29 @@ return call_user_func("is_resource", $handle);"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "R:resource");
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval resource introspection builtins expose stream type and one-based id.
+    #[test]
+    fn execute_program_dispatches_resource_introspection_builtins() {
+        let program = parse_fragment(
+            br#"echo get_resource_type($handle);
+echo ":" . get_resource_id($handle);
+echo ":" . call_user_func("get_resource_type", $handle);
+echo ":" . call_user_func_array("get_resource_id", ["resource" => $handle]);
+echo ":" . function_exists("get_resource_type");
+return function_exists("get_resource_id");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let handle = values.alloc(FakeValue::Resource(6));
+        scope.set("handle".to_string(), handle, ScopeCellOwnership::Borrowed);
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "stream:7:stream:7:1");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
