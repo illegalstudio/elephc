@@ -662,6 +662,22 @@ echo $items[0] . ":" . $items[1] . ":" . $items[2] . ":" . count($items);
     assert_eq!(out, "z:b:c:3");
 }
 
+/// Verifies eval array writes preserve PHP copy-on-write for by-value aliases.
+#[test]
+fn test_eval_array_write_preserves_native_by_value_alias() {
+    let out = compile_and_run(
+        r#"<?php
+$items = ["a", "b"];
+$snapshot = $items;
+eval('$items[0] = "z"; $items[] = "c";');
+echo $items[0] . ":" . $items[2] . ":" . count($items);
+echo "|";
+echo $snapshot[0] . ":" . count($snapshot);
+"#,
+    );
+    assert_eq!(out, "z:c:3|a:2");
+}
+
 /// Verifies eval indexed-array append syntax writes the next visible element.
 #[test]
 fn test_eval_indexed_array_append_is_visible_after_eval() {
