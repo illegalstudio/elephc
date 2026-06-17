@@ -359,3 +359,156 @@ fn test_include_function_variant_keeps_error_when_call_does_not_respecialize() {
         "main.php",
     ));
 }
+
+/// Verifies `require dirname(__DIR__) . '/lib/inner.php'` — the Symfony
+/// front-controller line-1 pattern. `__DIR__` lowers to a string literal during
+/// the magic-constants pass; the new `dirname()` arm folds it to its parent
+/// directory, and the concatenation resolves the include. The main file lives
+/// one level deep (`sub/main.php`) so `dirname(__DIR__)` reaches the sibling
+/// `lib/` directory that holds `inner.php`.
+#[test]
+fn test_include_with_dirname_of_dunder_dir_concat() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "sub/main.php",
+                "<?php\nrequire dirname(__DIR__) . '/lib/inner.php';\necho 'after';\n",
+            ),
+            (
+                "lib/inner.php",
+                "<?php\necho 'inner';\n",
+            ),
+        ],
+        "sub/main.php",
+    );
+    assert_eq!(out, "innerafter");
+}
+
+/// Verifies `require dirname(__DIR__, 2) . '/lib/inner.php'` folds two levels up.
+/// The main file lives two levels deep (`a/b/main.php`), so
+/// `dirname(__DIR__, 2)` reaches the temp root where the sibling `lib/`
+/// directory holds `inner.php`.
+#[test]
+fn test_include_with_dirname_levels_2() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "a/b/main.php",
+                "<?php\nrequire dirname(__DIR__, 2) . '/lib/inner.php';\necho 'after';\n",
+            ),
+            (
+                "lib/inner.php",
+                "<?php\necho 'inner';\n",
+            ),
+        ],
+        "a/b/main.php",
+    );
+    assert_eq!(out, "innerafter");
+}
+
+/// Verifies `Dirname(__DIR__)` (mixed case) folds like `dirname()`. PHP function
+/// names are case-insensitive and the name resolver has not run yet at
+/// include-path-folding time, so the `dirname` matcher is case-insensitive.
+#[test]
+fn test_include_with_dirname_case_insensitive() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "sub/main.php",
+                "<?php\nrequire Dirname(__DIR__) . '/lib/inner.php';\necho 'after';\n",
+            ),
+            (
+                "lib/inner.php",
+                "<?php\necho 'inner';\n",
+            ),
+        ],
+        "sub/main.php",
+    );
+    assert_eq!(out, "innerafter");
+}
+
+/// Verifies `\dirname(__DIR__)` (fully qualified) folds the same as the
+/// unqualified form. The matcher accepts the leading-backslash single-segment
+/// name so the Symfony pattern still resolves when written with an explicit
+/// global prefix.
+#[test]
+fn test_include_with_fully_qualified_dirname() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "sub/main.php",
+                "<?php\nrequire \\dirname(__DIR__) . '/lib/inner.php';\necho 'after';\n",
+            ),
+            (
+                "lib/inner.php",
+                "<?php\necho 'inner';\n",
+            ),
+        ],
+        "sub/main.php",
+    );
+    assert_eq!(out, "innerafter");
+}
+
+/// Verifies `dirname(__DIR__ . '/sub')` folds by recursing through
+/// `fold_include_path` for the concat argument. The inner concatenation folds to
+/// a compile-time string before `dirname()` strips its last component. Here
+/// `__DIR__` is the temp root, `__DIR__ . '/sub'` folds to `<root>/sub`, and
+/// `dirname(...)` folds back to `<root>` where the sibling `lib/` holds `inner.php`.
+#[test]
+fn test_include_with_dirname_of_concat() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire dirname(__DIR__ . '/sub') . '/lib/inner.php';\necho 'after';\n",
+            ),
+            (
+                "lib/inner.php",
+                "<?php\necho 'inner';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "innerafter");
+}
+
+/// Verifies `dirname($var)` in an include path is rejected as runtime-dynamic.
+/// The `dirname` arm matches the call, but the variable argument cannot fold,
+/// surfacing the runtime-dynamic error instead of silently mis-folding to a
+/// wrong path.
+#[test]
+fn test_include_with_dirname_of_variable_fails() {
+    assert!(compile_files_fails(
+        &[
+            (
+                "main.php",
+                "<?php\n$x = __DIR__;\nrequire dirname($x) . '/lib/inner.php';\n",
+            ),
+            (
+                "lib/inner.php",
+                "<?php\necho 'inner';\n",
+            ),
+        ],
+        "main.php",
+    ));
+}
+
+/// Verifies `dirname('/x', 0)` is rejected. A `levels` argument below 1 cannot
+/// fold (PHP itself rejects it at runtime) and the compile-time folder surfaces a
+/// targeted diagnostic rather than accepting the call.
+#[test]
+fn test_include_with_dirname_levels_zero_fails() {
+    assert!(compile_files_fails(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire dirname('/x', 0) . '/lib/inner.php';\n",
+            ),
+            (
+                "lib/inner.php",
+                "<?php\necho 'inner';\n",
+            ),
+        ],
+        "main.php",
+    ));
+}

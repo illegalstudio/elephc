@@ -21,6 +21,7 @@ mod files;
 mod function_variants;
 mod include_once;
 mod include_path;
+pub(crate) mod path_eval;
 mod state;
 mod stmt_exprs;
 

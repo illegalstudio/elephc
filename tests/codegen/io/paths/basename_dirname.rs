@@ -182,3 +182,21 @@ fn test_dirname_levels_past_root_stays_root() {
     let out = compile_and_run(r#"<?php echo dirname("/usr", 3);"#);
     assert_eq!(out, "/");
 }
+
+/// Verifies `dirname()` of a non-literal (function parameter) still emits the runtime
+/// helper rather than being compile-time folded. The parameter is bound to two different
+/// literals at the call sites, so both results must be distinct and correct — a wrong
+/// constant fold of `dirname($p)` would make both calls agree. Guards against over-folding
+/// non-literal `dirname()` calls when include-path folding is extended to the optimizer.
+#[test]
+fn test_dirname_of_runtime_variable_uses_runtime_helper() {
+    let out = compile_and_run(
+        r#"<?php
+function parent_dir($p) {
+    return dirname($p);
+}
+echo parent_dir("/etc/passwd") . "|" . parent_dir("/var/log/syslog");
+"#,
+    );
+    assert_eq!(out, "/etc|/var/log");
+}
