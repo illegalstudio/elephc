@@ -3520,6 +3520,25 @@ echo function_exists("sprintf"); echo is_callable("printf"); echo function_exist
     );
 }
 
+/// Verifies eval `sscanf()` returns indexed string matches through direct and callable paths.
+#[test]
+fn test_eval_dispatches_sscanf_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$result = sscanf("John 1.5 30", "%s %f %d");
+echo $result[0] . ":" . $result[1] . ":" . $result[2] . ":";
+$named = sscanf(string: "Age: -25", format: "Age: %d");
+echo $named[0] . ":";
+$call = call_user_func("sscanf", "-2.5e3", "%f");
+echo $call[0] . ":";
+$spread = call_user_func_array("sscanf", ["string" => "ok %", "format" => "%s %%"]);
+echo $spread[0] . ":";
+echo function_exists("sscanf");');
+"#,
+    );
+    assert_eq!(out, "John:1.5:30:-25:-2.5e3:ok:1");
+}
+
 /// Verifies eval `min()` and `max()` select numeric values directly and through callables.
 #[test]
 fn test_eval_dispatches_min_max_builtin_calls() {

@@ -1942,6 +1942,7 @@ fn eval_positional_expr_call(
         "sleep" => eval_builtin_sleep(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
         "spl_classes" => eval_builtin_spl_classes(args, values),
+        "sscanf" => eval_builtin_sscanf(args, context, scope, values),
         "sprintf" | "printf" => eval_builtin_sprintf_like(name, args, context, scope, values),
         "sys_get_temp_dir" => eval_builtin_sys_get_temp_dir(args, values),
         "tempnam" => eval_builtin_tempnam(args, context, scope, values),
@@ -2527,6 +2528,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "sort"
             | "sqrt"
             | "spl_classes"
+            | "sscanf"
             | "sprintf"
             | "strcasecmp"
             | "stream_get_filters"
@@ -2796,6 +2798,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "round" => Some(&["num", "precision"]),
         "sleep" => Some(&["seconds"]),
         "spl_classes" => Some(&[]),
+        "sscanf" => Some(&["string", "format", "vars"]),
         "sprintf" | "printf" => Some(&["format", "values"]),
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
@@ -3506,6 +3509,12 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_spl_classes_result(values)?
+        }
+        "sscanf" => {
+            let [input, format, ..] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_sscanf_result(*input, *format, values)?
         }
         "sprintf" | "printf" => eval_sprintf_like_result(name, evaluated_args, values)?,
         "strrev" => {
@@ -7021,6 +7030,24 @@ fn eval_builtin_vsprintf_like(
     eval_vsprintf_like_result(name, &evaluated_args, values)
 }
 
+/// Evaluates direct positional `sscanf()` calls in source order.
+fn eval_builtin_sscanf(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.len() < 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let input = eval_expr(&args[0], context, scope, values)?;
+    let format = eval_expr(&args[1], context, scope, values)?;
+    for arg in &args[2..] {
+        eval_expr(arg, context, scope, values)?;
+    }
+    eval_sscanf_result(input, format, values)
+}
+
 /// Dispatches already evaluated `sprintf()` or `printf()` arguments.
 fn eval_sprintf_like_result(
     name: &str,
@@ -7045,6 +7072,135 @@ fn eval_vsprintf_like_result(
         "vprintf" => eval_vprintf_result(evaluated_args, values),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Parses one string through the eval `sscanf()` subset and returns an indexed array.
+fn eval_sscanf_result(
+    input: RuntimeCellHandle,
+    format: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let input = values.string_bytes(input)?;
+    let format = values.string_bytes(format)?;
+    let matches = eval_sscanf_matches(&input, &format);
+    let mut result = values.array_new(matches.len())?;
+    for (index, matched) in matches.iter().enumerate() {
+        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        let value = values.string_bytes_value(matched)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Extracts `%d`, `%f`, `%s`, and `%%` matches with the same subset as native `sscanf()`.
+fn eval_sscanf_matches(input: &[u8], format: &[u8]) -> Vec<Vec<u8>> {
+    let mut matches = Vec::new();
+    let mut input_index = 0;
+    let mut format_index = 0;
+
+    while format_index < format.len() {
+        if format[format_index] != b'%' {
+            if input_index >= input.len() || input[input_index] != format[format_index] {
+                break;
+            }
+            input_index += 1;
+            format_index += 1;
+            continue;
+        }
+
+        format_index += 1;
+        if format_index >= format.len() {
+            break;
+        }
+
+        match format[format_index] {
+            b'%' => {
+                if input_index >= input.len() || input[input_index] != b'%' {
+                    break;
+                }
+                input_index += 1;
+            }
+            b'd' => matches.push(eval_sscanf_scan_int(input, &mut input_index)),
+            b'f' => matches.push(eval_sscanf_scan_float(input, &mut input_index)),
+            b's' => matches.push(eval_sscanf_scan_word(input, &mut input_index)),
+            _ => {}
+        }
+        format_index += 1;
+    }
+
+    matches
+}
+
+/// Scans the native `sscanf()` `%d` subset as a matched byte slice.
+fn eval_sscanf_scan_int(input: &[u8], input_index: &mut usize) -> Vec<u8> {
+    let start = *input_index;
+    if input.get(*input_index) == Some(&b'-') {
+        *input_index += 1;
+    }
+    while input
+        .get(*input_index)
+        .is_some_and(|byte| byte.is_ascii_digit())
+    {
+        *input_index += 1;
+    }
+    input[start..*input_index].to_vec()
+}
+
+/// Scans the native `sscanf()` `%f` subset as a matched byte slice.
+fn eval_sscanf_scan_float(input: &[u8], input_index: &mut usize) -> Vec<u8> {
+    let start = *input_index;
+    if input
+        .get(*input_index)
+        .is_some_and(|byte| matches!(byte, b'+' | b'-'))
+    {
+        *input_index += 1;
+    }
+    while input
+        .get(*input_index)
+        .is_some_and(|byte| byte.is_ascii_digit())
+    {
+        *input_index += 1;
+    }
+    if input.get(*input_index) == Some(&b'.') {
+        *input_index += 1;
+        while input
+            .get(*input_index)
+            .is_some_and(|byte| byte.is_ascii_digit())
+        {
+            *input_index += 1;
+        }
+    }
+    if input
+        .get(*input_index)
+        .is_some_and(|byte| matches!(byte, b'e' | b'E'))
+    {
+        *input_index += 1;
+        if input
+            .get(*input_index)
+            .is_some_and(|byte| matches!(byte, b'+' | b'-'))
+        {
+            *input_index += 1;
+        }
+        while input
+            .get(*input_index)
+            .is_some_and(|byte| byte.is_ascii_digit())
+        {
+            *input_index += 1;
+        }
+    }
+    input[start..*input_index].to_vec()
+}
+
+/// Scans the native `sscanf()` `%s` subset as a non-space byte word.
+fn eval_sscanf_scan_word(input: &[u8], input_index: &mut usize) -> Vec<u8> {
+    let start = *input_index;
+    while input
+        .get(*input_index)
+        .is_some_and(|byte| !matches!(byte, b' ' | b'\t' | b'\n'))
+    {
+        *input_index += 1;
+    }
+    input[start..*input_index].to_vec()
 }
 
 /// Formats `sprintf()` arguments and returns the resulting PHP string.
@@ -21517,6 +21673,30 @@ return is_callable("vprintf");"#,
             values.output,
             "Hello World:00042:3.14:hi    |:n=42:4:age/42/3.0:v-7:3:+42:spread:111"
         );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+    }
+
+    /// Verifies eval `sscanf()` returns indexed string matches through callable paths.
+    #[test]
+    fn execute_program_dispatches_sscanf_builtin() {
+        let program = parse_fragment(
+            br#"$result = sscanf("John 1.5 30", "%s %f %d");
+echo $result[0] . ":" . $result[1] . ":" . $result[2] . ":";
+$named = sscanf(string: "Age: -25", format: "Age: %d");
+echo $named[0] . ":";
+$call = call_user_func("sscanf", "-2.5e3", "%f");
+echo $call[0] . ":";
+$spread = call_user_func_array("sscanf", ["string" => "ok %", "format" => "%s %%"]);
+echo $spread[0] . ":";
+return function_exists("sscanf");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "John:1.5:30:-25:-2.5e3:ok:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
