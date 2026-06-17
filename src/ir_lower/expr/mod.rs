@@ -6360,16 +6360,21 @@ fn lower_closure_with_context(
     contextual_arg_types: &[PhpType],
     self_ref_callable_capture: Option<&str>,
 ) -> LoweredValue {
+    let body_contains_eval = body_contains_eval_call(body);
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
-        let captured = ctx.load_local(capture, Some(expr.span));
-        let php_type = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
-            PhpType::Callable
+        let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
+            Some(PhpType::Callable)
+        } else if by_ref && body_contains_eval {
+            ctx.set_local_type(capture, PhpType::Mixed);
+            Some(PhpType::Mixed)
         } else {
-            ctx.builder.value_php_type(captured.value)
+            None
         };
+        let captured = ctx.load_local(capture, Some(expr.span));
+        let php_type = php_type_override.unwrap_or_else(|| ctx.builder.value_php_type(captured.value));
         let immediate = by_ref.then_some(Immediate::I64(1));
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
         captured_values.push(ClosureCapture { value: captured.value });
@@ -6418,6 +6423,248 @@ fn lower_closure_with_context(
         Op::ClosureNew.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns true when a statement body contains an `eval(...)` call.
+fn body_contains_eval_call(body: &[Stmt]) -> bool {
+    body.iter().any(stmt_contains_eval_call)
+}
+
+/// Returns true when a statement or nested statement body contains an `eval(...)` call.
+fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Echo(expr)
+        | StmtKind::Throw(expr)
+        | StmtKind::ExprStmt(expr)
+        | StmtKind::ConstDecl { value: expr, .. }
+        | StmtKind::ListUnpack { value: expr, .. }
+        | StmtKind::StaticVar { init: expr, .. }
+        | StmtKind::Assign { value: expr, .. }
+        | StmtKind::TypedAssign { value: expr, .. }
+        | StmtKind::ArrayPush { value: expr, .. }
+        | StmtKind::StaticPropertyAssign { value: expr, .. }
+        | StmtKind::StaticPropertyArrayPush { value: expr, .. } => expr_contains_eval_call(expr),
+        StmtKind::Return(expr) => expr.as_ref().is_some_and(expr_contains_eval_call),
+        StmtKind::ArrayAssign { index, value, .. }
+        | StmtKind::StaticPropertyArrayAssign { index, value, .. }
+        | StmtKind::PropertyArrayAssign { index, value, .. } => {
+            expr_contains_eval_call(index) || expr_contains_eval_call(value)
+        }
+        StmtKind::NestedArrayAssign { target, value } => {
+            expr_contains_eval_call(target) || expr_contains_eval_call(value)
+        }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            expr_contains_eval_call(object) || expr_contains_eval_call(value)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_contains_eval_call(condition)
+                || body_contains_eval_call(then_body)
+                || elseif_clauses.iter().any(|(condition, body)| {
+                    expr_contains_eval_call(condition) || body_contains_eval_call(body)
+                })
+                || else_body.as_ref().is_some_and(|body| body_contains_eval_call(body))
+        }
+        StmtKind::IfDef { then_body, else_body, .. } => {
+            body_contains_eval_call(then_body)
+                || else_body.as_ref().is_some_and(|body| body_contains_eval_call(body))
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
+            expr_contains_eval_call(condition) || body_contains_eval_call(body)
+        }
+        StmtKind::For { init, condition, update, body } => {
+            init.as_deref().is_some_and(stmt_contains_eval_call)
+                || condition.as_ref().is_some_and(expr_contains_eval_call)
+                || update.as_deref().is_some_and(stmt_contains_eval_call)
+                || body_contains_eval_call(body)
+        }
+        StmtKind::Foreach { array, body, .. } => {
+            expr_contains_eval_call(array) || body_contains_eval_call(body)
+        }
+        StmtKind::Switch { subject, cases, default } => {
+            expr_contains_eval_call(subject)
+                || cases.iter().any(|(patterns, body)| {
+                    patterns.iter().any(expr_contains_eval_call) || body_contains_eval_call(body)
+                })
+                || default.as_ref().is_some_and(|body| body_contains_eval_call(body))
+        }
+        StmtKind::Include { path, .. } => expr_contains_eval_call(path),
+        StmtKind::Synthetic(body)
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. } => body_contains_eval_call(body),
+        StmtKind::FunctionDecl { params, body, .. } => {
+            params
+                .iter()
+                .any(|(_, _, default, _)| default.as_ref().is_some_and(expr_contains_eval_call))
+                || body_contains_eval_call(body)
+        }
+        StmtKind::ClassDecl { properties, methods, constants, .. }
+        | StmtKind::TraitDecl { properties, methods, constants, .. }
+        | StmtKind::InterfaceDecl { properties, methods, constants, .. } => {
+            properties.iter().any(|property| {
+                property.default.as_ref().is_some_and(expr_contains_eval_call)
+            }) || constants
+                .iter()
+                .any(|constant| expr_contains_eval_call(&constant.value))
+                || methods.iter().any(|method| {
+                    method.params.iter().any(|(_, _, default, _)| {
+                        default.as_ref().is_some_and(expr_contains_eval_call)
+                    }) || body_contains_eval_call(&method.body)
+                })
+        }
+        StmtKind::Try { try_body, catches, finally_body } => {
+            body_contains_eval_call(try_body)
+                || catches.iter().any(|catch_clause| body_contains_eval_call(&catch_clause.body))
+                || finally_body.as_ref().is_some_and(|body| body_contains_eval_call(body))
+        }
+        StmtKind::EnumDecl { cases, .. } => cases
+            .iter()
+            .any(|case| case.value.as_ref().is_some_and(expr_contains_eval_call)),
+        StmtKind::RefAssign { .. }
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
+        | StmtKind::NamespaceDecl { .. }
+        | StmtKind::UseDecl { .. }
+        | StmtKind::FunctionVariantGroup { .. }
+        | StmtKind::FunctionVariantMark { .. }
+        | StmtKind::IncludeOnceMark { .. }
+        | StmtKind::Global { .. }
+        | StmtKind::PackedClassDecl { .. }
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. } => false,
+    }
+}
+
+/// Returns true when an expression contains an `eval(...)` call.
+fn expr_contains_eval_call(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, args } => {
+            is_eval_call_name(name) || args.iter().any(expr_contains_eval_call)
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_contains_eval_call(left) || expr_contains_eval_call(right)
+        }
+        ExprKind::InstanceOf { value, target } => {
+            expr_contains_eval_call(value) || instance_of_target_contains_eval_call(target)
+        }
+        ExprKind::Negate(expr)
+        | ExprKind::Not(expr)
+        | ExprKind::BitNot(expr)
+        | ExprKind::Throw(expr)
+        | ExprKind::ErrorSuppress(expr)
+        | ExprKind::Print(expr)
+        | ExprKind::Spread(expr)
+        | ExprKind::Cast { expr, .. }
+        | ExprKind::PtrCast { expr, .. }
+        | ExprKind::BufferNew { len: expr, .. }
+        | ExprKind::YieldFrom(expr) => expr_contains_eval_call(expr),
+        ExprKind::NullCoalesce { value, default }
+        | ExprKind::ShortTernary { value, default }
+        | ExprKind::Pipe { value, callable: default }
+        | ExprKind::ArrayAccess { array: value, index: default } => {
+            expr_contains_eval_call(value) || expr_contains_eval_call(default)
+        }
+        ExprKind::Assignment { target, value, result_target, prelude, .. } => {
+            expr_contains_eval_call(target)
+                || expr_contains_eval_call(value)
+                || result_target.as_ref().is_some_and(|target| expr_contains_eval_call(target))
+                || body_contains_eval_call(prelude)
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().any(expr_contains_eval_call),
+        ExprKind::ArrayLiteralAssoc(entries) => entries
+            .iter()
+            .any(|(key, value)| expr_contains_eval_call(key) || expr_contains_eval_call(value)),
+        ExprKind::Match { subject, arms, default } => {
+            expr_contains_eval_call(subject)
+                || arms.iter().any(|(patterns, value)| {
+                    patterns.iter().any(expr_contains_eval_call) || expr_contains_eval_call(value)
+                })
+                || default.as_ref().is_some_and(|default| expr_contains_eval_call(default))
+        }
+        ExprKind::Ternary { condition, then_expr, else_expr } => {
+            expr_contains_eval_call(condition)
+                || expr_contains_eval_call(then_expr)
+                || expr_contains_eval_call(else_expr)
+        }
+        ExprKind::Closure { params, body, .. } => {
+            params
+                .iter()
+                .any(|(_, _, default, _)| default.as_ref().is_some_and(expr_contains_eval_call))
+                || body_contains_eval_call(body)
+        }
+        ExprKind::NamedArg { value, .. } => expr_contains_eval_call(value),
+        ExprKind::ClosureCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_contains_eval_call),
+        ExprKind::ExprCall { callee, args } => {
+            expr_contains_eval_call(callee) || args.iter().any(expr_contains_eval_call)
+        }
+        ExprKind::NewDynamic { name_expr, args } => {
+            expr_contains_eval_call(name_expr) || args.iter().any(expr_contains_eval_call)
+        }
+        ExprKind::NewDynamicObject { class_name, args, .. } => {
+            expr_contains_eval_call(class_name) || args.iter().any(expr_contains_eval_call)
+        }
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => expr_contains_eval_call(object),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_contains_eval_call(object) || expr_contains_eval_call(property)
+        }
+        ExprKind::MethodCall { object, args, .. }
+        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            expr_contains_eval_call(object) || args.iter().any(expr_contains_eval_call)
+        }
+        ExprKind::FirstClassCallable(target) => callable_target_contains_eval_call(target),
+        ExprKind::Yield { key, value } => {
+            key.as_ref().is_some_and(|key| expr_contains_eval_call(key))
+                || value.as_ref().is_some_and(|value| expr_contains_eval_call(value))
+        }
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::Variable(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::PreIncrement(_)
+        | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_)
+        | ExprKind::PostDecrement(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::StaticPropertyAccess { .. }
+        | ExprKind::This
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::MagicConstant(_) => false,
+    }
+}
+
+/// Returns true when an `instanceof` target expression contains an `eval(...)` call.
+fn instance_of_target_contains_eval_call(target: &InstanceOfTarget) -> bool {
+    match target {
+        InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Expr(expr) => expr_contains_eval_call(expr),
+    }
+}
+
+/// Returns true when a first-class callable target contains an `eval(...)` call.
+fn callable_target_contains_eval_call(target: &CallableTarget) -> bool {
+    match target {
+        CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
+        CallableTarget::Method { object, .. } => expr_contains_eval_call(object),
+    }
+}
+
+/// Returns true when a function call name resolves to PHP's `eval` construct.
+fn is_eval_call_name(name: &Name) -> bool {
+    php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval"
 }
 
 /// Lowers a closure variable call.

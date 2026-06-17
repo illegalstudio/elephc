@@ -1038,12 +1038,12 @@ fn emit_branch_if_scope_entry_missing(ctx: &mut FunctionContext<'_>, label: &str
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("b.eq {}", label)); // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // skip reload when eval unset or omitted the local
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("je {}", label)); // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("je {}", label));                  // skip reload when eval unset or omitted the local
         }
     }
 }
@@ -1056,40 +1056,34 @@ fn store_mixed_scope_cell_to_local(
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
             emit_retain_scope_cell_if_owned(ctx);
-            let result_reg = abi::int_result_reg(ctx.emitter);
-            let offset = ctx.local_offset(local.slot)?;
-            abi::store_at_offset(ctx.emitter, result_reg, offset);
+            ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
-            let offset = ctx.local_offset(local.slot)?;
-            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+            ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Bool => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
-            let offset = ctx.local_offset(local.slot)?;
-            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+            ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Float => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
-            let offset = ctx.local_offset(local.slot)?;
-            abi::store_at_offset(ctx.emitter, abi::float_result_reg(ctx.emitter), offset);
+            ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Str => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-            let offset = ctx.local_offset(local.slot)?;
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::store_at_offset(ctx.emitter, ptr_reg, offset);
-            abi::store_at_offset(ctx.emitter, len_reg, offset - 8);
+            ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Object(_) => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            let offset = ctx.local_offset(local.slot)?;
             let object_reg = match ctx.emitter.target.arch {
                 Arch::AArch64 => "x1",
                 Arch::X86_64 => "rdi",
             };
-            abi::store_at_offset(ctx.emitter, object_reg, offset);
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", result_reg, object_reg)); // move unboxed object pointer into the local-store result register
+            ctx.store_current_result_to_local(local.slot)?;
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -1161,12 +1155,12 @@ fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("b.eq {}", skip)); // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // borrowed scope entries can be copied back without retaining
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("je {}", skip)); // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("je {}", skip));                   // borrowed scope entries can be copied back without retaining
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -1178,32 +1172,30 @@ fn store_missing_scope_entry_to_local(
     ctx: &mut FunctionContext<'_>,
     local: &EvalSyncLocal,
 ) -> Result<()> {
-    let offset = ctx.local_offset(local.slot)?;
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
             let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_value_null");
             abi::emit_call_label(ctx.emitter, &symbol);
-            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+            ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Int | PhpType::Bool => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+            ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Float => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             abi::emit_int_result_to_float_result(ctx.emitter);
-            abi::store_at_offset(ctx.emitter, abi::float_result_reg(ctx.emitter), offset);
+            ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-            abi::store_at_offset(ctx.emitter, ptr_reg, offset);
-            abi::store_at_offset(ctx.emitter, len_reg, offset - 8);
+            ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Object(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+            ctx.store_current_result_to_local(local.slot)?;
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -1289,12 +1281,12 @@ fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: i64, label:
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, #{}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("b.eq {}", label)); // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching eval status handler
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching eval status handler
         }
     }
 }
@@ -1322,7 +1314,7 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the eval runtime diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the eval runtime diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
@@ -1331,12 +1323,12 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the eval runtime diagnostic to Linux stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the eval runtime diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the eval runtime diagnostic byte length
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the eval runtime diagnostic before exiting
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the eval runtime diagnostic before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }

@@ -1,14 +1,15 @@
 //! Purpose:
-//! Integration tests for the initial `eval()` bridge wiring.
-//! Covers language-construct visibility, conditional bridge linking, and the
-//! base runtime interpreter path for scalar, branch, indexed-array, and simple builtin eval fragments.
+//! Integration tests for the optional `eval()` bridge.
+//! Covers language-construct visibility, conditional bridge linking, scope
+//! synchronization, dynamic declarations, EvalIR execution, and supported
+//! builtin dispatch through end-to-end codegen.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests eval` through Rust's test harness.
 //!
 //! Key details:
-//! - These tests intentionally cover the first scalar/control-flow/indexed-array subset,
-//!   not full PHP eval scope synchronization or dynamic declaration semantics.
+//! - Fixtures exercise the native/EvalIR boundary rather than the frozen legacy
+//!   AST backend, and many cases assert post-barrier native visibility.
 
 use crate::support::*;
 
@@ -3875,6 +3876,39 @@ eval('static $n = 0; $n++; echo $n;');
 "#,
     );
     assert_eq!(out, "1:1");
+}
+
+/// Verifies eval inside a closure can mutate the closure's by-value capture without touching the outer variable.
+#[test]
+fn test_eval_inside_closure_updates_by_value_capture_copy() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$fn = function() use ($x) {
+    eval('$x = $x + 4;');
+    return $x;
+};
+echo $fn();
+echo ":" . $x;
+"#,
+    );
+    assert_eq!(out, "5:1");
+}
+
+/// Verifies eval inside a closure writes through a by-reference capture to the source variable.
+#[test]
+fn test_eval_inside_closure_updates_by_ref_capture_source() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$fn = function() use (&$x) {
+    eval('$x = $x + 4;');
+};
+$fn();
+echo $x;
+"#,
+    );
+    assert_eq!(out, "5");
 }
 
 /// Verifies `global` inside eval can write compiler-known global storage.
