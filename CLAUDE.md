@@ -522,6 +522,29 @@ sidebar:
 - New work items go under the appropriate future version.
 - When all items in a version are completed, the version is considered done — do not move items elsewhere.
 
+## Changelog management
+
+`CHANGELOG.md` records every released version, newest first, in *Keep a Changelog* style.
+
+When cutting a release:
+
+- Add a new section at the top (under the header), above the previous version:
+
+  ```
+  ## [X.Y.Z] - YYYY-MM-DD
+  - One terse, user-facing bullet per notable change.
+  ```
+
+  Keep entries concise (usually one or two bullets), describe what shipped — not the implementation — and use the absolute release date.
+- Add a matching compare link at the **bottom** of the file, also newest first, immediately above the previous version's link:
+
+  ```
+  [X.Y.Z]: https://github.com/illegalstudio/elephc/compare/v<previous>...vX.Y.Z
+  ```
+
+  The first-ever release uses the `releases/tag/v0.1.0` form instead of a compare range. Every version section must have its link; do not leave the link out.
+- The changelog version, the `[X.Y.Z]` link, and `version` in `Cargo.toml` must agree. The `Cargo.toml` bump is a separate `chore: bump version to X.Y.Z` commit.
+
 ## Conventions
 
 - No `Co-Authored-By` lines in commits
