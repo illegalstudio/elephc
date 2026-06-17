@@ -3168,6 +3168,23 @@ echo ":"; echo function_exists("boolval");');
     assert_eq!(out, "42:3.5:12:false:7:9:1");
 }
 
+/// Verifies eval `settype()` mutates direct variables and supports named arguments.
+#[test]
+fn test_eval_dispatches_settype_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$x = 42;
+echo settype($x, "string") ? gettype($x) . ":" . $x : "bad";
+echo ":";
+$y = "0";
+echo settype(type: "bool", var: $y) ? gettype($y) . ":" . ($y ? "true" : "false") : "bad";
+echo ":";
+echo function_exists("settype");');
+"#,
+    );
+    assert_eq!(out, "string:42:boolean:false:1");
+}
+
 /// Verifies eval `gettype()` maps boxed Mixed runtime tags to PHP type names.
 #[test]
 fn test_eval_dispatches_gettype_builtin_call() {

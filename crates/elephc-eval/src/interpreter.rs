@@ -1684,6 +1684,7 @@ fn eval_call(
             | "rsort"
             | "shuffle"
             | "sort"
+            | "settype"
             | "uasort"
             | "uksort"
             | "usort"
@@ -2520,6 +2521,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "round"
             | "rmdir"
             | "scandir"
+            | "settype"
             | "sleep"
             | "sha1"
             | "shuffle"
@@ -2708,6 +2710,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => {
             Some(&["value"])
         }
+        "settype" => Some(&["var", "type"]),
         "get_class" => Some(&["object"]),
         "get_parent_class" => Some(&["object_or_class"]),
         "call_user_func" => Some(&["callback"]),
@@ -3517,6 +3520,12 @@ fn eval_builtin_with_values(
             eval_sscanf_result(*input, *format, values)?
         }
         "sprintf" | "printf" => eval_sprintf_like_result(name, evaluated_args, values)?,
+        "settype" => {
+            let [value, type_name] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_settype_value_result(*value, *type_name, values)?
+        }
         "strrev" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -4489,6 +4498,119 @@ fn eval_array_walk_result(
     values.bool_value(true)
 }
 
+/// Evaluates direct by-reference `settype()` calls and writes the converted cell back.
+fn eval_builtin_settype_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (var_name, type_name) = eval_settype_direct_args(args, context, scope, values)?;
+    let value = visible_scope_cell(context, scope, &var_name).map_or_else(|| values.null(), Ok)?;
+    let Some(converted) = eval_settype_cast_value(value, type_name, values)? else {
+        return values.bool_value(false);
+    };
+    for replaced in set_scope_cell(
+        context,
+        scope,
+        var_name,
+        converted,
+        ScopeCellOwnership::Owned,
+    )? {
+        values.release(replaced)?;
+    }
+    values.bool_value(true)
+}
+
+/// Evaluates and binds direct `settype()` arguments while preserving source order.
+fn eval_settype_direct_args(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(String, RuntimeCellHandle), EvalStatus> {
+    let mut var_name = None;
+    let mut type_name = None;
+    let mut positional_index = 0;
+    let mut saw_named = false;
+
+    for arg in args {
+        if arg.is_spread() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let parameter = if let Some(name) = arg.name() {
+            saw_named = true;
+            name
+        } else {
+            if saw_named {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let parameter = match positional_index {
+                0 => "var",
+                1 => "type",
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            positional_index += 1;
+            parameter
+        };
+
+        match parameter {
+            "var" => {
+                if var_name.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                let EvalExpr::LoadVar(name) = arg.value() else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                var_name = Some(name.clone());
+            }
+            "type" => {
+                if type_name.is_some() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                type_name = Some(eval_expr(arg.value(), context, scope, values)?);
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
+    let var_name = var_name.ok_or(EvalStatus::RuntimeFatal)?;
+    let type_name = type_name.ok_or(EvalStatus::RuntimeFatal)?;
+    Ok((var_name, type_name))
+}
+
+/// Applies the eval-supported `settype()` scalar target conversion.
+fn eval_settype_cast_value(
+    value: RuntimeCellHandle,
+    type_name: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let type_name = values.string_bytes(type_name)?;
+    let type_name = String::from_utf8_lossy(&type_name).to_ascii_lowercase();
+    let converted = match type_name.as_str() {
+        "bool" | "boolean" => Some(values.cast_bool(value)?),
+        "float" | "double" => Some(values.cast_float(value)?),
+        "int" | "integer" => Some(values.cast_int(value)?),
+        "string" => Some(values.cast_string(value)?),
+        _ => None,
+    };
+    Ok(converted)
+}
+
+/// Evaluates by-value `settype()` callable dispatch without mutating the source argument.
+fn eval_settype_value_result(
+    value: RuntimeCellHandle,
+    type_name: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    values.warning("settype(): Argument #1 ($var) must be passed by reference, value given")?;
+    if let Some(converted) = eval_settype_cast_value(value, type_name, values)? {
+        values.release(converted)?;
+        return values.bool_value(true);
+    }
+    values.bool_value(false)
+}
+
 /// Evaluates direct by-reference `array_pop()` / `array_shift()` calls and writes back the array.
 fn eval_builtin_array_pop_shift_call(
     name: &str,
@@ -4497,6 +4619,9 @@ fn eval_builtin_array_pop_shift_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if name == "settype" {
+        return eval_builtin_settype_call(args, context, scope, values);
+    }
     if matches!(name, "array_push" | "array_unshift") {
         return eval_builtin_array_push_unshift_call(name, args, context, scope, values);
     }
@@ -21401,6 +21526,40 @@ return call_user_func_array("intval", ["9"]);"#,
 
         assert_eq!(values.output, "42:3.5:12:false:7");
         assert_eq!(values.get(result), FakeValue::Int(9));
+    }
+
+    /// Verifies eval `settype()` mutates direct variables and warns for callable by-value dispatch.
+    #[test]
+    fn execute_program_dispatches_settype_builtin() {
+        let program = parse_fragment(
+            br#"$x = 42;
+echo settype($x, "string") ? gettype($x) . ":" . $x : "bad";
+echo ":";
+$y = "0";
+echo settype(type: "bool", var: $y) ? gettype($y) . ":" . ($y ? "true" : "false") : "bad";
+echo ":";
+echo settype($missing, "integer") ? gettype($missing) . ":" . $missing : "bad";
+echo ":";
+$z = 3.8;
+echo call_user_func("settype", $z, "integer") ? gettype($z) . ":" . $z : "bad";
+echo ":";
+return function_exists("settype");"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(
+            values.output,
+            "string:42:boolean:false:integer:0:double:3.8:"
+        );
+        assert_eq!(values.get(result), FakeValue::Bool(true));
+        assert_eq!(
+            values.warnings,
+            ["settype(): Argument #1 ($var) must be passed by reference, value given"]
+        );
     }
 
     /// Verifies eval `gettype()` maps runtime tags to PHP type names directly and by callable.
