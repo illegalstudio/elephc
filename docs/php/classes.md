@@ -500,6 +500,24 @@ For named receivers, elephc preserves PHP's written/imported spelling for the
 operations such as `new`, `instanceof`, static method calls, and static property
 access.
 
+`$expr::class` (PHP 8.0) resolves the class name of the value held by an expression
+receiver at runtime — `$obj::class`, `$v[$i]::class`, `($foo)::class`. Unlike the
+named-receiver forms above (which are compile-time constants), this is a runtime
+lookup: it desugars to `get_class($expr)`, so the receiver must be an object and the
+result is the object's actual (possibly subclass) class, matching PHP.
+
+```php
+<?php
+class Box {}
+class Derived extends Box {}
+$b = new Derived();
+echo $b::class;                      // "Derived" — runtime class, not the declared type
+
+enum Suit { case Hearts; case Spades; }
+$c = Suit::Spades;
+echo $c::class;                      // "Suit" — an enum case is an object
+```
+
 ## Late static binding constructors (`new self()`, `new static()`, `new parent()`)
 
 The `new self()`, `new static()`, and `new parent()` factory patterns are supported inside class methods:

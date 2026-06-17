@@ -81,6 +81,25 @@ pub(super) fn parse_expr_bp(
                 // `call_user_func([$cls, $method], ...args)`, reusing the runtime dispatch path.
                 let span = tokens[*pos].1;
                 *pos += 1; // consume '::'
+                // `$expr::class` (PHP 8.0) — the runtime class name of the value held by
+                // an expression receiver. The named-receiver `Foo::class` / `self::class`
+                // forms are compile-time constants parsed in the prefix parser; only a
+                // dynamic receiver reaches this postfix arm. For objects (the only case
+                // the bypass path exercises) this is PHP-faithfully equivalent to
+                // `get_class($expr)`, so desugar to that call and reuse the existing
+                // `get_class` catalog entry, signature, and AArch64/x86_64 dynamic
+                // class-name lowering instead of introducing a new AST node / runtime.
+                if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Class)) {
+                    *pos += 1; // consume `class`
+                    lhs = Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::unqualified("get_class"),
+                            args: vec![lhs],
+                        },
+                        span,
+                    );
+                    continue;
+                }
                 let member = match tokens.get(*pos).map(|(token, s)| (token.clone(), *s)) {
                     Some((Token::Identifier(name), name_span)) => {
                         *pos += 1;

@@ -176,3 +176,84 @@ echo Cfg::TIMEOUT;
     );
     assert_eq!(out, "30");
 }
+
+/// Verifies `$obj::class` on a simple variable receiver returns the runtime class name.
+/// Regression for the Symfony `polyfill-deepclone` `$v[1]::class` wall: `::class` on an
+/// expression receiver (not a named class) desugars to `get_class($expr)`.
+#[test]
+fn test_expr_class_on_object_variable() {
+    //! Verifies `$obj::class` resolves to the object's class name via get_class.
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+$b = new Box();
+echo $b::class;
+"#,
+    );
+    assert_eq!(out, "Box");
+}
+
+/// Verifies an enum case is a first-class object for `$expr::class` (the DeepClone value is a
+/// `\UnitEnum`). A simple-variable enum receiver reports the enum class name via get_class.
+#[test]
+fn test_expr_class_on_enum_case_variable() {
+    //! Verifies `$enumCase::class` resolves to the enum class name.
+    let out = compile_and_run(
+        r#"<?php
+enum Suit { case Hearts; case Spades; }
+$c = Suit::Spades;
+echo $c::class;
+"#,
+    );
+    assert_eq!(out, "Suit");
+}
+
+/// Verifies `$v[i]::class` — `::class` on an array-access expression receiver — the
+/// `polyfill-deepclone/DeepClone.php:87` receiver shape (`$v[1]::class`). Uses plain objects
+/// as the array elements (enum cases in array literals lose object identity — a separate,
+/// pre-existing gap tracked independently of this `::class` fix).
+#[test]
+fn test_expr_class_on_array_access_receiver() {
+    //! Verifies `::class` works on an array-access expression (the DeepClone receiver shape).
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+$v = [new Box(), new Box()];
+echo $v[1]::class;
+"#,
+    );
+    assert_eq!(out, "Box");
+}
+
+/// Verifies `$obj::class` returns the *runtime* class (the actual instance class), not the
+/// declared/variable type — the semantic distinction from the compile-time `Foo::class` form.
+/// A Derived stored as Base still reports "Derived", matching PHP `get_class`.
+#[test]
+fn test_expr_class_returns_runtime_class() {
+    //! Verifies `$obj::class` is a runtime get_class, not a compile-time declared type.
+    let out = compile_and_run(
+        r#"<?php
+class Base {}
+class Derived extends Base {}
+$b = new Derived();
+echo $b::class;
+"#,
+    );
+    assert_eq!(out, "Derived");
+}
+
+/// Verifies the `polyfill-deepclone` concat shape `$v[1]::class . '::' . <tail>` compiles and
+/// concatenates. The real DeepClone tail is `$v[1]->name` (enum-case `->name`, a separate
+/// gate); here the tail is a literal so this regression isolates the `$expr::class` wall.
+#[test]
+fn test_expr_class_concat_shape() {
+    //! Verifies `$expr::class` composes in a string concat expression.
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+$b = new Box();
+echo $b::class . '::marker';
+"#,
+    );
+    assert_eq!(out, "Box::marker");
+}
