@@ -146,6 +146,30 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release the class-exists helper frame
     emitter.instruction("ret");                                                 // return the class-exists flag to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_object_class_name");
+    emitter.instruction("cbz x0, __elephc_eval_value_object_class_name_miss");  // reject null boxed handles before reading their tag
+    emitter.instruction("ldr x9, [x0]");                                        // load the boxed eval value runtime tag
+    emitter.instruction("cmp x9, #6");                                          // tag 6 is an object payload
+    emitter.instruction("b.ne __elephc_eval_value_object_class_name_miss");     // non-objects cannot provide a class name
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
+    emitter.instruction("cbz x9, __elephc_eval_value_object_class_name_miss");  // reject malformed object payloads
+    emitter.instruction("ldr x10, [x9]");                                       // load the object's runtime class id
+    abi::emit_symbol_address(emitter, "x11", "_class_name_count");
+    emitter.instruction("ldr x11, [x11]");                                      // load the dense class-name table length
+    emitter.instruction("cmp x10, x11");                                        // check whether the class id is in table bounds
+    emitter.instruction("b.hs __elephc_eval_value_object_class_name_miss");     // reject missing or out-of-range class ids
+    abi::emit_symbol_address(emitter, "x11", "_class_name_entries");
+    emitter.instruction("lsl x12, x10, #4");                                    // convert class id to a 16-byte table-entry offset
+    emitter.instruction("add x11, x11, x12");                                   // address the class-name entry for this class id
+    emitter.instruction("ldr x1, [x11]");                                       // load the class-name string pointer
+    emitter.instruction("ldr x2, [x11, #8]");                                   // load the class-name string length
+    emitter.instruction("cbz x2, __elephc_eval_value_object_class_name_miss");  // reject table holes with empty names
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("b __rt_mixed_from_value");                             // persist and box the class-name string for Rust
+    emitter.label("__elephc_eval_value_object_class_name_miss");
+    emitter.instruction("mov x0, xzr");                                         // report failure as a null C pointer to Rust
+    emitter.instruction("ret");                                                 // return the failure sentinel
+
     label_c_global(emitter, "__elephc_eval_value_array_new");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for array allocation and boxing
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across runtime calls
@@ -1302,6 +1326,32 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the class-exists flag to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_object_class_name");
+    emitter.instruction("test rdi, rdi");                                       // reject null boxed handles before reading their tag
+    emitter.instruction("jz __elephc_eval_value_object_class_name_miss_x86");   // null handles cannot provide a class name
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed eval value runtime tag
+    emitter.instruction("cmp r10, 6");                                          // tag 6 is an object payload
+    emitter.instruction("jne __elephc_eval_value_object_class_name_miss_x86");  // non-objects cannot provide a class name
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
+    emitter.instruction("test r10, r10");                                       // check the unboxed object pointer before dereferencing it
+    emitter.instruction("jz __elephc_eval_value_object_class_name_miss_x86");   // reject malformed object payloads
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the object's runtime class id
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_class_name_count", 0);
+    emitter.instruction("cmp r11, rdx");                                        // check whether the class id is in table bounds
+    emitter.instruction("jae __elephc_eval_value_object_class_name_miss_x86");  // reject missing or out-of-range class ids
+    abi::emit_symbol_address(emitter, "rdx", "_class_name_entries");
+    emitter.instruction("shl r11, 4");                                          // convert class id to a 16-byte table-entry offset
+    emitter.instruction("add rdx, r11");                                        // address the class-name entry for this class id
+    emitter.instruction("mov rdi, QWORD PTR [rdx]");                            // load the class-name string pointer
+    emitter.instruction("mov rsi, QWORD PTR [rdx + 8]");                        // load the class-name string length
+    emitter.instruction("test rsi, rsi");                                       // table holes use a zero-length name
+    emitter.instruction("jz __elephc_eval_value_object_class_name_miss_x86");   // reject table holes with empty names
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("jmp __rt_mixed_from_value");                           // persist and box the class-name string for Rust
+    emitter.label("__elephc_eval_value_object_class_name_miss_x86");
+    emitter.instruction("xor eax, eax");                                        // report failure as a null C pointer to Rust
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     label_c_global(emitter, "__elephc_eval_value_array_new");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls

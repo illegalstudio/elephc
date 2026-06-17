@@ -3175,6 +3175,25 @@ echo ":"; echo function_exists("gettype");');
     );
 }
 
+/// Verifies eval `get_class()` resolves stdClass and AOT object runtime names.
+#[test]
+fn test_eval_dispatches_get_class_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalClassNameProbe {}
+
+eval('$object = json_decode("{}");
+echo get_class($object) . ":";
+$probe = new EvalClassNameProbe();
+echo get_class($probe) . ":";
+echo call_user_func("get_class", $object) . ":";
+echo call_user_func_array("get_class", ["object" => $probe]) . ":";
+echo function_exists("get_class");');
+"#,
+    );
+    assert_eq!(out, "stdClass:EvalClassNameProbe:stdClass:EvalClassNameProbe:1");
+}
+
 /// Verifies eval `define()` and `defined()` share dynamic constant names across fragments.
 #[test]
 fn test_eval_define_and_defined_dynamic_constants() {
