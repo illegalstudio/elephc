@@ -4353,6 +4353,26 @@ echo class_exists(class: "MissingEvalClassExistsProbe", autoload: false) ? "Y" :
     assert_eq!(out, "YYYYYN");
 }
 
+/// Verifies eval `interface_exists()` probes generated AOT interface metadata.
+#[test]
+fn test_eval_fragment_interface_exists_probes_aot_interfaces() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalInterfaceExistsProbe {}
+class EvalInterfaceExistsImpl implements EvalInterfaceExistsProbe {}
+
+eval('echo interface_exists("EvalInterfaceExistsProbe") ? "Y" : "N";
+echo interface_exists("evalinterfaceexistsprobe") ? "Y" : "N";
+echo interface_exists("\EvalInterfaceExistsProbe") ? "Y" : "N";
+echo interface_exists("EvalInterfaceExistsImpl") ? "Y" : "N";
+echo call_user_func("interface_exists", "EvalInterfaceExistsProbe") ? "Y" : "N";
+echo call_user_func_array("interface_exists", ["autoload" => false, "interface" => "\EvalInterfaceExistsProbe"]) ? "Y" : "N";
+echo function_exists("interface_exists");');
+"#,
+    );
+    assert_eq!(out, "YYYNYY1");
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {

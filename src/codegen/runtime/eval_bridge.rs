@@ -146,6 +146,22 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release the class-exists helper frame
     emitter.instruction("ret");                                                 // return the class-exists flag to Rust
 
+    label_c_global(emitter, "__elephc_eval_interface_exists");
+    emitter.instruction("sub sp, sp, #16");                                     // preserve the Rust return address across the metadata lookup
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across runtime call
+    emitter.instruction("mov x29, sp");                                         // establish a stable interface-exists wrapper frame
+    emitter.instruction("mov x2, x1");                                          // move the C string length into the internal string-length register
+    emitter.instruction("mov x1, x0");                                          // move the C string pointer into the internal string-pointer register
+    emitter.instruction("bl __rt_instanceof_lookup");                           // resolve the name against class/interface metadata
+    emitter.instruction("cmp x0, #0");                                          // did the name resolve to any class-like target?
+    emitter.instruction("cset x0, ne");                                         // keep true only when metadata lookup succeeded
+    emitter.instruction("cmp x2, #1");                                          // target kind 1 means interface metadata
+    emitter.instruction("cset x1, eq");                                         // keep true only for interface targets
+    emitter.instruction("and x0, x0, x1");                                      // return success && interface-kind
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the interface-exists wrapper frame
+    emitter.instruction("ret");                                                 // return the interface-exists flag to Rust
+
     label_c_global(emitter, "__elephc_eval_value_object_class_name");
     emitter.instruction("cbz x0, __elephc_eval_value_object_class_name_miss");  // reject null boxed handles before reading their tag
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed eval value runtime tag
@@ -1409,6 +1425,21 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the class-exists flag to Rust
+
+    label_c_global(emitter, "__elephc_eval_interface_exists");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime call
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable interface-exists wrapper frame
+    emitter.instruction("mov rax, rdi");                                        // move the C string pointer into the internal string-pointer register
+    emitter.instruction("mov rdx, rsi");                                        // move the C string length into the internal string-length register
+    emitter.instruction("call __rt_instanceof_lookup");                         // resolve the name against class/interface metadata
+    emitter.instruction("test rax, rax");                                       // did the name resolve to any class-like target?
+    emitter.instruction("setne al");                                            // keep true only when metadata lookup succeeded
+    emitter.instruction("cmp rdx, 1");                                          // target kind 1 means interface metadata
+    emitter.instruction("sete cl");                                             // keep true only for interface targets
+    emitter.instruction("and al, cl");                                          // return success && interface-kind
+    emitter.instruction("movzx eax, al");                                       // widen the C boolean result for Rust
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the interface-exists flag to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_class_name");
     emitter.instruction("test rdi, rdi");                                       // reject null boxed handles before reading their tag

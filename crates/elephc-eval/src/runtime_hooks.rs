@@ -69,6 +69,7 @@ unsafe extern "C" {
         args: *mut RuntimeCell,
     ) -> u64;
     fn __elephc_eval_class_exists(name_ptr: *const u8, name_len: u64) -> u64;
+    fn __elephc_eval_interface_exists(name_ptr: *const u8, name_len: u64) -> u64;
     fn __elephc_eval_value_object_class_name(object: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_parent_class_name(object_or_class: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
@@ -349,6 +350,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Returns whether the generated AOT class-name table contains the requested class.
     fn class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_class_exists(name.as_ptr(), name.len() as u64) != 0 })
+    }
+
+    /// Returns whether the generated AOT interface-name table contains the requested interface.
+    fn interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_interface_exists(name.as_ptr(), name.len() as u64) != 0 })
     }
 
     /// Returns a boxed Mixed string naming a boxed Mixed object's runtime class.

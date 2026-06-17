@@ -386,6 +386,9 @@ pub trait RuntimeValueOps {
     /// Returns whether a runtime class table contains the requested class name.
     fn class_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
 
+    /// Returns whether a runtime interface table contains the requested interface name.
+    fn interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
+
     /// Returns the PHP-visible runtime class name for an object cell.
     fn object_class_name(
         &mut self,
@@ -1804,6 +1807,7 @@ fn eval_positional_expr_call(
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "class_exists" => eval_builtin_class_exists(args, context, scope, values),
+        "interface_exists" => eval_builtin_interface_exists(args, context, scope, values),
         "chop" => eval_builtin_trim_like(name, args, context, scope, values),
         "boolval" | "floatval" | "intval" | "strval" => {
             eval_builtin_cast(name, args, context, scope, values)
@@ -2133,6 +2137,49 @@ fn eval_class_exists_name(
     values.class_exists(name)
 }
 
+/// Evaluates `interface_exists(...)` against generated interface-name metadata.
+fn eval_builtin_interface_exists(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let name = match args {
+        [name] => eval_expr(name, context, scope, values)?,
+        [name, autoload] => {
+            let name = eval_expr(name, context, scope, values)?;
+            let _ = eval_expr(autoload, context, scope, values)?;
+            name
+        }
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    let exists = eval_interface_exists_name(name, values)?;
+    values.bool_value(exists)
+}
+
+/// Evaluates `interface_exists(...)` from already materialized call arguments.
+fn eval_interface_exists_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let exists = match evaluated_args {
+        [name] => eval_interface_exists_name(*name, values)?,
+        [name, _autoload] => eval_interface_exists_name(*name, values)?,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.bool_value(exists)
+}
+
+/// Normalizes a PHP interface-name cell and probes generated interface metadata.
+fn eval_interface_exists_name(
+    name: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let name = values.string_bytes(name)?;
+    let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values.interface_exists(name.trim_start_matches('\\'))
+}
+
 /// Evaluates PHP's `isset(...)` language construct over eval-visible values.
 fn eval_builtin_isset(
     args: &[EvalExpr],
@@ -2257,6 +2304,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "call_user_func"
             | "call_user_func_array"
             | "class_exists"
+            | "interface_exists"
             | "boolval"
             | "chop"
             | "chr"
@@ -2605,6 +2653,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_exists" => Some(&["class", "autoload"]),
+        "interface_exists" => Some(&["interface", "autoload"]),
         "chdir" | "mkdir" | "rmdir" | "scandir" => Some(&["directory"]),
         "chmod" => Some(&["filename", "permissions"]),
         "chr" => Some(&["codepoint"]),
@@ -3580,6 +3629,7 @@ fn eval_builtin_with_values(
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
+        "interface_exists" => eval_interface_exists_result(evaluated_args, values)?,
         "json_decode" => match evaluated_args {
             [json] => eval_json_decode_result(*json, None, None, None, context, values)?,
             [json, associative] => {
@@ -15526,6 +15576,11 @@ mod tests {
             Ok(name.eq_ignore_ascii_case("KnownClass"))
         }
 
+        /// Reports one fake AOT interface for eval `interface_exists` unit tests.
+        fn interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
+            Ok(name.eq_ignore_ascii_case("KnownInterface"))
+        }
+
         /// Returns a fake PHP class name for object-tagged test values.
         fn object_class_name(
             &mut self,
@@ -21781,6 +21836,26 @@ echo function_exists("missing_probe") . "x";"#,
             .expect("execute eval ir");
 
         assert_eq!(values.output, "1x1x1x1xxx");
+    }
+
+    /// Verifies eval `interface_exists()` probes generated interface metadata by callable.
+    #[test]
+    fn execute_program_interface_exists_uses_runtime_probe() {
+        let program = parse_fragment(
+            br#"echo interface_exists("KnownInterface") ? "Y" : "N";
+echo interface_exists("knowninterface") ? "Y" : "N";
+echo interface_exists("KnownClass") ? "Y" : "N";
+echo call_user_func("interface_exists", "KnownInterface") ? "Y" : "N";
+echo call_user_func_array("interface_exists", ["interface" => "KnownInterface"]) ? "Y" : "N";
+echo interface_exists(interface: "MissingInterface", autoload: false) ? "Y" : "N";"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "YYNYYN");
     }
 
     /// Verifies eval `define()` and `defined()` share a dynamic constant-name table.
