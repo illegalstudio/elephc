@@ -9,6 +9,11 @@
 
 use crate::support::*;
 
+use std::collections::HashSet;
+
+use elephc::errors::{CompileError, CompileWarning};
+use elephc::parser::ast::Program;
+
 /// Verifies PSR-4 single namespace autoload.
 #[test]
 fn test_psr4_single_namespace_autoload() {
@@ -1662,4 +1667,150 @@ fn test_spl_autoload_call_with_literal_loads_class() {
         "main.php",
     );
     assert_eq!(out, "forced");
+}
+
+// --- tolerant autoload.files skip (A-P0.4) ---
+
+/// Runs the frontend pipeline (lexer through name resolver) plus the autoload pass
+/// directly, returning the `autoload::run` result without running type checking or
+/// codegen. Used by the tolerant-skip unit tests to inspect the returned
+/// `CompileWarning`s and to assert that a referenced class still hard-fails. Each
+/// call writes its fixtures to an isolated temp directory (mirroring the codegen
+/// harness) and cleans it up afterwards.
+fn autoload_run_result(
+    files: &[(&str, &str)],
+    main_file: &str,
+) -> Result<(Program, Vec<CompileWarning>), CompileError> {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+    for (path, content) in files {
+        let full_path = dir.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+    let php_path = dir.join(main_file);
+    let source = fs::read_to_string(&php_path).unwrap();
+    let base_dir = php_path.parent().unwrap();
+    let result = (|| -> Result<(Program, Vec<CompileWarning>), CompileError> {
+        let tokens = elephc::lexer::tokenize(&source)?;
+        let ast = elephc::parser::parse(&tokens)?;
+        let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
+        let define_set: HashSet<String> = HashSet::new();
+        let ast = elephc::conditional::apply(ast, &define_set);
+        let (autoload_registry, ast) = elephc::autoload::Registry::build(base_dir, ast);
+        let resolved = elephc::resolver::resolve(ast, base_dir)?;
+        let resolved = elephc::autoload::collect_aliases(resolved);
+        let resolved = elephc::name_resolver::resolve(resolved)?;
+        elephc::autoload::run(resolved, base_dir, &autoload_registry)
+    })();
+    let _ = fs::remove_dir_all(&dir);
+    result
+}
+
+/// Verifies an unresolvable `autoload.files` helper is skipped with a warning
+/// rather than aborting the build, when the app does not reference it. The
+/// `src/broken.php` helper uses a dynamic `require $x;` that the closed-world
+/// resolver cannot fold; since `main.php` only calls `shout()` from
+/// `src/helpers.php`, the build still succeeds and emits `HI`.
+#[test]
+fn test_autoload_files_tolerant_skip_unresolvable_unreferenced_helper() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"files":["src/helpers.php","src/broken.php"]}}"#,
+            ),
+            (
+                "src/helpers.php",
+                "<?php\nfunction shout(string $s): string { return strtoupper($s); }\n",
+            ),
+            (
+                "src/broken.php",
+                "<?php\n// Dynamic include: the closed-world resolver cannot fold `require $x;`, so this helper is unloadable and is skipped.\n$x = __DIR__;\nrequire $x;\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho shout(\"hi\");\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "HI");
+}
+
+/// Verifies the tolerant skip does not suppress a failure to load a class the
+/// program actually references. `src/Foo.php` (the PSR-4 target for `App\Foo`)
+/// is unparseable, and `main.php` references `App\Foo`, so the class-triggered
+/// load must still return `Err` rather than being tolerated away like an
+/// unreferenced `autoload.files` helper.
+#[test]
+fn test_autoload_tolerant_skip_does_not_suppress_referenced_class_failure() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Foo.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$f = new App\\Foo();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert!(result.is_err(), "referenced broken class must hard-fail, got Ok");
+}
+
+/// Verifies the tolerant skip returns a `CompileWarning` naming the skipped
+/// helper. The unresolvable `src/broken.php` helper produces exactly one warning
+/// whose message contains the file path and the word "skipped"; the loadable
+/// `src/helpers.php` is still spliced into the program.
+#[test]
+fn test_autoload_tolerant_skip_returns_warning_naming_helper() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"files":["src/helpers.php","src/broken.php"]}}"#,
+            ),
+            (
+                "src/helpers.php",
+                "<?php\nfunction shout(string $s): string { return strtoupper($s); }\n",
+            ),
+            (
+                "src/broken.php",
+                "<?php\n$x = __DIR__;\nrequire $x;\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho shout(\"hi\");\n",
+            ),
+        ],
+        "main.php",
+    );
+    let (program, warnings) =
+        result.expect("unreferenced broken helper must not fail the build");
+    assert!(
+        program.len() >= 1,
+        "helpers.php statements must be spliced into the program"
+    );
+    assert_eq!(warnings.len(), 1, "exactly one skip warning expected");
+    let msg = &warnings[0].message;
+    assert!(
+        msg.contains("broken.php"),
+        "warning must name the helper, got: {msg}"
+    );
+    assert!(
+        msg.contains("skipped"),
+        "warning must say 'skipped', got: {msg}"
+    );
 }

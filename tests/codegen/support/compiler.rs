@@ -126,7 +126,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
     let resolved = elephc::image_prelude::inject_if_used(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved =
+    let (resolved, _autoload_warnings) =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =

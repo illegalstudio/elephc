@@ -222,6 +222,8 @@ The compiler reads four `autoload` (and `autoload-dev`) subsections:
 
 `autoload-dev` is always merged in alongside `autoload`. There is no production/test split in the AOT model — both contribute to the same compiled binary.
 
+> `autoload.files` helpers that fail to read, parse, resolve, or name-resolve are skipped with a warning rather than aborting the whole build — they are always-included but frequently unreferenced by the app, so one unsupported construct in an unused helper cannot kill compilation. The warning names the skipped file and the failure reason. A class the program actually references is **not** tolerated this way: if its file fails to load, the build still hard-fails. To force a hard-fail on a skipped helper, fix the construct or remove the file from `autoload.files`.
+
 ### `class_exists` / `interface_exists` / `trait_exists` / `enum_exists`
 
 When called with a string literal class name and the default `$autoload = true`, the compiler treats the literal as an explicit demand to load the class:

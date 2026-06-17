@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 pub use registry::Registry;
 
-use crate::errors::CompileError;
+use crate::errors::{CompileError, CompileWarning};
 use crate::parser::ast::Program;
 use crate::parser::ast::Stmt;
 use crate::span::Span;
@@ -99,14 +99,21 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
 /// the program, look it up first in the composer.json PSR-4 index and
 /// then in the user-registered closure rules; parse the referenced file,
 /// run resolver+name_resolver on it, and append. Iterate until stable.
+///
+/// Returns the program plus any `CompileWarning`s collected along the way:
+/// `autoload.files` helpers that fail to parse or read are skipped with a
+/// warning rather than aborting the build (they are always-included but
+/// frequently unreferenced by the app), while a class the program actually
+/// references must still load or the call returns `Err`.
 pub fn run(
     mut program: Program,
     base_dir: &Path,
     registry: &Registry,
-) -> Result<Program, CompileError> {
+) -> Result<(Program, Vec<CompileWarning>), CompileError> {
     if registry.is_empty() {
-        return Ok(program);
+        return Ok((program, Vec::new()));
     }
+    let mut warnings: Vec<CompileWarning> = Vec::new();
     let mut included: HashSet<PathBuf> = HashSet::new();
     const MAX_ITERATIONS: usize = 64;
 
@@ -118,7 +125,21 @@ pub fn run(
     for path in registry.always_included_files() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
-            prefix.extend(load_autoloaded_file(&canonical, base_dir)?);
+            // `autoload.files` helpers are always-included but often unreferenced by
+            // the app. Tolerate an unparseable or unreadable helper by skipping it and
+            // recording a warning rather than aborting the whole build, so one
+            // unsupported construct in an unused helper cannot kill compilation.
+            match load_autoloaded_file(&canonical, base_dir) {
+                Ok(stmts) => prefix.extend(stmts),
+                Err(e) => warnings.push(CompileWarning::new(
+                    Span::dummy(),
+                    &format!(
+                        "Autoload: skipped autoload.files helper '{}': {}",
+                        canonical.display(),
+                        e.message
+                    ),
+                )),
+            }
         }
     }
     if !prefix.is_empty() {
@@ -138,6 +159,9 @@ pub fn run(
             if let Some(path) = resolve_class(&fqn, registry) {
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
+                    // Referenced classes must load or the program is broken: a class the
+                    // app actually uses cannot be tolerated-away like an unreferenced
+                    // `autoload.files` helper, so a load failure here is a hard error.
                     let loaded = load_autoloaded_file(&canonical, base_dir)?;
                     insertions.push((stmt_idx, loaded));
                 }
@@ -153,7 +177,7 @@ pub fn run(
             program.splice(insert_at..insert_at, loaded);
         }
     }
-    Ok(program)
+    Ok((program, warnings))
 }
 
 /// Lower any top-level literal `class_alias()` calls left after another

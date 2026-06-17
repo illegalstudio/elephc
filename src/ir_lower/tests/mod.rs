@@ -48,7 +48,8 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::var_export_prelude::inject_if_used(ast);
     let ast = crate::image_prelude::inject_if_used(ast);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
-    let ast = crate::autoload::run(ast, parent, &autoload_registry).expect("autoload failed");
+    let (ast, _autoload_warnings) =
+        crate::autoload::run(ast, parent, &autoload_registry).expect("autoload failed");
     let ast = crate::optimize::fold_constants(ast);
     let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast);

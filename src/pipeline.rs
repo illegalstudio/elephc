@@ -173,7 +173,12 @@ pub(crate) fn compile(config: CliConfig) {
 
     let phase_started = Instant::now();
     let ast = match autoload::run(ast, parent, &autoload_registry) {
-        Ok(resolved) => resolved,
+        Ok((resolved, autoload_warnings)) => {
+            for warning in &autoload_warnings {
+                errors::report_warning(warning);
+            }
+            resolved
+        }
         Err(e) => {
             errors::report(&e);
             process::exit(1);
