@@ -70,6 +70,7 @@ unsafe extern "C" {
     ) -> u64;
     fn __elephc_eval_class_exists(name_ptr: *const u8, name_len: u64) -> u64;
     fn __elephc_eval_value_object_class_name(object: *mut RuntimeCell) -> *mut RuntimeCell;
+    fn __elephc_eval_value_parent_class_name(object_or_class: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
@@ -356,6 +357,14 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         object: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_object_class_name(object.as_ptr()) })
+    }
+
+    /// Returns a boxed Mixed string naming a boxed Mixed object's or class string's parent class.
+    fn parent_class_name(
+        &mut self,
+        object_or_class: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_parent_class_name(object_or_class.as_ptr()) })
     }
 
     /// Returns the visible element count for a boxed Mixed array through the generated runtime wrapper.

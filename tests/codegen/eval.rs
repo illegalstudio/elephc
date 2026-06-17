@@ -3194,6 +3194,30 @@ echo function_exists("get_class");');
     assert_eq!(out, "stdClass:EvalClassNameProbe:stdClass:EvalClassNameProbe:1");
 }
 
+/// Verifies eval `get_parent_class()` resolves AOT object and class-string parents.
+#[test]
+fn test_eval_dispatches_get_parent_class_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalParentBase {}
+class EvalParentChild extends EvalParentBase {}
+
+eval('$child = new EvalParentChild();
+echo get_parent_class($child) . ":";
+echo get_parent_class("EvalParentChild") . ":";
+echo get_parent_class("evalparentchild") . ":";
+echo call_user_func("get_parent_class", $child) . ":";
+echo call_user_func_array("get_parent_class", ["object_or_class" => "EvalParentChild"]) . ":";
+echo function_exists("get_parent_class");');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "EvalParentBase:EvalParentBase:EvalParentBase:EvalParentBase:EvalParentBase:1"
+    );
+}
+
 /// Verifies eval `define()` and `defined()` share dynamic constant names across fragments.
 #[test]
 fn test_eval_define_and_defined_dynamic_constants() {
