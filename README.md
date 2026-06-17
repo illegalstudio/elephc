@@ -158,6 +158,9 @@ elephc --check hello.php
 # Fall back to stack-only value placement (default is linear-scan registers)
 elephc --regalloc=stack hot.php
 
+# Disable the EIR optimization passes (identity folding, …) for A/B comparison
+elephc --no-ir-opt hot.php
+
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 

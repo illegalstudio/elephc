@@ -425,3 +425,9 @@ Note that **register allocation** is no longer on this list: the EIR backend now
 runs a linear-scan register allocator (`src/ir_passes/`), described in
 [The IR](the-ir.md). It is a backend pass over EIR rather than an AST-level
 optimization, so it lives outside `src/optimize/`.
+
+IR-level transformations also no longer live here. The EIR backend runs a
+fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting with
+identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …). These are rewrites
+the AST optimizer cannot express well because they need value identity, basic
+blocks, or dominance; see [Optimization Passes](the-ir.md#optimization-passes).

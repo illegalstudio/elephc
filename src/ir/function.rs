@@ -116,6 +116,11 @@ impl Function {
         self.instructions.get(id.as_raw() as usize)
     }
 
+    /// Returns a mutable instruction by identifier, used by in-place IR passes.
+    pub fn instruction_mut(&mut self, id: InstId) -> Option<&mut Instruction> {
+        self.instructions.get_mut(id.as_raw() as usize)
+    }
+
     /// Returns a value by identifier.
     pub fn value(&self, id: ValueId) -> Option<&Value> {
         self.values.get(id.as_raw() as usize)

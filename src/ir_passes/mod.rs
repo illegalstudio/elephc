@@ -7,20 +7,26 @@
 //! - `crate::pipeline::compile()` after AST-to-EIR lowering, before codegen.
 //!
 //! Key details:
-//! - Passes are read-only or produce sidecar tables (e.g. liveness, allocation).
-//!   They do not mutate `Function` in place.
+//! - Passes are either read-only analyses that produce sidecar tables (e.g.
+//!   liveness, allocation) or in-place transformations driven by the fixed-point
+//!   `driver`, which re-validates each function after every pass in debug/test
+//!   builds.
 
 mod allocation;
 mod cfg;
 mod clobber;
+mod driver;
+mod identity_arith;
 mod intervals;
 mod liveness;
 mod regalloc;
+mod rewrite;
 
 #[cfg(test)]
 mod tests;
 
 pub use allocation::{Allocation, Location};
+pub use driver::optimize_module;
 pub use intervals::{build_intervals, LiveInterval};
 pub use liveness::{compute_liveness, LivenessInfo};
 pub use regalloc::allocate_registers;

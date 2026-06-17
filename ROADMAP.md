@@ -709,8 +709,8 @@ EIR backend is the user-facing default.
 - [x] Deprecation warning on `--ast-backend`; from this point the legacy AST backend is frozen as a diagnostic-only fallback, not a feature/parity target
 - [x] EIR-only backend documentation updates (`the-codegen.md`, `the-ir.md`) with `--ast-backend` documented only as frozen diagnostic fallback
 - [ ] EIR-only backend release notes with `--ast-backend` documented only as frozen diagnostic fallback
-- [ ] Fixed-point IR pass driver with validation after each pass in test builds
-- [ ] Identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, etc.)
+- [x] Fixed-point IR pass driver with validation after each pass in test builds — `src/ir_passes/driver.rs` runs registered `IrPass` transforms over each function to a fixed point; in debug/test builds it re-validates the function after every pass (panicking and naming the offending pass on malformed IR) and panics on non-convergence within the iteration cap, with both guards compiled out of `--release` (cap then stops and proceeds). Shared use-rewriting (RAUW) lives in `src/ir_passes/rewrite.rs`.
+- [x] Identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, etc.) — `src/ir_passes/identity_arith.rs`, the first registered pass. Fold-to-operand neutralizes the op to `nop` and redirects uses to the surviving operand (`x + 0`, `x * 1`, `x | 0`, `x << 0`, `x & x`, `x / 1`, `x * 1.0`, …); fold-to-zero rewrites the op in place to `const_i64 0` (`x ^ x`, `x - x`, `x * 0`, `x & 0`, `x % 1`). PHP-equivalence preserved: integer `x / 0` / `x % 0` still trap, and float additive-zero / `* 0.0` are excluded for signed-zero/`NaN` safety. Fold chains within a sweep resolve transitively.
 - [ ] Peephole patterns: redundant load/store, box/unbox cancellation, string-literal concat folding, paired acquire/release cancellation, redundant `Move` / `Borrow` cleanup
 - [ ] Dead instruction elimination over the IR CFG (absorbs former v0.23 "Dead code elimination v3")
 - [ ] Dead store elimination over PHP local slots

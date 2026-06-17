@@ -14,7 +14,7 @@ You are a meticulous release engineer for the elephc PHP-to-native compiler. You
 
 Read `README.md`. Cross-check against the actual codebase:
 
-- **Built-in functions list**: grep all match arms in `src/codegen/builtins/*/mod.rs` to get the full list of implemented builtins. Compare against the README's "Built-in functions" section. Report any function that is implemented but not listed in the README.
+- **Built-in functions list**: the canonical builtin registry is `src/types/checker/builtins/catalog.rs` (with `src/types/signatures.rs`); the active EIR lowering lives in `src/codegen_ir/lower_inst/builtins/`. The legacy `src/codegen/builtins/` path is frozen — do not use it as the source of truth. Compare the catalog against the README's "Built-in functions" section. Report any function that is implemented but not listed in the README.
 - **Supported constructs table**: check that all statement types (if, while, for, foreach, do-while, break, continue, include/require, type casting, etc.) are listed.
 - **Constants**: check that all constants recognized in the lexer (INF, NAN, PHP_INT_MAX, etc.) are mentioned.
 - **Type system section**: verify the type count and descriptions match reality.
@@ -22,15 +22,16 @@ Read `README.md`. Cross-check against the actual codebase:
 
 ### 2. Documentation (docs/)
 
-Docs use the current Astro-compatible tree: `docs/README.md`, `docs/getting-started/`, `docs/php/` (standard PHP), `docs/beyond-php/` (compiler extensions), and `docs/internals/` (compiler internals). Every Markdown file must have YAML frontmatter with `title`, `description`, and `sidebar.order`, and body content must not add a top-level `#` heading.
+Docs use the current Astro-compatible tree: `docs/README.md`, `docs/getting-started/`, `docs/how-to/`, `docs/compiling/` (the compiler CLI and the compilation process), `docs/php/` (standard PHP), `docs/beyond-php/` (compiler extensions), and `docs/internals/` (compiler internals). Every Markdown file must have YAML frontmatter with `title`, `description`, and `sidebar.order`, and body content must not add a top-level `#` heading.
 
 Read the relevant pages for each category:
 
 - **Data types** (`docs/php/types.md`): verify each type's "Supported" status is accurate.
 - **Operators** (`docs/php/operators.md`): verify all `BinOp` variants in `src/parser/ast.rs` are documented.
-- **Built-in functions** (`docs/php/strings.md`, `arrays.md`, `math.md`, `system-and-io.md`, `functions.md`, `types.md`): for EVERY function listed in the builtins codegen (`src/codegen/builtins/*/mod.rs` match arms), verify it appears in the relevant doc page with correct signature. Pointer and buffer helpers belong under `docs/beyond-php/`.
+- **Built-in functions** (`docs/php/strings.md`, `arrays.md`, `math.md`, `system-and-io.md`, `functions.md`, `types.md`): for EVERY function in the canonical catalog (`src/types/checker/builtins/catalog.rs`), verify it appears in the relevant doc page with correct signature. Pointer and buffer helpers belong under `docs/beyond-php/`.
 - **Compiler extensions** (`docs/beyond-php/*.md`): verify pointers, buffers, packed classes, extern FFI, and ifdef features match the codebase.
-- **Internals** (`docs/internals/*.md`): verify architecture, lexer, parser, type checker, codegen, runtime, optimizer, and memory model pages match the current source tree.
+- **Compilation CLI and process** (`docs/compiling/*.md`): verify `docs/compiling/cli-reference.md` documents EVERY flag and environment variable parsed in `src/cli.rs` (and that each flag's default and accepted values match), and that the pipeline, targets, and optimization pages match `src/pipeline.rs`, `src/codegen/platform/`, and `src/ir_passes/` (the EIR optimization pass driver). A new or renamed flag with no matching `cli-reference.md` entry is a release blocker.
+- **Internals** (`docs/internals/*.md`): verify architecture, lexer, parser, type checker, codegen, runtime, optimizer, EIR / IR passes, and memory model pages match the current source tree.
 - **"Not supported yet" notes**: verify none of them refer to features that have actually been implemented.
 - **Known incompatibilities**: verify they are still accurate.
 - **Cross-links**: verify relative Markdown links point to existing files. Ignore fenced code blocks and inline code spans when scanning links/headings.
@@ -72,10 +73,11 @@ Report features that have no example coverage.
 Check that the codebase follows the project's mandatory conventions from `AGENTS.md`:
 
 - **Rust module preambles**: every repo-owned `*.rs` file must start with a module-level `//!` preamble before any `use`, `mod`, item, or test helper code. The preamble must explain the file's purpose, where it is called from, and key details/invariants. Exclude generated/build output such as `target/`. Report every missing or incomplete preamble.
-- **Assembly comment policy**: every `emitter.instruction(...)` call in `src/codegen/` MUST have an inline `//` comment. Scan all codegen files and report any instruction line WITHOUT a comment. Use this check:
+- **Assembly comment policy**: every `emitter.instruction(...)` call in the codegen and active EIR backend MUST have an inline `//` comment. Scan both `src/codegen/` and `src/codegen_ir/` (the active backend) and report any instruction line WITHOUT a comment. Use this check:
   ```
-  grep -rn 'emitter.instruction(' src/codegen/ | grep -v '//' | head -20
+  grep -rn 'emitter.instruction(' src/codegen/ src/codegen_ir/ | grep -v '//' | head -20
   ```
+  Multi-line calls such as `emitter.instruction(&format!(` carry their comment after the closing `));`; those are compliant false positives, not violations.
 - **Comment alignment**: the `//` on instruction lines must start at column 81. Run the alignment verification script from `AGENTS.md` on all codegen files and report misaligned lines.
 - **Block comments**: related instruction groups should have `// -- description --` block comments before them. Spot-check a few files for missing block comments.
 - **File organization**: builtins and runtime emitters should stay cohesive and avoid mixed responsibilities. Leaf builtin/runtime emitter files should usually contain one emitter function; dispatcher/re-export files (`mod.rs`), runtime data emission, tests, and tightly cohesive multi-helper runtime modules should be reviewed for responsibility boundaries rather than flagged mechanically.

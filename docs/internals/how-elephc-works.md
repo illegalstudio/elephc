@@ -263,9 +263,9 @@ This pass currently handles cases such as:
 
 In our running example there is nothing else to remove: the remaining assignment and `echo` stay as they are.
 
-## Phase 15: EIR lowering and validation
+## Phase 15: EIR lowering, validation, and optimization
 
-**Files:** `src/ir_lower/`, `src/ir/` — See [The EIR Design](the-ir.md) for details.
+**Files:** `src/ir_lower/`, `src/ir/`, `src/ir_passes/` — See [The EIR Design](the-ir.md) for details.
 
 The default backend lowers the checked and optimized AST into elephc IR (EIR), then validates the module before any assembly is emitted. EIR keeps PHP-visible evaluation order, ownership operations, call metadata, runtime helper references, and block structure explicit while still deferring physical registers and stack layout to the target-aware backend.
 
@@ -278,7 +278,9 @@ function main:
   return
 ```
 
-The exact textual IR contains value ids, types, ownership, spans, and terminators, but the important point is that the removed `if` shell does not reappear. `--emit-ir` stops here after printing validated textual EIR.
+After validation, a fixed-point optimization pass driver (`src/ir_passes/`) runs the registered EIR transformation passes over each function until none reports a change. The first pass is [identity arithmetic folding](the-ir.md#optimization-passes) (`x + 0` → `x`, `x * 0` → `0`, …); later releases add more passes to the same driver. In debug and test builds the driver re-validates each function after every pass, so an optimization bug aborts the compile immediately. These passes are on by default and can be disabled with [`--no-ir-opt`](../compiling/optimization.md#eir-optimization-passes).
+
+The exact textual IR contains value ids, types, ownership, spans, and terminators, but the important point is that the removed `if` shell does not reappear. `--emit-ir` stops here after printing the optimized, validated textual EIR; add `--no-ir-opt` to see the IR before the passes run.
 
 ## Phase 16: Code generation
 

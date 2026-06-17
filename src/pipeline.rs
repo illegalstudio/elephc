@@ -18,8 +18,8 @@ use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, codegen_ir, conditional, errors, exports, ir, ir_lower, lexer, linker,
-    magic_constants, name_resolver, optimize, parser, pdo_prelude, resolver, runtime_cache,
+    autoload, codegen, codegen_ir, conditional, errors, exports, ir, ir_lower, ir_passes, lexer,
+    linker, magic_constants, name_resolver, optimize, parser, pdo_prelude, resolver, runtime_cache,
     source_map, types,
 };
 
@@ -49,6 +49,7 @@ pub(crate) fn compile(config: CliConfig) {
         emit_timings,
         emit_source_map,
         regalloc_linear,
+        ir_opt,
         target,
         mut extra_link_libs,
         extra_link_paths,
@@ -216,7 +217,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     if emit_ir {
         let phase_started = Instant::now();
-        let module = match ir_lower::lower_program(&ast, &check_result, target) {
+        let mut module = match ir_lower::lower_program(&ast, &check_result, target) {
             Ok(module) => module,
             Err(err) => {
                 eprintln!("EIR lowering error: {}", err);
@@ -224,6 +225,12 @@ pub(crate) fn compile(config: CliConfig) {
             }
         };
         timings.record_since("ir-lower", phase_started);
+
+        let phase_started = Instant::now();
+        if ir_opt {
+            ir_passes::optimize_module(&mut module);
+        }
+        timings.record_since("ir-opt", phase_started);
 
         let phase_started = Instant::now();
         let text = ir::print_module(&module);
@@ -235,7 +242,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     let ir_module = if matches!(backend, CodegenBackend::Eir) {
         let phase_started = Instant::now();
-        let module = match ir_lower::lower_program(&ast, &check_result, target) {
+        let mut module = match ir_lower::lower_program(&ast, &check_result, target) {
             Ok(module) => module,
             Err(err) => {
                 eprintln!("EIR lowering error: {}", err);
@@ -243,6 +250,12 @@ pub(crate) fn compile(config: CliConfig) {
             }
         };
         timings.record_since("ir-lower", phase_started);
+
+        let phase_started = Instant::now();
+        if ir_opt {
+            ir_passes::optimize_module(&mut module);
+        }
+        timings.record_since("ir-opt", phase_started);
         Some(module)
     } else {
         None

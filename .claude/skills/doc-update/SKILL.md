@@ -20,11 +20,13 @@ The current documentation tree is:
 
 - `docs/README.md`
 - `docs/getting-started/`
+- `docs/how-to/`
+- `docs/compiling/` — the compiler CLI (flags, env vars) and the full compilation process
 - `docs/php/`
 - `docs/beyond-php/`
 - `docs/internals/`
 
-Every `.md` file must have YAML frontmatter with `title`, `description`, and `sidebar.order`. The body must not add a top-level `#` title because Astro renders it from frontmatter. Do not add hand-written previous/next navigation links.
+Every `.md` file must have YAML frontmatter with `title`, `description`, and `sidebar.order`. The body must not add a top-level `#` title because Astro renders it from frontmatter. Do not add hand-written previous/next navigation links. When adding a new page, also add it to the `docs/README.md` index.
 
 ### 2. `docs/internals/architecture.md` — Module map & file counts
 
@@ -33,15 +35,16 @@ Every `.md` file must have YAML frontmatter with `title`, `description`, and `si
 - Count files in each directory: `src/codegen/builtins/{strings,arrays,math,types,io,system,pointers}/`, `src/codegen/runtime/`, and runtime subdirectories including `arrays`, `strings`, `io`, `system`, `exceptions`, `buffers`, `pointers`, and `fibers`.
 - Update the module map tree to match. File counts in parentheses (e.g., `(57 files)`) must be accurate.
 - If a new category directory exists (e.g., `builtins/io/`), add it to the tree.
-- Check target and ABI descriptions against `src/codegen/platform.rs` and `src/codegen/abi/`.
+- Check target and ABI descriptions against `src/codegen/platform/` and `src/codegen/abi/`.
+- Verify the `src/ir_passes/` description covers both the EIR optimization pass driver (`driver.rs`, identity folding, …) and linear-scan register allocation, not register allocation alone.
 - Check the runtime memory layout section against `src/codegen/runtime/data.rs`.
 
 ### 3. `docs/php/*.md` and `docs/beyond-php/*.md` — Supported features
 
-**Source of truth:** `src/types/model.rs` (PhpType enum), `src/types/signatures.rs`, `src/types/checker/builtins/`, `src/codegen/builtins/`, `src/parser/ast.rs` (ExprKind, StmtKind)
+**Source of truth:** `src/types/model.rs` (PhpType enum), `src/types/signatures.rs`, `src/types/checker/builtins/catalog.rs` (canonical builtin registry), `src/codegen_ir/lower_inst/builtins/` (active EIR lowering), `src/parser/ast.rs` (ExprKind, StmtKind). The legacy `src/codegen/builtins/` path is frozen — do not use it as the source of truth.
 
 - Every type in `PhpType` must be documented in `docs/php/types.md` or the relevant extension page.
-- Every builtin function matched in `src/codegen/builtins/*/mod.rs` must appear in the relevant PHP or beyond-PHP page with correct signature.
+- Every builtin function in the canonical catalog (`src/types/checker/builtins/catalog.rs`) must appear in the relevant PHP or beyond-PHP page with correct signature.
 - Every `StmtKind` variant must be covered in `docs/php/control-structures.md`, `docs/php/functions.md`, `docs/php/classes.md`, `docs/php/namespaces.md`, or the relevant extension page.
 - Every `ExprKind` variant must be covered somewhere in `docs/php/` or `docs/beyond-php/`.
 - "Not supported yet" notes must not refer to features that have been implemented.
@@ -83,9 +86,9 @@ Every `.md` file must have YAML frontmatter with `title`, `description`, and `si
 
 ### 8. `docs/internals/the-runtime.md` — Runtime routines
 
-**Source of truth:** `src/codegen/runtime/emitters.rs`, `src/codegen/runtime/x86_minimal.rs`, and `src/codegen/runtime/`
+**Source of truth:** `src/codegen/runtime/emitters.rs` (the target-aware `emit_runtime()` entry point) and `src/codegen/runtime/`
 
-- Every runtime helper emitted by `emit_runtime()` / `emit_x86_minimal_runtime()` should appear in the runtime docs.
+- Every runtime helper emitted by `emit_runtime()` should appear in the runtime docs.
 - Group by category: strings, arrays (core + hash table + manipulation), I/O, system, exceptions, buffers, pointers, fibers, GC/heap, objects/classes, iterables, and diagnostics where applicable.
 - Hash table routines (`__rt_hash_*`) must be documented.
 - I/O routines must have their own section.
@@ -102,6 +105,16 @@ Every `.md` file must have YAML frontmatter with `title`, `description`, and `si
 ### 10. `docs/internals/arm64-assembly.md` and `docs/internals/arm64-instructions.md`
 
 These rarely change. Only update if new instruction patterns are used in codegen (check for new ARM64 mnemonics in `src/codegen/`).
+
+### 11. `docs/compiling/*.md` — Compiler CLI and the compilation process
+
+**Source of truth:** `src/cli.rs` (flag parsing, defaults, env-var overrides), `src/pipeline.rs` (phase order and timing labels), `src/codegen/platform/` (targets), `src/ir_passes/` (EIR optimization passes), `README.md` (Usage section).
+
+- `docs/compiling/cli-reference.md` must document EVERY flag and environment variable parsed in `src/cli.rs`, with the correct accepted values and default. A new, renamed, or removed flag with no matching entry is a mismatch to fix.
+- `docs/compiling/compilation-pipeline.md` phase list and labels must match the `timings.record_since("…")` labels and ordering in `src/pipeline.rs`.
+- `docs/compiling/targets.md` must match the supported target matrix and accepted spellings in `src/codegen/platform/`.
+- `docs/compiling/optimization.md` must match the optimization controls: `--ir-opt`/`--no-ir-opt` (the EIR pass driver in `src/ir_passes/`), `--regalloc`, and `--null-repr`.
+- Keep user-facing flag examples in `README.md` consistent with this section.
 
 ## How to update
 

@@ -8,6 +8,8 @@
 //! - Functions are built with `crate::ir::Builder` so the tests exercise the
 //!   real IR data model without going through AST lowering.
 
+mod driver_test;
+mod identity_arith_test;
 mod intervals_test;
 mod liveness_test;
 mod regalloc_test;

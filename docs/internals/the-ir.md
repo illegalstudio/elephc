@@ -81,6 +81,7 @@ PHP source
   -> AST optimizer passes
   -> AST -> EIR lowering
   -> EIR validation
+  -> EIR optimization passes (fixed-point driver)
   -> EIR -> assembly backend
   -> runtime cache
   -> assembler / linker
@@ -122,9 +123,10 @@ The compiler currently supports two assembly backends:
 
 `--ast-backend` is a deprecated escape hatch while the legacy emitter remains
 in-tree. It emits a warning and will be removed after the default EIR path has
-completed its validation window. EIR currently preserves the existing
-hand-written assembly style; register allocation and IR optimization passes are
-planned follow-up work.
+completed its validation window. EIR preserves the existing hand-written assembly
+style and adds linear-scan register allocation plus a fixed-point IR optimization
+pass driver (see [Optimization Passes](#optimization-passes)); further IR passes
+are incremental follow-up work.
 
 ## Design Invariants
 
@@ -864,6 +866,52 @@ Validation has two modes:
    global symbols, JSON error state, and include-once/function-variant state.
 6. `writes_heap` invalidates reads of possibly aliasing arrays, hashes, objects,
    mixed cells, iterators, buffers, generators, fibers, and callable descriptors.
+
+## Optimization Passes
+
+After lowering and the one-shot module validation, EIR runs a fixed-point pass
+driver (`src/ir_passes/driver.rs`) before codegen. The driver is where
+IR-level transformations live — the rewrites the AST optimizer could not express
+because they need value identity, basic blocks, or dominance.
+
+A pass implements the `IrPass` trait: a stable `name()` and a
+`run(&mut Function) -> bool` that mutates the function in place and reports
+whether it changed anything. The driver runs the registered passes over each
+function-like body (functions, methods, closures, trampolines, invokers)
+repeatedly until a full sweep reports no change, capped at a fixed iteration
+budget.
+
+In debug and test builds (`debug_assertions`), the driver re-validates the
+function with `validate_function` after every pass and panics — naming the
+offending pass — if any pass produced malformed IR. The same builds panic if a
+pass set fails to converge within the cap, which only happens for a
+non-converging pass bug. Both guards compile out of `--release`, where hitting
+the cap simply stops and proceeds with the current IR.
+
+Mutating passes share the use-rewriting helper `replace_all_uses`
+(`src/ir_passes/rewrite.rs`), which redirects every *use* of a value — across
+instruction operands and all terminator slots — to a replacement, leaving
+definitions (block parameters and instruction results) untouched.
+
+### Identity Arithmetic Folding
+
+The first registered transform (`src/ir_passes/identity_arith.rs`) folds
+algebraic identities on integer and float arithmetic/bitwise operations using
+two dominance-safe, validator-clean rewrites:
+
+- Fold-to-operand: when the result equals an existing operand `x` (`x + 0`,
+  `x * 1`, `x | 0`, `x << 0`, `x & x`, `x / 1`, `x * 1.0`, …), the instruction is
+  neutralized to `nop` and its result uses are redirected to `x`. `x` was already
+  an operand, so it dominates every use.
+- Fold-to-zero: when the result is the integer `0` (`x ^ x`, `x - x`, `x * 0`,
+  `x & 0`, `x % 1`), the instruction is rewritten in place to `const_i64 0`,
+  keeping the same result value id so no use-rewrite is needed.
+
+Only PHP-equivalent identities are folded. Integer `x / 0` and `x % 0` are left
+to trap at runtime, and float additive-zero and `x * 0.0` are excluded because
+signed zero and `NaN` make them observable. Fold-to-operand chains within one
+sweep (`a = x + 0; b = a * 1`) are resolved transitively so a neutralized,
+dead value is never used as a replacement target.
 
 ## AST Lowering Catalogue
 
