@@ -389,6 +389,14 @@ pub trait RuntimeValueOps {
     /// Returns whether a runtime interface table contains the requested interface name.
     fn interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
 
+    /// Tests whether a boxed object cell satisfies a class/interface relation.
+    fn object_is_a(
+        &mut self,
+        object_or_class: RuntimeCellHandle,
+        target_class: &str,
+        exclude_self: bool,
+    ) -> Result<bool, EvalStatus>;
+
     /// Returns the PHP-visible runtime class name for an object cell.
     fn object_class_name(
         &mut self,
@@ -1808,6 +1816,7 @@ fn eval_positional_expr_call(
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "class_exists" => eval_builtin_class_exists(args, context, scope, values),
         "interface_exists" => eval_builtin_interface_exists(args, context, scope, values),
+        "is_a" | "is_subclass_of" => eval_builtin_is_a_relation(name, args, context, scope, values),
         "chop" => eval_builtin_trim_like(name, args, context, scope, values),
         "boolval" | "floatval" | "intval" | "strval" => {
             eval_builtin_cast(name, args, context, scope, values)
@@ -2180,6 +2189,48 @@ fn eval_interface_exists_name(
     values.interface_exists(name.trim_start_matches('\\'))
 }
 
+/// Evaluates `is_a(...)` and `is_subclass_of(...)` over eval boxed object cells.
+fn eval_builtin_is_a_relation(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut evaluated_args = Vec::with_capacity(args.len());
+    for arg in args {
+        evaluated_args.push(eval_expr(arg, context, scope, values)?);
+    }
+    eval_is_a_relation_result(name, &evaluated_args, values)
+}
+
+/// Evaluates materialized `is_a(...)` or `is_subclass_of(...)` builtin arguments.
+fn eval_is_a_relation_result(
+    name: &str,
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (object_or_class, target_class, allow_string) = match evaluated_args {
+        [object_or_class, target_class] => {
+            (*object_or_class, *target_class, name == "is_subclass_of")
+        }
+        [object_or_class, target_class, allow_string] => {
+            (*object_or_class, *target_class, values.truthy(*allow_string)?)
+        }
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    let target_class = values.string_bytes(target_class)?;
+    let target_class = String::from_utf8(target_class).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let target_class = target_class.trim_start_matches('\\');
+    let is_object = values.type_tag(object_or_class)? == 6;
+    let result = if is_object || allow_string {
+        values.object_is_a(object_or_class, target_class, name == "is_subclass_of")?
+    } else {
+        false
+    };
+    values.bool_value(result)
+}
+
 /// Evaluates PHP's `isset(...)` language construct over eval-visible values.
 fn eval_builtin_isset(
     args: &[EvalExpr],
@@ -2305,6 +2356,8 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "call_user_func_array"
             | "class_exists"
             | "interface_exists"
+            | "is_a"
+            | "is_subclass_of"
             | "boolval"
             | "chop"
             | "chr"
@@ -2654,6 +2707,7 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_exists" => Some(&["class", "autoload"]),
         "interface_exists" => Some(&["interface", "autoload"]),
+        "is_a" | "is_subclass_of" => Some(&["object_or_class", "class", "allow_string"]),
         "chdir" | "mkdir" | "rmdir" | "scandir" => Some(&["directory"]),
         "chmod" => Some(&["filename", "permissions"]),
         "chr" => Some(&["codepoint"]),
@@ -3630,6 +3684,7 @@ fn eval_builtin_with_values(
         }
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
         "interface_exists" => eval_interface_exists_result(evaluated_args, values)?,
+        "is_a" | "is_subclass_of" => eval_is_a_relation_result(name, evaluated_args, values)?,
         "json_decode" => match evaluated_args {
             [json] => eval_json_decode_result(*json, None, None, None, context, values)?,
             [json, associative] => {
@@ -15581,6 +15636,22 @@ mod tests {
             Ok(name.eq_ignore_ascii_case("KnownInterface"))
         }
 
+        /// Reports fake class relations for eval `is_a` and `is_subclass_of` unit tests.
+        fn object_is_a(
+            &mut self,
+            object_or_class: RuntimeCellHandle,
+            target_class: &str,
+            exclude_self: bool,
+        ) -> Result<bool, EvalStatus> {
+            match self.get(object_or_class) {
+                FakeValue::Object(_) if target_class.eq_ignore_ascii_case("KnownClass") => {
+                    Ok(!exclude_self)
+                }
+                FakeValue::Object(_) if target_class.eq_ignore_ascii_case("ParentClass") => Ok(true),
+                _ => Ok(false),
+            }
+        }
+
         /// Returns a fake PHP class name for object-tagged test values.
         fn object_class_name(
             &mut self,
@@ -21856,6 +21927,27 @@ echo interface_exists(interface: "MissingInterface", autoload: false) ? "Y" : "N
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "YYNYYN");
+    }
+
+    /// Verifies eval `is_a()` and `is_subclass_of()` dispatch through runtime class metadata.
+    #[test]
+    fn execute_program_is_a_relation_uses_runtime_probe() {
+        let program = parse_fragment(
+            br#"$object = new KnownClass();
+echo is_a($object, "KnownClass") ? "Y" : "N";
+echo is_subclass_of($object, "KnownClass") ? "Y" : "N";
+echo is_subclass_of($object, "ParentClass") ? "Y" : "N";
+echo call_user_func("is_a", $object, "ParentClass") ? "Y" : "N";
+echo call_user_func_array("is_subclass_of", ["object_or_class" => $object, "class" => "ParentClass"]) ? "Y" : "N";
+echo is_a(object_or_class: $object, class: "MissingClass", allow_string: false) ? "Y" : "N";"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "YNYYYN");
     }
 
     /// Verifies eval `define()` and `defined()` share a dynamic constant-name table.

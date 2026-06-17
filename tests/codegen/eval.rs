@@ -4373,6 +4373,31 @@ echo function_exists("interface_exists");');
     assert_eq!(out, "YYYNYY1");
 }
 
+/// Verifies eval `is_a()` and `is_subclass_of()` use generated AOT relation metadata.
+#[test]
+fn test_eval_fragment_is_a_relation_probes_aot_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalRelationIface {}
+class EvalRelationParent {}
+class EvalRelationChild extends EvalRelationParent implements EvalRelationIface {}
+
+eval('$object = new EvalRelationChild();
+echo is_a($object, "EvalRelationChild") ? "Y" : "N";
+echo is_a($object, "EvalRelationParent") ? "Y" : "N";
+echo is_a($object, "EvalRelationIface") ? "Y" : "N";
+echo is_subclass_of($object, "EvalRelationChild") ? "Y" : "N";
+echo is_subclass_of($object, "EvalRelationParent") ? "Y" : "N";
+echo is_subclass_of($object, "EvalRelationIface") ? "Y" : "N";
+echo call_user_func("is_a", $object, "EvalRelationParent") ? "Y" : "N";
+echo call_user_func_array("is_subclass_of", ["object_or_class" => $object, "class" => "EvalRelationParent"]) ? "Y" : "N";
+echo is_a(object_or_class: $object, class: "MissingEvalRelation", allow_string: false) ? "Y" : "N";
+echo function_exists("is_a"); echo function_exists("is_subclass_of");');
+"#,
+    );
+    assert_eq!(out, "YYYNYYYYN11");
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {

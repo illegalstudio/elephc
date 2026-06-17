@@ -70,6 +70,12 @@ unsafe extern "C" {
     ) -> u64;
     fn __elephc_eval_class_exists(name_ptr: *const u8, name_len: u64) -> u64;
     fn __elephc_eval_interface_exists(name_ptr: *const u8, name_len: u64) -> u64;
+    fn __elephc_eval_value_is_a(
+        object_or_class: *mut RuntimeCell,
+        target_ptr: *const u8,
+        target_len: u64,
+        exclude_self: u64,
+    ) -> u64;
     fn __elephc_eval_value_object_class_name(object: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_parent_class_name(object_or_class: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
@@ -355,6 +361,23 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Returns whether the generated AOT interface-name table contains the requested interface.
     fn interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_interface_exists(name.as_ptr(), name.len() as u64) != 0 })
+    }
+
+    /// Tests a boxed Mixed object against generated class/interface metadata.
+    fn object_is_a(
+        &mut self,
+        object_or_class: RuntimeCellHandle,
+        target_class: &str,
+        exclude_self: bool,
+    ) -> Result<bool, EvalStatus> {
+        Ok(unsafe {
+            __elephc_eval_value_is_a(
+                object_or_class.as_ptr(),
+                target_class.as_ptr(),
+                target_class.len() as u64,
+                u64::from(exclude_self),
+            ) != 0
+        })
     }
 
     /// Returns a boxed Mixed string naming a boxed Mixed object's runtime class.

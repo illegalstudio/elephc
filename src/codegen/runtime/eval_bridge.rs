@@ -162,6 +162,44 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the interface-exists wrapper frame
     emitter.instruction("ret");                                                 // return the interface-exists flag to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_is_a");
+    emitter.instruction("sub sp, sp, #64");                                     // reserve relation lookup state and preserve the Rust return address
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address across runtime match helpers
+    emitter.instruction("add x29, sp, #48");                                    // establish a stable is-a relation frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the boxed eval object-or-class cell
+    emitter.instruction("str x3, [sp, #8]");                                    // save whether exact class matches should be rejected
+    emitter.instruction("bl __rt_instanceof_lookup");                           // resolve the target class/interface string to matcher metadata
+    emitter.instruction("cmp x0, #0");                                          // did the target string resolve to emitted metadata?
+    emitter.instruction("b.eq __elephc_eval_value_is_a_false");                 // unresolved targets cannot match eval object values
+    emitter.instruction("str x1, [sp, #16]");                                   // save the target class/interface id
+    emitter.instruction("str x2, [sp, #24]");                                   // save the target kind: 0 class, 1 interface
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed eval value for unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unwrap nested Mixed cells to tag and payload words
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the eval value is an object
+    emitter.instruction("b.ne __elephc_eval_value_is_a_false");                 // non-object values do not satisfy class relations
+    emitter.instruction("mov x9, x1");                                          // keep the unboxed object pointer for matcher input
+    emitter.instruction("cbz x9, __elephc_eval_value_is_a_false");              // malformed object payloads cannot match class metadata
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the exact-self exclusion flag
+    emitter.instruction("cbz x10, __elephc_eval_value_is_a_match");             // is_a() allows exact class matches
+    emitter.instruction("ldr x11, [sp, #24]");                                  // reload target kind before exact-class filtering
+    emitter.instruction("cbnz x11, __elephc_eval_value_is_a_match");            // interface targets cannot be exact concrete-class self matches
+    emitter.instruction("ldr x12, [x9]");                                       // load the object's concrete runtime class id
+    emitter.instruction("ldr x13, [sp, #16]");                                  // reload the target concrete class id
+    emitter.instruction("cmp x12, x13");                                        // compare object and target class ids for subclass self exclusion
+    emitter.instruction("b.eq __elephc_eval_value_is_a_false");                 // is_subclass_of() excludes the object's exact class
+    emitter.label("__elephc_eval_value_is_a_match");
+    emitter.instruction("mov x0, x9");                                          // pass the unboxed object pointer to the metadata matcher
+    emitter.instruction("ldr x1, [sp, #16]");                                   // pass the target class/interface id
+    emitter.instruction("ldr x2, [sp, #24]");                                   // pass the target kind: 0 class, 1 interface
+    emitter.instruction("bl __rt_exception_matches");                           // test inheritance or implemented-interface metadata
+    emitter.instruction("b __elephc_eval_value_is_a_done");                     // keep the matcher result and restore the wrapper frame
+    emitter.label("__elephc_eval_value_is_a_false");
+    emitter.instruction("mov x0, #0");                                          // return false for unresolved, scalar, or exact-self subclass cases
+    emitter.label("__elephc_eval_value_is_a_done");
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the relation lookup frame
+    emitter.instruction("ret");                                                 // return the boolean class-relation result to Rust
+
     label_c_global(emitter, "__elephc_eval_value_object_class_name");
     emitter.instruction("cbz x0, __elephc_eval_value_object_class_name_miss");  // reject null boxed handles before reading their tag
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed eval value runtime tag
@@ -1440,6 +1478,45 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("movzx eax, al");                                       // widen the C boolean result for Rust
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the interface-exists flag to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_is_a");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime match helpers
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable is-a relation frame pointer
+    emitter.instruction("sub rsp, 48");                                         // reserve slots for value pointer, flags, and target metadata
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed eval object-or-class cell
+    emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save whether exact class matches should be rejected
+    emitter.instruction("mov rax, rsi");                                        // move the target string pointer into the lookup ABI register
+    emitter.instruction("call __rt_instanceof_lookup");                         // resolve the target class/interface string to matcher metadata
+    emitter.instruction("test rax, rax");                                       // did the target string resolve to emitted metadata?
+    emitter.instruction("je __elephc_eval_value_is_a_false_x86");               // unresolved targets cannot match eval object values
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the target class/interface id
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the target kind: 0 class, 1 interface
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the boxed eval value for unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells to tag and payload words
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the eval value is an object
+    emitter.instruction("jne __elephc_eval_value_is_a_false_x86");              // non-object values do not satisfy class relations
+    emitter.instruction("test rdi, rdi");                                       // check the unboxed object pointer before reading its header
+    emitter.instruction("je __elephc_eval_value_is_a_false_x86");               // malformed object payloads cannot match class metadata
+    emitter.instruction("mov r8, rdi");                                         // keep the unboxed object pointer for matcher input
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // does this call reject exact concrete-class matches?
+    emitter.instruction("je __elephc_eval_value_is_a_match_x86");               // is_a() allows exact class matches
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // is the target a concrete class rather than an interface?
+    emitter.instruction("jne __elephc_eval_value_is_a_match_x86");              // interface targets cannot be exact concrete-class self matches
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the object's concrete runtime class id
+    emitter.instruction("cmp r9, QWORD PTR [rbp - 24]");                        // compare object and target class ids for subclass self exclusion
+    emitter.instruction("je __elephc_eval_value_is_a_false_x86");               // is_subclass_of() excludes the object's exact class
+    emitter.label("__elephc_eval_value_is_a_match_x86");
+    emitter.instruction("mov rdi, r8");                                         // pass the unboxed object pointer to the metadata matcher
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the target class/interface id
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // pass the target kind: 0 class, 1 interface
+    emitter.instruction("call __rt_exception_matches");                         // test inheritance or implemented-interface metadata
+    emitter.instruction("jmp __elephc_eval_value_is_a_done_x86");               // keep the matcher result and restore the wrapper frame
+    emitter.label("__elephc_eval_value_is_a_false_x86");
+    emitter.instruction("xor eax, eax");                                        // return false for unresolved, scalar, or exact-self subclass cases
+    emitter.label("__elephc_eval_value_is_a_done_x86");
+    emitter.instruction("mov rsp, rbp");                                        // discard relation lookup spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boolean class-relation result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_class_name");
     emitter.instruction("test rdi, rdi");                                       // reject null boxed handles before reading their tag
