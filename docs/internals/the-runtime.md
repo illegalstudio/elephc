@@ -44,6 +44,11 @@ identity dispatch includes `spl_object_id()` and `spl_object_hash()` by deriving
 the integer or decimal-string identity from the unboxed object payload after the
 normal runtime tag check.
 
+Eval class-like metadata probe dispatch includes `trait_exists()` and
+`enum_exists()` through small generated `(name_ptr, name_len)` tables in the
+user runtime data section. The eval bridge scans those tables with the same
+case-insensitive string comparison convention used by `class_exists()`.
+
 Eval `ucwords()` performs ASCII word-start capitalization and honors the optional `separators` argument.
 
 Eval `strstr()` uses the shared byte-search helper to return the matching suffix, optional prefix, or PHP `false`.

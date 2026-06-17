@@ -389,6 +389,12 @@ pub trait RuntimeValueOps {
     /// Returns whether a runtime interface table contains the requested interface name.
     fn interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
 
+    /// Returns whether a runtime trait table contains the requested trait name.
+    fn trait_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
+
+    /// Returns whether a runtime enum table contains the requested enum name.
+    fn enum_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
+
     /// Tests whether a boxed object cell satisfies a class/interface relation.
     fn object_is_a(
         &mut self,
@@ -1820,6 +1826,9 @@ fn eval_positional_expr_call(
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "class_exists" => eval_builtin_class_exists(args, context, scope, values),
         "interface_exists" => eval_builtin_interface_exists(args, context, scope, values),
+        "trait_exists" | "enum_exists" => {
+            eval_builtin_class_like_exists(name, args, context, scope, values)
+        }
         "is_a" | "is_subclass_of" => eval_builtin_is_a_relation(name, args, context, scope, values),
         "chop" => eval_builtin_trim_like(name, args, context, scope, values),
         "boolval" | "floatval" | "intval" | "strval" => {
@@ -2200,6 +2209,57 @@ fn eval_interface_exists_name(
     values.interface_exists(name.trim_start_matches('\\'))
 }
 
+/// Evaluates `trait_exists(...)` and `enum_exists(...)` against generated metadata.
+fn eval_builtin_class_like_exists(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let symbol = match args {
+        [symbol] => eval_expr(symbol, context, scope, values)?,
+        [symbol, autoload] => {
+            let symbol = eval_expr(symbol, context, scope, values)?;
+            let _ = eval_expr(autoload, context, scope, values)?;
+            symbol
+        }
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    let exists = eval_class_like_exists_name(name, symbol, values)?;
+    values.bool_value(exists)
+}
+
+/// Evaluates materialized `trait_exists(...)` or `enum_exists(...)` arguments.
+fn eval_class_like_exists_result(
+    name: &str,
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let exists = match evaluated_args {
+        [symbol] => eval_class_like_exists_name(name, *symbol, values)?,
+        [symbol, _autoload] => eval_class_like_exists_name(name, *symbol, values)?,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.bool_value(exists)
+}
+
+/// Normalizes a PHP class-like name cell and probes generated trait or enum metadata.
+fn eval_class_like_exists_name(
+    name: &str,
+    symbol: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let symbol = values.string_bytes(symbol)?;
+    let symbol = String::from_utf8(symbol).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let symbol = symbol.trim_start_matches('\\');
+    match name {
+        "trait_exists" => values.trait_exists(symbol),
+        "enum_exists" => values.enum_exists(symbol),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
 /// Evaluates `is_a(...)` and `is_subclass_of(...)` over eval boxed object cells.
 fn eval_builtin_is_a_relation(
     name: &str,
@@ -2366,6 +2426,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "call_user_func"
             | "call_user_func_array"
             | "class_exists"
+            | "enum_exists"
             | "interface_exists"
             | "is_a"
             | "is_subclass_of"
@@ -2572,6 +2633,7 @@ fn eval_php_visible_builtin_exists(name: &str) -> bool {
             | "tanh"
             | "time"
             | "touch"
+            | "trait_exists"
             | "trim"
             | "substr_replace"
             | "ucfirst"
@@ -2724,7 +2786,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_exists" => Some(&["class", "autoload"]),
+        "enum_exists" => Some(&["enum", "autoload"]),
         "interface_exists" => Some(&["interface", "autoload"]),
+        "trait_exists" => Some(&["trait", "autoload"]),
         "is_a" | "is_subclass_of" => Some(&["object_or_class", "class", "allow_string"]),
         "chdir" | "mkdir" | "rmdir" | "scandir" => Some(&["directory"]),
         "chmod" => Some(&["filename", "permissions"]),
@@ -3722,6 +3786,9 @@ fn eval_builtin_with_values(
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
+        "enum_exists" | "trait_exists" => {
+            eval_class_like_exists_result(name, evaluated_args, values)?
+        }
         "interface_exists" => eval_interface_exists_result(evaluated_args, values)?,
         "is_a" | "is_subclass_of" => eval_is_a_relation_result(name, evaluated_args, values)?,
         "json_decode" => match evaluated_args {
@@ -16007,6 +16074,16 @@ mod tests {
             Ok(name.eq_ignore_ascii_case("KnownInterface"))
         }
 
+        /// Reports one fake AOT trait for eval `trait_exists` unit tests.
+        fn trait_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
+            Ok(name.eq_ignore_ascii_case("KnownTrait"))
+        }
+
+        /// Reports one fake AOT enum for eval `enum_exists` unit tests.
+        fn enum_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
+            Ok(name.eq_ignore_ascii_case("KnownEnum"))
+        }
+
         /// Reports fake class relations for eval `is_a` and `is_subclass_of` unit tests.
         fn object_is_a(
             &mut self,
@@ -22416,6 +22493,30 @@ echo interface_exists(interface: "MissingInterface", autoload: false) ? "Y" : "N
         let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "YYNYYN");
+    }
+
+    /// Verifies eval `trait_exists()` and `enum_exists()` probe generated metadata.
+    #[test]
+    fn execute_program_class_like_exists_uses_runtime_probe() {
+        let program = parse_fragment(
+            br#"echo trait_exists("KnownTrait") ? "T" : "t";
+echo trait_exists("knowntrait") ? "T" : "t";
+echo trait_exists("KnownEnum") ? "T" : "t";
+echo enum_exists("KnownEnum") ? "E" : "e";
+echo enum_exists("\knownenum") ? "E" : "e";
+echo enum_exists("KnownTrait") ? "E" : "e";
+echo call_user_func("trait_exists", "KnownTrait") ? "T" : "t";
+echo call_user_func_array("enum_exists", ["enum" => "KnownEnum"]) ? "E" : "e";
+echo trait_exists(trait: "MissingTrait", autoload: false) ? "T" : "t";
+echo enum_exists(enum: "MissingEnum", autoload: false) ? "E" : "e";"#,
+        )
+        .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+        assert_eq!(values.output, "TTtEEeTEte");
     }
 
     /// Verifies eval `is_a()` and `is_subclass_of()` dispatch through runtime class metadata.

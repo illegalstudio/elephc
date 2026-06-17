@@ -98,6 +98,7 @@ pub(super) fn emit_main_and_finalize(
             all_global_var_names,
             all_static_vars,
             interfaces,
+            traits,
             classes,
             enums,
             emitted_class_names,
@@ -172,6 +173,7 @@ pub(super) fn emit_main_and_finalize(
         all_global_var_names,
         all_static_vars,
         interfaces,
+        traits,
         classes,
         enums,
         emitted_class_names,
@@ -457,17 +459,20 @@ fn finish_user_asm(
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    traits: &HashSet<String>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     emitted_class_names: Option<&HashSet<String>>,
 ) -> String {
     let data_output = data.emit();
+    let trait_names: Vec<String> = traits.iter().cloned().collect();
     let user_data = runtime::emit_runtime_data_user(
         all_global_var_names,
         all_static_vars,
         functions,
         function_variant_groups,
         interfaces,
+        &trait_names,
         classes,
         enums,
         emitted_class_names,

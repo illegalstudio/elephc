@@ -4450,6 +4450,30 @@ echo function_exists("interface_exists");');
     assert_eq!(out, "YYYNYY1");
 }
 
+/// Verifies eval `trait_exists()` and `enum_exists()` probe generated AOT metadata.
+#[test]
+fn test_eval_fragment_trait_enum_exists_probe_aot_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+trait EvalTraitExistsProbe {}
+enum EvalEnumExistsProbe { case Ready; }
+
+eval('echo trait_exists("EvalTraitExistsProbe") ? "T" : "t";
+echo trait_exists("evaltraitexistsprobe") ? "T" : "t";
+echo trait_exists("\EvalEnumExistsProbe") ? "T" : "t";
+echo enum_exists("EvalEnumExistsProbe") ? "E" : "e";
+echo enum_exists("evalenumexistsprobe") ? "E" : "e";
+echo enum_exists("EvalTraitExistsProbe") ? "E" : "e";
+echo call_user_func("trait_exists", "EvalTraitExistsProbe") ? "T" : "t";
+echo call_user_func_array("enum_exists", ["autoload" => false, "enum" => "\EvalEnumExistsProbe"]) ? "E" : "e";
+echo trait_exists(trait: "MissingEvalTrait", autoload: false) ? "T" : "t";
+echo enum_exists(enum: "MissingEvalEnum", autoload: false) ? "E" : "e";
+echo function_exists("trait_exists"); echo function_exists("enum_exists");');
+"#,
+    );
+    assert_eq!(out, "TTtEEeTEte11");
+}
+
 /// Verifies eval `is_a()` and `is_subclass_of()` use generated AOT relation metadata.
 #[test]
 fn test_eval_fragment_is_a_relation_probes_aot_metadata() {

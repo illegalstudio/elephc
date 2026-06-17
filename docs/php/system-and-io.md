@@ -113,6 +113,11 @@ documented in [SPL](spl.md). Eval SPL object identity supports
 `spl_object_id()` and `spl_object_hash()` for object cells through direct,
 named-argument, callable, and `function_exists()` paths.
 
+Eval class-like metadata probes include `trait_exists()` and `enum_exists()` for
+generated AOT trait and enum names, with case-insensitive matching, optional
+autoload argument evaluation, named arguments, callable dispatch, and
+`function_exists()` visibility.
+
 Eval host-name calls include `gethostname()`, `gethostbyname()`, and `gethostbyaddr()` with direct, named-argument, callable, and `function_exists()` dispatch paths. `gethostbyname()` resolves IPv4 host names and returns the original string when no IPv4 address is available. `gethostbyaddr()` reverse-resolves IPv4 dotted-quad addresses, returns the original address when no record exists, and returns `false` for malformed addresses.
 
 Eval protocol and service database calls include `getprotobyname()`, `getprotobynumber()`, `getservbyname()`, and `getservbyport()` with direct, named-argument, callable, and `function_exists()` dispatch paths.

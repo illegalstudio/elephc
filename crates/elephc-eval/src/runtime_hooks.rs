@@ -78,6 +78,10 @@ unsafe extern "C" {
     ) -> u64;
     fn __elephc_eval_value_object_class_name(object: *mut RuntimeCell) -> *mut RuntimeCell;
     fn __elephc_eval_value_parent_class_name(object_or_class: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Returns whether generated trait metadata contains the requested PHP name.
+    fn __elephc_eval_trait_exists(name_ptr: *const u8, name_len: u64) -> u64;
+    /// Returns whether generated enum metadata contains the requested PHP name.
+    fn __elephc_eval_enum_exists(name_ptr: *const u8, name_len: u64) -> u64;
     fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
     fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
@@ -363,6 +367,16 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Returns whether the generated AOT interface-name table contains the requested interface.
     fn interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_interface_exists(name.as_ptr(), name.len() as u64) != 0 })
+    }
+
+    /// Returns whether the generated AOT trait-name table contains the requested trait.
+    fn trait_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_trait_exists(name.as_ptr(), name.len() as u64) != 0 })
+    }
+
+    /// Returns whether the generated AOT enum-name table contains the requested enum.
+    fn enum_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_enum_exists(name.as_ptr(), name.len() as u64) != 0 })
     }
 
     /// Tests a boxed Mixed object against generated class/interface metadata.

@@ -27,6 +27,7 @@ pub(crate) fn emit_runtime_data_user(
     functions: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    trait_names: &[String],
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     allowed_class_names: Option<&HashSet<String>>,
@@ -76,14 +77,14 @@ pub(crate) fn emit_runtime_data_user(
 
     let mut sorted_enum_names: Vec<&String> = enums.keys().collect();
     sorted_enum_names.sort();
-    for enum_name in sorted_enum_names {
-        let Some(enum_info) = enums.get(enum_name) else {
+    for enum_name in &sorted_enum_names {
+        let Some(enum_info) = enums.get(*enum_name) else {
             continue;
         };
         for case in &enum_info.cases {
             out.push_str(&format!(
                 ".comm {}, 8, 3\n",
-                enum_case_symbol(enum_name, &case.name)
+                enum_case_symbol(*enum_name, &case.name)
             ));
         }
     }
@@ -119,6 +120,21 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
     emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
+    emit_name_lookup_data(
+        &mut out,
+        "_trait_names_count",
+        "_trait_names",
+        "_trait_name",
+        trait_names,
+    );
+    let enum_names: Vec<String> = sorted_enum_names.iter().map(|name| (*name).clone()).collect();
+    emit_name_lookup_data(
+        &mut out,
+        "_enum_names_count",
+        "_enum_names",
+        "_enum_name",
+        &enum_names,
+    );
 
     // Per-program class id of the built-in `Fiber` class. The fiber runtime
     // checks this against the receiver's class_id in __rt_object_free_deep so
@@ -776,6 +792,34 @@ fn emit_class_name_lookup_data(
     out.push_str("    .p2align 3\n");
 }
 
+/// Emits a compact `(name_ptr, name_len)` table for runtime class-like name probes.
+fn emit_name_lookup_data(
+    out: &mut String,
+    count_symbol: &str,
+    table_symbol: &str,
+    label_prefix: &str,
+    names: &[String],
+) {
+    let mut sorted_names: Vec<&String> = names.iter().collect();
+    sorted_names.sort();
+    for (idx, name) in sorted_names.iter().enumerate() {
+        out.push_str(&format!(
+            ".globl {0}_{1}\n{0}_{1}:\n    .ascii \"{2}\"\n",
+            label_prefix,
+            idx,
+            escaped_ascii(name)
+        ));
+    }
+    out.push_str(".p2align 3\n");
+    out.push_str(&format!(".globl {0}\n{0}:\n", count_symbol));
+    out.push_str(&format!("    .quad {}\n", sorted_names.len()));
+    out.push_str(&format!(".globl {0}\n{0}:\n", table_symbol));
+    for (idx, name) in sorted_names.iter().enumerate() {
+        out.push_str(&format!("    .quad {}_{}\n", label_prefix, idx));
+        out.push_str(&format!("    .quad {}\n", name.len()));
+    }
+}
+
 /// Emits the callable-function name table and pointer table for user-defined functions.
 /// Each function name is emitted as an ASCII label; the pointer table references
 /// either the active variant symbol for polymorphic functions or zero.
@@ -1255,6 +1299,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            &[],
             &classes,
             &HashMap::new(),
             Some(&allowed_class_names),
@@ -1280,6 +1325,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            &[],
             &classes,
             &HashMap::new(),
             None,

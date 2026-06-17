@@ -175,6 +175,7 @@ fn finalize_user_asm(
         &user_functions,
         &function_variant_groups,
         &runtime_interfaces,
+        &module.trait_table.names,
         &runtime_classes,
         &module.enum_infos,
         Some(&allowed_class_names),
