@@ -224,6 +224,13 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_readfile_result(*filename, values)?
         }
+        "readline" => {
+            if evaluated_args.len() > 1 {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let prompt = evaluated_args.first().copied();
+            eval_readline_result(prompt, values)?
+        }
         "scandir" => {
             let [directory] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
