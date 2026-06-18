@@ -152,6 +152,7 @@ fn parse_stmt_dispatch(
         | Token::Parent
         | Token::Backslash
         | Token::Question
+        | Token::New
         | Token::LParen
         | Token::Match => {
             if matches!(&tokens[*pos].0, Token::Identifier(name) if name.eq_ignore_ascii_case("list"))
