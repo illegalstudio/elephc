@@ -31,6 +31,12 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_chmod_result(*filename, *permissions, values)?
         }
+        "chown" | "chgrp" | "lchown" | "lchgrp" => {
+            let [filename, principal] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_chown_like_result(name, *filename, *principal, values)?
+        }
         "clearstatcache" => {
             if evaluated_args.len() > 2 {
                 return Err(EvalStatus::RuntimeFatal);

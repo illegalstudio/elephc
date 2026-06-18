@@ -254,6 +254,8 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "sys_get_temp_dir" | "time" => Some(&[]),
         "tempnam" => Some(&["directory", "prefix"]),
         "touch" => Some(&["filename", "mtime", "atime"]),
+        "chown" | "lchown" => Some(&["filename", "user"]),
+        "chgrp" | "lchgrp" => Some(&["filename", "group"]),
         "lcfirst" | "strlen" | "strrev" | "strtolower" | "strtoupper" | "ucfirst" => {
             Some(&["string"])
         }

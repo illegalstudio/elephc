@@ -482,6 +482,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "hash" | "hash_file" | "hash_hmac" | "md5" | "sha1" => {
             eval_builtin_hash_one_shot(name, args, context, scope, values)
         }
+        "chown" | "chgrp" | "lchown" | "lchgrp" => {
+            eval_builtin_chown_like(name, args, context, scope, values)
+        }
         "hash_algos" => eval_builtin_hash_algos(args, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
         "hex2bin" => eval_builtin_hex2bin(args, context, scope, values),
