@@ -60,6 +60,24 @@ fn parse_fragment_accepts_static_method_call_expression() {
     );
 }
 
+/// Verifies static method calls preserve named arguments in source order.
+#[test]
+fn parse_fragment_accepts_named_static_method_call_expression() {
+    let program =
+        parse_fragment(br#"return EvalStaticBox::Read(step: 2);"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::StaticMethodCall {
+            class_name: "EvalStaticBox".to_string(),
+            method: "read".to_string(),
+            args: vec![EvalCallArg::named(
+                "step",
+                EvalExpr::Const(EvalConst::Int(2)),
+            )],
+        }))]
+    );
+}
+
 /// Verifies static property compound assignments lower to one read-modify-write statement.
 #[test]
 fn parse_fragment_accepts_static_property_compound_assignment() {

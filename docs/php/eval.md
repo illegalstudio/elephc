@@ -72,8 +72,8 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, eval object property access, static property access, and class constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, and string-key reads/writes. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
-| Object construction | `new ClassName(...)` for eval-declared classes, `stdClass`, and emitted AOT classes visible through runtime metadata. |
-| Method calls | Public object method calls with positional arguments and numeric array unpacking. |
+| Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; `stdClass` and emitted AOT classes visible through runtime metadata use positional constructor arguments. |
+| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking. Runtime/AOT object-method fallback remains positional. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, and eval-declared-function `__FUNCTION__` / `__METHOD__`. |
 | Constants | Predefined eval-visible constants, dynamic constants from `define()`, namespaced constant fallback, and bare constant fetches are supported. |
@@ -263,14 +263,15 @@ fail at runtime with an eval fatal diagnostic.
 
 The fragment subset is broad but not the full elephc language surface. In
 particular, advanced native callable descriptors, closure callback values, and
-static-method callable arrays are still outside eval fragments. Object method
-calls through eval support positional arguments and numeric array unpacking;
-named method arguments remain unsupported.
+static-method callable arrays are still outside eval fragments. Runtime/AOT
+object-method fallback from eval remains positional, so named method arguments
+are supported for eval-declared methods but not for every generated native
+method bridge.
 
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are eval-declared enums, property hooks,
 attributes/reflection metadata, readonly semantics, dynamic static callables,
-and advanced method-call forms such as named method arguments.
+and dynamic static-method call forms.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

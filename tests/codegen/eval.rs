@@ -4847,6 +4847,37 @@ echo EvalStaticBase::baseRead();');
     assert_eq!(out.stdout, "1:3:3:14:5:5");
 }
 
+/// Verifies eval-declared constructors and methods bind named arguments.
+#[test]
+fn test_eval_declared_method_named_arguments() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalNamedMethodBox {
+    public function __construct($left, $right) {
+        $this->label = $left . $right;
+    }
+    public function read($left, $right) {
+        return $this->label . ":" . $left . ":" . $right;
+    }
+    public static function join($left, $right) {
+        return $left . "-" . $right;
+    }
+}
+$box = new EvalNamedMethodBox(right: "B", left: "A");
+echo $box->read(right: "D", left: "C") . ":";
+$args = ["right" => "F", "left" => "E"];
+echo $box->read(...$args) . ":";
+echo EvalNamedMethodBox::join(right: "H", left: "G");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "AB:C:D:AB:E:F:G-H");
+}
+
 /// Verifies eval-declared class constants work through the bridge.
 #[test]
 fn test_eval_declared_class_constants_and_scoped_fetches() {
