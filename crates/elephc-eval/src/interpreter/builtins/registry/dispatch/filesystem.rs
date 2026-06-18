@@ -123,6 +123,15 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             }
             eval_fopen_result(evaluated_args[0], evaluated_args[1], context, values)?
         }
+        "fprintf" => {
+            let Some((stream, rest)) = evaluated_args.split_first() else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let Some((format, format_args)) = rest.split_first() else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_fprintf_result(*stream, *format, format_args, context, values)?
+        }
         "fread" => {
             let [stream, length] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -286,6 +295,12 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_tmpfile_result(context, values)?
+        }
+        "vfprintf" => {
+            let [stream, format, array] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_vfprintf_result(*stream, *format, *array, context, values)?
         }
         "touch" => match evaluated_args {
             [filename] => eval_touch_result(*filename, None, None, values)?,
