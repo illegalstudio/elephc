@@ -12,6 +12,7 @@
 //! - File handles are process-local to eval and are not visible across the C ABI.
 
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
@@ -22,6 +23,7 @@ use std::path::PathBuf;
 pub(crate) struct EvalStreamResources {
     next_id: i64,
     directories: HashMap<i64, EvalDirectoryStream>,
+    hash_contexts: HashMap<i64, EvalHashContext>,
     streams: HashMap<i64, EvalFileStream>,
 }
 
@@ -56,6 +58,19 @@ impl EvalStreamResources {
         Some(self.insert_directory(directory))
     }
 
+    /// Opens an incremental hash context and returns its resource id.
+    pub(crate) fn open_hash_context(&mut self, algo: &[u8]) -> Option<i64> {
+        let handle = unsafe {
+            // elephc-crypto reads the algorithm name during this call and returns
+            // an owned opaque context handle on success.
+            elephc_crypto::elephc_crypto_init(algo.as_ptr(), algo.len())
+        };
+        if handle.is_null() {
+            return None;
+        }
+        Some(self.insert_hash_context(EvalHashContext { handle }))
+    }
+
     /// Removes a stream resource from the table, closing its file handle.
     pub(crate) fn close(&mut self, id: i64) -> bool {
         self.streams.remove(&id).is_some()
@@ -79,6 +94,19 @@ impl EvalStreamResources {
     /// Reads the next entry name from a directory resource.
     pub(crate) fn read_directory(&mut self, id: i64) -> Option<String> {
         self.directories.get_mut(&id)?.read()
+    }
+
+    /// Feeds bytes into an incremental hash context.
+    pub(crate) fn update_hash_context(&mut self, id: i64, data: &[u8]) -> bool {
+        let Some(context) = self.hash_contexts.get_mut(&id) else {
+            return false;
+        };
+        unsafe {
+            // The table owns the opaque handle and this mutable borrow gives the
+            // crypto call exclusive access for the duration of the update.
+            elephc_crypto::elephc_crypto_update(context.handle, data.as_ptr(), data.len());
+        }
+        true
     }
 
     /// Reads one stream line up to a limit, newline, or custom delimiter.
@@ -195,6 +223,30 @@ impl EvalStreamResources {
             .is_some_and(EvalDirectoryStream::rewind)
     }
 
+    /// Finalizes and removes an incremental hash context, returning raw digest bytes.
+    pub(crate) fn finalize_hash_context(&mut self, id: i64) -> Option<Vec<u8>> {
+        let context = self.hash_contexts.remove(&id)?;
+        let mut output = [0_u8; 64];
+        let len = unsafe {
+            // elephc-crypto consumes and frees the owned context handle here.
+            elephc_crypto::elephc_crypto_final(context.handle, output.as_mut_ptr())
+        };
+        eval_hash_digest_bytes(len, &output)
+    }
+
+    /// Clones an incremental hash context into a new resource id.
+    pub(crate) fn copy_hash_context(&mut self, id: i64) -> Option<i64> {
+        let context = self.hash_contexts.get(&id)?;
+        let handle = unsafe {
+            // elephc-crypto returns a deep clone with independent ownership.
+            elephc_crypto::elephc_crypto_clone(context.handle)
+        };
+        if handle.is_null() {
+            return None;
+        }
+        Some(self.insert_hash_context(EvalHashContext { handle }))
+    }
+
     /// Truncates a stream to the requested byte length.
     pub(crate) fn truncate(&mut self, id: i64, size: u64) -> bool {
         self.streams
@@ -270,6 +322,27 @@ impl EvalStreamResources {
         self.directories.insert(id, directory);
         id
     }
+
+    /// Inserts a hash context and returns the assigned zero-based resource payload.
+    fn insert_hash_context(&mut self, context: EvalHashContext) -> i64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.hash_contexts.insert(id, context);
+        id
+    }
+}
+
+impl Drop for EvalStreamResources {
+    /// Frees any incremental hash contexts that were never finalized.
+    fn drop(&mut self) {
+        for context in self.hash_contexts.drain().map(|(_, context)| context) {
+            unsafe {
+                // The resource table owns these handles; draining prevents reuse
+                // after the crypto free call.
+                elephc_crypto::elephc_crypto_free(context.handle);
+            }
+        }
+    }
 }
 
 /// PHP-visible metadata for one eval stream resource.
@@ -295,6 +368,15 @@ fn eval_flock_operation(operation: i64) -> Option<libc::c_int> {
 fn eval_flock_would_block() -> bool {
     let errno = std::io::Error::last_os_error().raw_os_error();
     errno.is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
+}
+
+/// Converts an elephc-crypto digest length into owned raw bytes.
+fn eval_hash_digest_bytes(len: isize, output: &[u8; 64]) -> Option<Vec<u8>> {
+    let len = usize::try_from(len).ok()?;
+    if len > output.len() {
+        return None;
+    }
+    Some(output[..len].to_vec())
 }
 
 /// File stream stored behind one eval resource id.
@@ -350,6 +432,11 @@ impl EvalDirectoryStream {
         self.index = 0;
         true
     }
+}
+
+/// Opaque elephc-crypto incremental hash context resource.
+struct EvalHashContext {
+    handle: *mut c_void,
 }
 
 /// Parsed PHP fopen mode used to configure `OpenOptions`.

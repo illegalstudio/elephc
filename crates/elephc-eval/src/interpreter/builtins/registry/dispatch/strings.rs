@@ -15,7 +15,7 @@ use super::super::super::*;
 pub(in crate::interpreter) fn eval_strings_builtin_with_values(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
@@ -168,6 +168,32 @@ pub(in crate::interpreter) fn eval_strings_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_hash_algos_result(values)?
+        }
+        "hash_copy" => {
+            let [hash_context] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_hash_copy_result(*hash_context, context, values)?
+        }
+        "hash_final" => match evaluated_args {
+            [hash_context] => eval_hash_final_result(*hash_context, false, context, values)?,
+            [hash_context, binary] => {
+                let binary = values.truthy(*binary)?;
+                eval_hash_final_result(*hash_context, binary, context, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "hash_init" => {
+            let [algo] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_hash_init_result(*algo, context, values)?
+        }
+        "hash_update" => {
+            let [hash_context, data] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_hash_update_result(*hash_context, *data, context, values)?
         }
         "stream_is_local" | "stream_supports_lock" => {
             let [stream] = evaluated_args else {
