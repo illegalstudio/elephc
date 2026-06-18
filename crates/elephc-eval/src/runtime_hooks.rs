@@ -77,7 +77,8 @@ unsafe extern "C" {
         exclude_self: u64,
     ) -> u64;
     fn __elephc_eval_value_object_class_name(object: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_parent_class_name(object_or_class: *mut RuntimeCell) -> *mut RuntimeCell;
+    fn __elephc_eval_value_parent_class_name(object_or_class: *mut RuntimeCell)
+        -> *mut RuntimeCell;
     /// Returns whether generated trait metadata contains the requested PHP name.
     fn __elephc_eval_trait_exists(name_ptr: *const u8, name_len: u64) -> u64;
     /// Returns whether generated enum metadata contains the requested PHP name.
@@ -281,10 +282,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     }
 
     /// Returns the JSON-visible public property count for a boxed Mixed object.
-    fn object_property_len(
-        &mut self,
-        object: RuntimeCellHandle,
-    ) -> Result<usize, EvalStatus> {
+    fn object_property_len(&mut self, object: RuntimeCellHandle) -> Result<usize, EvalStatus> {
         let len = unsafe { __elephc_eval_value_object_property_len(object.as_ptr()) };
         usize::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)
     }

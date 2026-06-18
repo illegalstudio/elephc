@@ -57,10 +57,7 @@ pub(crate) enum JsonParseErrorKind {
 }
 
 /// Parses one complete JSON document and preserves the PHP-visible error category.
-pub(crate) fn decode_result(
-    bytes: &[u8],
-    depth_limit: usize,
-) -> Result<JsonValue, JsonParseError> {
+pub(crate) fn decode_result(bytes: &[u8], depth_limit: usize) -> Result<JsonValue, JsonParseError> {
     let mut parser = Parser::new(bytes, depth_limit);
     parser.parse_document()
 }
@@ -145,7 +142,10 @@ impl<'a> Parser<'a> {
     /// Parses any JSON value at the given active container depth.
     fn parse_value(&mut self, depth: usize) -> Result<JsonValue, JsonParseError> {
         self.skip_ws();
-        match self.peek().ok_or_else(|| self.error(JsonParseErrorKind::Syntax))? {
+        match self
+            .peek()
+            .ok_or_else(|| self.error(JsonParseErrorKind::Syntax))?
+        {
             b'n' => self.consume_literal_value(b"null", JsonValue::Null),
             b't' => self.consume_literal_value(b"true", JsonValue::Bool(true)),
             b'f' => self.consume_literal_value(b"false", JsonValue::Bool(false)),
@@ -271,7 +271,8 @@ impl<'a> Parser<'a> {
                 Ok(())
             }
             InvalidUtf8Mode::Substitute => {
-                append_codepoint(output, 0xfffd).ok_or_else(|| self.error(JsonParseErrorKind::Utf8))?;
+                append_codepoint(output, 0xfffd)
+                    .ok_or_else(|| self.error(JsonParseErrorKind::Utf8))?;
                 self.cursor = start + 1;
                 Ok(())
             }
@@ -281,7 +282,10 @@ impl<'a> Parser<'a> {
     /// Parses one JSON string escape sequence at the current backslash.
     fn parse_string_escape(&mut self, output: &mut Vec<u8>) -> Result<(), JsonParseError> {
         self.cursor += 1;
-        match self.peek().ok_or_else(|| self.error(JsonParseErrorKind::Syntax))? {
+        match self
+            .peek()
+            .ok_or_else(|| self.error(JsonParseErrorKind::Syntax))?
+        {
             b'"' => output.push(b'"'),
             b'\\' => output.push(b'\\'),
             b'/' => output.push(b'/'),
@@ -356,7 +360,10 @@ impl<'a> Parser<'a> {
             return Err(self.error(JsonParseErrorKind::Syntax));
         }
 
-        match self.peek().ok_or_else(|| self.error(JsonParseErrorKind::Syntax))? {
+        match self
+            .peek()
+            .ok_or_else(|| self.error(JsonParseErrorKind::Syntax))?
+        {
             b'0' => {
                 self.cursor += 1;
                 if matches!(self.peek(), Some(b'0'..=b'9')) {
