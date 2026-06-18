@@ -160,7 +160,10 @@ fn lower_cast_to_float(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
 }
 
 /// Lowers an explicit cast to PHP string for concrete scalar operands.
-fn lower_cast_to_string(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_cast_to_string(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let raw_ty = ctx.raw_value_php_type(value)?;
     if matches!(raw_ty, PhpType::Resource(_)) {

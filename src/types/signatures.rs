@@ -99,9 +99,10 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             Some(fixed(&["text"]))
         }
 
-        "intval" | "floatval" | "boolval" | "gettype" | "is_bool" | "is_null"
-        | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
-        | "empty" | "var_dump" | "print_r" => {
+        "intval" | "floatval" | "boolval" | "strval" | "gettype" | "is_array"
+        | "is_bool" | "is_double" | "is_null" | "is_float" | "is_int"
+        | "is_integer" | "is_iterable" | "is_long" | "is_object" | "is_real"
+        | "is_string" | "is_numeric" | "empty" | "var_dump" | "print_r" => {
             Some(fixed(&["value"]))
         }
         "isset" => Some(variadic(&["var"], "vars")),
@@ -665,9 +666,16 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Mixed],
             PhpType::Float,
         )),
-        "boolval" | "is_bool" | "is_null" | "is_float" | "is_int" | "is_iterable"
-        | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
-        | "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
+        "strval" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Str,
+        )),
+        "boolval" | "is_array" | "is_bool" | "is_double" | "is_null" | "is_float"
+        | "is_int" | "is_integer" | "is_iterable" | "is_long" | "is_object"
+        | "is_real" | "is_string" | "is_numeric" | "is_nan" | "is_finite"
+        | "is_infinite" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
+        | "ctype_space" => {
             Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Bool))
         }
         "defined" => Some(typed_first_class_builtin_sig(

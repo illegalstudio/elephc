@@ -147,7 +147,7 @@ fn guard_var_and_type(cond: &Expr) -> Option<(String, PhpType)> {
             };
             let target = match name.as_str().to_ascii_lowercase().as_str() {
                 "is_int" | "is_integer" | "is_long" => PhpType::Int,
-                "is_float" | "is_double" => PhpType::Float,
+                "is_float" | "is_double" | "is_real" => PhpType::Float,
                 "is_string" => PhpType::Str,
                 "is_bool" => PhpType::Bool,
                 _ => return None,

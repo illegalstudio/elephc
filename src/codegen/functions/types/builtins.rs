@@ -39,7 +39,7 @@ pub(super) fn infer_function_call_type(
         | "stripslashes" | "htmlspecialchars" | "html_entity_decode" | "htmlentities"
         | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
         | "base64_decode" | "bin2hex" | "hex2bin" | "md5" | "sha1" | "hash" | "hash_hmac"
-        | "gettype"
+        | "gettype" | "strval"
         | "strstr" | "readline" | "date"
         | "json_last_error_msg" | "php_uname" | "phpversion"
         | "tempnam" | "getcwd" | "shell_exec" | "preg_replace_callback"
@@ -192,15 +192,16 @@ pub(super) fn infer_function_call_type(
         | "microtime" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2"
         | "sinh" | "cosh" | "tanh" | "log" | "log2" | "log10" | "exp" | "hypot" | "pi"
         | "deg2rad" | "rad2deg" => PhpType::Float,
-        "is_callable" | "is_int" | "is_float" | "is_string" | "is_bool" | "is_null" | "is_numeric"
-        | "is_nan" | "is_finite" | "is_infinite" | "is_array" | "empty" | "isset"
-        | "is_file" | "is_dir" | "is_readable" | "is_writable" | "file_exists"
-        | "in_array" | "array_key_exists" | "str_contains" | "str_starts_with"
-        | "str_ends_with" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
-        | "ctype_space" | "function_exists" | "defined" | "chmod" | "chown" | "chgrp"
-        | "touch" | "ftruncate" | "fflush" | "fsync" | "fdatasync" | "ptr_is_null"
-        | "json_validate" | "flock" | "symlink" | "link" | "feof" | "rewind"
-        | "fclose" => {
+        "is_callable" | "is_array" | "is_int" | "is_integer" | "is_long" | "is_float"
+        | "is_double" | "is_real" | "is_string" | "is_bool" | "is_null" | "is_numeric"
+        | "is_object" | "is_iterable" | "is_resource" | "is_nan" | "is_finite"
+        | "is_infinite" | "empty" | "isset" | "is_file" | "is_dir" | "is_readable"
+        | "is_writable" | "file_exists" | "in_array" | "array_key_exists"
+        | "str_contains" | "str_starts_with" | "str_ends_with" | "ctype_alpha"
+        | "ctype_digit" | "ctype_alnum" | "ctype_space" | "function_exists" | "defined"
+        | "chmod" | "chown" | "chgrp" | "touch" | "ftruncate" | "fflush" | "fsync"
+        | "fdatasync" | "ptr_is_null" | "json_validate" | "flock" | "symlink" | "link"
+        | "feof" | "rewind" | "fclose" => {
             PhpType::Bool
         }
         "define" => PhpType::Bool,

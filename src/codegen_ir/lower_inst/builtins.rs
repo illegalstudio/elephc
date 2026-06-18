@@ -18,7 +18,10 @@ use crate::types::checker::builtins::is_php_visible_builtin_function;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{expect_data, expect_operand, load_value_to_first_int_arg, predicates, store_if_result};
+use super::{
+    conversions, expect_data, expect_operand, load_value_to_first_int_arg, predicates,
+    store_if_result,
+};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 pub(in crate::codegen_ir::lower_inst) mod attributes;
@@ -144,6 +147,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "intval" => lower_intval(ctx, inst),
         "floatval" => lower_floatval(ctx, inst),
         "boolval" => lower_boolval(ctx, inst),
+        "strval" => lower_strval(ctx, inst),
         "empty" => lower_empty(ctx, inst),
         "settype" => types::lower_settype(ctx, inst),
         "unset" => types::lower_unset_builtin(ctx, inst),
@@ -336,11 +340,17 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_callable" => lower_is_callable(ctx, inst),
         "print_r" => debug::lower_print_r(ctx, inst),
         "var_dump" => debug::lower_var_dump(ctx, inst),
-        "is_int" => lower_static_type_predicate(ctx, inst, "is_int", PhpType::Int),
-        "is_float" => lower_static_type_predicate(ctx, inst, "is_float", PhpType::Float),
+        "is_int" | "is_integer" | "is_long" => {
+            lower_static_type_predicate(ctx, inst, key.as_str(), PhpType::Int)
+        }
+        "is_float" | "is_double" | "is_real" => {
+            lower_static_type_predicate(ctx, inst, key.as_str(), PhpType::Float)
+        }
         "is_bool" => lower_static_type_predicate(ctx, inst, "is_bool", PhpType::Bool),
         "is_null" => lower_is_null_builtin(ctx, inst),
         "is_string" => lower_static_type_predicate(ctx, inst, "is_string", PhpType::Str),
+        "is_array" => lower_is_array(ctx, inst),
+        "is_object" => lower_is_object(ctx, inst),
         "is_resource" => types::lower_is_resource(ctx, inst),
         "is_iterable" => lower_is_iterable(ctx, inst),
         "get_resource_type" => types::lower_get_resource_type(ctx, inst),
@@ -1087,6 +1097,12 @@ fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()
     store_if_result(ctx, inst)
 }
 
+/// Lowers `strval()` through the same semantics as an explicit PHP string cast.
+fn lower_strval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "strval", 1)?;
+    conversions::lower_cast_to_string(ctx, inst)
+}
+
 /// Lowers `empty()` for concrete scalar and array-like operands.
 fn lower_empty(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "empty", 1)?;
@@ -1259,6 +1275,72 @@ fn emit_tagged_scalar_int_predicate(
         }
     }
     Ok(())
+}
+
+/// Lowers `is_array()` for concrete containers and boxed Mixed payloads.
+fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_array", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.value_php_type(value)?;
+    match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            emit_static_bool(ctx, true);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_mixed_is_array(ctx, value)?;
+        }
+        _ => emit_static_bool(ctx, false),
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits a runtime `is_array()` predicate for boxed Mixed array/hash tags.
+fn emit_mixed_is_array(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let true_case = ctx.next_label("is_array_mixed_true");
+    let done = ctx.next_label("is_array_mixed_done");
+    let ty = ctx.load_value_to_result(value)?;
+    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "is_array Mixed check for PHP type {:?}",
+            ty
+        )));
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // check for a boxed indexed-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", true_case));            // indexed arrays satisfy is_array
+            ctx.emitter.instruction("cmp x0, #5");                              // check for a boxed associative-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", true_case));            // associative arrays satisfy is_array
+            ctx.emitter.instruction("mov x0, #0");                              // all other Mixed payloads are not arrays
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the truthy result path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // check for a boxed indexed-array payload
+            ctx.emitter.instruction(&format!("je {}", true_case));              // indexed arrays satisfy is_array
+            ctx.emitter.instruction("cmp rax, 5");                              // check for a boxed associative-array payload
+            ctx.emitter.instruction(&format!("je {}", true_case));              // associative arrays satisfy is_array
+            ctx.emitter.instruction("mov rax, 0");                              // all other Mixed payloads are not arrays
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the truthy result path
+        }
+    }
+    ctx.emitter.label(&true_case);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Lowers `is_object()` for concrete object values and boxed Mixed payloads.
+fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_object", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.value_php_type(value)?;
+    match ty {
+        PhpType::Object(_) => emit_static_bool(ctx, true),
+        PhpType::Mixed | PhpType::Union(_) => predicates::emit_mixed_tag_eq(ctx, value, 6)?,
+        _ => emit_static_bool(ctx, false),
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `is_iterable()` for concrete values and boxed Mixed payloads.

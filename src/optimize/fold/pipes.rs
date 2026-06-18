@@ -84,8 +84,12 @@ pub(super) fn try_fold_pure_pipe(value: &Expr, callable: &Expr) -> Option<ExprKi
         }
 
         // -- type predicates on literals --------------------------------------
-        ("is_int", value_kind) => Some(ExprKind::BoolLiteral(matches!(value_kind, ExprKind::IntLiteral(_)))),
-        ("is_float", value_kind) => Some(ExprKind::BoolLiteral(matches!(value_kind, ExprKind::FloatLiteral(_)))),
+        ("is_int" | "is_integer" | "is_long", value_kind) => {
+            Some(ExprKind::BoolLiteral(matches!(value_kind, ExprKind::IntLiteral(_))))
+        }
+        ("is_float" | "is_double" | "is_real", value_kind) => {
+            Some(ExprKind::BoolLiteral(matches!(value_kind, ExprKind::FloatLiteral(_))))
+        }
         ("is_string", value_kind) => Some(ExprKind::BoolLiteral(matches!(value_kind, ExprKind::StringLiteral(_)))),
         ("is_bool", value_kind) => Some(ExprKind::BoolLiteral(matches!(value_kind, ExprKind::BoolLiteral(_)))),
         ("is_null", value_kind) => Some(ExprKind::BoolLiteral(matches!(value_kind, ExprKind::Null))),
@@ -93,6 +97,7 @@ pub(super) fn try_fold_pure_pipe(value: &Expr, callable: &Expr) -> Option<ExprKi
             value_kind,
             ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
         ))),
+        ("is_object", _) => Some(ExprKind::BoolLiteral(false)),
         // PHP `is_numeric` accepts ints, floats, and numeric strings. Reject
         // strings we cannot reliably classify here; the runtime fallback
         // handles them with the canonical parser.

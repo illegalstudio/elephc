@@ -74,6 +74,7 @@ mod strrpos;
 mod strstr;
 mod strtolower;
 mod strtoupper;
+mod strval;
 mod substr;
 mod substr_replace;
 mod trim;
@@ -111,6 +112,7 @@ pub fn emit(
         "strstr" => strstr::emit(name, args, emitter, ctx, data),
         "strtolower" => strtolower::emit(name, args, emitter, ctx, data),
         "strtoupper" => strtoupper::emit(name, args, emitter, ctx, data),
+        "strval" => strval::emit(name, args, emitter, ctx, data),
         "ucfirst" => ucfirst::emit(name, args, emitter, ctx, data),
         "lcfirst" => lcfirst::emit(name, args, emitter, ctx, data),
         "trim" => trim::emit(name, args, emitter, ctx, data),

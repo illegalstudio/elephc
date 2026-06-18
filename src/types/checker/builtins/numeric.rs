@@ -24,13 +24,15 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 /// arity mismatch.
 ///
 /// ## Supported builtins
-/// - Type checks: `is_bool`, `boolval`, `is_callable`, `is_null`, `is_float`, `is_int`,
-///   `is_iterable`, `is_string`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`
+/// - Type checks: `is_array`, `is_bool`, `boolval`, `is_callable`, `is_null`,
+///   `is_float`, `is_double`, `is_real`, `is_int`, `is_integer`, `is_long`,
+///   `is_iterable`, `is_object`, `is_string`, `is_numeric`, `is_nan`,
+///   `is_finite`, `is_infinite`
 /// - Numeric: `abs`, `floor`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
 ///   `sinh`, `cosh`, `tanh`, `log2`, `log10`, `exp`, `deg2rad`, `rad2deg`, `atan2`, `hypot`,
 ///   `pi`, `round`, `pow`, `intdiv`, `fmod`, `fdiv`, `log`
 /// - Random: `rand`, `mt_rand`, `random_int`
-/// - Cast/retype: `floatval`, `settype`, `gettype`
+/// - Cast/retype: `floatval`, `strval`, `settype`, `gettype`
 /// - Array/string helpers: `min`, `max`, `number_format`
 /// - Control: `exit`, `die`, `empty`
 /// - Unset: `unset`
@@ -66,9 +68,10 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Void))
         }
-        "is_bool" | "boolval" | "is_callable" | "is_null" | "is_float" | "is_int"
-        | "is_iterable" | "is_string" | "is_numeric" | "is_nan" | "is_finite"
-        | "is_infinite" | "is_resource" => {
+        "is_array" | "is_bool" | "boolval" | "is_callable" | "is_null" | "is_float"
+        | "is_double" | "is_real" | "is_int" | "is_integer" | "is_long"
+        | "is_iterable" | "is_object" | "is_string" | "is_numeric" | "is_nan"
+        | "is_finite" | "is_infinite" | "is_resource" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,
@@ -104,6 +107,13 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Float))
+        }
+        "strval" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "strval() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
         }
         "abs" => {
             if args.len() != 1 {
