@@ -210,6 +210,49 @@ return function_exists("rawurldecode");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval incremental hash context builtins use elephc-crypto state.
+#[test]
+fn execute_program_dispatches_hash_context_builtins() {
+    let program = parse_fragment(
+        br#"$ctx = hash_init("sha256");
+echo is_resource($ctx) ? "ctx" : "bad"; echo ":";
+echo get_resource_type($ctx) === "stream" ? "rtype" : "bad"; echo ":";
+echo hash_update($ctx, "ab") ? "up1" : "bad"; echo ":";
+$copy = hash_copy($ctx);
+echo hash_update($ctx, "c") ? "up2" : "bad"; echo ":";
+echo hash_update($copy, "d") ? "upcopy" : "bad"; echo ":";
+echo hash_final($ctx); echo ":";
+echo hash_final($copy); echo ":";
+$raw = call_user_func("hash_init", "md5");
+hash_update(context: $raw, data: "abc");
+echo bin2hex(call_user_func("hash_final", $raw, true)); echo ":";
+$named = call_user_func_array("hash_init", ["algo" => "sha1"]);
+call_user_func_array("hash_update", ["context" => $named, "data" => "abc"]);
+echo call_user_func_array("hash_final", ["context" => $named]); echo ":";
+echo function_exists("hash_init"); echo function_exists("hash_update");
+echo function_exists("hash_final"); echo function_exists("hash_copy");
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        concat!(
+            "ctx:rtype:up1:up2:upcopy:",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad:",
+            "a52d159f262b2c6ddb724a61840befc36eb30c88877a4030b65cbe86298449c9:",
+            "900150983cd24fb0d6963f7d28e17f72:",
+            "a9993e364706816aba3e25717850c26c9cd0d89d:",
+            "1111"
+        )
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval `ctype_*` predicates dispatch through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_ctype_builtins() {

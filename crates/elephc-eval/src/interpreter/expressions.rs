@@ -524,7 +524,11 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_chown_like(name, args, context, scope, values)
         }
         "hash_algos" => eval_builtin_hash_algos(args, values),
+        "hash_copy" => eval_builtin_hash_copy(args, context, scope, values),
         "hash_equals" => eval_builtin_hash_equals(args, context, scope, values),
+        "hash_final" => eval_builtin_hash_final(args, context, scope, values),
+        "hash_init" => eval_builtin_hash_init(args, context, scope, values),
+        "hash_update" => eval_builtin_hash_update(args, context, scope, values),
         "hex2bin" => eval_builtin_hex2bin(args, context, scope, values),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => {
             eval_builtin_html_entity(name, args, context, scope, values)
