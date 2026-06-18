@@ -150,9 +150,11 @@ syntax, but requesting those arguments is a runtime fatal.
 `ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`, and
 `ReflectionProperty::getAttributes()` expose eval-retained class, method, and
 property attributes for eval-declared class-like symbols when their arguments
-fit the same literal subset. Attributes on constants and enum cases are parsed
-and retained for future reflection support, but eval does not expose them
-through Reflection APIs yet.
+fit the same literal subset. `ReflectionClassConstant::getAttributes()`,
+`ReflectionEnumUnitCase::getAttributes()`, and
+`ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant
+and enum-case attributes through the same materialized `ReflectionAttribute`
+shape.
 Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the
@@ -306,10 +308,9 @@ fallback from eval remains positional, so named method arguments are supported
 for eval-declared methods but not for every generated native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
-remaining class-system gaps are Reflection exposure for constant and enum-case
-attributes, broader reflection APIs beyond the supported attribute/getName
-slice, and broader generated/AOT method bridge signatures beyond the current
-public scalar zero-to-two-argument slice.
+remaining class-system gaps are broader reflection APIs beyond the supported
+attribute/getName slice and broader generated/AOT method bridge signatures
+beyond the current public scalar zero-to-two-argument slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

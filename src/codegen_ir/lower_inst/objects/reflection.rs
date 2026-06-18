@@ -6,7 +6,8 @@
 //! - `crate::codegen_ir::lower_inst::objects::lower_object_new()`.
 //!
 //! Key details:
-//! - `ReflectionClass`, `ReflectionMethod`, and `ReflectionProperty`
+//! - `ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`,
+//!   `ReflectionClassConstant`, and `ReflectionEnum*`
 //!   constructors are compile-time metadata lookups that populate private
 //!   `__name`/`__attrs` slots instead of running their public empty bodies.
 
@@ -30,7 +31,12 @@ struct ReflectionOwnerMetadata {
 pub(super) fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
-        "ReflectionClass" | "ReflectionMethod" | "ReflectionProperty"
+        "ReflectionClass"
+            | "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
     )
 }
 
@@ -42,11 +48,10 @@ pub(super) fn lower_reflection_owner_new(
 ) -> Result<()> {
     let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
     let (class_id, property_count, uninitialized_marker_offsets) = {
-        let class_info = ctx
-            .module
-            .class_infos
-            .get(class_name)
-            .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", class_name)))?;
+        let class_info =
+            ctx.module.class_infos.get(class_name).ok_or_else(|| {
+                CodegenIrError::unsupported(format!("unknown class {}", class_name))
+            })?;
         (
             class_info.class_id,
             class_info.properties.len(),
@@ -63,12 +68,7 @@ pub(super) fn lower_reflection_owner_new(
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_string_property(ctx, reflected_name, 8, 16);
     }
-    emit_reflection_attrs_property(
-        ctx,
-        class_name,
-        &metadata.attr_names,
-        &metadata.attr_args,
-    )?;
+    emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
@@ -85,6 +85,10 @@ fn reflection_owner_metadata(
         "ReflectionClass" => reflection_class_metadata(ctx, inst),
         "ReflectionMethod" => reflection_method_metadata(ctx, inst),
         "ReflectionProperty" => reflection_property_metadata(ctx, inst),
+        "ReflectionClassConstant" => reflection_class_constant_metadata(ctx, inst),
+        "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
+            reflection_enum_case_metadata(ctx, class_name, inst)
+        }
         _ => Ok(empty_reflection_metadata()),
     }
 }
@@ -156,6 +160,76 @@ fn reflection_property_metadata(
         .unwrap_or_else(empty_reflection_metadata))
 }
 
+/// Resolves `ReflectionClassConstant(class, constant)` metadata.
+fn reflection_class_constant_metadata(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some(class_operand) = inst.operands.first().copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let Some(constant_operand) = inst.operands.get(1).copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let reflected_class =
+        const_string_or_class_operand(ctx, class_operand, "ReflectionClassConstant")?;
+    let constant_name =
+        const_required_string_operand(ctx, constant_operand, "ReflectionClassConstant")?;
+    if let Some(case) = resolve_reflection_enum_case(ctx, &reflected_class, &constant_name) {
+        return Ok(ReflectionOwnerMetadata {
+            reflected_name: Some(constant_name.clone()),
+            attr_names: case.attribute_names.clone(),
+            attr_args: case.attribute_args.clone(),
+        });
+    }
+    Ok(
+        resolve_reflection_class_constant(ctx, &reflected_class, &constant_name)
+            .map(|(_, info)| {
+                let attr_names = info
+                    .constant_attribute_names
+                    .get(&constant_name)
+                    .cloned()
+                    .unwrap_or_default();
+                let attr_args = info
+                    .constant_attribute_args
+                    .get(&constant_name)
+                    .cloned()
+                    .unwrap_or_default();
+                ReflectionOwnerMetadata {
+                    reflected_name: Some(constant_name),
+                    attr_names,
+                    attr_args,
+                }
+            })
+            .unwrap_or_else(empty_reflection_metadata),
+    )
+}
+
+/// Resolves `ReflectionEnumUnitCase/BackedCase(enum, case)` metadata.
+fn reflection_enum_case_metadata(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some(enum_operand) = inst.operands.first().copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let Some(case_operand) = inst.operands.get(1).copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let reflected_enum = const_string_or_class_operand(ctx, enum_operand, class_name)?;
+    let case_name = const_required_string_operand(ctx, case_operand, class_name)?;
+    Ok(
+        resolve_reflection_enum_case(ctx, &reflected_enum, &case_name)
+            .map(|case| ReflectionOwnerMetadata {
+                reflected_name: Some(case_name.clone()),
+                attr_names: case.attribute_names.clone(),
+                attr_args: case.attribute_args.clone(),
+            })
+            .unwrap_or_else(empty_reflection_metadata),
+    )
+}
+
 /// Looks up class metadata by PHP-style case-insensitive name.
 fn resolve_reflection_class<'a>(
     ctx: &'a FunctionContext<'_>,
@@ -167,6 +241,34 @@ fn resolve_reflection_class<'a>(
         .iter()
         .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
         .map(|(name, info)| (name.as_str(), info))
+}
+
+/// Looks up class-constant metadata by PHP-style class name and case-sensitive constant name.
+fn resolve_reflection_class_constant<'a>(
+    ctx: &'a FunctionContext<'_>,
+    class_name: &str,
+    constant_name: &str,
+) -> Option<(&'a str, &'a crate::types::ClassInfo)> {
+    let (resolved_name, info) = resolve_reflection_class(ctx, class_name)?;
+    if info.constants.contains_key(constant_name) {
+        return Some((resolved_name, info));
+    }
+    let parent = info.parent.as_deref()?;
+    resolve_reflection_class_constant(ctx, parent, constant_name)
+}
+
+/// Looks up enum-case metadata by PHP-style enum name and case-sensitive case name.
+fn resolve_reflection_enum_case<'a>(
+    ctx: &'a FunctionContext<'_>,
+    enum_name: &str,
+    case_name: &str,
+) -> Option<&'a crate::types::EnumCaseInfo> {
+    let enum_key = php_symbol_key(enum_name.trim_start_matches('\\'));
+    ctx.module
+        .enum_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == enum_key)
+        .and_then(|(_, info)| info.cases.iter().find(|case| case.name == case_name))
 }
 
 /// Returns empty Reflection metadata for unsupported dynamic constructor operands.
@@ -311,9 +413,20 @@ fn emit_reflection_attrs_property(
 
 /// Returns the low/high object offsets for the private `__attrs` slot.
 fn reflection_attrs_offsets(class_name: &str) -> (usize, usize) {
-    if class_name == "ReflectionClass" {
+    if reflection_owner_has_name(class_name) {
         (24, 32)
     } else {
         (8, 16)
     }
+}
+
+/// Returns true when the synthetic Reflection owner stores a private `__name` slot.
+fn reflection_owner_has_name(class_name: &str) -> bool {
+    matches!(
+        class_name,
+        "ReflectionClass"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
+    )
 }

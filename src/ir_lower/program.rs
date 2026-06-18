@@ -660,6 +660,9 @@ fn lower_builtin_reflection_methods(
     for class_name in [
         "ReflectionAttribute",
         "ReflectionClass",
+        "ReflectionClassConstant",
+        "ReflectionEnumBackedCase",
+        "ReflectionEnumUnitCase",
         "ReflectionMethod",
         "ReflectionProperty",
     ] {

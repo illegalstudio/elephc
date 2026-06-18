@@ -200,6 +200,55 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClassConstant/EnumCase expose eval-declared attribute metadata.
+#[test]
+fn execute_program_reflects_eval_constant_and_enum_case_attributes() {
+    let program = parse_fragment(
+        br#"class EvalConstMarker {
+    public $name;
+    public function __construct($name) {
+        $this->name = $name;
+    }
+    public function label() {
+        return $this->name;
+    }
+}
+class EvalConstReflectTarget {
+    #[EvalConstMarker("const")]
+    public const ANSWER = 42;
+}
+enum EvalCaseReflectTarget: string {
+    #[EvalConstMarker("case")]
+    case Ready = "ready";
+}
+$const_attrs = (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getAttributes();
+echo count($const_attrs); echo ":"; echo (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getName(); echo ":";
+echo $const_attrs[0]->getName(); echo ":"; echo $const_attrs[0]->getArguments()[0]; echo ":";
+echo $const_attrs[0]->newInstance()->label(); echo ":";
+$case_attrs = (new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->getAttributes();
+echo count($case_attrs); echo ":"; echo (new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->getName(); echo ":";
+echo $case_attrs[0]->getName(); echo ":"; echo $case_attrs[0]->getArguments()[0]; echo ":";
+$unit_attrs = (new ReflectionEnumUnitCase("EvalCaseReflectTarget", "Ready"))->getAttributes();
+echo (new ReflectionEnumUnitCase("EvalCaseReflectTarget", "Ready"))->getName(); echo ":";
+echo $unit_attrs[0]->newInstance()->label(); echo ":";
+$backed_attrs = (new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getAttributes();
+echo (new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getName(); echo ":";
+echo $backed_attrs[0]->newInstance()->label();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "1:ANSWER:EvalConstMarker:const:const:1:Ready:EvalConstMarker:case:Ready:case:Ready:case"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies unsupported attribute argument metadata remains name-visible but not materializable.
 #[test]
 fn execute_program_rejects_unsupported_class_attribute_args_metadata() {

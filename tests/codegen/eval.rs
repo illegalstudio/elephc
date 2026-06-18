@@ -5392,6 +5392,54 @@ echo $propertyAttrs[0]->getArguments()[0] . ":" . $propertyAttrs[0]->newInstance
     );
 }
 
+/// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.
+#[test]
+fn test_eval_reflection_constant_and_enum_case_attributes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalConstMarker {
+    public $name;
+    public function __construct($name) {
+        $this->name = $name;
+    }
+    public function label() {
+        return $this->name;
+    }
+}
+class EvalConstReflectTarget {
+    #[EvalConstMarker("const")]
+    public const ANSWER = 42;
+}
+enum EvalCaseReflectTarget: string {
+    #[EvalConstMarker("case")]
+    case Ready = "ready";
+}
+$constAttrs = (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getAttributes();
+echo count($constAttrs) . ":" . (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getName() . ":";
+echo $constAttrs[0]->getName() . ":" . $constAttrs[0]->getArguments()[0] . ":";
+echo $constAttrs[0]->newInstance()->label() . ":";
+$caseAttrs = (new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->getAttributes();
+echo count($caseAttrs) . ":" . (new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->getName() . ":";
+echo $caseAttrs[0]->getName() . ":" . $caseAttrs[0]->getArguments()[0] . ":";
+$unitAttrs = (new ReflectionEnumUnitCase("EvalCaseReflectTarget", "Ready"))->getAttributes();
+echo (new ReflectionEnumUnitCase("EvalCaseReflectTarget", "Ready"))->getName() . ":";
+echo $unitAttrs[0]->newInstance()->label() . ":";
+$backedAttrs = (new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getAttributes();
+echo (new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getName() . ":";
+echo $backedAttrs[0]->newInstance()->label();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "1:ANSWER:EvalConstMarker:const:const:1:Ready:EvalConstMarker:case:Ready:case:Ready:case"
+    );
+}
+
 /// Verifies eval interface and trait constants work through the bridge.
 #[test]
 fn test_eval_declared_interface_and_trait_constants() {

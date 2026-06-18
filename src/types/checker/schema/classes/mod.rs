@@ -25,6 +25,8 @@ use super::super::Checker;
 use super::validation::build_constructor_param_map;
 use state::ClassBuildState;
 
+pub(super) use state::{collect_attribute_args, collect_attribute_names};
+
 /// Recursively builds and registers `ClassInfo` for `class_name` and its inheritance chain.
 ///
 /// Uses `building` set to detect circular inheritance. Validates modifiers, resolves the parent
@@ -77,8 +79,7 @@ pub(crate) fn build_class_info_recursive(
     )?;
     interfaces::ensure_concrete_class_implements_abstracts(&state, &class)?;
 
-    let constructor_param_to_prop =
-        constructor_param_to_prop_for(&class, parent_info.as_ref());
+    let constructor_param_to_prop = constructor_param_to_prop_for(&class, parent_info.as_ref());
     let class_info = state.into_class_info(*next_class_id, &class, constructor_param_to_prop)?;
     checker.classes.insert(class.name.clone(), class_info);
     *next_class_id += 1;
@@ -166,7 +167,10 @@ fn validate_parent_constraints(
     if parent.is_final {
         return Err(CompileError::new(
             crate::span::Span::dummy(),
-            &format!("Class {} cannot extend final class {}", class.name, parent_name),
+            &format!(
+                "Class {} cannot extend final class {}",
+                class.name, parent_name
+            ),
         ));
     }
     if class.is_readonly_class != parent.is_readonly_class {

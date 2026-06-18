@@ -15,6 +15,8 @@ use crate::types::{fibers, FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
+mod reflection;
+
 impl Checker {
     /// Infers the type of a `new Class(...)` expression.
     ///
@@ -81,7 +83,8 @@ impl Checker {
                         .map(String::as_str)
                         .unwrap_or(class_name.as_str());
                     if !self.can_access_member(declaring_class, visibility)
-                        && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
+                        && !self
+                            .can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
                     {
                         return Err(CompileError::new(
                             expr.span,
@@ -233,6 +236,37 @@ impl Checker {
                 )?;
                 self.validate_reflection_property_attrs(&reflected_class, &property_name, expr)
             }
+            "ReflectionClassConstant" => {
+                let constant_name = self.reflection_string_literal_arg(
+                    class_name,
+                    "constant name",
+                    normalized_args.get(1),
+                    env,
+                )?;
+                self.validate_reflection_class_constant_attrs(
+                    &reflected_class,
+                    &constant_name,
+                    expr,
+                )
+            }
+            "ReflectionEnumUnitCase" => {
+                let case_name = self.reflection_string_literal_arg(
+                    class_name,
+                    "case name",
+                    normalized_args.get(1),
+                    env,
+                )?;
+                self.validate_reflection_enum_case_attrs(&reflected_class, &case_name, false, expr)
+            }
+            "ReflectionEnumBackedCase" => {
+                let case_name = self.reflection_string_literal_arg(
+                    class_name,
+                    "case name",
+                    normalized_args.get(1),
+                    env,
+                )?;
+                self.validate_reflection_enum_case_attrs(&reflected_class, &case_name, true, expr)
+            }
             _ => Ok(()),
         }
     }
@@ -321,127 +355,6 @@ impl Checker {
         }
     }
 
-    /// Validates that a class's attributes do not have unsupported argument metadata.
-    ///
-    /// Returns `Ok` if the class has no attribute args or if all args are
-    /// supported. Used by `ReflectionClass` constructor validation.
-    fn validate_reflection_class_attrs(
-        &self,
-        class_name: &str,
-        expr: &Expr,
-    ) -> Result<(), CompileError> {
-        let Some(class_info) = self.classes.get(class_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("ReflectionClass::__construct(): undefined class '{}'", class_name),
-            ));
-        };
-        if attributes_have_unsupported_args(&class_info.attribute_names, &class_info.attribute_args)
-        {
-            return Err(CompileError::new(
-                expr.span,
-                "ReflectionClass::getAttributes(): class has attribute argument metadata that is not supported yet",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Validates that a method's attributes do not have unsupported argument metadata.
-    ///
-    /// Also checks that the method exists on the class. Used by
-    /// `ReflectionMethod` constructor validation.
-    fn validate_reflection_method_attrs(
-        &self,
-        class_name: &str,
-        method_name: &str,
-        expr: &Expr,
-    ) -> Result<(), CompileError> {
-        let Some(class_info) = self.classes.get(class_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("ReflectionMethod::__construct(): undefined class '{}'", class_name),
-            ));
-        };
-        let method_key = php_symbol_key(method_name);
-        if !class_info.methods.contains_key(&method_key)
-            && !class_info.static_methods.contains_key(&method_key)
-        {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionMethod::__construct(): undefined method '{}::{}'",
-                    class_name, method_name
-                ),
-            ));
-        }
-        let empty_names = Vec::new();
-        let empty_args = Vec::new();
-        let names = class_info
-            .method_attribute_names
-            .get(&method_key)
-            .unwrap_or(&empty_names);
-        let args = class_info
-            .method_attribute_args
-            .get(&method_key)
-            .unwrap_or(&empty_args);
-        if attributes_have_unsupported_args(names, args) {
-            return Err(CompileError::new(
-                expr.span,
-                "ReflectionMethod::getAttributes(): method has attribute argument metadata that is not supported yet",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Validates that a property's attributes do not have unsupported argument metadata.
-    ///
-    /// Also checks that the property exists on the class (instance or static).
-    /// Used by `ReflectionProperty` constructor validation.
-    fn validate_reflection_property_attrs(
-        &self,
-        class_name: &str,
-        property_name: &str,
-        expr: &Expr,
-    ) -> Result<(), CompileError> {
-        let Some(class_info) = self.classes.get(class_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("ReflectionProperty::__construct(): undefined class '{}'", class_name),
-            ));
-        };
-        if !class_info.properties.iter().any(|(name, _)| name == property_name)
-            && !class_info
-                .static_properties
-                .iter()
-                .any(|(name, _)| name == property_name)
-        {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionProperty::__construct(): undefined property '{}::${}'",
-                    class_name, property_name
-                ),
-            ));
-        }
-        let empty_names = Vec::new();
-        let empty_args = Vec::new();
-        let names = class_info
-            .property_attribute_names
-            .get(property_name)
-            .unwrap_or(&empty_names);
-        let args = class_info
-            .property_attribute_args
-            .get(property_name)
-            .unwrap_or(&empty_args);
-        if attributes_have_unsupported_args(names, args) {
-            return Err(CompileError::new(
-                expr.span,
-                "ReflectionProperty::getAttributes(): property has attribute argument metadata that is not supported yet",
-            ));
-        }
-        Ok(())
-    }
-
     /// Resolves a static receiver to a class name for reflection class constant.
     ///
     /// `Named` returns the canonical name. `Self_`/`Static` require a class
@@ -453,10 +366,11 @@ impl Checker {
     ) -> Result<String, CompileError> {
         match receiver {
             StaticReceiver::Named(name) => Ok(name.as_canonical()),
-            StaticReceiver::Self_ | StaticReceiver::Static => self
-                .current_class
-                .clone()
-                .ok_or_else(|| CompileError::new(span, "Cannot use self::class outside a class context")),
+            StaticReceiver::Self_ | StaticReceiver::Static => {
+                self.current_class.clone().ok_or_else(|| {
+                    CompileError::new(span, "Cannot use self::class outside a class context")
+                })
+            }
             StaticReceiver::Parent => {
                 let current = self.current_class.as_ref().ok_or_else(|| {
                     CompileError::new(span, "Cannot use parent::class outside a class context")
@@ -465,10 +379,7 @@ impl Checker {
                     .get(current)
                     .and_then(|info| info.parent.clone())
                     .ok_or_else(|| {
-                        CompileError::new(
-                            span,
-                            &format!("Class '{}' has no parent class", current),
-                        )
+                        CompileError::new(span, &format!("Class '{}' has no parent class", current))
                     })
             }
         }
@@ -509,7 +420,10 @@ impl Checker {
             {
                 return Ok(());
             }
-            return Err(CompileError::new(callback.span, "Fiber callback must be callable"));
+            return Err(CompileError::new(
+                callback.span,
+                "Fiber callback must be callable",
+            ));
         };
 
         let visible_param_count = match &callback.kind {
@@ -535,11 +449,19 @@ impl Checker {
         }
 
         match &callback.kind {
-            ExprKind::StringLiteral(name) => self.resolve_fiber_string_callable_sig(name, callback.span, env),
-            ExprKind::ArrayLiteral(_) => self.resolve_fiber_callable_array_literal_sig(callback, env),
+            ExprKind::StringLiteral(name) => {
+                self.resolve_fiber_string_callable_sig(name, callback.span, env)
+            }
+            ExprKind::ArrayLiteral(_) => {
+                self.resolve_fiber_callable_array_literal_sig(callback, env)
+            }
             ExprKind::Variable(name) => {
                 if let Some(target) = self.callable_array_targets.get(name).cloned() {
-                    return self.resolve_fiber_callable_array_variable_sig(&target, callback.span, env);
+                    return self.resolve_fiber_callable_array_variable_sig(
+                        &target,
+                        callback.span,
+                        env,
+                    );
                 }
                 self.resolve_fiber_invokable_object_sig(callback, env)
             }
@@ -563,7 +485,9 @@ impl Checker {
                 receiver: StaticReceiver::Named(Name::from(class_name.to_string())),
                 method: method_name.to_string(),
             };
-            return self.resolve_first_class_callable_sig(&target, span, env).map(Some);
+            return self
+                .resolve_first_class_callable_sig(&target, span, env)
+                .map(Some);
         }
 
         let function_name = self
@@ -571,7 +495,8 @@ impl Checker {
             .or_else(|| crate::name_resolver::canonical_builtin_function_name(name))
             .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
         let target = CallableTarget::Function(Name::from(function_name));
-        self.resolve_first_class_callable_sig(&target, span, env).map(Some)
+        self.resolve_first_class_callable_sig(&target, span, env)
+            .map(Some)
     }
 
     /// Resolves a literal callable array to a static-method or receiver-bound method signature.
@@ -594,7 +519,8 @@ impl Checker {
         span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<Option<FunctionSig>, CompileError> {
-        self.resolve_first_class_callable_sig(target, span, env).map(Some)
+        self.resolve_first_class_callable_sig(target, span, env)
+            .map(Some)
     }
 
     /// Resolves an invokable object callback signature for `$object` or `$this`.
@@ -657,9 +583,9 @@ impl Checker {
             ExprKind::StringLiteral(class_name) => self
                 .resolve_fiber_callable_class_name(class_name)
                 .map(str::to_string),
-            ExprKind::ClassConstant { receiver } => Some(
-                self.resolve_fiber_callable_static_receiver_class(receiver, span)?,
-            ),
+            ExprKind::ClassConstant { receiver } => {
+                Some(self.resolve_fiber_callable_static_receiver_class(receiver, span)?)
+            }
             _ => None,
         };
         Ok(class_name.map(|class_name| StaticReceiver::Named(Name::from(class_name))))
@@ -691,10 +617,7 @@ impl Checker {
                     .get(current)
                     .and_then(|class_info| class_info.parent.clone())
                     .ok_or_else(|| {
-                        CompileError::new(
-                            span,
-                            &format!("Class '{}' has no parent class", current),
-                        )
+                        CompileError::new(span, &format!("Class '{}' has no parent class", current))
                     })
             }
         }
@@ -814,7 +737,10 @@ impl Checker {
         let Some(sig) = self.functions.get_mut(name.as_str()) else {
             return Err(CompileError::new(
                 span,
-                &format!("Undefined function for CallbackFilterIterator callback: {}", name),
+                &format!(
+                    "Undefined function for CallbackFilterIterator callback: {}",
+                    name
+                ),
             ));
         };
         let callback_arg_types = [
@@ -874,11 +800,17 @@ fn fiber_callable_array_parts(expr: &Expr) -> Option<(&Expr, &str)> {
 }
 
 /// Returns `true` if `class_name` is a reflection owner class
-/// (`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`).
+/// (`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`,
+/// `ReflectionClassConstant`, `ReflectionEnumUnitCase`, `ReflectionEnumBackedCase`).
 fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
-        "ReflectionClass" | "ReflectionMethod" | "ReflectionProperty"
+        "ReflectionClass"
+            | "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
     )
 }
 

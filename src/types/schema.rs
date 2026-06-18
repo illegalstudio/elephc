@@ -105,6 +105,11 @@ pub struct ClassInfo {
     pub property_attribute_names: HashMap<String, Vec<String>>,
     /// Literal property-attribute args aligned with `property_attribute_names`.
     pub property_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
+    /// Attribute names attached to class constants visible on this class.
+    /// Constant names are case-sensitive, so the source constant name is the key.
+    pub constant_attribute_names: HashMap<String, Vec<String>>,
+    /// Literal class-constant-attribute args aligned with `constant_attribute_names`.
+    pub constant_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
     /// Trait names used directly by this class declaration, preserving source order.
     pub used_traits: Vec<String>,
     pub properties: Vec<(String, PhpType)>,
@@ -167,6 +172,8 @@ pub enum EnumCaseValue {
 pub struct EnumCaseInfo {
     pub name: String,
     pub value: Option<EnumCaseValue>,
+    pub attribute_names: Vec<String>,
+    pub attribute_args: Vec<Option<Vec<AttrArgValue>>>,
 }
 
 /// Enum metadata for a resolved backed enum declaration (PHP 8.1+).
