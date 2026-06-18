@@ -276,6 +276,18 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             [path, flags] => eval_pathinfo_result(*path, Some(*flags), values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "pclose" => {
+            let [handle] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_pclose_result(*handle, context, values)?
+        }
+        "popen" => {
+            let [command, mode] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_popen_result(*command, *mode, context, values)?
+        }
         "realpath" => {
             let [path] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
