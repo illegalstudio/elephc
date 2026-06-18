@@ -347,6 +347,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             backing_type,
             cases,
             implements,
+            trait_uses,
             methods,
             constants,
         } => {
@@ -370,6 +371,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 backing_type,
                 cases,
                 implements,
+                trait_uses,
                 methods,
                 constants,
             }

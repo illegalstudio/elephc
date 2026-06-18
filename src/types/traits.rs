@@ -66,16 +66,22 @@ struct ImportedMethod {
     decl: ClassMethod,
 }
 
-/// Scans `program` for all traits and classes, validates direct member uniqueness,
-/// expands trait uses for each class, merges imported vs. local members, and returns
-/// a vector of `FlattenedClass` with any composition errors collected.
+/// Scans `program` for all traits, classes, and enums, validates direct member uniqueness,
+/// expands trait uses for each class-like declaration, and returns flattened metadata with
+/// any composition errors collected.
 ///
 /// Trait declarations are stored in `trait_map` for later expansion.
-/// Classes with traits are processed in program order; each class's trait uses are
-/// resolved recursively, then merged with the class's own members.
+/// Class-like declarations with traits are processed in program order; each declaration's trait
+/// uses are resolved recursively, then merged with the declaration's own members.
 /// Circular trait composition and duplicate declarations are reported as errors.
-/// Returns `([FlattenedClass], Vec<CompileError>)`.
-pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileError>) {
+/// Returns `(flattened_classes, flattened_enums, errors)`.
+pub fn flatten_classes(
+    program: &Program,
+) -> (
+    Vec<FlattenedClass>,
+    HashMap<String, FlattenedClass>,
+    Vec<CompileError>,
+) {
     let mut trait_map = HashMap::new();
     let mut trait_keys = HashSet::new();
     let mut class_like_keys = HashSet::new();
@@ -128,92 +134,175 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
     let mut cache = HashMap::new();
     let mut stack = Vec::new();
     let mut flattened = Vec::new();
+    let mut flattened_enums = HashMap::new();
     for stmt in program {
-        if let StmtKind::ClassDecl {
-            name,
-            extends,
-            implements,
-            is_abstract,
-            is_final,
-            is_readonly_class,
-            trait_uses,
-            properties,
-            methods,
-            constants,
-        } = &stmt.kind
-        {
-            if let Err(error) = validation::validate_direct_members(properties, methods, stmt.span, name) {
-                errors.extend(error.flatten());
-                continue;
-            }
-            let (imported_props, imported_methods) = match expand::resolve_trait_uses(
+        match &stmt.kind {
+            StmtKind::ClassDecl {
+                name,
+                extends,
+                implements,
+                is_abstract,
+                is_final,
+                is_readonly_class,
                 trait_uses,
-                &trait_map,
-                &mut cache,
-                &mut stack,
-                &format!("class {}", name),
-                stmt.span,
-            ) {
-                Ok(result) => result,
-                Err(error) => {
-                    errors.extend(error.flatten());
-                    continue;
-                }
-            };
-            let merged_props = match merge::merge_properties(
-                &imported_props,
                 properties,
-                stmt.span,
-                &format!("class {}", name),
-                true,
-            ) {
-                Ok(props) => props,
-                Err(error) => {
-                    errors.extend(error.flatten());
-                    continue;
-                }
-            };
-            let merged_methods = match merge::merge_methods(
-                imported_methods,
                 methods,
-                stmt.span,
-                &format!("class {}", name),
-            ) {
-                Ok(methods) => methods,
-                Err(error) => {
+                constants,
+            } => {
+                if let Err(error) =
+                    validation::validate_direct_members(properties, methods, stmt.span, name)
+                {
                     errors.extend(error.flatten());
                     continue;
                 }
-            };
-            let (merged_props, merged_methods) =
-                crate::magic_constants::bind_trait_class_constants(
-                    merged_props,
-                    merged_methods,
-                    name,
-                );
-            flattened.push(FlattenedClass {
-                name: name.clone(),
-                extends: extends.as_ref().map(|name| name.as_str().to_string()),
-                implements: implements.iter().map(|name| name.as_str().to_string()).collect(),
-                is_abstract: *is_abstract,
-                is_final: *is_final,
-                is_readonly_class: *is_readonly_class,
-                properties: merged_props,
-                methods: merged_methods,
-                attributes: stmt.attributes.clone(),
-                constants: constants.clone(),
-                used_traits: trait_uses
-                    .iter()
-                    .flat_map(|use_decl| {
-                        use_decl
-                            .trait_names
+                let (imported_props, imported_methods) = match expand::resolve_trait_uses(
+                    trait_uses,
+                    &trait_map,
+                    &mut cache,
+                    &mut stack,
+                    &format!("class {}", name),
+                    stmt.span,
+                ) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        errors.extend(error.flatten());
+                        continue;
+                    }
+                };
+                let merged_props = match merge::merge_properties(
+                    &imported_props,
+                    properties,
+                    stmt.span,
+                    &format!("class {}", name),
+                    true,
+                ) {
+                    Ok(props) => props,
+                    Err(error) => {
+                        errors.extend(error.flatten());
+                        continue;
+                    }
+                };
+                let merged_methods = match merge::merge_methods(
+                    imported_methods,
+                    methods,
+                    stmt.span,
+                    &format!("class {}", name),
+                ) {
+                    Ok(methods) => methods,
+                    Err(error) => {
+                        errors.extend(error.flatten());
+                        continue;
+                    }
+                };
+                let (merged_props, merged_methods) =
+                    crate::magic_constants::bind_trait_class_constants(
+                        merged_props,
+                        merged_methods,
+                        name,
+                    );
+                flattened.push(FlattenedClass {
+                    name: name.clone(),
+                    extends: extends.as_ref().map(|name| name.as_str().to_string()),
+                    implements: implements.iter().map(|name| name.as_str().to_string()).collect(),
+                    is_abstract: *is_abstract,
+                    is_final: *is_final,
+                    is_readonly_class: *is_readonly_class,
+                    properties: merged_props,
+                    methods: merged_methods,
+                    attributes: stmt.attributes.clone(),
+                    constants: constants.clone(),
+                    used_traits: used_trait_names(trait_uses),
+                });
+            }
+            StmtKind::EnumDecl {
+                name,
+                implements,
+                trait_uses,
+                methods,
+                constants,
+                ..
+            } => {
+                if let Err(error) =
+                    validation::validate_direct_members(&[], methods, stmt.span, name)
+                {
+                    errors.extend(error.flatten());
+                    continue;
+                }
+                let (imported_props, imported_methods) = match expand::resolve_trait_uses(
+                    trait_uses,
+                    &trait_map,
+                    &mut cache,
+                    &mut stack,
+                    &format!("enum {}", name),
+                    stmt.span,
+                ) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        errors.extend(error.flatten());
+                        continue;
+                    }
+                };
+                if let Some(property) = imported_props.first() {
+                    errors.push(CompileError::new(
+                        property.span,
+                        "Enums cannot use traits with properties",
+                    ));
+                    continue;
+                }
+                let merged_methods = match merge::merge_methods(
+                    imported_methods,
+                    methods,
+                    stmt.span,
+                    &format!("enum {}", name),
+                ) {
+                    Ok(methods) => methods,
+                    Err(error) => {
+                        errors.extend(error.flatten());
+                        continue;
+                    }
+                };
+                let (_merged_props, merged_methods) =
+                    crate::magic_constants::bind_trait_class_constants(
+                        Vec::new(),
+                        merged_methods,
+                        name,
+                    );
+                flattened_enums.insert(
+                    name.clone(),
+                    FlattenedClass {
+                        name: name.clone(),
+                        extends: None,
+                        implements: implements
                             .iter()
                             .map(|name| name.as_str().to_string())
-                    })
-                    .collect(),
-            });
+                            .collect(),
+                        is_abstract: false,
+                        is_final: true,
+                        is_readonly_class: false,
+                        properties: Vec::new(),
+                        methods: merged_methods,
+                        attributes: stmt.attributes.clone(),
+                        constants: constants.clone(),
+                        used_traits: used_trait_names(trait_uses),
+                    },
+                );
+            }
+            _ => {}
         }
     }
 
-    (flattened, errors)
+    (flattened, flattened_enums, errors)
+}
+
+/// Returns the direct trait names from a group of trait-use declarations.
+fn used_trait_names(trait_uses: &[TraitUse]) -> Vec<String> {
+    trait_uses
+        .iter()
+        .flat_map(|use_decl| {
+            use_decl
+                .trait_names
+                .iter()
+                .map(|name| name.as_str().to_string())
+        })
+        .collect()
 }

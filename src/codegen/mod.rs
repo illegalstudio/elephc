@@ -492,6 +492,9 @@ fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>
         match &stmt.kind {
             StmtKind::TraitDecl {
                 name, trait_uses, ..
+            }
+            | StmtKind::EnumDecl {
+                name, trait_uses, ..
             } => {
                 uses.insert(
                     name.clone(),

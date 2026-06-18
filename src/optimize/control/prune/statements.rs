@@ -315,6 +315,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             backing_type,
             cases,
             implements,
+            trait_uses,
             methods,
             constants,
         } => vec![Stmt {
@@ -323,6 +324,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 backing_type,
                 cases,
                 implements,
+                trait_uses,
                 methods,
                 constants,
             },

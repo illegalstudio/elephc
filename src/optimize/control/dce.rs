@@ -484,6 +484,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             backing_type,
             cases,
             implements,
+            trait_uses,
             methods,
             constants,
         } => vec![Stmt {
@@ -492,6 +493,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 backing_type,
                 cases,
                 implements,
+                trait_uses,
                 methods,
                 constants,
             },

@@ -318,12 +318,12 @@ fn test_error_case_outside_enum() {
     );
 }
 
-/// Verifies that using a trait inside an enum is rejected (not yet supported).
+/// Verifies that enum trait use rejects imported properties because PHP enums cannot have them.
 #[test]
-fn test_error_enum_using_trait() {
+fn test_error_enum_trait_with_property() {
     expect_error(
-        "<?php trait T {} enum E { use T; case A; }",
-        "Enums using traits are not supported yet",
+        "<?php trait T { public int $value; } enum E { use T; case A; }",
+        "Enums cannot use traits with properties",
     );
 }
 

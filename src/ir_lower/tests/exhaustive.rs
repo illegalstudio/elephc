@@ -447,7 +447,7 @@ fn lowers_every_stmt_variant_smoke() {
             methods: vec![method.clone(), static_method.clone()],
             constants: vec![class_const.clone()],
         }),
-        stmt(StmtKind::EnumDecl { name: "E".to_string(), backing_type: Some(TypeExpr::Int), cases: vec![EnumCaseDecl { name: "A".to_string(), value: Some(int(1)), span: sp(), attributes: Vec::new() }], implements: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
+        stmt(StmtKind::EnumDecl { name: "E".to_string(), backing_type: Some(TypeExpr::Int), cases: vec![EnumCaseDecl { name: "A".to_string(), value: Some(int(1)), span: sp(), attributes: Vec::new() }], implements: Vec::new(), trait_uses: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
         stmt(StmtKind::PackedClassDecl { name: "P".to_string(), fields: vec![PackedField { name: "x".to_string(), type_expr: TypeExpr::Int, span: sp() }] }),
         stmt(StmtKind::InterfaceDecl { name: "I".to_string(), extends: Vec::new(), properties: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
         stmt(StmtKind::TraitDecl { name: "T".to_string(), trait_uses: Vec::new(), properties: Vec::new(), methods: vec![method], constants: vec![class_const] }),
