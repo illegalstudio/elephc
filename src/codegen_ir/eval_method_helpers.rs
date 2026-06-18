@@ -9,8 +9,7 @@
 //! - The cacheable runtime object cannot know user class ids, method symbols,
 //!   or return types, so this bridge is emitted into the user assembly.
 //! - This method-call slice supports public AOT methods with fixed non-by-ref
-//!   scalar/Mixed argument lists that fit the target ABI register bridge, and
-//!   reports unsupported calls as runtime failure.
+//!   scalar/Mixed argument lists and reports unsupported calls as runtime failure.
 
 use std::collections::BTreeMap;
 
@@ -18,7 +17,7 @@ use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
-use crate::codegen::platform::{Arch, Target};
+use crate::codegen::platform::Arch;
 use crate::ir::{Function, LocalKind, Module};
 use crate::names::{method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
@@ -123,7 +122,6 @@ fn collect_eval_method_slots(module: &Module) -> Vec<EvalMethodSlot> {
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
         collect_class_method_slots(
-            module.target,
             class_name,
             class_info,
             &emitted_methods,
@@ -141,7 +139,6 @@ fn collect_eval_static_method_slots(module: &Module) -> Vec<EvalStaticMethodSlot
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
         collect_class_static_method_slots(
-            module.target,
             class_name,
             class_info,
             &emitted_methods,
@@ -165,7 +162,6 @@ fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
 
 /// Adds bridge-supported public methods for one class.
 fn collect_class_method_slots(
-    target: Target,
     class_name: &str,
     class_info: &ClassInfo,
     emitted_methods: &std::collections::HashSet<(String, String, bool)>,
@@ -175,7 +171,7 @@ fn collect_class_method_slots(
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
         if !method_is_public(class_info, method)
-            || !method_signature_supported(sig, target, PhpType::Object(class_name.to_string()))
+            || !method_signature_supported(sig)
             || !method_return_supported(&sig.return_type)
         {
             continue;
@@ -201,7 +197,6 @@ fn collect_class_method_slots(
 
 /// Adds bridge-supported public static methods for one class.
 fn collect_class_static_method_slots(
-    target: Target,
     class_name: &str,
     class_info: &ClassInfo,
     emitted_methods: &std::collections::HashSet<(String, String, bool)>,
@@ -211,7 +206,7 @@ fn collect_class_static_method_slots(
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
         if !static_method_is_public(class_info, method)
-            || !method_signature_supported(sig, target, PhpType::Int)
+            || !method_signature_supported(sig)
             || !method_return_supported(&sig.return_type)
         {
             continue;
@@ -252,16 +247,11 @@ fn static_method_is_public(class_info: &ClassInfo, method: &str) -> bool {
 }
 
 /// Returns true for method signatures supported by the eval bridge.
-fn method_signature_supported(
-    sig: &crate::types::FunctionSig,
-    target: Target,
-    hidden_arg_ty: PhpType,
-) -> bool {
+fn method_signature_supported(sig: &crate::types::FunctionSig) -> bool {
     sig.params.len() <= MAX_EVAL_METHOD_ARGS
         && sig.variadic.is_none()
         && sig.ref_params.iter().all(|is_ref| !*is_ref)
         && sig.params.iter().all(|(_, ty)| method_param_supported(ty))
-        && eval_bridge_signature_fits_registers(target, hidden_arg_ty, &sig.params)
 }
 
 /// Returns true for an eval-supplied method argument type supported by this bridge.
@@ -270,20 +260,6 @@ fn method_param_supported(ty: &PhpType) -> bool {
         ty.codegen_repr(),
         PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
     )
-}
-
-/// Returns true when this helper can materialize the complete call without stack args.
-fn eval_bridge_signature_fits_registers(
-    target: Target,
-    hidden_arg_ty: PhpType,
-    params: &[(String, PhpType)],
-) -> bool {
-    let mut arg_types = Vec::with_capacity(params.len() + 1);
-    arg_types.push(hidden_arg_ty.codegen_repr());
-    arg_types.extend(params.iter().map(|(_, ty)| ty.codegen_repr()));
-    abi::build_outgoing_arg_assignments_for_target(target, &arg_types, 0)
-        .iter()
-        .all(|assignment| assignment.in_register())
 }
 
 /// Returns true for return storage shapes the bridge can box for eval.
@@ -849,7 +825,11 @@ fn emit_aarch64_method_bodies(
         emitter.label(&method_body_label(module, slot));
         emit_aarch64_validate_method_arg_count(module, emitter, slot, fail_label);
         let overflow_bytes = emit_aarch64_prepare_method_args(module, emitter, slot);
+        let caller_stack_pad_bytes =
+            abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
+        abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, &slot.method));
+        abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
         emit_box_method_result(module, emitter, &slot.return_ty);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native method result
@@ -868,7 +848,11 @@ fn emit_x86_64_method_bodies(
         emitter.label(&method_body_label(module, slot));
         emit_x86_64_validate_method_arg_count(module, emitter, slot, fail_label);
         let overflow_bytes = emit_x86_64_prepare_method_args(module, emitter, slot);
+        let caller_stack_pad_bytes =
+            abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
+        abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, &slot.method));
+        abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
         emit_box_method_result(module, emitter, &slot.return_ty);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native method result
@@ -887,10 +871,14 @@ fn emit_aarch64_static_method_bodies(
         emitter.label(&static_method_body_label(module, slot));
         emit_aarch64_validate_static_method_arg_count(module, emitter, slot, fail_label);
         let overflow_bytes = emit_aarch64_prepare_static_method_args(module, emitter, slot);
+        let caller_stack_pad_bytes =
+            abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
+        abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_call_label(
             emitter,
             &static_method_symbol(&slot.impl_class, &slot.method),
         );
+        abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
         emit_box_method_result(module, emitter, &slot.return_ty);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native static method result
@@ -909,10 +897,14 @@ fn emit_x86_64_static_method_bodies(
         emitter.label(&static_method_body_label(module, slot));
         emit_x86_64_validate_static_method_arg_count(module, emitter, slot, fail_label);
         let overflow_bytes = emit_x86_64_prepare_static_method_args(module, emitter, slot);
+        let caller_stack_pad_bytes =
+            abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
+        abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_call_label(
             emitter,
             &static_method_symbol(&slot.impl_class, &slot.method),
         );
+        abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
         emit_box_method_result(module, emitter, &slot.return_ty);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native static method result

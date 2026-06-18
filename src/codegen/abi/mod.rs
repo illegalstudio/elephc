@@ -27,6 +27,7 @@ pub use calls::{
     emit_push_reg_pair, emit_push_result_value, emit_release_temporary_stack,
     emit_reserve_temporary_stack, emit_store_incoming_param, emit_store_to_sp,
     emit_temporary_stack_address, emit_load_temporary_stack_slot, materialize_outgoing_args,
+    outgoing_call_stack_pad_bytes,
 };
 pub use frame::{
     emit_cleanup_callback_epilogue, emit_cleanup_callback_prologue, emit_frame_prologue,
