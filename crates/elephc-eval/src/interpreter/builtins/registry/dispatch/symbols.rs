@@ -55,6 +55,12 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
             };
             eval_get_class_result(*object, context, values)?
         }
+        "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_get_declared_symbols_result(name, context, values)?
+        }
         "get_parent_class" => {
             let [object_or_class] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);

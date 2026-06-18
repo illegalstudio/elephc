@@ -235,6 +235,51 @@ fn eval_class_alias_name(
     Ok(name.trim_start_matches('\\').to_string())
 }
 
+/// Evaluates `get_declared_classes/interfaces/traits()` for eval-visible declarations.
+pub(in crate::interpreter) fn eval_builtin_get_declared_symbols(
+    name: &str,
+    args: &[EvalExpr],
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_get_declared_symbols_result(name, context, values)
+}
+
+/// Builds an indexed array for eval-visible declared class-like names.
+pub(in crate::interpreter) fn eval_get_declared_symbols_result(
+    name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match name {
+        "get_declared_classes" => {
+            eval_dynamic_string_array_result(context.declared_class_names(), values)
+        }
+        "get_declared_interfaces" | "get_declared_traits" => {
+            eval_dynamic_string_array_result(&[], values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Builds one indexed PHP array from runtime-owned strings.
+fn eval_dynamic_string_array_result(
+    items: &[String],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(items.len())?;
+    for (index, item) in items.iter().enumerate() {
+        let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let key = values.int(index)?;
+        let value = values.string(item)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
 /// Evaluates `interface_exists(...)` against generated interface-name metadata.
 pub(in crate::interpreter) fn eval_builtin_interface_exists(
     args: &[EvalExpr],

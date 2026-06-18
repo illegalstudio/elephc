@@ -313,6 +313,39 @@ return is_callable("class_alias");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval `get_declared_*()` lists eval-visible class-like declarations.
+#[test]
+fn execute_program_get_declared_symbols_reports_eval_declarations() {
+    let program = parse_fragment(
+        br#"class DeclaredOne {}
+class DeclaredTwo {}
+class_alias("DeclaredOne", "DeclaredAlias");
+$classes = get_declared_classes();
+echo count($classes); echo ":";
+echo $classes[0]; echo ":";
+echo $classes[1]; echo ":";
+echo $classes[2]; echo ":";
+$call = call_user_func("get_declared_classes");
+echo count($call); echo ":";
+echo $call[2]; echo ":";
+echo count(get_declared_interfaces()); echo ":";
+echo count(call_user_func_array("get_declared_traits", [])); echo ":";
+echo function_exists("get_declared_classes");
+echo function_exists("get_declared_interfaces");
+return is_callable("get_declared_traits");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "3:DeclaredOne:DeclaredTwo:DeclaredAlias:3:DeclaredAlias:0:0:11"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies duplicate eval-declared class names fail through runtime status.
 #[test]
 fn execute_program_duplicate_class_declaration_fails() {

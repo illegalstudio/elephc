@@ -475,6 +475,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "getservbyname" => eval_builtin_getservbyname(args, context, scope, values),
         "getservbyport" => eval_builtin_getservbyport(args, context, scope, values),
         "get_class" => eval_builtin_get_class(args, context, scope, values),
+        "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
+            eval_builtin_get_declared_symbols(name, args, context, values)
+        }
         "get_parent_class" => eval_builtin_get_parent_class(args, context, scope, values),
         "get_resource_id" | "get_resource_type" => {
             eval_builtin_resource_introspection(name, args, context, scope, values)
