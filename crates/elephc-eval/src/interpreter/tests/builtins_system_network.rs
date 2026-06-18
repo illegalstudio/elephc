@@ -248,6 +248,33 @@ return function_exists("putenv");"#,
     assert_eq!(values.output, "direct:named:named:set:spread:empty:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval shell process builtins capture or echo stdout across all call paths.
+#[test]
+fn execute_program_dispatches_process_builtins() {
+    let program = parse_fragment(
+        br#"echo shell_exec("printf shell"); echo ":";
+echo exec(command: "printf exec"); echo ":";
+echo system("printf system") === "" ? "empty" : "bad"; echo ":";
+echo passthru(command: "printf pass") === null ? "null" : "bad"; echo ":";
+echo call_user_func("shell_exec", "printf call"); echo ":";
+echo call_user_func_array("exec", ["command" => "printf spread"]); echo ":";
+echo call_user_func("system", "printf dynsys") === "" ? "dyn-empty" : "bad"; echo ":";
+echo call_user_func_array("passthru", ["command" => "printf dynpass"]) === null ? "dyn-null" : "bad"; echo ":";
+echo function_exists("exec"); echo function_exists("shell_exec"); echo function_exists("system");
+return function_exists("passthru");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "shell:exec:systemempty:passnull:call:spread:dynsysdyn-empty:dynpassdyn-null:111"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval sleep builtins dispatch without delaying focused tests.
 #[test]
 fn execute_program_dispatches_sleep_builtins() {

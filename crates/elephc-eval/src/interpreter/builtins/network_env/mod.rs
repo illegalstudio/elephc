@@ -13,10 +13,12 @@ mod cache;
 mod env;
 mod hosts;
 mod ip;
+mod process;
 mod protocols;
 
 pub(in crate::interpreter) use cache::*;
 pub(in crate::interpreter) use env::*;
 pub(in crate::interpreter) use hosts::*;
 pub(in crate::interpreter) use ip::*;
+pub(in crate::interpreter) use process::*;
 pub(in crate::interpreter) use protocols::*;

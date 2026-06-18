@@ -443,6 +443,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_disk_space(name, args, context, scope, values)
         }
         "empty" => eval_builtin_empty(args, context, scope, values),
+        "exec" | "shell_exec" | "system" | "passthru" => {
+            eval_builtin_process_command(name, args, context, scope, values)
+        }
         "eval" => eval_nested_eval(args, context, scope, values),
         "explode" => eval_builtin_explode(args, context, scope, values),
         "fdiv" | "fmod" => eval_builtin_float_binary(name, args, context, scope, values),

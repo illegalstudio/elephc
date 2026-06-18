@@ -72,6 +72,12 @@ pub(in crate::interpreter) fn eval_network_env_builtin_with_values(
             };
             eval_getenv_result(*name, values)?
         }
+        "exec" | "shell_exec" | "system" | "passthru" => {
+            let [command] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_process_command_result(name, *command, values)?
+        }
         "inet_ntop" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
