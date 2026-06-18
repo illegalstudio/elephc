@@ -20,6 +20,7 @@ mod builtins_file_streams;
 mod builtins_filesystem_metadata;
 mod builtins_filesystem_ops;
 mod builtins_json;
+mod builtins_language_constructs;
 mod builtins_readline;
 mod builtins_math_formatting;
 mod builtins_process_pipes;

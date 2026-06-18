@@ -45,6 +45,7 @@ pub(in crate::interpreter) fn eval_core_builtin_with_values(
         }
         "define" => eval_define_result(evaluated_args, context, values)?,
         "defined" => eval_defined_result(evaluated_args, context, values)?,
+        "die" | "exit" => return eval_exit_result(evaluated_args, values).map(Some),
         _ => return Ok(None),
     };
     Ok(Some(result))

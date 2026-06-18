@@ -132,10 +132,10 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "grapheme_strrev"
         | "hex2bin" | "rawurldecode" | "rawurlencode" | "stripslashes" | "urldecode"
         | "urlencode" => Some(&["string"]),
-        "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
-        | "is_finite" | "is_float" | "is_infinite" | "is_int" | "is_integer" | "is_iterable"
-        | "is_long" | "is_nan" | "is_null" | "is_numeric" | "is_object" | "is_real"
-        | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
+        "boolval" | "empty" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool"
+        | "is_double" | "is_finite" | "is_float" | "is_infinite" | "is_int" | "is_integer"
+        | "is_iterable" | "is_long" | "is_nan" | "is_null" | "is_numeric" | "is_object"
+        | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
         "settype" => Some(&["var", "type"]),
         "get_class" => Some(&["object"]),
         "get_parent_class" => Some(&["object_or_class"]),
@@ -166,6 +166,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "date" => Some(&["format", "timestamp"]),
         "define" => Some(&["constant_name", "value"]),
         "defined" => Some(&["constant_name"]),
+        "die" | "exit" => Some(&["status"]),
         "dirname" => Some(&["path", "levels"]),
         "disk_free_space" | "disk_total_space" => Some(&["directory"]),
         "exec" | "shell_exec" | "system" | "passthru" => Some(&["command"]),
@@ -236,6 +237,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "iterator_count" => Some(&["iterator"]),
         "iterator_to_array" => Some(&["iterator", "preserve_keys"]),
         "ip2long" => Some(&["ip"]),
+        "isset" | "unset" => Some(&["var", "vars"]),
         "json_decode" => Some(&["json", "associative", "depth", "flags"]),
         "json_encode" => Some(&["value", "flags", "depth"]),
         "json_last_error" | "json_last_error_msg" => Some(&[]),

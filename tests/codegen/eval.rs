@@ -3680,7 +3680,7 @@ if (isset($zero, $nullish)) { echo "1"; } else { echo "0"; }
 echo function_exists("isset") . "x";');
 "#,
     );
-    assert_eq!(out, "001110x");
+    assert_eq!(out, "0011101x");
 }
 
 /// Verifies eval `empty()` uses PHP truthiness without warning on missing variables.
@@ -3702,7 +3702,7 @@ if (empty($value)) { echo "1"; } else { echo "0"; }
 echo function_exists("empty") . "x";');
 "#,
     );
-    assert_eq!(out, "111110x");
+    assert_eq!(out, "1111101x");
 }
 
 /// Verifies eval `isset()` and `empty()` use PHP offset semantics for array reads.

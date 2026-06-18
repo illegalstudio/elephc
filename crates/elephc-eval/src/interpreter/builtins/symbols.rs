@@ -452,7 +452,7 @@ pub(in crate::interpreter) fn eval_builtin_isset(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if args.is_empty() {
-        return values.bool_value(false);
+        return Err(EvalStatus::RuntimeFatal);
     }
     for arg in args {
         if !eval_isset_arg(arg, context, scope, values)? {
@@ -474,6 +474,65 @@ pub(in crate::interpreter) fn eval_builtin_empty(
     };
     let empty = eval_empty_arg(arg, context, scope, values)?;
     values.bool_value(empty)
+}
+
+/// Evaluates direct `unset(...)` calls over eval-visible variable names.
+pub(in crate::interpreter) fn eval_builtin_unset(
+    args: &[EvalExpr],
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    for arg in args {
+        let EvalExpr::LoadVar(name) = arg else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
+            values.release(replaced)?;
+        }
+    }
+    values.null()
+}
+
+/// Evaluates callable `isset(...)` over already materialized values.
+pub(in crate::interpreter) fn eval_isset_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    for value in evaluated_args {
+        if values.is_null(*value)? {
+            return values.bool_value(false);
+        }
+    }
+    values.bool_value(true)
+}
+
+/// Evaluates callable `empty(...)` over one already materialized value.
+pub(in crate::interpreter) fn eval_empty_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [value] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let empty = !values.truthy(*value)?;
+    values.bool_value(empty)
+}
+
+/// Evaluates callable `unset(...)` after values have already been materialized.
+pub(in crate::interpreter) fn eval_unset_result(
+    evaluated_args: &[RuntimeCellHandle],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    values.null()
 }
 
 /// Evaluates one `empty` operand without warning or failing on missing variables.

@@ -52,6 +52,9 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
             let name = name.trim_start_matches('\\').to_ascii_lowercase();
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
+        "empty" => eval_empty_result(evaluated_args, values)?,
+        "isset" => eval_isset_result(evaluated_args, values)?,
+        "unset" => eval_unset_result(evaluated_args, values)?,
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
         "class_alias" => eval_class_alias_result(evaluated_args, context, values)?,
         "class_attribute_args" | "class_attribute_names" | "class_get_attributes" => {

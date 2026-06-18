@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - PHP call argument evaluation order is preserved before binding or ABI-like materialization.
-//! - Language constructs such as `eval`, `isset`, and `empty` receive unevaluated expressions.
+//! - Language constructs such as `eval`, `isset`, `empty`, and `unset` receive unevaluated expressions.
 
 use super::*;
 
@@ -352,7 +352,7 @@ pub(in crate::interpreter) fn eval_dynamic_call(
 
 /// Returns true for language constructs that need unevaluated argument expressions.
 pub(in crate::interpreter) fn eval_expr_language_construct_name(name: &str) -> bool {
-    matches!(name, "empty" | "eval" | "isset")
+    matches!(name, "empty" | "eval" | "isset" | "unset")
 }
 
 /// Returns true when every source argument is plain positional.
@@ -458,6 +458,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "dirname" => eval_builtin_dirname(args, context, scope, values),
+        "die" | "exit" => eval_builtin_exit(args, context, scope, values),
         "disk_free_space" | "disk_total_space" => {
             eval_builtin_disk_space(name, args, context, scope, values)
         }
@@ -728,6 +729,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "long2ip" => eval_builtin_long2ip(args, context, scope, values),
         "trim" => eval_builtin_trim_like(name, args, context, scope, values),
         "ucwords" => eval_builtin_ucwords(args, context, scope, values),
+        "unset" => eval_builtin_unset(args, scope, values),
         "umask" => eval_builtin_umask(args, context, scope, values),
         "usleep" => eval_builtin_usleep(args, context, scope, values),
         "var_dump" => eval_builtin_var_dump(args, context, scope, values),
