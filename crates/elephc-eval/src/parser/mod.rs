@@ -12,7 +12,10 @@
 //!   `<?` / `<?php` tags.
 //! - File and directory metadata are supplied by the eval context at execution time.
 
+mod cursor;
+mod expressions;
 mod state;
+mod statements;
 
 #[cfg(test)]
 mod tests;

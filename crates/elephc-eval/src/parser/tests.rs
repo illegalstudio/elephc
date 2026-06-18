@@ -10,8 +10,8 @@
 //! - Fixtures intentionally use eval fragments without PHP opening tags.
 //! - Expected values compare against EvalIR so grammar regressions are visible.
 
+use super::cursor::inc_dec_store;
 use super::parse_fragment;
-use super::state::inc_dec_store;
 use crate::errors::EvalParseError;
 use crate::eval_ir::*;
 

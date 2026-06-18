@@ -1,0 +1,761 @@
+//! Purpose:
+//! Parses PHP eval expressions using PHP-compatible precedence and postfix syntax.
+//!
+//! Called from:
+//! - `crate::parser::statements` for expression-bearing statements.
+//!
+//! Key details:
+//! - Logical keyword precedence, ternary associativity, coalesce, and exponentiation follow PHP grammar.
+//! - Name resolution uses parser namespace/import state while building EvalIR call and constant nodes.
+
+use super::cursor::*;
+use super::state::*;
+use crate::errors::EvalParseError;
+use crate::eval_ir::{
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalMagicConst, EvalMatchArm,
+    EvalUnaryOp,
+};
+use crate::lexer::TokenKind;
+
+impl Parser {
+    /// Parses an expression using PHP-like logical, comparison, concatenation, and arithmetic precedence.
+    pub(super) fn parse_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+        self.parse_keyword_or()
+    }
+
+    /// Parses PHP keyword `or`, whose precedence is lower than `xor`, `and`, and ternary.
+    pub(super) fn parse_keyword_or(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_keyword_xor()?;
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "or")) {
+            self.advance();
+            let right = self.parse_keyword_xor()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalOr,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses PHP keyword `xor`, whose operands are evaluated before boolean XOR.
+    pub(super) fn parse_keyword_xor(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_keyword_and()?;
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "xor")) {
+            self.advance();
+            let right = self.parse_keyword_and()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalXor,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses PHP keyword `and`, whose precedence is lower than ternary and `&&`.
+    pub(super) fn parse_keyword_and(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_ternary()?;
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "and")) {
+            self.advance();
+            let right = self.parse_ternary()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalAnd,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses PHP ternary expressions, including the short `expr ?: fallback` form.
+    pub(super) fn parse_ternary(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let condition = self.parse_null_coalesce()?;
+        if !self.consume(TokenKind::Question) {
+            return Ok(condition);
+        }
+        let then_branch = if self.consume(TokenKind::Colon) {
+            None
+        } else {
+            let expr = self.parse_expr()?;
+            self.expect(TokenKind::Colon)?;
+            Some(Box::new(expr))
+        };
+        let else_branch = self.parse_expr()?;
+        Ok(EvalExpr::Ternary {
+            condition: Box::new(condition),
+            then_branch,
+            else_branch: Box::new(else_branch),
+        })
+    }
+
+    /// Parses right-associative null coalescing below logical OR and above ternary.
+    pub(super) fn parse_null_coalesce(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let value = self.parse_logical_or()?;
+        if !self.consume(TokenKind::QuestionQuestion) {
+            return Ok(value);
+        }
+        let default = self.parse_null_coalesce()?;
+        Ok(EvalExpr::NullCoalesce {
+            value: Box::new(value),
+            default: Box::new(default),
+        })
+    }
+
+    /// Parses left-associative logical OR with lower precedence than logical AND.
+    pub(super) fn parse_logical_or(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_logical_and()?;
+        while self.consume(TokenKind::OrOr) {
+            let right = self.parse_logical_and()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalOr,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative logical AND with lower precedence than equality.
+    pub(super) fn parse_logical_and(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_bit_or()?;
+        while self.consume(TokenKind::AndAnd) {
+            let right = self.parse_bit_or()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalAnd,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative bitwise OR with lower precedence than bitwise XOR.
+    pub(super) fn parse_bit_or(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_bit_xor()?;
+        while self.consume(TokenKind::Pipe) {
+            let right = self.parse_bit_xor()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::BitOr,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative bitwise XOR with lower precedence than bitwise AND.
+    pub(super) fn parse_bit_xor(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_bit_and()?;
+        while self.consume(TokenKind::Caret) {
+            let right = self.parse_bit_and()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::BitXor,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative bitwise AND with lower precedence than equality.
+    pub(super) fn parse_bit_and(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_equality()?;
+        while self.consume(TokenKind::Ampersand) {
+            let right = self.parse_equality()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::BitAnd,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative equality and inequality comparisons.
+    pub(super) fn parse_equality(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_ordering()?;
+        loop {
+            let op = if self.consume(TokenKind::EqualEqual) {
+                EvalBinOp::LooseEq
+            } else if self.consume(TokenKind::NotEqual) {
+                EvalBinOp::LooseNotEq
+            } else if self.consume(TokenKind::EqualEqualEqual) {
+                EvalBinOp::StrictEq
+            } else if self.consume(TokenKind::NotEqualEqual) {
+                EvalBinOp::StrictNotEq
+            } else {
+                break;
+            };
+            let right = self.parse_ordering()?;
+            expr = EvalExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative ordered comparisons.
+    pub(super) fn parse_ordering(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_shift()?;
+        loop {
+            let op = if self.consume(TokenKind::Less) {
+                EvalBinOp::Lt
+            } else if self.consume(TokenKind::LessEqual) {
+                EvalBinOp::LtEq
+            } else if self.consume(TokenKind::Greater) {
+                EvalBinOp::Gt
+            } else if self.consume(TokenKind::GreaterEqual) {
+                EvalBinOp::GtEq
+            } else if self.consume(TokenKind::Spaceship) {
+                EvalBinOp::Spaceship
+            } else {
+                break;
+            };
+            let right = self.parse_shift()?;
+            expr = EvalExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative integer shift operators.
+    pub(super) fn parse_shift(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_concat()?;
+        loop {
+            let op = if self.consume(TokenKind::LessLess) {
+                EvalBinOp::ShiftLeft
+            } else if self.consume(TokenKind::GreaterGreater) {
+                EvalBinOp::ShiftRight
+            } else {
+                break;
+            };
+            let right = self.parse_concat()?;
+            expr = EvalExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative string concatenation.
+    pub(super) fn parse_concat(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_add()?;
+        while self.consume(TokenKind::Dot) {
+            let right = self.parse_add()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::Concat,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative numeric addition and subtraction.
+    pub(super) fn parse_add(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_mul()?;
+        loop {
+            let op = if self.consume(TokenKind::Plus) {
+                EvalBinOp::Add
+            } else if self.consume(TokenKind::Minus) {
+                EvalBinOp::Sub
+            } else {
+                break;
+            };
+            let right = self.parse_mul()?;
+            expr = EvalExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses left-associative numeric multiplication, division, and modulo.
+    pub(super) fn parse_mul(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_unary()?;
+        loop {
+            let op = if self.consume(TokenKind::Star) {
+                EvalBinOp::Mul
+            } else if self.consume(TokenKind::Slash) {
+                EvalBinOp::Div
+            } else if self.consume(TokenKind::Percent) {
+                EvalBinOp::Mod
+            } else {
+                break;
+            };
+            let right = self.parse_unary()?;
+            expr = EvalExpr::Binary {
+                op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses right-associative unary prefix expressions.
+    pub(super) fn parse_unary(&mut self) -> Result<EvalExpr, EvalParseError> {
+        if self.consume(TokenKind::Plus) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::Plus,
+                expr: Box::new(expr),
+            });
+        }
+        if self.consume(TokenKind::Minus) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::Negate,
+                expr: Box::new(expr),
+            });
+        }
+        if self.consume(TokenKind::Bang) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::LogicalNot,
+                expr: Box::new(expr),
+            });
+        }
+        if self.consume(TokenKind::Tilde) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Unary {
+                op: EvalUnaryOp::BitNot,
+                expr: Box::new(expr),
+            });
+        }
+        self.parse_power()
+    }
+
+    /// Parses right-associative exponentiation with higher precedence than unary prefix operators.
+    pub(super) fn parse_power(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_postfix()?;
+        if self.consume(TokenKind::StarStar) {
+            let right = self.parse_unary()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::Pow,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses postfix array reads, property reads, method calls, and dynamic calls.
+    pub(super) fn parse_postfix(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_primary()?;
+        loop {
+            if matches!(self.current(), TokenKind::LParen) {
+                let args = self.parse_call_args()?;
+                expr = EvalExpr::DynamicCall {
+                    callee: Box::new(expr),
+                    args,
+                };
+                continue;
+            }
+            if self.consume(TokenKind::LBracket) {
+                let index = self.parse_expr()?;
+                self.expect(TokenKind::RBracket)?;
+                expr = EvalExpr::ArrayGet {
+                    array: Box::new(expr),
+                    index: Box::new(index),
+                };
+                continue;
+            }
+            if self.consume(TokenKind::Arrow) {
+                let TokenKind::Ident(member) = self.current() else {
+                    return Err(EvalParseError::UnexpectedToken);
+                };
+                let member = member.clone();
+                self.advance();
+                if matches!(self.current(), TokenKind::LParen) {
+                    let args = self.parse_call_args()?;
+                    expr = EvalExpr::MethodCall {
+                        object: Box::new(expr),
+                        method: member.to_ascii_lowercase(),
+                        args,
+                    };
+                } else {
+                    expr = EvalExpr::PropertyGet {
+                        object: Box::new(expr),
+                        property: member,
+                    };
+                }
+                continue;
+            }
+            break;
+        }
+        Ok(expr)
+    }
+
+    /// Parses primary expressions supported by the initial eval subset.
+    pub(super) fn parse_primary(&mut self) -> Result<EvalExpr, EvalParseError> {
+        match self.current() {
+            TokenKind::Int(value) => {
+                let value = *value;
+                self.advance();
+                Ok(EvalExpr::Const(EvalConst::Int(value)))
+            }
+            TokenKind::Float(value) => {
+                let value = *value;
+                self.advance();
+                Ok(EvalExpr::Const(EvalConst::Float(value)))
+            }
+            TokenKind::String(value) => {
+                let value = value.clone();
+                self.advance();
+                Ok(EvalExpr::Const(EvalConst::String(value)))
+            }
+            TokenKind::DollarIdent(name) => {
+                let name = name.clone();
+                self.advance();
+                Ok(EvalExpr::LoadVar(name))
+            }
+            TokenKind::Magic(EvalMagicConst::Namespace) => {
+                let namespace = self.namespace.clone();
+                self.advance();
+                Ok(EvalExpr::Const(EvalConst::String(namespace)))
+            }
+            TokenKind::Magic(magic) => {
+                let magic = magic.clone();
+                self.advance();
+                Ok(EvalExpr::Magic(magic))
+            }
+            TokenKind::Ident(name) if ident_eq(name, "null") => {
+                self.advance();
+                Ok(EvalExpr::Const(EvalConst::Null))
+            }
+            TokenKind::Ident(name) if ident_eq(name, "true") => {
+                self.advance();
+                Ok(EvalExpr::Const(EvalConst::Bool(true)))
+            }
+            TokenKind::Ident(name) if ident_eq(name, "false") => {
+                self.advance();
+                Ok(EvalExpr::Const(EvalConst::Bool(false)))
+            }
+            TokenKind::Ident(name) if ident_eq(name, "print") => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                Ok(EvalExpr::Print(Box::new(expr)))
+            }
+            TokenKind::Ident(_) if self.current_starts_legacy_array_literal() => {
+                self.parse_legacy_array_literal()
+            }
+            TokenKind::Ident(name) if is_include_construct_name(name) => self.parse_include_expr(),
+            TokenKind::Ident(name) if ident_eq(name, "match") => self.parse_match_expr(),
+            TokenKind::Ident(name) if ident_eq(name, "new") => self.parse_new_object_expr(),
+            TokenKind::Ident(name) if is_unsupported_expression_keyword(name) => {
+                Err(EvalParseError::UnsupportedConstruct)
+            }
+            TokenKind::Backslash => self.parse_qualified_name_expr(),
+            TokenKind::Ident(_) if matches!(self.peek(), TokenKind::Backslash) => {
+                self.parse_qualified_name_expr()
+            }
+            TokenKind::Ident(name) if matches!(self.peek(), TokenKind::LParen) => {
+                self.parse_call_expr(name.clone())
+            }
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                self.advance();
+                Ok(self.const_fetch_expr(name))
+            }
+            TokenKind::LBracket => self.parse_array_literal(),
+            TokenKind::LParen => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                self.expect(TokenKind::RParen)?;
+                Ok(expr)
+            }
+            TokenKind::Eof => Err(EvalParseError::UnexpectedEof),
+            _ => Err(EvalParseError::UnexpectedToken),
+        }
+    }
+
+    /// Parses PHP include/require expression constructs and their path expression.
+    pub(super) fn parse_include_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let required = ident_eq(name, "require") || ident_eq(name, "require_once");
+        let once = ident_eq(name, "include_once") || ident_eq(name, "require_once");
+        self.advance();
+        let path = if self.consume(TokenKind::LParen) {
+            let path = self.parse_expr()?;
+            self.expect(TokenKind::RParen)?;
+            path
+        } else {
+            self.parse_expr()?
+        };
+        Ok(EvalExpr::Include {
+            path: Box::new(path),
+            required,
+            once,
+        })
+    }
+
+    /// Parses `match (expr) { pattern, other => value, default => fallback }`.
+    pub(super) fn parse_match_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let subject = self.parse_expr()?;
+        self.expect(TokenKind::RParen)?;
+        self.expect(TokenKind::LBrace)?;
+
+        let mut arms = Vec::new();
+        let mut default = None;
+        while !self.consume(TokenKind::RBrace) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "default")) {
+                self.advance();
+                self.expect(TokenKind::FatArrow)?;
+                default = Some(Box::new(self.parse_expr()?));
+            } else {
+                arms.push(self.parse_match_arm()?);
+            }
+            if self.consume(TokenKind::Comma) {
+                continue;
+            }
+            self.expect(TokenKind::RBrace)?;
+            break;
+        }
+
+        Ok(EvalExpr::Match {
+            subject: Box::new(subject),
+            arms,
+            default,
+        })
+    }
+
+    /// Parses one non-default `match` arm and its comma-separated pattern list.
+    pub(super) fn parse_match_arm(&mut self) -> Result<EvalMatchArm, EvalParseError> {
+        let mut patterns = Vec::new();
+        loop {
+            patterns.push(self.parse_expr()?);
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            if matches!(self.current(), TokenKind::FatArrow) {
+                return Err(EvalParseError::UnexpectedToken);
+            }
+            if matches!(self.current(), TokenKind::Eof | TokenKind::RBrace) {
+                return Err(EvalParseError::UnexpectedToken);
+            }
+        }
+        self.expect(TokenKind::FatArrow)?;
+        let value = self.parse_expr()?;
+        Ok(EvalMatchArm { patterns, value })
+    }
+
+    /// Parses a function-like call expression and its source-order arguments.
+    pub(super) fn parse_call_expr(&mut self, name: String) -> Result<EvalExpr, EvalParseError> {
+        self.advance();
+        let args = self.parse_call_args()?;
+        Ok(self.call_expr(name, args))
+    }
+
+    /// Parses an explicitly qualified call or constant-fetch expression.
+    pub(super) fn parse_qualified_name_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let name = self.parse_qualified_name()?;
+        let name = self.resolve_qualified_name(name);
+        if matches!(self.current(), TokenKind::LParen) {
+            let args = self.parse_call_args()?;
+            return Ok(EvalExpr::Call {
+                name: name.to_ascii_lowercase(),
+                args,
+            });
+        }
+        Ok(EvalExpr::ConstFetch(name))
+    }
+
+    /// Parses `new ClassName(...)` expressions in eval fragments.
+    pub(super) fn parse_new_object_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
+        self.advance();
+        let class_name = self.parse_qualified_name()?;
+        let class_name = self.resolve_class_name(class_name);
+        let args = self.parse_call_args()?;
+        Ok(EvalExpr::NewObject { class_name, args })
+    }
+
+    /// Parses a simple or explicitly qualified PHP name.
+    pub(super) fn parse_qualified_name(&mut self) -> Result<ParsedQualifiedName, EvalParseError> {
+        let absolute = self.consume(TokenKind::Backslash);
+        let TokenKind::Ident(first) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let mut name = first.clone();
+        self.advance();
+        while self.consume(TokenKind::Backslash) {
+            let TokenKind::Ident(part) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            name.push('\\');
+            name.push_str(part);
+            self.advance();
+        }
+        Ok(ParsedQualifiedName { name, absolute })
+    }
+
+    /// Builds a call expression, adding namespace fallback for unqualified names.
+    pub(super) fn call_expr(&self, name: String, args: Vec<EvalCallArg>) -> EvalExpr {
+        if let Some(imported) = self.imports.resolve_function(&name) {
+            return EvalExpr::Call {
+                name: imported.to_ascii_lowercase(),
+                args,
+            };
+        }
+        let fallback_name = name.to_ascii_lowercase();
+        if self.namespace.is_empty() {
+            EvalExpr::Call {
+                name: fallback_name,
+                args,
+            }
+        } else {
+            EvalExpr::NamespacedCall {
+                name: self
+                    .qualify_name_in_current_namespace(&name)
+                    .to_ascii_lowercase(),
+                fallback_name,
+                args,
+            }
+        }
+    }
+
+    /// Builds a constant fetch expression, adding namespace fallback for unqualified names.
+    pub(super) fn const_fetch_expr(&self, name: String) -> EvalExpr {
+        if let Some(imported) = self.imports.resolve_constant(&name) {
+            return EvalExpr::ConstFetch(imported.to_string());
+        }
+        if self.namespace.is_empty() {
+            EvalExpr::ConstFetch(name)
+        } else {
+            EvalExpr::NamespacedConstFetch {
+                name: self.qualify_name_in_current_namespace(&name),
+                fallback_name: name,
+            }
+        }
+    }
+
+    /// Prefixes a name with the parser's current namespace when one is active.
+    pub(super) fn qualify_name_in_current_namespace(&self, name: &str) -> String {
+        if self.namespace.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}\\{}", self.namespace, name)
+        }
+    }
+
+    /// Resolves a class name through active imports before namespace qualification.
+    pub(super) fn resolve_class_name(&self, name: ParsedQualifiedName) -> String {
+        if name.absolute {
+            return name.name;
+        }
+        if let Some(imported) = self.imports.resolve_class(&name.name) {
+            return imported;
+        }
+        self.resolve_qualified_name(name)
+    }
+
+    /// Resolves a parsed PHP name according to the current namespace.
+    pub(super) fn resolve_qualified_name(&self, name: ParsedQualifiedName) -> String {
+        if name.absolute || self.namespace.is_empty() {
+            name.name
+        } else {
+            self.qualify_name_in_current_namespace(&name.name)
+        }
+    }
+
+    /// Parses a parenthesized source-order argument list.
+    pub(super) fn parse_call_args(&mut self) -> Result<Vec<EvalCallArg>, EvalParseError> {
+        self.expect(TokenKind::LParen)?;
+        let mut args = Vec::new();
+        if self.consume(TokenKind::RParen) {
+            return Ok(args);
+        }
+        loop {
+            args.push(self.parse_call_arg()?);
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            if self.consume(TokenKind::RParen) {
+                return Ok(args);
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(args)
+    }
+
+    /// Parses one positional or named argument within a call argument list.
+    pub(super) fn parse_call_arg(&mut self) -> Result<EvalCallArg, EvalParseError> {
+        if self.consume(TokenKind::Ellipsis) {
+            return self.parse_expr().map(EvalCallArg::spread);
+        }
+        if matches!(self.peek(), TokenKind::Colon) {
+            if let TokenKind::Ident(name) = self.current() {
+                let name = name.clone();
+                self.advance();
+                self.expect(TokenKind::Colon)?;
+                let value = self.parse_expr()?;
+                return Ok(EvalCallArg::named(name, value));
+            }
+        }
+        self.parse_expr().map(EvalCallArg::positional)
+    }
+
+    /// Parses an array literal with source-order optional key/value element expressions.
+    pub(super) fn parse_array_literal(&mut self) -> Result<EvalExpr, EvalParseError> {
+        self.expect(TokenKind::LBracket)?;
+        self.parse_array_elements_until(TokenKind::RBracket)
+    }
+
+    /// Parses PHP's legacy `array(...)` literal into the same EvalIR node as `[...]`.
+    pub(super) fn parse_legacy_array_literal(&mut self) -> Result<EvalExpr, EvalParseError> {
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        self.parse_array_elements_until(TokenKind::RParen)
+    }
+
+    /// Returns whether the current token starts PHP's legacy `array(...)` literal syntax.
+    pub(super) fn current_starts_legacy_array_literal(&self) -> bool {
+        matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "array"))
+            && matches!(self.peek(), TokenKind::LParen)
+    }
+
+    /// Parses comma-separated array elements until the supplied closing delimiter.
+    pub(super) fn parse_array_elements_until(
+        &mut self,
+        close: TokenKind,
+    ) -> Result<EvalExpr, EvalParseError> {
+        let mut elements = Vec::new();
+        if self.consume(close.clone()) {
+            return Ok(EvalExpr::Array(elements));
+        }
+        loop {
+            let first = self.parse_expr()?;
+            if self.consume(TokenKind::FatArrow) {
+                let value = self.parse_expr()?;
+                elements.push(EvalArrayElement::KeyValue { key: first, value });
+            } else {
+                elements.push(EvalArrayElement::Value(first));
+            }
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            if self.consume(close.clone()) {
+                return Ok(EvalExpr::Array(elements));
+            }
+        }
+        self.expect(close)?;
+        Ok(EvalExpr::Array(elements))
+    }
+}
