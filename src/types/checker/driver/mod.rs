@@ -27,9 +27,7 @@ use super::builtin_types::{
     patch_magic_method_signatures, InterfaceDeclInfo,
 };
 use super::builtin_enums::inject_builtin_enums;
-use super::builtin_interfaces::{
-    apply_implicit_stringable_interfaces, inject_builtin_interfaces,
-};
+use super::builtin_interfaces::{apply_implicit_stringable_interfaces, inject_builtin_interfaces};
 use super::builtin_iterators::{inject_builtin_iterators, patch_builtin_generator_signatures};
 use super::builtin_json::{inject_builtin_json_interfaces, patch_builtin_json_signatures};
 use super::builtin_spl_classes::{
@@ -84,13 +82,7 @@ pub(super) fn check_types_impl(
     // single pass feeds the schema signatures, the body-check pass, and codegen (which all read
     // the flattened method/property declarations), so no later stage sees a symbolic `self`.
     substitute_relative_class_types_in_flattened(&mut flattened_classes);
-    let declared_traits: HashSet<String> = program
-        .iter()
-        .filter_map(|stmt| match &stmt.kind {
-            StmtKind::TraitDecl { name, .. } => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
+    let declared_traits = collect_declared_trait_names(program);
     let mut seen_classes = HashSet::new();
     let mut class_map = HashMap::new();
     for class in &flattened_classes {
@@ -181,13 +173,13 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_user_filter(&mut class_map) {
         errors.extend(error.flatten());
     }
-    if let Err(error) =
-        inject_builtin_reflection(&interface_map, &mut class_map, &declared_traits)
+    if let Err(error) = inject_builtin_reflection(&interface_map, &mut class_map, &declared_traits)
     {
         errors.extend(error.flatten());
     }
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
+    checker.declared_traits = declared_traits.clone();
     // Enum names must resolve as types in member positions (property and
     // promoted-constructor-param types), which are checked during the class
     // schema pass — before the enum-processing phase populates `enums`. Pre-
@@ -310,6 +302,28 @@ pub(super) fn check_types_impl(
     Ok((checker, final_global_env))
 }
 
+/// Collects source-declared trait names recursively, including namespace blocks.
+fn collect_declared_trait_names(program: &Program) -> HashSet<String> {
+    let mut names = HashSet::new();
+    collect_declared_trait_names_into(program, &mut names);
+    names
+}
+
+/// Pushes recursive source-declared trait names into `names`.
+fn collect_declared_trait_names_into(program: &Program, names: &mut HashSet<String>) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl { name, .. } => {
+                names.insert(name.clone());
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                collect_declared_trait_names_into(body, names);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Resolves the relative class types `self`/`static`/`parent` to concrete class names across
 /// every flattened class's method parameter, method return, and property type annotations.
 ///
@@ -336,7 +350,10 @@ fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
             let mut flattened = FlattenedClass {
                 name: name.clone(),
                 extends: None,
-                implements: implements.iter().map(|name| name.as_str().to_string()).collect(),
+                implements: implements
+                    .iter()
+                    .map(|name| name.as_str().to_string())
+                    .collect(),
                 is_abstract: false,
                 is_final: true,
                 is_readonly_class: false,

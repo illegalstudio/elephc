@@ -8,7 +8,6 @@
 //! Key details:
 //! - Checker state is populated in ordered phases; later passes assume schemas, builtins, and signatures are complete.
 
-pub(crate) mod builtins;
 mod builtin_enums;
 mod builtin_interfaces;
 mod builtin_iterators;
@@ -19,9 +18,8 @@ mod builtin_spl_exceptions;
 pub(crate) mod builtin_stdclass;
 mod builtin_types;
 mod builtin_user_filter;
+pub(crate) mod builtins;
 mod callables;
-/// yield_validation
-pub(crate) mod yield_validation;
 mod driver;
 mod extern_decl;
 mod functions;
@@ -30,6 +28,8 @@ mod method_pass;
 mod schema;
 mod stmt_check;
 mod type_compat;
+/// yield_validation
+pub(crate) mod yield_validation;
 
 use std::collections::{HashMap, HashSet};
 
@@ -109,6 +109,9 @@ pub(crate) struct Checker {
     /// Canonical interface names declared in the program, available for forward references
     /// before the full interface definitions are available.
     pub declared_interfaces: HashSet<String>,
+    /// Canonical trait names declared in the program, available for reflection
+    /// and class-like metadata probes that accept traits.
+    pub declared_traits: HashSet<String>,
     /// Name of the class currently being type-checked (used for `$this` resolution).
     pub current_class: Option<String>,
     /// Name of the current method being type-checked, when inside a class body.
@@ -200,7 +203,10 @@ pub(crate) struct FnDecl {
 /// a `CheckResult` on success or a `CompileError` on failure. The checker validates
 /// types, resolves declarations, infers return types, and collects warnings. Abstract
 /// return types are propagated from concrete implementations before returning.
-pub fn check_types(program: &Program, target_platform: Platform) -> Result<CheckResult, CompileError> {
+pub fn check_types(
+    program: &Program,
+    target_platform: Platform,
+) -> Result<CheckResult, CompileError> {
     let (mut checker, global_env) = driver::check_types_impl(program, target_platform)?;
 
     propagate_abstract_return_types(&mut checker);

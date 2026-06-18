@@ -1109,6 +1109,8 @@ fn test_reflection_class_reports_modifier_flags() {
         r#"<?php
 abstract class StaticAbstractReflect {}
 final class StaticFinalReflect {}
+interface StaticIfaceReflect {}
+trait StaticTraitReflect {}
 enum StaticEnumReflect { case Ready; }
 echo (new ReflectionClass(StaticAbstractReflect::class))->isAbstract() ? "A" : "a";
 echo (new ReflectionClass(StaticAbstractReflect::class))->isFinal() ? "F" : "f";
@@ -1118,9 +1120,19 @@ echo (new ReflectionClass(StaticFinalReflect::class))->isFinal() ? "F" : "f";
 echo ":";
 echo (new ReflectionClass(StaticEnumReflect::class))->isAbstract() ? "A" : "a";
 echo (new ReflectionClass(StaticEnumReflect::class))->isFinal() ? "F" : "f";
+echo ":";
+$iface = new ReflectionClass("staticifacereflect");
+echo $iface->getName() . "/";
+echo $iface->isAbstract() ? "A" : "a";
+echo $iface->isFinal() ? "F" : "f";
+echo ":";
+$trait = new ReflectionClass("STATICTRAITREFLECT");
+echo $trait->getName() . "/";
+echo $trait->isAbstract() ? "A" : "a";
+echo $trait->isFinal() ? "F" : "f";
 "#,
     );
-    assert_eq!(out, "Af:aF:aF");
+    assert_eq!(out, "Af:aF:aF:StaticIfaceReflect/af:StaticTraitReflect/af");
 }
 
 /// Verifies that `ReflectionClass::getName()` returns the canonical declared
