@@ -22,6 +22,24 @@ fn parse_fragment_accepts_empty_class_declaration_source() {
         ))]
     );
 }
+/// Verifies class relation clauses lower into dynamic class metadata.
+#[test]
+fn parse_fragment_accepts_class_extends_and_implements_source() {
+    let program = parse_fragment(
+        br#"class DynEvalChild extends DynEvalBase implements DynEvalIface, \Root\Iface {}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::with_relations(
+            "DynEvalChild",
+            Some("DynEvalBase".to_string()),
+            vec!["DynEvalIface".to_string(), "Root\\Iface".to_string()],
+            Vec::new(),
+            Vec::new(),
+        ))]
+    );
+}
 /// Verifies public property and method class members lower into dynamic class metadata.
 #[test]
 fn parse_fragment_accepts_public_class_members() {

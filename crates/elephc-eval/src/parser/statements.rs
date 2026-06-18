@@ -190,7 +190,7 @@ impl Parser {
         }])
     }
 
-    /// Parses `class Name { ... }` declarations for dynamic class metadata.
+    /// Parses `class Name [extends Parent] [implements Iface, ...] { ... }`.
     pub(super) fn parse_class_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
@@ -198,6 +198,8 @@ impl Parser {
         };
         let name = self.qualify_name_in_current_namespace(name);
         self.advance();
+        let parent = self.parse_class_parent_clause()?;
+        let interfaces = self.parse_class_interface_clause()?;
         self.expect(TokenKind::LBrace)?;
         let mut properties = Vec::new();
         let mut methods = Vec::new();
@@ -208,9 +210,36 @@ impl Parser {
             self.parse_class_member(&mut properties, &mut methods)?;
         }
         self.consume_semicolon();
-        Ok(vec![EvalStmt::ClassDecl(EvalClass::new(
-            name, properties, methods,
+        Ok(vec![EvalStmt::ClassDecl(EvalClass::with_relations(
+            name, parent, interfaces, properties, methods,
         ))])
+    }
+
+    /// Parses an optional `extends Parent` class declaration clause.
+    pub(super) fn parse_class_parent_clause(&mut self) -> Result<Option<String>, EvalParseError> {
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "extends")) {
+            return Ok(None);
+        }
+        self.advance();
+        let parent = self.parse_qualified_name()?;
+        Ok(Some(self.resolve_class_name(parent)))
+    }
+
+    /// Parses an optional `implements Iface, ...` class declaration clause.
+    pub(super) fn parse_class_interface_clause(&mut self) -> Result<Vec<String>, EvalParseError> {
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "implements")) {
+            return Ok(Vec::new());
+        }
+        self.advance();
+        let mut interfaces = Vec::new();
+        loop {
+            let interface = self.parse_qualified_name()?;
+            interfaces.push(self.resolve_class_name(interface));
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+        }
+        Ok(interfaces)
     }
 
     /// Parses one public property or method from an eval class body.

@@ -27,6 +27,7 @@ pub(crate) fn emit_runtime_data_user(
     functions: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    interface_names: &[String],
     trait_names: &[String],
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
@@ -120,6 +121,13 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
     emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
+    emit_name_lookup_data(
+        &mut out,
+        "_interface_names_count",
+        "_interface_names",
+        "_interface_name",
+        interface_names,
+    );
     emit_name_lookup_data(
         &mut out,
         "_trait_names_count",
@@ -1301,6 +1309,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             &[],
+            &[],
             &classes,
             &HashMap::new(),
             Some(&allowed_class_names),
@@ -1326,6 +1335,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            &[],
             &[],
             &classes,
             &HashMap::new(),

@@ -6,8 +6,8 @@
 //! - Dynamic callable dispatch under `builtins::registry::dispatch`.
 //!
 //! Key details:
-//! - Eval-declared classes currently have no parent, interface, trait, or
-//!   attribute metadata, so known class-like targets return empty arrays.
+//! - Eval-declared classes carry parent and interface metadata; trait and
+//!   attribute metadata remains empty.
 //! - Missing class-like relation targets return `false`, matching the main
 //!   backend's unknown-target fallback.
 
@@ -57,8 +57,20 @@ pub(in crate::interpreter) fn eval_class_relation_target_result(
     if !matches!(name, "class_implements" | "class_parents" | "class_uses") {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if !eval_class_relation_target_exists(target, context, values)? {
+    let Some(target) = eval_class_relation_target_name(target, context, values)? else {
         return values.bool_value(false);
+    };
+    if context.class(&target).is_some() {
+        return match name {
+            "class_implements" => {
+                eval_class_relation_names_result(context.class_interface_names(&target), values)
+            }
+            "class_parents" => {
+                eval_class_relation_names_result(context.class_parent_names(&target), values)
+            }
+            "class_uses" => values.assoc_new(0),
+            _ => Err(EvalStatus::RuntimeFatal),
+        };
     }
     values.assoc_new(0)
 }
@@ -105,18 +117,18 @@ pub(in crate::interpreter) fn eval_class_attribute_metadata_result(
 }
 
 /// Returns whether a class-relation target refers to a known class-like symbol.
-fn eval_class_relation_target_exists(
+fn eval_class_relation_target_name(
     target: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
+) -> Result<Option<String>, EvalStatus> {
     if values.type_tag(target)? == EVAL_TAG_OBJECT {
         let name = eval_get_class_result(target, context, values)?;
         let name = eval_class_metadata_name(name, values)?;
-        return eval_class_relation_name_exists(&name, context, values);
+        return Ok(eval_class_relation_name_exists(&name, context, values)?.then_some(name));
     }
     let name = eval_class_metadata_name(target, values)?;
-    eval_class_relation_name_exists(&name, context, values)
+    Ok(eval_class_relation_name_exists(&name, context, values)?.then_some(name))
 }
 
 /// Returns whether one normalized class-like name exists in eval or runtime metadata.
@@ -133,6 +145,20 @@ fn eval_class_relation_name_exists(
         return Ok(true);
     }
     values.enum_exists(name)
+}
+
+/// Builds a PHP associative class-name array keyed by class-name strings.
+fn eval_class_relation_names_result(
+    names: Vec<String>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.assoc_new(names.len())?;
+    for name in names {
+        let key = values.string(&name)?;
+        let value = values.string(&name)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }
 
 /// Reads and normalizes one class metadata string argument.

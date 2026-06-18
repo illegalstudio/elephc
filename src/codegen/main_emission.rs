@@ -465,6 +465,7 @@ fn finish_user_asm(
     emitted_class_names: Option<&HashSet<String>>,
 ) -> String {
     let data_output = data.emit();
+    let interface_names: Vec<String> = interfaces.keys().cloned().collect();
     let trait_names: Vec<String> = traits.iter().cloned().collect();
     let user_data = runtime::emit_runtime_data_user(
         all_global_var_names,
@@ -472,6 +473,7 @@ fn finish_user_asm(
         functions,
         function_variant_groups,
         interfaces,
+        &interface_names,
         &trait_names,
         classes,
         enums,

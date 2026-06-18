@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
-use crate::eval_ir::{EvalClass, EvalFunction};
+use crate::eval_ir::{EvalClass, EvalClassMethod, EvalFunction};
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
@@ -250,6 +250,108 @@ impl ElephcEvalContext {
         self.dynamic_objects
             .get(&identity)
             .and_then(|class_key| self.classes.get(class_key))
+    }
+
+    /// Returns eval-declared class metadata from parent to child for construction.
+    pub fn class_chain(&self, name: &str) -> Vec<EvalClass> {
+        let mut chain = Vec::new();
+        let mut seen = HashSet::new();
+        self.collect_class_chain(name, &mut chain, &mut seen);
+        chain
+    }
+
+    /// Collects one eval-declared class ancestry chain without following cycles.
+    fn collect_class_chain(
+        &self,
+        name: &str,
+        chain: &mut Vec<EvalClass>,
+        seen: &mut HashSet<String>,
+    ) {
+        let key = normalize_class_name(name);
+        if !seen.insert(key.clone()) {
+            return;
+        }
+        let Some(class) = self.classes.get(&key) else {
+            return;
+        };
+        if let Some(parent) = class.parent() {
+            self.collect_class_chain(parent, chain, seen);
+        }
+        chain.push(class.clone());
+    }
+
+    /// Finds a method in an eval-declared class or its eval-declared parents.
+    pub fn class_method(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(String, EvalClassMethod)> {
+        let mut current_name = self.resolve_class_name(class_name)?;
+        let mut seen = HashSet::new();
+        loop {
+            let key = normalize_class_name(&current_name);
+            if !seen.insert(key.clone()) {
+                return None;
+            }
+            let class = self.classes.get(&key)?;
+            if let Some(method) = class.method(method_name) {
+                return Some((class.name().to_string(), method.clone()));
+            }
+            current_name = class.parent()?.to_string();
+        }
+    }
+
+    /// Returns direct and inherited parent class names for an eval-declared class.
+    pub fn class_parent_names(&self, class_name: &str) -> Vec<String> {
+        let mut parents = Vec::new();
+        let mut current = self.class(class_name).and_then(EvalClass::parent);
+        let mut seen = HashSet::new();
+        while let Some(parent) = current {
+            let Some(parent_class) = self.class(parent) else {
+                break;
+            };
+            let key = normalize_class_name(parent_class.name());
+            if !seen.insert(key) {
+                break;
+            }
+            parents.push(parent_class.name().trim_start_matches('\\').to_string());
+            current = parent_class.parent();
+        }
+        parents
+    }
+
+    /// Returns direct and inherited interface names for an eval-declared class.
+    pub fn class_interface_names(&self, class_name: &str) -> Vec<String> {
+        let mut interfaces = Vec::new();
+        let mut seen = HashSet::new();
+        for class in self.class_chain(class_name) {
+            for interface in class.interfaces() {
+                push_unique_class_name(interface, &mut interfaces, &mut seen);
+            }
+        }
+        interfaces
+    }
+
+    /// Returns whether an eval-declared class satisfies one class/interface target.
+    pub fn class_is_a(&self, class_name: &str, target: &str, exclude_self: bool) -> bool {
+        let Some(class) = self.class(class_name) else {
+            return false;
+        };
+        let target = normalize_class_name(
+            &self
+                .resolve_class_name(target)
+                .unwrap_or_else(|| target.trim_start_matches('\\').to_string()),
+        );
+        if !exclude_self && normalize_class_name(class.name()) == target {
+            return true;
+        }
+        self.class_parent_names(class.name())
+            .iter()
+            .any(|parent| normalize_class_name(parent) == target)
+            || self
+                .class_interface_names(class.name())
+                .iter()
+                .any(|interface| normalize_class_name(interface) == target)
     }
 
     /// Defines an eval dynamic constant value, failing if the name is invalid or already present.
@@ -491,6 +593,14 @@ impl Default for ElephcEvalContext {
 /// Normalizes PHP class names for the eval dynamic class registry.
 fn normalize_class_name(name: &str) -> String {
     name.trim_start_matches('\\').to_ascii_lowercase()
+}
+
+/// Pushes a PHP class-like name once, preserving the first visible spelling.
+fn push_unique_class_name(name: &str, names: &mut Vec<String>, seen: &mut HashSet<String>) {
+    let key = normalize_class_name(name);
+    if seen.insert(key) {
+        names.push(name.trim_start_matches('\\').to_string());
+    }
 }
 
 /// Normalizes PHP constant names for case-sensitive eval dynamic probes.

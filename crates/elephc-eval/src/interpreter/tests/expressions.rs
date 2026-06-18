@@ -338,3 +338,40 @@ return $box->x;"#,
     assert_eq!(values.output, "DynBox:7:Y8:10:");
     assert_eq!(values.get(result), FakeValue::Int(10));
 }
+/// Verifies eval-declared classes inherit properties, methods, and constructors.
+#[test]
+fn execute_program_constructs_eval_declared_class_with_inheritance() {
+    let program = parse_fragment(
+        br#"class EvalBaseBox {
+    public int $base = 1;
+    public function __construct($base) { $this->base = $base; }
+    public function sum($n) { return $this->base + $this->tail + $n; }
+}
+class EvalChildBox extends EvalBaseBox implements KnownInterface {
+    public int $tail = 4;
+    public function read($n) { return $this->sum($n); }
+}
+$box = new EvalChildBox(3);
+echo $box->read(5); echo ":";
+echo get_parent_class($box); echo ":";
+echo is_a($box, "EvalBaseBox") ? "isa" : "bad"; echo ":";
+echo is_a($box, "KnownInterface") ? "iface" : "bad"; echo ":";
+echo is_subclass_of($box, "EvalChildBox") ? "bad" : "self"; echo ":";
+echo is_subclass_of($box, "EvalBaseBox") ? "sub" : "bad"; echo ":";
+$parents = class_parents($box);
+echo count($parents); echo ":";
+echo $parents["EvalBaseBox"];
+return $box->base;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "12:EvalBaseBox:isa:iface:self:sub:1:EvalBaseBox"
+    );
+    assert_eq!(values.get(result), FakeValue::Int(3));
+}

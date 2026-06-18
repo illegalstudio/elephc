@@ -1289,10 +1289,7 @@ echo call_user_func_array("krsort", ["array" => $f]) . ":" . $f["b"] . $f["a"] .
 echo function_exists("asort") && function_exists("arsort") && function_exists("ksort") && function_exists("krsort");');
 "#,
     );
-    assert_eq!(
-        out,
-        "1:y1z2x3:1:y3z2x1:1:34a2b1:1:b1a234:1:21:1:12:1"
-    );
+    assert_eq!(out, "1:y1z2x3:1:y3z2x1:1:34a2b1:1:b1a234:1:21:1:12:1");
 }
 
 /// Verifies eval natural sort builtins preserve keys and use natural string order.
@@ -1313,10 +1310,7 @@ echo call_user_func("natsort", $c) . ":" . $c["x"] . $c["y"] . ":";
 echo function_exists("natsort") && function_exists("natcasesort");');
 "#,
     );
-    assert_eq!(
-        out,
-        "1:2img1;1img2;0img10;:1:cIMG1;aimg2;bImg10;:1:ba:1"
-    );
+    assert_eq!(out, "1:2img1;1img2;0img10;:1:cIMG1;aimg2;bImg10;:1:ba:1");
 }
 
 /// Verifies eval `shuffle()` reindexes direct variable arrays only.
@@ -1433,10 +1427,7 @@ echo count($ints) . ":" . $ints[0] . ":" . $ints[2] . ":";
 echo function_exists("array_filter");');
 "#,
     );
-    assert_eq!(
-        out,
-        "3:1:2:ok:drop:2:1:3:1:4:1:5:2:2:4:1:20:2:1:3:2:1:2:1"
-    );
+    assert_eq!(out, "3:1:2:ok:drop:2:1:3:1:4:1:5:2:2:4:1:20:2:1:3:2:1:2:1");
 }
 
 /// Verifies eval `array_combine()` supports PHP key conversions and callable dispatch.
@@ -3266,7 +3257,10 @@ echo call_user_func_array("get_class", ["object" => $probe]) . ":";
 echo function_exists("get_class");');
 "#,
     );
-    assert_eq!(out, "stdClass:EvalClassNameProbe:stdClass:EvalClassNameProbe:1");
+    assert_eq!(
+        out,
+        "stdClass:EvalClassNameProbe:stdClass:EvalClassNameProbe:1"
+    );
 }
 
 /// Verifies eval `get_parent_class()` resolves AOT object and class-string parents.
@@ -4549,6 +4543,46 @@ echo function_exists("is_a"); echo function_exists("is_subclass_of");');
     assert_eq!(out, "YYYNYYYYN11");
 }
 
+/// Verifies eval-declared class inheritance uses dynamic methods and metadata.
+#[test]
+fn test_eval_declared_class_inherits_methods_and_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalDynIface {}
+
+eval('class EvalDynBase {
+    public int $base = 1;
+    public function __construct($base) { $this->base = $base; }
+    public function sum($n) { return $this->base + $this->tail + $n; }
+}
+class EvalDynChild extends EvalDynBase implements EvalDynIface {
+    public int $tail = 4;
+    public function read($n) { return $this->sum($n); }
+}
+$box = new EvalDynChild(3);
+echo $box->read(5) . ":";
+echo get_parent_class($box) . ":";
+echo is_a($box, "EvalDynBase") ? "isa" : "bad"; echo ":";
+echo is_a($box, "EvalDynIface") ? "iface" : "bad"; echo ":";
+echo is_subclass_of($box, "EvalDynChild") ? "bad" : "self"; echo ":";
+echo is_subclass_of($box, "EvalDynBase") ? "sub" : "bad"; echo ":";
+$parents = class_parents($box);
+echo count($parents) . ":" . $parents["EvalDynBase"] . ":";
+$implements = class_implements("EvalDynChild");
+echo count($implements) . ":" . $implements["EvalDynIface"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "12:EvalDynBase:isa:iface:self:sub:1:EvalDynBase:1:EvalDynIface"
+    );
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {
@@ -4818,7 +4852,8 @@ echo eval('return include "eval-plain-piece.txt";');
 /// Verifies missing eval require aborts through the runtime eval fatal path.
 #[test]
 fn test_eval_fragment_missing_require_fails() {
-    let err = compile_and_run_expect_failure("<?php eval('require \"missing-eval-require.php\";');");
+    let err =
+        compile_and_run_expect_failure("<?php eval('require \"missing-eval-require.php\";');");
     assert!(
         err.contains("Fatal error: eval() runtime failed"),
         "stderr did not contain eval runtime fatal: {err}"

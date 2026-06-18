@@ -340,6 +340,16 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     if context.has_class(name) || values.class_exists(name)? {
         return Err(EvalStatus::RuntimeFatal);
     }
+    if let Some(parent) = class.parent() {
+        if context.class(parent).is_none() || context.class_is_a(parent, name, false) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    for interface in class.interfaces() {
+        if !values.interface_exists(interface)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
     if context.define_class(class.clone()) {
         Ok(())
     } else {
@@ -358,18 +368,26 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
     let object = values.new_object("stdClass")?;
     let identity = values.object_identity(object)?;
     context.register_dynamic_object(identity, class.name());
-    for property in class.properties() {
-        let value = if let Some(default) = property.default() {
-            eval_expr(default, context, caller_scope, values)?
-        } else {
-            values.null()?
-        };
-        values.property_set(object, property.name(), value)?;
+    let mut class_chain = context.class_chain(class.name());
+    if class_chain.is_empty() {
+        class_chain.push(class.clone());
     }
-    if let Some(constructor) = class.method("__construct") {
+    for class in &class_chain {
+        for property in class.properties() {
+            let value = if let Some(default) = property.default() {
+                eval_expr(default, context, caller_scope, values)?
+            } else {
+                values.null()?
+            };
+            values.property_set(object, property.name(), value)?;
+        }
+    }
+    if let Some((constructor_class, constructor)) =
+        context.class_method(class.name(), "__construct")
+    {
         eval_dynamic_method_with_values(
-            class.name(),
-            constructor,
+            &constructor_class,
+            &constructor,
             object,
             evaluated_args,
             context,
@@ -395,10 +413,8 @@ pub(in crate::interpreter) fn eval_method_call_result(
     let Some(class) = context.dynamic_object_class(identity) else {
         return values.method_call(object, method_name, evaluated_args);
     };
-    let class_name = class.name().to_string();
-    let method = class
-        .method(method_name)
-        .cloned()
+    let (class_name, method) = context
+        .class_method(class.name(), method_name)
         .ok_or(EvalStatus::RuntimeFatal)?;
     eval_dynamic_method_with_values(
         &class_name,

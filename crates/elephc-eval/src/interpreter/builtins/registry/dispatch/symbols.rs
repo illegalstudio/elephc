@@ -31,9 +31,7 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
         "spl_autoload" | "spl_autoload_call" => {
             eval_spl_autoload_void_result(name, evaluated_args, values)?
         }
-        "spl_autoload_functions" => {
-            eval_spl_autoload_functions_result(evaluated_args, values)?
-        }
+        "spl_autoload_functions" => eval_spl_autoload_functions_result(evaluated_args, values)?,
         "spl_autoload_extensions" => {
             eval_spl_autoload_extensions_result(evaluated_args, context, values)?
         }
@@ -86,7 +84,7 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
             let [object_or_class] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_get_parent_class_result(*object_or_class, values)?
+            eval_get_parent_class_result(*object_or_class, context, values)?
         }
         "get_resource_id" | "get_resource_type" => {
             let [resource] = evaluated_args else {
