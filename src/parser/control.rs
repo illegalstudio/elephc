@@ -110,6 +110,12 @@ pub fn parse_while(
 
 /// Parses a foreach loop: `foreach ($array as $value)` or `foreach ($array as $key => $value)`.
 /// Supports by-reference values via `&` prefix and by-reference loop variables.
+///
+/// Also supports PHP 7.1+ array-destructuring value patterns: `foreach ($arr as [$a, $b])`
+/// and `foreach ($arr as $k => ['key' => $v])`. The bracket pattern is parsed and lowered
+/// (via the standalone list-destructuring lowering) against a synthetic per-iteration
+/// element variable, and the resulting destructure statement is prepended to the body so
+/// the rest of the `Foreach` node — and every pass that reads its `value_var` — is unchanged.
 pub fn parse_foreach(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -119,6 +125,14 @@ pub fn parse_foreach(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'foreach'")?;
     let array = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::As, "Expected 'as' in foreach")?;
+
+    // Destructure value pattern: `foreach ($arr as [pattern])`.
+    if matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::LBracket)
+    ) {
+        return finish_foreach_destructure(tokens, pos, span, array, None);
+    }
 
     let first_by_ref = if matches!(
         tokens.get(*pos).map(|(token, _)| token),
@@ -146,6 +160,13 @@ pub fn parse_foreach(
             ));
         }
         *pos += 1;
+        // Destructure value pattern: `foreach ($arr as $k => [pattern])`.
+        if matches!(
+            tokens.get(*pos).map(|(token, _)| token),
+            Some(Token::LBracket)
+        ) {
+            return finish_foreach_destructure(tokens, pos, span, array, Some(first_var));
+        }
         let value_by_ref = if matches!(
             tokens.get(*pos).map(|(token, _)| token),
             Some(Token::Ampersand)
@@ -174,6 +195,43 @@ pub fn parse_foreach(
             key_var,
             value_var,
             value_by_ref,
+            body,
+        },
+        span,
+    ))
+}
+
+/// Builds a `Foreach` whose value is destructured by a bracket pattern.
+///
+/// `key_var` is `Some(name)` for the `$k => [pattern]` form, `None` for the `as [pattern]`
+/// form. The bracket pattern at `*pos` is parsed and lowered against a fresh synthetic
+/// element variable (`__elephc_foreach_destructure_{line}_{col}`, unique per foreach by
+/// its starting span) and the resulting destructure statement is prepended to the parsed
+/// body. The `Foreach` node itself uses the synthetic variable as `value_var`, so every
+/// downstream pass that reads `value_var` continues to work unchanged.
+fn finish_foreach_destructure(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    array: Expr,
+    key_var: Option<String>,
+) -> Result<Stmt, CompileError> {
+    let temp = format!("__elephc_foreach_destructure_{}_{}", span.line, span.col);
+    let destructure_stmt = crate::parser::stmt::parse_and_lower_foreach_destructure(
+        tokens,
+        pos,
+        span,
+        Expr::new(ExprKind::Variable(temp.clone()), span),
+    )?;
+    expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
+    let mut body = parse_body(tokens, pos)?;
+    body.insert(0, destructure_stmt);
+    Ok(Stmt::new(
+        StmtKind::Foreach {
+            array,
+            key_var,
+            value_var: temp,
+            value_by_ref: false,
             body,
         },
         span,

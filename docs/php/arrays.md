@@ -187,6 +187,28 @@ $items = [0];
 
 PHP does not allow keyed and unkeyed entries in the same destructuring pattern, and elephc reports that as a compile-time error.
 
+Destructuring can also appear directly in a `foreach` value pattern. The pattern is bound from each element (or each value, when a key is present), so you can unpack rows while iterating.
+
+```php
+<?php
+// Positional: bind each element pair.
+foreach ([["a", "b"], ["c", "d"]] as [$x, $y]) {
+    echo $x . $y; // abcd
+}
+
+// Keyed: pick fields by name from each row.
+foreach ([["id" => 1, "name" => "Ada"]] as ["id" => $id, "name" => $name]) {
+    echo $id . ':' . $name; // 1:Ada
+}
+
+// Key with a destructured value.
+foreach (["k" => [1, 2]] as $key => [$m, $n]) {
+    echo $key . $m . $n; // k12
+}
+```
+
+By-reference destructuring targets (`foreach ($arr as [&$a, $b])` and `[&$a, $b] = $arr`) are not supported; the pattern must bind by value.
+
 ## Built-in array functions
 
 | Function | Signature | Description |

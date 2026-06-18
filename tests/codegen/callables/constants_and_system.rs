@@ -324,6 +324,71 @@ fn test_list_unpack_static_property_targets() {
     assert_eq!(out, "7 8");
 }
 
+// --- foreach array destructuring (PHP 7.1+) ---
+
+/// Verifies `foreach ($arr as [$a, $b])` binds each positional element pair.
+#[test]
+fn test_foreach_destructure_positional() {
+    let out = compile_and_run(
+        "<?php\n$out = \"\";\nforeach ([[\"a\",\"b\"], [\"c\",\"d\"]] as [$x, $y]) {\n $out .= $x . $y . \"|\";\n}\necho $out;\n",
+    );
+    assert_eq!(out, "ab|cd|");
+}
+
+/// Verifies `foreach ($arr as $k => [$a, $b])` binds the key and the element pair.
+#[test]
+fn test_foreach_destructure_key_value_pair() {
+    let out = compile_and_run(
+        "<?php\nforeach ([\"k1\" => [1, 2], \"k2\" => [3, 4]] as $k => [$m, $n]) {\n echo $k . \":\" . $m . \",\" . $n . \"\\n\";\n}\n",
+    );
+    assert_eq!(out, "k1:1,2\nk2:3,4\n");
+}
+
+/// Verifies keyed destructuring directly as the foreach value pattern.
+#[test]
+fn test_foreach_destructure_keyed_pattern() {
+    let out = compile_and_run(
+        "<?php\nforeach ([[\"id\"=>1,\"name\"=>\"Alice\"], [\"id\"=>2,\"name\"=>\"Bob\"]] as [\"id\" => $id, \"name\" => $name]) {\n echo $id . \":\" . $name . \"\\n\";\n}\n",
+    );
+    assert_eq!(out, "1:Alice\n2:Bob\n");
+}
+
+/// Verifies nested patterns inside a foreach value pattern bind correctly.
+#[test]
+fn test_foreach_destructure_nested_pattern() {
+    let out = compile_and_run(
+        "<?php\nforeach ([[1, [2, 3]], [4, [5, 6]]] as [$a, [$b, $c]]) {\n echo $a . $b . $c;\n}\n",
+    );
+    assert_eq!(out, "123456");
+}
+
+/// Verifies holes (skipped slots) advance the positional index without binding.
+#[test]
+fn test_foreach_destructure_holes() {
+    let out = compile_and_run(
+        "<?php\nforeach ([[10, 20, 30], [40, 50, 60]] as [, $mid,]) {\n echo $mid . \"\\n\";\n}\n",
+    );
+    assert_eq!(out, "20\n50\n");
+}
+
+/// Verifies foreach destructuring over a real typed-element local variable array.
+#[test]
+fn test_foreach_destructure_over_variable_array() {
+    let out = compile_and_run(
+        "<?php\n$rows = [[\"p\", \"q\"], [\"r\", \"s\"]];\nforeach ($rows as [$u, $v]) {\n echo $u . $v;\n}\n",
+    );
+    assert_eq!(out, "pqrs");
+}
+
+/// Verifies foreach destructuring works inside a function (local slot + element binding).
+#[test]
+fn test_foreach_destructure_inside_function() {
+    let out = compile_and_run(
+        "<?php\nfunction pair(array $rows): string {\n $out = \"\";\n foreach ($rows as [$a, $b]) { $out .= $a . $b; }\n return $out;\n}\necho pair([[\"x\",\"y\"], [\"z\",\"w\"]]);\n",
+    );
+    assert_eq!(out, "xyzw");
+}
+
 // --- call_user_func_array ---
 
 // Tests basic `call_user_func_array("add", [3, 4])` where `add($a, $b) { return $a + $b; }`

@@ -217,3 +217,66 @@ fn test_parse_foreach_key_value_by_ref() {
         panic!("expected Foreach");
     }
 }
+
+/// Verifies `foreach ($a as [$x, $y]) {}` desugars to a `Foreach` whose synthetic
+/// `value_var` is bound and whose body starts with a `ListUnpack` of `[$x, $y]`.
+#[test]
+fn test_parse_foreach_destructure_positional() {
+    let stmts = parse_source("<?php foreach ($a as [$x, $y]) {}");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        value_by_ref,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    assert_eq!(key_var, &None);
+    assert!(value_var.starts_with("__elephc_foreach_destructure_"));
+    assert!(!value_by_ref);
+    assert!(matches!(
+        body.first().map(|s| &s.kind),
+        Some(StmtKind::ListUnpack { vars, .. }) if vars.len() == 2
+    ));
+}
+
+/// Verifies `foreach ($a as $k => [$x, $y]) {}` keeps the key and desugars the value
+/// pattern into a leading `ListUnpack`.
+#[test]
+fn test_parse_foreach_destructure_key_value() {
+    let stmts = parse_source("<?php foreach ($a as $k => [$x, $y]) {}");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    assert_eq!(key_var, &Some("k".to_string()));
+    assert!(value_var.starts_with("__elephc_foreach_destructure_"));
+    assert!(matches!(
+        body.first().map(|s| &s.kind),
+        Some(StmtKind::ListUnpack { vars, .. }) if vars.len() == 2
+    ));
+}
+
+/// Verifies a keyed foreach destructure pattern lowers to a `Synthetic` body prefix
+/// (keyed entries cannot use the simple `ListUnpack` form).
+#[test]
+fn test_parse_foreach_destructure_keyed_pattern() {
+    let stmts = parse_source("<?php foreach ($a as [\"id\" => $id]) {}");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Foreach { body, .. } = &stmts[0].kind else {
+        panic!("expected Foreach");
+    };
+    assert!(matches!(
+        body.first().map(|s| &s.kind),
+        Some(StmtKind::Synthetic(stmts)) if !stmts.is_empty()
+    ));
+}

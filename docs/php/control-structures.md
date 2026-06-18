@@ -82,6 +82,28 @@ By-reference value binding is currently supported only for array sources;
 `iterable`-typed values is rejected at compile time. Use an array source or
 iterate by value when consuming Traversable objects.
 
+The value position can also be an array-destructuring pattern (PHP 7.1+). Each
+element is unpacked into the pattern targets on every iteration:
+
+```php
+<?php
+foreach ([["a", "b"], ["c", "d"]] as [$x, $y]) {
+    echo $x . $y; // abcd
+}
+
+foreach ([["id" => 1, "name" => "Ada"]] as ["id" => $id, "name" => $name]) {
+    echo $id . ':' . $name; // 1:Ada
+}
+
+foreach (["k" => [1, 2]] as $key => [$m, $n]) {
+    echo $key . $m . $n; // k12
+}
+```
+
+Destructuring `foreach` patterns bind by value; by-reference pattern targets
+are not supported. See [Array destructuring](arrays.md#array-destructuring) for
+the full pattern grammar (positional, keyed, nested, holes).
+
 Untyped, `mixed`, and union-typed sources are dispatched at runtime. If the
 runtime value is an indexed or associative array, both by-value and by-reference
 value binding are supported. If the runtime value is an `Iterator` or

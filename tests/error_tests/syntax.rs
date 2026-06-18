@@ -110,6 +110,30 @@ fn test_error_list_destructuring_requires_writable_target() {
     expect_error("<?php [1 + 2] = [3];", "Invalid list destructuring target");
 }
 
+// --- foreach array destructuring errors ---
+
+/// Verifies an empty foreach destructure pattern (`foreach ($a as [])`) is rejected.
+#[test]
+fn test_error_foreach_destructure_empty_pattern() {
+    expect_error("<?php foreach ($a as []) {}", "Cannot use empty list");
+}
+
+/// Verifies a foreach destructure pattern that mixes keyed and unkeyed entries is rejected,
+/// matching standalone list destructuring.
+#[test]
+fn test_error_foreach_destructure_mixes_keyed_and_unkeyed() {
+    expect_error(
+        "<?php foreach ($a as [$x, \"k\" => $y]) {}",
+        "Cannot mix keyed and unkeyed list entries",
+    );
+}
+
+/// Verifies a foreach destructure pattern with a non-writable target is rejected.
+#[test]
+fn test_error_foreach_destructure_invalid_target() {
+    expect_error("<?php foreach ($a as [1 + 2]) {}", "Invalid list destructuring target");
+}
+
 // --- Attribute syntax errors ---
 
 /// Verifies the error diagnostic for unterminated attribute group.
