@@ -114,6 +114,7 @@ pub(in crate::interpreter) fn eval_php_visible_builtin_exists(name: &str) -> boo
             | "filesize"
             | "filetype"
             | "fnmatch"
+            | "flock"
             | "floor"
             | "floatval"
             | "fmod"

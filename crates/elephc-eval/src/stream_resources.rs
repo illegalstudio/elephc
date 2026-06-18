@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 /// Eval-owned table of local file streams keyed by runtime resource payload.
@@ -109,6 +110,21 @@ impl EvalStreamResources {
         self.streams
             .get_mut(&id)
             .is_some_and(|stream| stream.file.flush().is_ok())
+    }
+
+    /// Applies an advisory lock operation to a stream's backing file descriptor.
+    pub(crate) fn flock(&self, id: i64, operation: i64) -> Option<(bool, bool)> {
+        let stream = self.streams.get(&id)?;
+        let operation = eval_flock_operation(operation)?;
+        let result = unsafe {
+            // libc only observes the borrowed raw fd during this call.
+            libc::flock(stream.file.as_raw_fd(), operation)
+        };
+        if result == 0 {
+            Some((true, false))
+        } else {
+            Some((false, eval_flock_would_block()))
+        }
     }
 
     /// Synchronizes stream data and metadata to storage.
@@ -229,6 +245,24 @@ pub(crate) struct EvalStreamMetaData {
     pub(crate) eof: bool,
     pub(crate) mode: String,
     pub(crate) uri: String,
+}
+
+/// Converts PHP `LOCK_*` bit flags into host `flock()` flags.
+fn eval_flock_operation(operation: i64) -> Option<libc::c_int> {
+    let non_blocking = operation & 4 != 0;
+    let base = match operation & !4 {
+        1 => libc::LOCK_SH,
+        2 => libc::LOCK_EX,
+        3 => libc::LOCK_UN,
+        _ => return None,
+    };
+    Some(base | if non_blocking { libc::LOCK_NB } else { 0 })
+}
+
+/// Returns whether the last host `flock()` failure was a non-blocking lock miss.
+fn eval_flock_would_block() -> bool {
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    errno.is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
 }
 
 /// File stream stored behind one eval resource id.

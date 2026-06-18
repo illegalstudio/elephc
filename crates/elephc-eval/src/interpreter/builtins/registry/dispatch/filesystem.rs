@@ -157,6 +157,18 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_fprintf_result(*stream, *format, format_args, context, values)?
         }
+        "flock" => {
+            if !(2..=3).contains(&evaluated_args.len()) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let (success, _) = eval_flock_result(
+                evaluated_args[0],
+                evaluated_args[1],
+                context,
+                values,
+            )?;
+            values.bool_value(success)?
+        }
         "fread" => {
             let [stream, length] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
