@@ -116,3 +116,56 @@ if (step("c", false)) {
 
     assert_eq!(out, "aX|cdY");
 }
+
+/// Regression for a tail-sinking bug that duplicated declarations.
+///
+/// When a function declaration followed an `if/else` whose both branches fall through, DCE
+/// tail-sinking moved the declaration into *both* branches, producing a duplicate
+/// `_fn_<name>` symbol and a linker error. Declarations are hoistable and must be kept once at
+/// the outer level instead of being sunk into branches. The `if` condition uses `$argc` so it
+/// is not constant-folded away before DCE; the program must compile (no duplicate symbol) and run.
+#[test]
+fn test_dead_code_elimination_does_not_duplicate_declaration_in_tail() {
+    let out = compile_and_run(
+        r#"<?php
+if ($argc) {
+    echo "a";
+} else {
+    echo "b";
+}
+function double(int $n): int {
+    return $n * 2;
+}
+echo double(3);
+"#,
+    );
+
+    assert_eq!(out, "a6");
+}
+
+/// Same tail-sinking declaration rule for a class declaration following an `if/else`, plus a
+/// constant initializer used after the `if`. The class must be emitted once.
+#[test]
+fn test_dead_code_elimination_does_not_duplicate_class_declaration_in_tail() {
+    let out = compile_and_run(
+        r#"<?php
+if ($argc) {
+    echo "p";
+} else {
+    echo "q";
+}
+class Box {
+    public int $v;
+}
+function make_box(): Box {
+    $b = new Box();
+    $b->v = 7;
+    return $b;
+}
+$box = make_box();
+echo $box->v;
+"#,
+    );
+
+    assert_eq!(out, "p7");
+}
