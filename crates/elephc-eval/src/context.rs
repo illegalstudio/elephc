@@ -16,7 +16,7 @@ use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
-    EvalClass, EvalClassMethod, EvalClassProperty, EvalFunction, EvalInterface,
+    EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalFunction, EvalInterface,
     EvalInterfaceMethod, EvalTrait,
 };
 use crate::scope::ElephcEvalScope;
@@ -102,6 +102,7 @@ pub struct ElephcEvalContext {
     native_functions: HashMap<String, NativeFunction>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
     static_properties: HashMap<(String, String), RuntimeCellHandle>,
+    class_constants: HashMap<(String, String), RuntimeCellHandle>,
     included_files: HashSet<String>,
     dynamic_objects: HashMap<u64, String>,
     global_scope: Option<*mut ElephcEvalScope>,
@@ -136,6 +137,7 @@ impl ElephcEvalContext {
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
+            class_constants: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
             global_scope: None,
@@ -171,6 +173,7 @@ impl ElephcEvalContext {
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
+            class_constants: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
             global_scope: None,
@@ -403,6 +406,39 @@ impl ElephcEvalContext {
         class
             .method(method_name)
             .map(|method| (class.name().to_string(), method.clone()))
+    }
+
+    /// Finds a class constant in an eval-declared class or its eval-declared parents.
+    pub fn class_constant(
+        &self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Option<(String, EvalClassConstant)> {
+        let mut current_name = self.resolve_class_name(class_name)?;
+        let mut seen = HashSet::new();
+        loop {
+            let key = normalize_class_name(&current_name);
+            if !seen.insert(key.clone()) {
+                return None;
+            }
+            let class = self.classes.get(&key)?;
+            if let Some(constant) = class.constant(constant_name) {
+                return Some((class.name().to_string(), constant.clone()));
+            }
+            current_name = class.parent()?.to_string();
+        }
+    }
+
+    /// Finds a class constant declared directly by one eval-declared class.
+    pub fn class_own_constant(
+        &self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Option<(String, EvalClassConstant)> {
+        let class = self.class(class_name)?;
+        class
+            .constant(constant_name)
+            .map(|constant| (class.name().to_string(), constant.clone()))
     }
 
     /// Finds a property in an eval-declared class or its eval-declared parents.
@@ -690,6 +726,26 @@ impl ElephcEvalContext {
     ) -> Option<RuntimeCellHandle> {
         let previous = self
             .static_properties
+            .insert((normalize_class_name(class_name), name.into()), cell);
+        previous.filter(|previous| *previous != cell)
+    }
+
+    /// Returns a materialized eval class constant cell.
+    pub fn class_constant_cell(&self, class_name: &str, name: &str) -> Option<RuntimeCellHandle> {
+        self.class_constants
+            .get(&(normalize_class_name(class_name), name.to_string()))
+            .copied()
+    }
+
+    /// Stores one eval class constant cell and returns any replaced distinct cell.
+    pub fn set_class_constant_cell(
+        &mut self,
+        class_name: &str,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let previous = self
+            .class_constants
             .insert((normalize_class_name(class_name), name.into()), cell);
         previous.filter(|previous| *previous != cell)
     }

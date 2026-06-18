@@ -12,8 +12,8 @@ use super::cursor::*;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalCatch, EvalClass, EvalClassMethod, EvalClassProperty, EvalExpr, EvalInterface,
-    EvalInterfaceMethod, EvalStmt, EvalSwitchCase, EvalTrait, EvalVisibility,
+    EvalCatch, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalExpr,
+    EvalInterface, EvalInterfaceMethod, EvalStmt, EvalSwitchCase, EvalTrait, EvalVisibility,
 };
 use crate::lexer::TokenKind;
 
@@ -257,6 +257,7 @@ impl Parser {
         let parent = self.parse_class_parent_clause()?;
         let interfaces = self.parse_class_interface_clause()?;
         self.expect(TokenKind::LBrace)?;
+        let mut constants = Vec::new();
         let mut properties = Vec::new();
         let mut methods = Vec::new();
         let mut traits = Vec::new();
@@ -264,17 +265,18 @@ impl Parser {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
-            self.parse_class_member(&mut properties, &mut methods, &mut traits)?;
+            self.parse_class_member(&mut constants, &mut properties, &mut methods, &mut traits)?;
         }
         self.consume_semicolon();
         Ok(vec![EvalStmt::ClassDecl(
-            EvalClass::with_modifiers_and_traits(
+            EvalClass::with_modifiers_traits_and_constants(
                 name,
                 is_abstract,
                 is_final,
                 parent,
                 interfaces,
                 traits,
+                constants,
                 properties,
                 methods,
             ),
@@ -336,6 +338,7 @@ impl Parser {
     /// Parses one public property or method from an eval class body.
     pub(super) fn parse_class_member(
         &mut self,
+        constants: &mut Vec<EvalClassConstant>,
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
         traits: &mut Vec<String>,
@@ -356,6 +359,15 @@ impl Parser {
             return Ok(());
         }
 
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
+            if is_static || is_abstract || is_final {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            constants
+                .push(self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?);
+            return Ok(());
+        }
+
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
             methods.push(self.parse_class_method_decl(
                 visibility.unwrap_or(EvalVisibility::Public),
@@ -372,6 +384,23 @@ impl Parser {
         }
         properties.push(self.parse_class_property_decl(visibility, is_static)?);
         Ok(())
+    }
+
+    /// Parses one eval class constant declaration.
+    pub(super) fn parse_class_const_decl(
+        &mut self,
+        visibility: EvalVisibility,
+    ) -> Result<EvalClassConstant, EvalParseError> {
+        self.advance();
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let name = name.clone();
+        self.advance();
+        self.expect(TokenKind::Equal)?;
+        let value = self.parse_expr()?;
+        self.expect_semicolon()?;
+        Ok(EvalClassConstant::with_visibility(name, visibility, value))
     }
 
     /// Parses `use TraitName, OtherTrait;` inside an eval class body.

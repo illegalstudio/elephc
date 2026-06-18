@@ -88,6 +88,10 @@ pub(in crate::interpreter) fn eval_expr(
             class_name,
             property,
         } => eval_static_property_get_result(class_name, property, context, values),
+        EvalExpr::ClassConstantFetch {
+            class_name,
+            constant,
+        } => eval_class_constant_fetch_result(class_name, constant, context, values),
         EvalExpr::MethodCall {
             object,
             method,

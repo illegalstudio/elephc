@@ -13,6 +13,7 @@
 mod arrays_objects;
 mod assignments;
 mod calls;
+mod class_constants;
 mod classes_errors;
 mod control_statements;
 mod exceptions_control;

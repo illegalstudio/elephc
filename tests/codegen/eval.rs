@@ -4789,6 +4789,42 @@ echo EvalStaticBase::baseRead();');
     assert_eq!(out.stdout, "1:3:3:14:5:5");
 }
 
+/// Verifies eval-declared class constants work through the bridge.
+#[test]
+fn test_eval_declared_class_constants_and_scoped_fetches() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalConstBase {
+    public const SEED = 2;
+    protected const HIDDEN = 5;
+    public static function read() {
+        return self::SEED + static::SEED;
+    }
+    public static function hidden() {
+        return self::HIDDEN;
+    }
+}
+class EvalConstChild extends EvalConstBase {
+    public const SEED = 7;
+    public static function readParent() {
+        return parent::SEED;
+    }
+}
+echo EvalConstBase::SEED . ":";
+echo EvalConstChild::SEED . ":";
+echo EvalConstChild::read() . ":";
+echo EvalConstChild::readParent() . ":";
+echo EvalConstChild::hidden();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2:7:9:2:5");
+}
+
 /// Verifies eval rejects private member access from outside the declaring class.
 #[test]
 fn test_eval_declared_private_member_access_fails() {
@@ -4799,6 +4835,23 @@ eval('class EvalPrivateAccessBox {
 }
 $box = new EvalPrivateAccessBox();
 echo $box->secret;');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval rejects protected class constant access from outside the declaring class.
+#[test]
+fn test_eval_declared_protected_class_constant_access_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalProtectedConstAccessBox {
+    protected const SECRET = 4;
+}
+echo EvalProtectedConstAccessBox::SECRET;');
 "#,
     );
     assert!(
