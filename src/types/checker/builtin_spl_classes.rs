@@ -29,6 +29,7 @@ mod heaps;
 mod multiple;
 mod object_storage;
 mod patch;
+mod weak_map;
 mod phar;
 mod recursive;
 mod recursive_array;
@@ -59,6 +60,7 @@ pub(crate) fn inject_builtin_spl_classes(
     multiple::insert_class(class_map);
     heaps::insert_classes(class_map);
     object_storage::insert_class(class_map);
+    weak_map::insert_class(class_map);
     phar::insert_classes(class_map);
 
     Ok(())

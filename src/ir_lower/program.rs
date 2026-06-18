@@ -1173,6 +1173,18 @@ fn required_builtin_spl_metadata_methods(class_name: &str) -> &'static [&'static
             "offsetSet",
             "offsetUnset",
         ],
+        "WeakMap" => &[
+            "current",
+            "key",
+            "next",
+            "rewind",
+            "valid",
+            "count",
+            "offsetExists",
+            "offsetGet",
+            "offsetSet",
+            "offsetUnset",
+        ],
         "RegexIterator" => &["accept", "current", "key"],
         "RecursiveArrayIterator" => &["hasChildren", "getChildren"],
         "RecursiveFilterIterator" => &["hasChildren"],
@@ -1470,6 +1482,21 @@ fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
                 | "__serialize"
                 | "__unserialize"
                 | "__debuginfo"
+                | "__elephcindexof"
+        ),
+        "WeakMap" => matches!(
+            method_key,
+            "__construct"
+                | "count"
+                | "rewind"
+                | "valid"
+                | "key"
+                | "current"
+                | "next"
+                | "offsetexists"
+                | "offsetget"
+                | "offsetset"
+                | "offsetunset"
                 | "__elephcindexof"
         ),
         "Phar" | "PharData" => matches!(

@@ -36,3 +36,5 @@ mod recursive;
 mod regex;
 #[path = "spl/storage.rs"]
 mod storage;
+#[path = "spl/weakmap.rs"]
+mod weakmap;

@@ -22,7 +22,7 @@ classes `SplFileInfo`, `SplFileObject`, `SplTempFileObject`,
 `DirectoryIterator`, `FilesystemIterator`, `GlobIterator`, and
 `RecursiveDirectoryIterator`, and
 `ParentIterator`, plus `SplHeap`, `SplMaxHeap`, `SplMinHeap`,
-`SplPriorityQueue`, and `SplObjectStorage`.
+`SplPriorityQueue`, `SplObjectStorage`, and `WeakMap`.
 
 SPL names live in the global namespace, matching PHP. They are available
 without imports or runtime extensions.
@@ -77,6 +77,7 @@ one or more `Iterator` objects:
 | `SplMinHeap` | `SplHeap` | inherited from parent |
 | `SplPriorityQueue` | - | `Iterator`, `Countable` |
 | `SplObjectStorage` | - | `Iterator`, `Countable`, `ArrayAccess` |
+| `WeakMap` | - | `Iterator`, `Countable`, `ArrayAccess` |
 | `SplFileInfo` | - | `Stringable` |
 | `SplFileObject` | `SplFileInfo` | `RecursiveIterator`, `SeekableIterator` |
 | `SplTempFileObject` | `SplFileObject` | inherited from parent |
@@ -317,6 +318,52 @@ foreach ($storage as $index => $node) {
 
 `SplObjectStorage` stores object handles and info payloads in per-instance
 storage. Releasing the storage object releases the arrays and handles it owns.
+
+### WeakMap
+
+`WeakMap` maps object keys to arbitrary values by object identity. It is `final`
+and implements `Countable`, `ArrayAccess`, and `Iterator`.
+
+```php
+<?php
+class Node {
+    public int $id;
+    public function __construct(int $id) {
+        $this->id = $id;
+    }
+}
+
+$cache = new WeakMap();
+$a = new Node(1);
+$cache[$a] = "first";
+echo $cache[$a];          // first
+echo count($cache);       // 1
+echo isset($cache[$a]) ? "y" : "n";   // y
+unset($cache[$a]);
+echo count($cache);       // 0
+```
+
+`foreach ($map as $key => $value)` yields each stored object key with its mapped
+value, in insertion order.
+
+Supported methods: `__construct()`, `count(): int`, `offsetExists($object): bool`,
+`offsetGet($object): mixed`, `offsetSet($object, $value): void`,
+`offsetUnset($object): void`, `rewind()`, `valid(): bool`, `key(): mixed`,
+`current(): mixed`, `next()`.
+
+Compatibility gaps (documented):
+
+- **No auto-eviction.** PHP `WeakMap` removes an entry when its key object is
+  garbage-collected. elephc has no per-object finalizer or weak-reference
+  registry, so stored keys keep their objects alive. While a key is live,
+  `get`/`set`/`count`/`isset`/`unset` and iteration match PHP exactly; the only
+  divergence is that an entry outlives its key. Treat this as a potential leak,
+  not a correctness bug, for short-lived programs.
+- **`offsetGet` returns `null` for an absent key** instead of throwing `Error`
+  like PHP. Code that guards access with `isset` first is unaffected.
+- **Implements `Iterator`, not `IteratorAggregate`.** PHP's `WeakMap` implements
+  `IteratorAggregate`; elephc dispatches foreach through the `Iterator` protocol
+  directly (as `SplObjectStorage` does). `foreach` results are identical.
 
 ### Storage iterators
 

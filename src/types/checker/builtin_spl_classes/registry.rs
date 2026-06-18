@@ -55,6 +55,7 @@ pub(super) const SPL_CLASS_NAMES: &[&str] = &[
     "SplMinHeap",
     "SplPriorityQueue",
     "SplObjectStorage",
+    "WeakMap",
 ];
 
 const PHAR_CLASS_NAMES: &[&str] = &["Phar", "PharData", "PharFileInfo"];
