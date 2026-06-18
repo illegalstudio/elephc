@@ -181,6 +181,12 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_fread_result(*stream, *length, context, values)?
         }
+        "fsockopen" | "pfsockopen" => {
+            if !(2..=5).contains(&evaluated_args.len()) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_fsockopen_result(evaluated_args[0], evaluated_args[1], context, values)?
+        }
         "fscanf" => {
             if evaluated_args.len() < 2 {
                 return Err(EvalStatus::RuntimeFatal);
@@ -419,6 +425,71 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_stream_bucket_push_result(name, *brigade, *bucket, values)?
+        }
+        "stream_select" => eval_stream_select_result(evaluated_args, values)?,
+        "stream_socket_server" => {
+            let [address] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_stream_socket_server_result(*address, context, values)?
+        }
+        "stream_socket_client" => {
+            let [address] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_stream_socket_client_result(*address, context, values)?
+        }
+        "stream_socket_accept" => {
+            if !(1..=3).contains(&evaluated_args.len()) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_stream_socket_accept_result(evaluated_args[0], context, values)?
+        }
+        "stream_socket_get_name" => {
+            let [socket, remote] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_stream_socket_get_name_result(*socket, *remote, context, values)?
+        }
+        "stream_socket_shutdown" => {
+            let [stream, mode] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_stream_socket_shutdown_result(*stream, *mode, context, values)?
+        }
+        "stream_socket_enable_crypto" => {
+            if !(2..=4).contains(&evaluated_args.len()) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_stream_socket_enable_crypto_result(
+                evaluated_args[0],
+                evaluated_args[1],
+                context,
+                values,
+            )?
+        }
+        "stream_socket_sendto" => {
+            if !(2..=4).contains(&evaluated_args.len()) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_stream_socket_sendto_result(evaluated_args[0], evaluated_args[1], context, values)?
+        }
+        "stream_socket_recvfrom" => {
+            if !(2..=4).contains(&evaluated_args.len()) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_stream_socket_recvfrom_result(
+                evaluated_args[0],
+                evaluated_args[1],
+                context,
+                values,
+            )?
+        }
+        "stream_socket_pair" => {
+            let [_domain, _socket_type, _protocol] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_stream_socket_pair_result(context, values)?
         }
         "stream_get_contents" => match evaluated_args {
             [stream] => eval_stream_get_contents_result(*stream, None, None, context, values)?,

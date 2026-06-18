@@ -15,7 +15,10 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
@@ -31,6 +34,8 @@ pub(crate) struct EvalStreamResources {
     filter_resources: HashSet<i64>,
     hash_contexts: HashMap<i64, EvalHashContext>,
     process_children: HashMap<i64, Child>,
+    socket_listeners: HashMap<i64, TcpListener>,
+    socket_names: HashMap<i64, EvalSocketNames>,
     stream_contexts: HashMap<i64, EvalStreamContext>,
     streams: HashMap<i64, EvalFileStream>,
 }
@@ -106,6 +111,91 @@ impl EvalStreamResources {
         Some(id)
     }
 
+    /// Opens a TCP listener resource for `stream_socket_server()`.
+    pub(crate) fn open_tcp_listener(&mut self, address: &str) -> Option<i64> {
+        let listener = TcpListener::bind(eval_tcp_address(address)).ok()?;
+        let local = listener.local_addr().ok()?.to_string();
+        let id = self.next_id;
+        self.next_id += 1;
+        self.socket_names.insert(
+            id,
+            EvalSocketNames {
+                local,
+                peer: None,
+            },
+        );
+        self.socket_listeners.insert(id, listener);
+        Some(id)
+    }
+
+    /// Opens a connected TCP stream resource.
+    pub(crate) fn open_tcp_stream(&mut self, address: &str) -> Option<i64> {
+        let stream = TcpStream::connect(eval_tcp_address(address)).ok()?;
+        self.insert_tcp_stream(stream)
+    }
+
+    /// Opens a connected TCP stream from separate host and port arguments.
+    pub(crate) fn open_tcp_stream_host_port(&mut self, host: &str, port: i64) -> Option<i64> {
+        let host = host
+            .strip_prefix("tcp://")
+            .or_else(|| host.strip_prefix("ssl://"))
+            .or_else(|| host.strip_prefix("tls://"))
+            .unwrap_or(host);
+        self.open_tcp_stream(&format!("{host}:{port}"))
+    }
+
+    /// Accepts one TCP connection from a listener resource.
+    pub(crate) fn accept_tcp(&mut self, id: i64) -> Option<i64> {
+        let listener = self.socket_listeners.get(&id)?;
+        let (stream, _) = listener.accept().ok()?;
+        self.insert_tcp_stream(stream)
+    }
+
+    /// Opens a pair of connected local stream resources.
+    pub(crate) fn open_socket_pair(&mut self) -> Option<(i64, i64)> {
+        #[cfg(unix)]
+        {
+            let (left, right) = UnixStream::pair().ok()?;
+            let left = unsafe {
+                // The UnixStream endpoint is moved into the File-backed eval stream.
+                File::from_raw_fd(left.into_raw_fd())
+            };
+            let right = unsafe {
+                // The UnixStream endpoint is moved into the File-backed eval stream.
+                File::from_raw_fd(right.into_raw_fd())
+            };
+            let left_id = self.insert(EvalFileStream::new(
+                left,
+                "socketpair".to_string(),
+                "r+".to_string(),
+            ));
+            let right_id = self.insert(EvalFileStream::new(
+                right,
+                "socketpair".to_string(),
+                "r+".to_string(),
+            ));
+            self.socket_names.insert(
+                left_id,
+                EvalSocketNames {
+                    local: "socketpair".to_string(),
+                    peer: Some("socketpair".to_string()),
+                },
+            );
+            self.socket_names.insert(
+                right_id,
+                EvalSocketNames {
+                    local: "socketpair".to_string(),
+                    peer: Some("socketpair".to_string()),
+                },
+            );
+            Some((left_id, right_id))
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     /// Opens a local directory and returns its resource id.
     pub(crate) fn open_directory(&mut self, path: &str) -> Option<i64> {
         let directory = EvalDirectoryStream::open(path)?;
@@ -142,7 +232,10 @@ impl EvalStreamResources {
 
     /// Removes a stream resource from the table, closing its file handle.
     pub(crate) fn close(&mut self, id: i64) -> bool {
-        let closed = self.streams.remove(&id).is_some() || self.filter_resources.remove(&id);
+        let closed = self.streams.remove(&id).is_some()
+            || self.filter_resources.remove(&id)
+            || self.socket_listeners.remove(&id).is_some();
+        self.socket_names.remove(&id);
         if let Some(mut child) = self.process_children.remove(&id) {
             let _ = child.wait();
         }
@@ -152,6 +245,32 @@ impl EvalStreamResources {
     /// Returns whether a file-like stream resource exists.
     pub(crate) fn has_stream(&self, id: i64) -> bool {
         self.streams.contains_key(&id)
+    }
+
+    /// Returns a local or remote socket name for a socket resource.
+    pub(crate) fn socket_name(&self, id: i64, remote: bool) -> Option<String> {
+        let names = self.socket_names.get(&id)?;
+        if remote {
+            names.peer.clone()
+        } else {
+            Some(names.local.clone())
+        }
+    }
+
+    /// Applies a TCP/Unix stream shutdown operation.
+    pub(crate) fn socket_shutdown(&self, id: i64, mode: i64) -> Option<bool> {
+        let stream = self.streams.get(&id)?;
+        let shutdown = match mode {
+            0 => Shutdown::Read,
+            1 => Shutdown::Write,
+            2 => Shutdown::Both,
+            _ => return Some(false),
+        };
+        let result = unsafe {
+            // libc shutdown only observes the borrowed descriptor and mode.
+            libc::shutdown(stream.file.as_raw_fd(), eval_shutdown_how(shutdown))
+        };
+        Some(result == 0)
     }
 
     /// Allocates an eval-local stream filter resource handle.
@@ -483,6 +602,20 @@ impl EvalStreamResources {
         id
     }
 
+    /// Inserts a TCP stream as a File-backed eval stream and records endpoint names.
+    fn insert_tcp_stream(&mut self, stream: TcpStream) -> Option<i64> {
+        let local = stream.local_addr().ok()?.to_string();
+        let peer = stream.peer_addr().ok().map(|addr| addr.to_string());
+        let file = unsafe {
+            // The TcpStream is moved into the File-backed eval stream.
+            File::from_raw_fd(stream.into_raw_fd())
+        };
+        let id = self.insert(EvalFileStream::new(file, local.clone(), "r+".to_string()));
+        self.socket_names
+            .insert(id, EvalSocketNames { local, peer });
+        Some(id)
+    }
+
     /// Inserts a directory stream and returns the assigned zero-based resource payload.
     fn insert_directory(&mut self, directory: EvalDirectoryStream) -> i64 {
         let id = self.next_id;
@@ -526,6 +659,30 @@ pub(crate) struct EvalStreamMetaData {
     pub(crate) eof: bool,
     pub(crate) mode: String,
     pub(crate) uri: String,
+}
+
+/// Local and peer names tracked for socket-backed eval streams.
+struct EvalSocketNames {
+    local: String,
+    peer: Option<String>,
+}
+
+/// Normalizes supported TCP-style stream socket addresses.
+fn eval_tcp_address(address: &str) -> &str {
+    address
+        .strip_prefix("tcp://")
+        .or_else(|| address.strip_prefix("ssl://"))
+        .or_else(|| address.strip_prefix("tls://"))
+        .unwrap_or(address)
+}
+
+/// Converts Rust's socket shutdown enum into libc constants.
+fn eval_shutdown_how(shutdown: Shutdown) -> libc::c_int {
+    match shutdown {
+        Shutdown::Read => libc::SHUT_RD,
+        Shutdown::Write => libc::SHUT_WR,
+        Shutdown::Both => libc::SHUT_RDWR,
+    }
 }
 
 /// Converts PHP `LOCK_*` bit flags into host `flock()` flags.

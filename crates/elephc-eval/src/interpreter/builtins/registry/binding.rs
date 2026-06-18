@@ -193,6 +193,9 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "fopen" => Some(&["filename", "mode", "use_include_path", "context"]),
         "fputcsv" => Some(&["stream", "fields", "separator", "enclosure"]),
         "fprintf" => Some(&["stream", "format", "values"]),
+        "fsockopen" | "pfsockopen" => {
+            Some(&["hostname", "port", "error_code", "error_message", "timeout"])
+        }
         "flock" => Some(&["stream", "operation", "would_block"]),
         "fread" => Some(&["stream", "length"]),
         "fscanf" => Some(&["stream", "format", "vars"]),
@@ -308,6 +311,17 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
             Some(&["stream", "size"])
         }
         "stream_set_timeout" => Some(&["stream", "seconds", "microseconds"]),
+        "stream_select" => Some(&["read", "write", "except", "seconds", "microseconds"]),
+        "stream_socket_server" | "stream_socket_client" => Some(&["address"]),
+        "stream_socket_accept" => Some(&["socket", "timeout", "peer_name"]),
+        "stream_socket_enable_crypto" => {
+            Some(&["stream", "enable", "crypto_method", "session_stream"])
+        }
+        "stream_socket_get_name" => Some(&["socket", "remote"]),
+        "stream_socket_pair" => Some(&["domain", "type", "protocol"]),
+        "stream_socket_recvfrom" => Some(&["stream", "length", "flags", "address"]),
+        "stream_socket_sendto" => Some(&["stream", "data", "flags", "address"]),
+        "stream_socket_shutdown" => Some(&["stream", "mode"]),
         "stream_wrapper_register" => Some(&["protocol", "class", "flags"]),
         "stream_wrapper_unregister" | "stream_wrapper_restore" => Some(&["protocol"]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
