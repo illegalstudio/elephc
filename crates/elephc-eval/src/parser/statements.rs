@@ -13,7 +13,7 @@ use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalCatch, EvalClass, EvalClassMethod, EvalClassProperty, EvalExpr, EvalInterface,
-    EvalInterfaceMethod, EvalStmt, EvalSwitchCase,
+    EvalInterfaceMethod, EvalStmt, EvalSwitchCase, EvalTrait,
 };
 use crate::lexer::TokenKind;
 
@@ -67,6 +67,7 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "switch") => self.parse_switch_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "throw") => self.parse_throw_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "try") => self.parse_try_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "trait") => self.parse_trait_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "unset") => self.parse_unset_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "use") && self.allow_use_imports => {
                 self.parse_use_stmt()
@@ -214,22 +215,26 @@ impl Parser {
         self.expect(TokenKind::LBrace)?;
         let mut properties = Vec::new();
         let mut methods = Vec::new();
+        let mut traits = Vec::new();
         while !self.consume(TokenKind::RBrace) {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
-            self.parse_class_member(&mut properties, &mut methods)?;
+            self.parse_class_member(&mut properties, &mut methods, &mut traits)?;
         }
         self.consume_semicolon();
-        Ok(vec![EvalStmt::ClassDecl(EvalClass::with_modifiers(
-            name,
-            is_abstract,
-            is_final,
-            parent,
-            interfaces,
-            properties,
-            methods,
-        ))])
+        Ok(vec![EvalStmt::ClassDecl(
+            EvalClass::with_modifiers_and_traits(
+                name,
+                is_abstract,
+                is_final,
+                parent,
+                interfaces,
+                traits,
+                properties,
+                methods,
+            ),
+        )])
     }
 
     /// Parses class-level `abstract` and `final` modifiers before `class`.
@@ -289,11 +294,21 @@ impl Parser {
         &mut self,
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
+        traits: &mut Vec<String>,
     ) -> Result<(), EvalParseError> {
         let (public, is_abstract, is_final) = self.parse_class_member_modifiers()?;
 
         if is_abstract && is_final {
             return Err(EvalParseError::UnsupportedConstruct);
+        }
+
+        if !public
+            && !is_abstract
+            && !is_final
+            && matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "use"))
+        {
+            self.parse_class_trait_use(traits)?;
+            return Ok(());
         }
 
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
@@ -306,6 +321,22 @@ impl Parser {
         }
         properties.push(self.parse_class_property_decl()?);
         Ok(())
+    }
+
+    /// Parses `use TraitName, OtherTrait;` inside an eval class body.
+    pub(super) fn parse_class_trait_use(
+        &mut self,
+        traits: &mut Vec<String>,
+    ) -> Result<(), EvalParseError> {
+        self.advance();
+        loop {
+            let trait_name = self.parse_qualified_name()?;
+            traits.push(self.resolve_class_name(trait_name));
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect_semicolon()
     }
 
     /// Parses method modifiers supported by eval class declarations.
@@ -392,6 +423,50 @@ impl Parser {
         };
         self.expect_semicolon()?;
         Ok(EvalClassProperty::new(name, default))
+    }
+
+    /// Parses `trait Name { ... }` declarations into dynamic trait metadata.
+    pub(super) fn parse_trait_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let name = self.qualify_name_in_current_namespace(name);
+        self.advance();
+        self.expect(TokenKind::LBrace)?;
+        let mut properties = Vec::new();
+        let mut methods = Vec::new();
+        while !self.consume(TokenKind::RBrace) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            self.parse_trait_member(&mut properties, &mut methods)?;
+        }
+        self.consume_semicolon();
+        Ok(vec![EvalStmt::TraitDecl(EvalTrait::new(
+            name, properties, methods,
+        ))])
+    }
+
+    /// Parses one property or method from an eval trait body.
+    pub(super) fn parse_trait_member(
+        &mut self,
+        properties: &mut Vec<EvalClassProperty>,
+        methods: &mut Vec<EvalClassMethod>,
+    ) -> Result<(), EvalParseError> {
+        let (public, is_abstract, is_final) = self.parse_class_member_modifiers()?;
+        if is_abstract && is_final {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
+            methods.push(self.parse_class_method_decl(is_abstract, is_final)?);
+            return Ok(());
+        }
+        if !public || is_abstract || is_final {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        properties.push(self.parse_class_property_decl()?);
+        Ok(())
     }
 
     /// Parses `interface Name [extends Parent, ...] { function name(...); }`.

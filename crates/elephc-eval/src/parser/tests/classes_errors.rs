@@ -128,6 +128,54 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
         ))]
     );
 }
+/// Verifies trait declarations and class trait uses lower into dynamic metadata.
+#[test]
+fn parse_fragment_accepts_trait_declaration_and_class_use() {
+    let program = parse_fragment(
+        br#"trait DynEvalTrait {
+    public int $seed = 2;
+    public function read($value) { return $this->seed + $value; }
+}
+class DynEvalUsesTrait {
+    use DynEvalTrait, \Root\SharedTrait;
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::TraitDecl(EvalTrait::new(
+                "DynEvalTrait",
+                vec![EvalClassProperty::new(
+                    "seed",
+                    Some(EvalExpr::Const(EvalConst::Int(2)))
+                )],
+                vec![EvalClassMethod::new(
+                    "read",
+                    vec!["value".to_string()],
+                    vec![EvalStmt::Return(Some(EvalExpr::Binary {
+                        op: EvalBinOp::Add,
+                        left: Box::new(EvalExpr::PropertyGet {
+                            object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                            property: "seed".to_string(),
+                        }),
+                        right: Box::new(EvalExpr::LoadVar("value".to_string())),
+                    }))]
+                )],
+            )),
+            EvalStmt::ClassDecl(EvalClass::with_modifiers_and_traits(
+                "DynEvalUsesTrait",
+                false,
+                false,
+                None,
+                Vec::new(),
+                vec!["DynEvalTrait".to_string(), "Root\\SharedTrait".to_string()],
+                Vec::new(),
+                Vec::new(),
+            )),
+        ]
+    );
+}
 /// Verifies malformed object construction reports an unexpected token.
 #[test]
 fn parse_fragment_rejects_new_without_class_name() {

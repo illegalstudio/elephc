@@ -70,6 +70,7 @@ pub enum EvalStmt {
     },
     ClassDecl(EvalClass),
     InterfaceDecl(EvalInterface),
+    TraitDecl(EvalTrait),
     Foreach {
         array: EvalExpr,
         key_name: Option<String>,
@@ -242,6 +243,7 @@ pub struct EvalClass {
     is_final: bool,
     parent: Option<String>,
     interfaces: Vec<String>,
+    traits: Vec<String>,
     properties: Vec<EvalClassProperty>,
     methods: Vec<EvalClassMethod>,
 }
@@ -277,12 +279,36 @@ impl EvalClass {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
+        Self::with_modifiers_and_traits(
+            name,
+            is_abstract,
+            is_final,
+            parent,
+            interfaces,
+            Vec::new(),
+            properties,
+            methods,
+        )
+    }
+
+    /// Creates a dynamic eval class with optional modifiers, relations, and trait uses.
+    pub fn with_modifiers_and_traits(
+        name: impl Into<String>,
+        is_abstract: bool,
+        is_final: bool,
+        parent: Option<String>,
+        interfaces: Vec<String>,
+        traits: Vec<String>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
         Self {
             name: name.into(),
             is_abstract,
             is_final,
             parent,
             interfaces,
+            traits,
             properties,
             methods,
         }
@@ -313,6 +339,11 @@ impl EvalClass {
         &self.interfaces
     }
 
+    /// Returns trait names used directly by this eval class.
+    pub fn traits(&self) -> &[String] {
+        &self.traits
+    }
+
     /// Returns public properties declared directly by this eval class.
     pub fn properties(&self) -> &[EvalClassProperty] {
         &self.properties
@@ -328,6 +359,44 @@ impl EvalClass {
         self.methods()
             .iter()
             .find(|method| method.name().eq_ignore_ascii_case(name))
+    }
+}
+
+/// Runtime trait declared by an eval fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalTrait {
+    name: String,
+    properties: Vec<EvalClassProperty>,
+    methods: Vec<EvalClassMethod>,
+}
+
+impl EvalTrait {
+    /// Creates a dynamic eval trait with public properties and methods.
+    pub fn new(
+        name: impl Into<String>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            properties,
+            methods,
+        }
+    }
+
+    /// Returns the original source spelling of this eval-declared trait name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns public properties declared directly by this eval trait.
+    pub fn properties(&self) -> &[EvalClassProperty] {
+        &self.properties
+    }
+
+    /// Returns public methods declared directly by this eval trait.
+    pub fn methods(&self) -> &[EvalClassMethod] {
+        &self.methods
     }
 }
 

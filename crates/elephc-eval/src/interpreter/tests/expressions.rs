@@ -514,6 +514,99 @@ class EvalFinalMethodChild extends EvalFinalMethodBase {
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
+/// Verifies eval-declared traits contribute methods, properties, and metadata.
+#[test]
+fn execute_program_constructs_class_using_eval_declared_trait() {
+    let program = parse_fragment(
+        br#"trait EvalReusableTrait {
+    public int $seed = 2;
+    public function add($n) { return $this->seed + $n; }
+}
+class EvalTraitBox {
+    use EvalReusableTrait;
+    public function read($n) { return $this->add($n) + 1; }
+}
+$box = new EvalTraitBox();
+echo $box->read(4); echo ":";
+echo trait_exists("EvalReusableTrait") ? "trait" : "bad"; echo ":";
+$traits = get_declared_traits();
+echo count($traits); echo ":"; echo $traits[0]; echo ":";
+$uses = class_uses($box);
+echo count($uses); echo ":"; echo $uses["EvalReusableTrait"];
+return $box->seed;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "7:trait:1:EvalReusableTrait:1:EvalReusableTrait"
+    );
+    assert_eq!(values.get(result), FakeValue::Int(2));
+}
+/// Verifies eval trait abstract methods can be implemented by the using class.
+#[test]
+fn execute_program_constructs_class_satisfying_eval_trait_abstract_method() {
+    let program = parse_fragment(
+        br#"trait EvalTraitNeedsRead {
+    abstract public function read($n);
+    public function wrap($n) { return $this->read($n) + 1; }
+}
+class EvalTraitReader {
+    use EvalTraitNeedsRead;
+    public function read($n) { return $n + 4; }
+}
+$reader = new EvalTraitReader();
+return $reader->wrap(3);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(8));
+}
+/// Verifies eval rejects a concrete class that leaves a trait abstract method open.
+#[test]
+fn execute_program_rejects_missing_eval_trait_abstract_method() {
+    let program = parse_fragment(
+        br#"trait EvalTraitAbstractMethod {
+    abstract public function read();
+}
+class EvalTraitMissingRead {
+    use EvalTraitAbstractMethod;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("class missing trait abstract method should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+/// Verifies eval rejects classes using traits that are not eval-declared.
+#[test]
+fn execute_program_rejects_missing_eval_trait_use() {
+    let program = parse_fragment(
+        br#"class EvalTraitMissingUse {
+    use MissingEvalTraitUse;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("missing eval trait use should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
 /// Verifies eval rejects classes missing methods required by eval interfaces.
 #[test]
 fn execute_program_rejects_missing_dynamic_interface_method() {

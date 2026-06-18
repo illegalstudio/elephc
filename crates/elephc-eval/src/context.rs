@@ -1,7 +1,7 @@
 //! Purpose:
 //! Declares the opaque process-level eval context handle.
 //! The full implementation will hold dynamic function, class, constant, and
-//! builtin registries plus runtime hooks.
+//! class-like, constant, builtin registries plus runtime hooks.
 //!
 //! Called from:
 //! - `crate::abi`
@@ -16,7 +16,7 @@ use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
-    EvalClass, EvalClassMethod, EvalFunction, EvalInterface, EvalInterfaceMethod,
+    EvalClass, EvalClassMethod, EvalFunction, EvalInterface, EvalInterfaceMethod, EvalTrait,
 };
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
@@ -94,6 +94,8 @@ pub struct ElephcEvalContext {
     declared_class_names: Vec<String>,
     interfaces: HashMap<String, EvalInterface>,
     declared_interface_names: Vec<String>,
+    traits: HashMap<String, EvalTrait>,
+    declared_trait_names: Vec<String>,
     constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
@@ -123,6 +125,8 @@ impl ElephcEvalContext {
             declared_class_names: Vec::new(),
             interfaces: HashMap::new(),
             declared_interface_names: Vec::new(),
+            traits: HashMap::new(),
+            declared_trait_names: Vec::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
@@ -153,6 +157,8 @@ impl ElephcEvalContext {
             declared_class_names: Vec::new(),
             interfaces: HashMap::new(),
             declared_interface_names: Vec::new(),
+            traits: HashMap::new(),
+            declared_trait_names: Vec::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
@@ -184,6 +190,7 @@ impl ElephcEvalContext {
         if self.classes.contains_key(&key)
             || self.class_aliases.contains_key(&key)
             || self.interfaces.contains_key(&key)
+            || self.traits.contains_key(&key)
         {
             return false;
         }
@@ -232,6 +239,7 @@ impl ElephcEvalContext {
         if alias_key.is_empty()
             || self.classes.contains_key(&alias_key)
             || self.interfaces.contains_key(&alias_key)
+            || self.traits.contains_key(&alias_key)
             || self.class_aliases.contains_key(&alias_key)
         {
             return false;
@@ -253,6 +261,7 @@ impl ElephcEvalContext {
         let key = normalize_class_name(interface.name());
         if self.interfaces.contains_key(&key)
             || self.classes.contains_key(&key)
+            || self.traits.contains_key(&key)
             || self.class_aliases.contains_key(&key)
         {
             return false;
@@ -276,6 +285,37 @@ impl ElephcEvalContext {
     /// Returns interface names declared through eval in PHP-visible order.
     pub fn declared_interface_names(&self) -> &[String] {
         &self.declared_interface_names
+    }
+
+    /// Defines an eval-declared trait, failing if this context already has the name.
+    pub fn define_trait(&mut self, trait_decl: EvalTrait) -> bool {
+        let key = normalize_class_name(trait_decl.name());
+        if self.traits.contains_key(&key)
+            || self.classes.contains_key(&key)
+            || self.interfaces.contains_key(&key)
+            || self.class_aliases.contains_key(&key)
+        {
+            return false;
+        }
+        self.declared_trait_names
+            .push(trait_decl.name().to_string());
+        self.traits.insert(key, trait_decl);
+        true
+    }
+
+    /// Returns true when this eval context has a dynamic trait with the requested name.
+    pub fn has_trait(&self, name: &str) -> bool {
+        self.traits.contains_key(&normalize_class_name(name))
+    }
+
+    /// Returns a dynamic eval trait by PHP case-insensitive trait name.
+    pub fn trait_decl(&self, name: &str) -> Option<&EvalTrait> {
+        self.traits.get(&normalize_class_name(name))
+    }
+
+    /// Returns trait names declared through eval in PHP-visible order.
+    pub fn declared_trait_names(&self) -> &[String] {
+        &self.declared_trait_names
     }
 
     /// Records that one runtime object handle was created for an eval-declared class.
@@ -375,6 +415,18 @@ impl ElephcEvalContext {
         interfaces
     }
 
+    /// Returns trait names used directly by an eval-declared class.
+    pub fn class_trait_names(&self, class_name: &str) -> Vec<String> {
+        self.class(class_name).map_or_else(Vec::new, |class| {
+            let mut traits = Vec::new();
+            let mut seen = HashSet::new();
+            for trait_name in class.traits() {
+                push_unique_class_name(trait_name, &mut traits, &mut seen);
+            }
+            traits
+        })
+    }
+
     /// Returns parent interface names for an eval-declared interface.
     pub fn interface_parent_names(&self, interface_name: &str) -> Vec<String> {
         let mut parents = Vec::new();
@@ -400,10 +452,7 @@ impl ElephcEvalContext {
     }
 
     /// Returns direct and inherited method requirements for an eval interface.
-    pub fn interface_method_requirements(
-        &self,
-        interface_name: &str,
-    ) -> Vec<EvalInterfaceMethod> {
+    pub fn interface_method_requirements(&self, interface_name: &str) -> Vec<EvalInterfaceMethod> {
         let mut methods = Vec::new();
         let mut seen_interfaces = HashSet::new();
         let mut seen_methods = HashSet::new();

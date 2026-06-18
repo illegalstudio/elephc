@@ -262,7 +262,7 @@ pub(in crate::interpreter) fn eval_get_declared_symbols_result(
             eval_dynamic_string_array_result(context.declared_interface_names(), values)
         }
         "get_declared_traits" => {
-            eval_dynamic_string_array_result(&[], values)
+            eval_dynamic_string_array_result(context.declared_trait_names(), values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -346,7 +346,7 @@ pub(in crate::interpreter) fn eval_builtin_class_like_exists(
         }
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    let exists = eval_class_like_exists_name(name, symbol, values)?;
+    let exists = eval_class_like_exists_name(name, symbol, context, values)?;
     values.bool_value(exists)
 }
 
@@ -354,11 +354,12 @@ pub(in crate::interpreter) fn eval_builtin_class_like_exists(
 pub(in crate::interpreter) fn eval_class_like_exists_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let exists = match evaluated_args {
-        [symbol] => eval_class_like_exists_name(name, *symbol, values)?,
-        [symbol, _autoload] => eval_class_like_exists_name(name, *symbol, values)?,
+        [symbol] => eval_class_like_exists_name(name, *symbol, context, values)?,
+        [symbol, _autoload] => eval_class_like_exists_name(name, *symbol, context, values)?,
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     values.bool_value(exists)
@@ -368,13 +369,14 @@ pub(in crate::interpreter) fn eval_class_like_exists_result(
 pub(in crate::interpreter) fn eval_class_like_exists_name(
     name: &str,
     symbol: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let symbol = values.string_bytes(symbol)?;
     let symbol = String::from_utf8(symbol).map_err(|_| EvalStatus::RuntimeFatal)?;
     let symbol = symbol.trim_start_matches('\\');
     match name {
-        "trait_exists" => values.trait_exists(symbol),
+        "trait_exists" => Ok(context.has_trait(symbol) || values.trait_exists(symbol)?),
         "enum_exists" => values.enum_exists(symbol),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }

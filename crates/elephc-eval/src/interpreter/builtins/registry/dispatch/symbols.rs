@@ -62,7 +62,7 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
             eval_class_relation_result(name, evaluated_args, context, values)?
         }
         "enum_exists" | "trait_exists" => {
-            eval_class_like_exists_result(name, evaluated_args, values)?
+            eval_class_like_exists_result(name, evaluated_args, context, values)?
         }
         "interface_exists" => eval_interface_exists_result(evaluated_args, context, values)?,
         "is_a" | "is_subclass_of" => {

@@ -114,6 +114,10 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_interface_decl_stmt(interface, context, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::TraitDecl(trait_decl) => {
+            execute_trait_decl_stmt(trait_decl, context, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::Foreach {
             array,
             key_name,
@@ -350,11 +354,15 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     let name = class.name().trim_start_matches('\\');
     if context.has_class(name)
         || context.has_interface(name)
+        || context.has_trait(name)
         || values.class_exists(name)?
         || values.interface_exists(name)?
+        || values.trait_exists(name)?
     {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let class = expand_eval_class_traits(class, context)?;
+    let class = &class;
     validate_eval_class_modifiers(class, context)?;
     if let Some(parent) = class.parent() {
         let Some(parent_class) = context.class(parent) else {
@@ -410,6 +418,131 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Registers an eval-declared trait in the dynamic trait table.
+pub(in crate::interpreter) fn execute_trait_decl_stmt(
+    trait_decl: &EvalTrait,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let name = trait_decl.name().trim_start_matches('\\');
+    if context.has_trait(name)
+        || context.has_class(name)
+        || context.has_interface(name)
+        || values.trait_exists(name)?
+        || values.class_exists(name)?
+        || values.interface_exists(name)?
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if context.define_trait(trait_decl.clone()) {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Expands eval trait uses into the class metadata used by dynamic dispatch.
+fn expand_eval_class_traits(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<EvalClass, EvalStatus> {
+    if class.traits().is_empty() {
+        return Ok(class.clone());
+    }
+    let class_method_names = class_method_name_set(class);
+    let class_property_names = class_property_name_set(class);
+    let mut trait_method_names = std::collections::HashSet::new();
+    let mut trait_property_names = std::collections::HashSet::new();
+    let mut properties = Vec::new();
+    let mut methods = Vec::new();
+    for trait_name in class.traits() {
+        let Some(trait_decl) = context.trait_decl(trait_name) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        append_eval_trait_properties(
+            trait_decl,
+            &class_property_names,
+            &mut trait_property_names,
+            &mut properties,
+        )?;
+        append_eval_trait_methods(
+            trait_decl,
+            &class_method_names,
+            &mut trait_method_names,
+            &mut methods,
+        )?;
+    }
+    properties.extend(class.properties().iter().cloned());
+    methods.extend(class.methods().iter().cloned());
+    Ok(EvalClass::with_modifiers_and_traits(
+        class.name().to_string(),
+        class.is_abstract(),
+        class.is_final(),
+        class.parent().map(str::to_string),
+        class.interfaces().to_vec(),
+        class.traits().to_vec(),
+        properties,
+        methods,
+    ))
+}
+
+/// Returns case-insensitive method names declared directly by a pending class.
+fn class_method_name_set(class: &EvalClass) -> std::collections::HashSet<String> {
+    class
+        .methods()
+        .iter()
+        .map(|method| method.name().to_ascii_lowercase())
+        .collect()
+}
+
+/// Returns property names declared directly by a pending class.
+fn class_property_name_set(class: &EvalClass) -> std::collections::HashSet<String> {
+    class
+        .properties()
+        .iter()
+        .map(|property| property.name().to_string())
+        .collect()
+}
+
+/// Appends trait properties unless the class provides a same-name property.
+fn append_eval_trait_properties(
+    trait_decl: &EvalTrait,
+    class_property_names: &std::collections::HashSet<String>,
+    trait_property_names: &mut std::collections::HashSet<String>,
+    properties: &mut Vec<EvalClassProperty>,
+) -> Result<(), EvalStatus> {
+    for property in trait_decl.properties() {
+        if class_property_names.contains(property.name()) {
+            continue;
+        }
+        if !trait_property_names.insert(property.name().to_string()) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        properties.push(property.clone());
+    }
+    Ok(())
+}
+
+/// Appends trait methods unless the class provides a same-name method.
+fn append_eval_trait_methods(
+    trait_decl: &EvalTrait,
+    class_method_names: &std::collections::HashSet<String>,
+    trait_method_names: &mut std::collections::HashSet<String>,
+    methods: &mut Vec<EvalClassMethod>,
+) -> Result<(), EvalStatus> {
+    for method in trait_decl.methods() {
+        let key = method.name().to_ascii_lowercase();
+        if class_method_names.contains(&key) {
+            continue;
+        }
+        if !trait_method_names.insert(key) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        methods.push(method.clone());
+    }
+    Ok(())
 }
 
 /// Validates abstract/final modifiers on an eval-declared class and its methods.

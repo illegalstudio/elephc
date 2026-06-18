@@ -6,7 +6,7 @@
 //! - Dynamic callable dispatch under `builtins::registry::dispatch`.
 //!
 //! Key details:
-//! - Eval-declared classes carry parent and interface metadata; trait and
+//! - Eval-declared classes carry parent, interface, and direct trait-use metadata;
 //!   attribute metadata remains empty.
 //! - Missing class-like relation targets return `false`, matching the main
 //!   backend's unknown-target fallback.
@@ -68,7 +68,9 @@ pub(in crate::interpreter) fn eval_class_relation_target_result(
             "class_parents" => {
                 eval_class_relation_names_result(context.class_parent_names(&target), values)
             }
-            "class_uses" => values.assoc_new(0),
+            "class_uses" => {
+                eval_class_relation_names_result(context.class_trait_names(&target), values)
+            }
             _ => Err(EvalStatus::RuntimeFatal),
         };
     }
@@ -148,6 +150,7 @@ fn eval_class_relation_name_exists(
 ) -> Result<bool, EvalStatus> {
     if context.has_class(name)
         || context.has_interface(name)
+        || context.has_trait(name)
         || values.class_exists(name)?
         || values.interface_exists(name)?
         || values.trait_exists(name)?

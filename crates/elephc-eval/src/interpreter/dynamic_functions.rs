@@ -287,6 +287,7 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
             | EvalStmt::Return(_)
             | EvalStmt::StoreVar { .. }
             | EvalStmt::Throw(_)
+            | EvalStmt::TraitDecl(_)
             | EvalStmt::UnsetVar { .. } => {}
         }
     }

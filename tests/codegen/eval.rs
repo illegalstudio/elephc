@@ -4667,6 +4667,59 @@ class EvalFinalChild extends EvalFinalBase {}');
     );
 }
 
+/// Verifies eval-declared traits contribute methods, properties, and metadata through the bridge.
+#[test]
+fn test_eval_declared_trait_methods_properties_and_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('trait EvalDynamicTrait {
+    public int $seed = 2;
+    public function add($n) { return $this->seed + $n; }
+}
+class EvalDynamicTraitBox {
+    use EvalDynamicTrait;
+    public function read($n) { return $this->add($n) + 1; }
+}
+$box = new EvalDynamicTraitBox();
+echo $box->read(4) . ":";
+echo trait_exists("EvalDynamicTrait") ? "trait" : "bad"; echo ":";
+$traits = get_declared_traits();
+echo count($traits) . ":" . $traits[0] . ":";
+$uses = class_uses($box);
+echo count($uses) . ":" . $uses["EvalDynamicTrait"] . ":";
+echo $box->seed;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "7:trait:1:EvalDynamicTrait:1:EvalDynamicTrait:2"
+    );
+}
+
+/// Verifies eval-declared trait abstract methods must be implemented by concrete classes.
+#[test]
+fn test_eval_declared_trait_abstract_method_requirement_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('trait EvalTraitNeedsConcrete {
+    abstract public function read();
+}
+class EvalTraitMissingConcrete {
+    use EvalTraitNeedsConcrete;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {
