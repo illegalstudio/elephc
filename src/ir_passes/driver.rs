@@ -19,6 +19,7 @@
 
 use crate::ir::{DataPool, Function, Module};
 
+use super::dead_inst::DeadInst;
 use super::identity_arith::IdentityArith;
 use super::peephole::Peephole;
 
@@ -45,7 +46,11 @@ pub trait IrPass {
 /// Builds the ordered set of transformation passes run on every function. Later
 /// v0.25.x passes (DCE, branch simplification, CSE, LICM, …) register here.
 fn default_passes() -> Vec<Box<dyn IrPass>> {
-    vec![Box::new(IdentityArith), Box::new(Peephole)]
+    vec![
+        Box::new(IdentityArith),
+        Box::new(Peephole),
+        Box::new(DeadInst),
+    ]
 }
 
 /// Runs the default pass pipeline over every function-like body in the module.
