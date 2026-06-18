@@ -134,6 +134,9 @@ impl FakeOps {
                 Self::object_property(&properties, "__is_enum")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "getmodifiers") if args.is_empty() => {
+                Self::object_property(&properties, "__modifiers").map_or_else(|| self.int(0), Ok)
+            }
             (FakeValue::Object(properties), "getinterfacenames") if args.is_empty() => {
                 Self::object_property(&properties, "__interface_names")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
@@ -260,6 +263,7 @@ impl FakeOps {
         interface_names: RuntimeCellHandle,
         trait_names: RuntimeCellHandle,
         flags: u64,
+        modifiers: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let class_name = match owner_kind {
             EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
@@ -276,6 +280,7 @@ impl FakeOps {
         let is_interface = self.bool_value((flags & 4) != 0)?;
         let is_trait = self.bool_value((flags & 8) != 0)?;
         let is_enum = self.bool_value((flags & 16) != 0)?;
+        let modifiers = self.int(modifiers as i64)?;
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
         if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
             let (namespace_name, short_name) = reflection_name_parts(reflected_name);
@@ -288,6 +293,7 @@ impl FakeOps {
             properties.push(("__is_interface".to_string(), is_interface));
             properties.push(("__is_trait".to_string(), is_trait));
             properties.push(("__is_enum".to_string(), is_enum));
+            properties.push(("__modifiers".to_string(), modifiers));
             properties.push(("__short_name".to_string(), short_name));
             properties.push(("__namespace_name".to_string(), namespace_name));
             properties.push(("__in_namespace".to_string(), in_namespace));

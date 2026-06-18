@@ -986,6 +986,34 @@ echo $trait->isEnum() ? "E" : "e";
     );
 }
 
+/// Verifies that `ReflectionClass::getModifiers()` reports PHP modifier bitmasks.
+#[test]
+fn test_reflection_class_get_modifiers_reports_php_bitmask() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class StaticModifierAbstract {}
+final class StaticModifierFinal {}
+readonly class StaticModifierReadonly {}
+final readonly class StaticModifierFinalReadonly {}
+enum StaticModifierEnum { case Ready; }
+interface StaticModifierIface {}
+trait StaticModifierTrait {}
+echo (new ReflectionClass(StaticModifierAbstract::class))->getModifiers() . ":";
+echo (new ReflectionClass(StaticModifierFinal::class))->getModifiers() . ":";
+echo (new ReflectionClass(StaticModifierReadonly::class))->getModifiers() . ":";
+echo (new ReflectionClass(StaticModifierFinalReadonly::class))->getModifiers() . ":";
+echo (new ReflectionClass(StaticModifierEnum::class))->getModifiers() . ":";
+echo (new ReflectionClass(StaticModifierIface::class))->getModifiers() . ":";
+echo (new ReflectionClass(StaticModifierTrait::class))->getModifiers() . ":";
+echo ReflectionClass::IS_IMPLICIT_ABSTRACT . ":";
+echo ReflectionClass::IS_FINAL . ":";
+echo ReflectionClass::IS_EXPLICIT_ABSTRACT . ":";
+echo ReflectionClass::IS_READONLY;
+"#,
+    );
+    assert_eq!(out, "64:32:65536:65568:32:0:0:16:32:64:65536");
+}
+
 /// Verifies that `ReflectionClass` reports implemented interface and used trait names.
 #[test]
 fn test_reflection_class_reports_relation_names() {

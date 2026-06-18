@@ -23,6 +23,7 @@ struct EvalReflectionClassMetadata {
     resolved_name: String,
     attributes: Vec<EvalAttribute>,
     flags: u64,
+    modifiers: u64,
     interface_names: Vec<String>,
     trait_names: Vec<String>,
 }
@@ -82,6 +83,7 @@ fn eval_reflection_class_new(
         &metadata.interface_names,
         &metadata.trait_names,
         metadata.flags,
+        metadata.modifiers,
         context,
         values,
     )
@@ -111,6 +113,7 @@ fn eval_reflection_method_new(
         &attributes,
         &[],
         &[],
+        0,
         0,
         context,
         values,
@@ -142,6 +145,7 @@ fn eval_reflection_property_new(
         &[],
         &[],
         0,
+        0,
         context,
         values,
     )
@@ -172,6 +176,7 @@ fn eval_reflection_class_constant_new(
         &attributes,
         &[],
         &[],
+        0,
         0,
         context,
         values,
@@ -213,6 +218,7 @@ fn eval_reflection_enum_case_new(
         &[],
         &[],
         0,
+        0,
         context,
         values,
     )
@@ -227,6 +233,7 @@ fn eval_reflection_owner_object(
     interface_names: &[String],
     trait_names: &[String],
     flags: u64,
+    modifiers: u64,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -240,6 +247,7 @@ fn eval_reflection_owner_object(
         interface_names,
         trait_names,
         flags,
+        modifiers,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -268,6 +276,7 @@ fn eval_reflection_class_like_attributes(
     context: &ElephcEvalContext,
 ) -> Option<EvalReflectionClassMetadata> {
     if let Some(class) = context.class(name) {
+        let is_enum = context.has_enum(class.name());
         let mut flags = 0;
         if class.is_final() {
             flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL;
@@ -275,15 +284,22 @@ fn eval_reflection_class_like_attributes(
         if class.is_abstract() {
             flags |= EVAL_REFLECTION_CLASS_FLAG_ABSTRACT;
         }
-        if context.has_enum(class.name()) {
+        if is_enum {
             flags |= EVAL_REFLECTION_CLASS_FLAG_ENUM;
         }
+        let modifiers = eval_reflection_class_modifiers(
+            class.is_final(),
+            class.is_abstract(),
+            class.is_readonly_class(),
+            is_enum,
+        );
         return Some(EvalReflectionClassMetadata {
             resolved_name: class.name().trim_start_matches('\\').to_string(),
             attributes: class.attributes().to_vec(),
             interface_names: context.class_interface_names(class.name()),
             trait_names: context.class_trait_names(class.name()),
             flags,
+            modifiers,
         });
     }
     if let Some(interface) = context.interface(name) {
@@ -293,6 +309,7 @@ fn eval_reflection_class_like_attributes(
             interface_names: context.interface_parent_names(interface.name()),
             trait_names: Vec::new(),
             flags: EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
+            modifiers: 0,
         });
     }
     if let Some(trait_decl) = context.trait_decl(name) {
@@ -302,6 +319,7 @@ fn eval_reflection_class_like_attributes(
             interface_names: Vec::new(),
             trait_names: Vec::new(),
             flags: EVAL_REFLECTION_CLASS_FLAG_TRAIT,
+            modifiers: 0,
         });
     }
     context
@@ -312,7 +330,28 @@ fn eval_reflection_class_like_attributes(
             interface_names: context.class_interface_names(enum_decl.name()),
             trait_names: Vec::new(),
             flags: EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM,
+            modifiers: 32,
         })
+}
+
+/// Computes PHP's `ReflectionClass::getModifiers()` bitmask for eval metadata.
+fn eval_reflection_class_modifiers(
+    is_final: bool,
+    is_abstract: bool,
+    is_readonly_class: bool,
+    is_enum: bool,
+) -> u64 {
+    let mut modifiers = 0;
+    if is_final {
+        modifiers |= 32;
+    }
+    if is_abstract {
+        modifiers |= 64;
+    }
+    if is_readonly_class && !is_enum {
+        modifiers |= 65_536;
+    }
+    modifiers
 }
 
 /// Returns attributes attached to an eval class constant or enum case.

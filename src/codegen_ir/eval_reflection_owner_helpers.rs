@@ -46,6 +46,8 @@ struct ReflectionOwnerLayout {
     is_trait_hi: Option<usize>,
     is_enum_lo: Option<usize>,
     is_enum_hi: Option<usize>,
+    modifiers_lo: Option<usize>,
+    modifiers_hi: Option<usize>,
     in_namespace_lo: Option<usize>,
     in_namespace_hi: Option<usize>,
 }
@@ -142,6 +144,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_interface_lo = reflection_property_offset(info, "__is_interface");
     let is_trait_lo = reflection_property_offset(info, "__is_trait");
     let is_enum_lo = reflection_property_offset(info, "__is_enum");
+    let modifiers_lo = reflection_property_offset(info, "__modifiers");
     let in_namespace_lo = reflection_property_offset(info, "__in_namespace");
     Some(ReflectionOwnerLayout {
         class_id: info.class_id,
@@ -168,6 +171,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         is_trait_hi: is_trait_lo.map(|offset| offset + 8),
         is_enum_lo,
         is_enum_hi: is_enum_lo.map(|offset| offset + 8),
+        modifiers_lo,
+        modifiers_hi: modifiers_lo.map(|offset| offset + 8),
         in_namespace_lo,
         in_namespace_hi: in_namespace_lo.map(|offset| offset + 8),
     })
@@ -213,6 +218,7 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("str x4, [sp, #80]");                                   // save the boxed ReflectionClass interface-name array
     emitter.instruction("str x5, [sp, #88]");                                   // save the boxed ReflectionClass trait-name array
     emitter.instruction("str x6, [sp, #48]");                                   // save ReflectionClass modifier flags
+    emitter.instruction("str x7, [sp, #96]");                                   // save ReflectionClass getModifiers bitmask
     emitter.instruction("cmp x0, #0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("b.eq {}", class_label));                      // allocate a ReflectionClass owner
     emitter.instruction("cmp x0, #1");                                          // owner kind 1 means ReflectionMethod
@@ -310,6 +316,8 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("mov QWORD PTR [rbp - 96], r9");                        // save the boxed ReflectionClass trait-name array
     emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load ReflectionClass modifier flags from the first stack argument
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save ReflectionClass modifier flags
+    emitter.instruction("mov rax, QWORD PTR [rbp + 24]");                       // load ReflectionClass getModifiers bitmask from the second stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // save ReflectionClass getModifiers bitmask
     emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
     emitter.instruction("cmp rdi, 1");                                          // owner kind 1 means ReflectionMethod
@@ -658,6 +666,12 @@ fn emit_set_owner_class_flags_property_aarch64(
     let Some(is_enum_hi) = layout.is_enum_hi else {
         return;
     };
+    let Some(modifiers_lo) = layout.modifiers_lo else {
+        return;
+    };
+    let Some(modifiers_hi) = layout.modifiers_hi else {
+        return;
+    };
     emitter.instruction("ldr x11, [sp, #48]");                                  // reload ReflectionClass modifier flags
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     emitter.instruction("and x10, x11, #1");                                    // extract the final-class flag as a boolean
@@ -679,6 +693,9 @@ fn emit_set_owner_class_flags_property_aarch64(
     emitter.instruction("and x10, x10, #1");                                    // extract the enum flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_enum_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_enum_hi);
+    emitter.instruction("ldr x10, [sp, #96]");                                  // reload PHP ReflectionClass::getModifiers() bitmask
+    abi::emit_store_to_address(emitter, "x10", "x9", modifiers_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", modifiers_hi);
 }
 
 /// Stores incoming x86_64 ReflectionClass boolean modifier flags.
@@ -716,6 +733,12 @@ fn emit_set_owner_class_flags_property_x86_64(
     let Some(is_enum_hi) = layout.is_enum_hi else {
         return;
     };
+    let Some(modifiers_lo) = layout.modifiers_lo else {
+        return;
+    };
+    let Some(modifiers_hi) = layout.modifiers_hi else {
+        return;
+    };
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload ReflectionClass modifier flags
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     emitter.instruction("mov rax, r11");                                        // copy flags before extracting the final bit
@@ -742,6 +765,9 @@ fn emit_set_owner_class_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the enum flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_enum_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_enum_hi);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload PHP ReflectionClass::getModifiers() bitmask
+    abi::emit_store_to_address(emitter, "rax", "r10", modifiers_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", modifiers_hi);
 }
 
 /// Stores incoming ARM64 ReflectionClass interface and trait name arrays.

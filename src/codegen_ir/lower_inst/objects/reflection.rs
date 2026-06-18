@@ -32,6 +32,7 @@ struct ReflectionOwnerMetadata {
     is_interface: bool,
     is_trait: bool,
     is_enum: bool,
+    modifiers: i64,
 }
 
 /// Returns true for reflection owner classes that need metadata-aware construction.
@@ -95,6 +96,7 @@ pub(super) fn lower_reflection_owner_new(
         emit_reflection_bool_property(ctx, "__is_interface", metadata.is_interface)?;
         emit_reflection_bool_property(ctx, "__is_trait", metadata.is_trait)?;
         emit_reflection_bool_property(ctx, "__is_enum", metadata.is_enum)?;
+        emit_reflection_int_property(ctx, "__modifiers", metadata.modifiers)?;
     }
     let result = inst
         .result
@@ -153,6 +155,7 @@ fn reflection_class_metadata(
     };
     let reflected_class = const_string_or_class_operand(ctx, class_operand, "ReflectionClass")?;
     if let Some((class_name, info)) = resolve_reflection_class(ctx, &reflected_class) {
+        let is_enum = is_reflection_enum(ctx, class_name);
         return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
@@ -163,7 +166,13 @@ fn reflection_class_metadata(
             is_abstract: info.is_abstract,
             is_interface: false,
             is_trait: false,
-            is_enum: is_reflection_enum(ctx, class_name),
+            is_enum,
+            modifiers: reflection_class_modifiers(
+                info.is_final,
+                info.is_abstract,
+                info.is_readonly_class,
+                is_enum,
+            ),
         });
     }
     if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
@@ -222,6 +231,7 @@ fn reflection_method_metadata(
                 is_interface: false,
                 is_trait: false,
                 is_enum: false,
+                modifiers: 0,
             })
         })
         .unwrap_or_else(empty_reflection_metadata))
@@ -253,6 +263,7 @@ fn reflection_property_metadata(
                 is_interface: false,
                 is_trait: false,
                 is_enum: false,
+                modifiers: 0,
             })
         })
         .unwrap_or_else(empty_reflection_metadata))
@@ -282,10 +293,11 @@ fn reflection_class_constant_metadata(
             trait_names: Vec::new(),
             is_final: false,
             is_abstract: false,
-            is_interface: false,
-            is_trait: false,
-            is_enum: false,
-        });
+                is_interface: false,
+                is_trait: false,
+                is_enum: false,
+                modifiers: 0,
+            });
     }
     Ok(
         resolve_reflection_class_constant(ctx, &reflected_class, &constant_name)
@@ -311,6 +323,7 @@ fn reflection_class_constant_metadata(
                     is_interface: false,
                     is_trait: false,
                     is_enum: false,
+                    modifiers: 0,
                 }
             })
             .unwrap_or_else(empty_reflection_metadata),
@@ -344,6 +357,7 @@ fn reflection_enum_case_metadata(
                 is_interface: false,
                 is_trait: false,
                 is_enum: false,
+                modifiers: 0,
             })
             .unwrap_or_else(empty_reflection_metadata),
     )
@@ -448,6 +462,7 @@ fn class_like_reflection_metadata(
         is_interface,
         is_trait,
         is_enum,
+        modifiers: if is_enum { 32 } else { 0 },
     }
 }
 
@@ -492,6 +507,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         is_interface: false,
         is_trait: false,
         is_enum: false,
+        modifiers: 0,
     }
 }
 
@@ -748,6 +764,47 @@ fn emit_reflection_bool_property(
     abi::emit_store_to_address(ctx.emitter, value_reg, result_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, result_reg, high_offset);
     Ok(())
+}
+
+/// Stores one integer property on the current ReflectionClass object result.
+fn emit_reflection_int_property(
+    ctx: &mut FunctionContext<'_>,
+    property_name: &str,
+    value: i64,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let value_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, value_reg, value);
+    abi::emit_store_to_address(ctx.emitter, value_reg, result_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, result_reg, high_offset);
+    Ok(())
+}
+
+/// Computes PHP's `ReflectionClass::getModifiers()` bitmask for class metadata.
+fn reflection_class_modifiers(
+    is_final: bool,
+    is_abstract: bool,
+    is_readonly_class: bool,
+    is_enum: bool,
+) -> i64 {
+    let mut modifiers = 0;
+    if is_final {
+        modifiers |= 32;
+    }
+    if is_abstract {
+        modifiers |= 64;
+    }
+    if is_readonly_class && !is_enum {
+        modifiers |= 65_536;
+    }
+    modifiers
 }
 
 /// Returns one declared property offset from a synthetic Reflection class layout.
