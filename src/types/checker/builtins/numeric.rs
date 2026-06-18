@@ -24,6 +24,8 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 /// arity mismatch.
 ///
 /// ## Supported builtins
+/// - Legacy scalar aliases not yet migrated into `src/builtins/`: `strval`,
+///   `is_double`, `is_real`, `is_integer`, `is_long`
 /// - Control: `exit`, `die`, `empty`
 /// - Unset: `unset`
 /// - Buffers: `buffer_len`, `buffer_free`
@@ -57,6 +59,23 @@ pub(super) fn check_builtin(
                 }
             }
             Ok(Some(PhpType::Void))
+        }
+        "strval" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "strval() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "is_double" | "is_real" | "is_integer" | "is_long" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 1 argument", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Bool))
         }
         "empty" => {
             if args.len() != 1 {

@@ -20,7 +20,12 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "die",
     "empty",
     "exit",
+    "is_double",
+    "is_integer",
+    "is_long",
+    "is_real",
     "isset",
+    "strval",
     "unset",
 ];
 

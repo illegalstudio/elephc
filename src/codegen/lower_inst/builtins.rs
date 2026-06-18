@@ -18,7 +18,10 @@ use crate::types::checker::builtins::is_php_visible_builtin_function;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{expect_data, expect_operand, load_value_to_first_int_arg, predicates, store_if_result};
+use super::{
+    conversions, expect_data, expect_operand, load_value_to_first_int_arg, predicates,
+    store_if_result,
+};
 use crate::codegen::{CodegenIrError, Result};
 
 pub(crate) mod attributes;
@@ -61,7 +64,13 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "eval" => eval::lower_eval(ctx, inst),
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
         "buffer_free" => buffers::lower_buffer_free(ctx, inst),
-
+        "strval" => lower_strval(ctx, inst),
+        "is_integer" | "is_long" => {
+            lower_static_type_predicate(ctx, inst, key.as_str(), PhpType::Int)
+        }
+        "is_double" | "is_real" => {
+            lower_static_type_predicate(ctx, inst, key.as_str(), PhpType::Float)
+        }
         "empty" => lower_empty(ctx, inst),
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
@@ -663,6 +672,12 @@ pub(crate) fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers `strval()` through the same semantics as an explicit PHP string cast.
+fn lower_strval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "strval", 1)?;
+    conversions::lower_cast_to_string(ctx, inst)
 }
 
 /// Lowers `empty()` for concrete scalar and array-like operands.
