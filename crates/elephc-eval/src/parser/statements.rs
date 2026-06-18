@@ -44,7 +44,11 @@ impl Parser {
             }
             TokenKind::Ident(name) if ident_eq(name, "for") => self.parse_for_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "foreach") => self.parse_foreach_stmt(),
-            TokenKind::Ident(name) if ident_eq(name, "abstract") || ident_eq(name, "final") => {
+            TokenKind::Ident(name)
+                if ident_eq(name, "abstract")
+                    || ident_eq(name, "final")
+                    || ident_eq(name, "readonly") =>
+            {
                 self.parse_class_decl_stmt()
             }
             TokenKind::Ident(name) if ident_eq(name, "class") => self.parse_class_decl_stmt(),
@@ -244,9 +248,9 @@ impl Parser {
         }])
     }
 
-    /// Parses `[abstract|final] class Name [extends Parent] [implements Iface, ...] { ... }`.
+    /// Parses `[abstract|final|readonly] class Name [extends Parent] [implements Iface, ...] { ... }`.
     pub(super) fn parse_class_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
-        let (is_abstract, is_final) = self.parse_class_decl_modifiers()?;
+        let (is_abstract, is_final, is_readonly_class) = self.parse_class_decl_modifiers()?;
         if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "class")) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
@@ -269,6 +273,7 @@ impl Parser {
                 return Err(EvalParseError::UnexpectedEof);
             }
             self.parse_class_member(
+                is_readonly_class,
                 &mut constants,
                 &mut properties,
                 &mut methods,
@@ -278,10 +283,11 @@ impl Parser {
         }
         self.consume_semicolon();
         Ok(vec![EvalStmt::ClassDecl(
-            EvalClass::with_modifiers_traits_adaptations_and_constants(
+            EvalClass::with_class_modifiers_traits_adaptations_and_constants(
                 name,
                 is_abstract,
                 is_final,
+                is_readonly_class,
                 parent,
                 interfaces,
                 traits,
@@ -293,10 +299,13 @@ impl Parser {
         )])
     }
 
-    /// Parses class-level `abstract` and `final` modifiers before `class`.
-    pub(super) fn parse_class_decl_modifiers(&mut self) -> Result<(bool, bool), EvalParseError> {
+    /// Parses class-level `abstract`, `final`, and `readonly` modifiers before `class`.
+    pub(super) fn parse_class_decl_modifiers(
+        &mut self,
+    ) -> Result<(bool, bool, bool), EvalParseError> {
         let mut is_abstract = false;
         let mut is_final = false;
+        let mut is_readonly_class = false;
         loop {
             match self.current() {
                 TokenKind::Ident(name) if ident_eq(name, "abstract") => {
@@ -313,7 +322,14 @@ impl Parser {
                     is_final = true;
                     self.advance();
                 }
-                _ => return Ok((is_abstract, is_final)),
+                TokenKind::Ident(name) if ident_eq(name, "readonly") => {
+                    if is_readonly_class {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    is_readonly_class = true;
+                    self.advance();
+                }
+                _ => return Ok((is_abstract, is_final, is_readonly_class)),
             }
         }
     }
@@ -348,6 +364,7 @@ impl Parser {
     /// Parses one public property or method from an eval class body.
     pub(super) fn parse_class_member(
         &mut self,
+        is_readonly_class: bool,
         constants: &mut Vec<EvalClassConstant>,
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
@@ -398,7 +415,12 @@ impl Parser {
         if is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        properties.push(self.parse_class_property_decl(visibility, is_static, is_readonly)?);
+        properties.push(self.parse_class_property_decl(
+            visibility,
+            is_static,
+            is_readonly,
+            is_readonly_class,
+        )?);
         Ok(())
     }
 
@@ -647,10 +669,12 @@ impl Parser {
         visibility: EvalVisibility,
         is_static: bool,
         is_readonly: bool,
+        is_readonly_class: bool,
     ) -> Result<EvalClassProperty, EvalParseError> {
         if is_static && is_readonly {
             return Err(EvalParseError::UnsupportedConstruct);
         }
+        let effective_readonly = is_readonly || (is_readonly_class && !is_static);
         self.skip_optional_property_type()?;
         let TokenKind::DollarIdent(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -658,7 +682,7 @@ impl Parser {
         let name = name.clone();
         self.advance();
         let default = if self.consume(TokenKind::Equal) {
-            if is_readonly {
+            if effective_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             Some(self.parse_expr()?)
@@ -670,7 +694,7 @@ impl Parser {
             name,
             visibility,
             is_static,
-            is_readonly,
+            effective_readonly,
             default,
         ))
     }
@@ -735,7 +759,12 @@ impl Parser {
         if is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        properties.push(self.parse_class_property_decl(visibility, is_static, is_readonly)?);
+        properties.push(self.parse_class_property_decl(
+            visibility,
+            is_static,
+            is_readonly,
+            false,
+        )?);
         Ok(())
     }
 

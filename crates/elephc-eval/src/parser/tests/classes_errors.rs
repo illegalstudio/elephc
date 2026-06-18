@@ -141,6 +141,43 @@ fn parse_fragment_accepts_readonly_class_property() {
     );
 }
 
+/// Verifies readonly class modifiers lower into class and property metadata.
+#[test]
+fn parse_fragment_accepts_readonly_class_modifier() {
+    let program = parse_fragment(
+        b"final readonly class DynEvalReadonlyClass { public int $id; public static int $count = 0; }",
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::with_class_modifiers(
+            "DynEvalReadonlyClass",
+            false,
+            true,
+            true,
+            None,
+            Vec::new(),
+            vec![
+                EvalClassProperty::with_visibility_static_and_readonly(
+                    "id",
+                    EvalVisibility::Public,
+                    false,
+                    true,
+                    None
+                ),
+                EvalClassProperty::with_visibility_static_and_readonly(
+                    "count",
+                    EvalVisibility::Public,
+                    true,
+                    false,
+                    Some(EvalExpr::Const(EvalConst::Int(0)))
+                )
+            ],
+            Vec::new()
+        ))]
+    );
+}
+
 /// Verifies eval rejects readonly property forms that PHP does not allow.
 #[test]
 fn parse_fragment_rejects_invalid_readonly_class_properties() {
@@ -148,6 +185,8 @@ fn parse_fragment_rejects_invalid_readonly_class_properties() {
         .expect_err("readonly properties cannot have defaults in eval");
     parse_fragment(b"class DynEvalReadonlyStatic { public static readonly int $id; }")
         .expect_err("static properties cannot be readonly in eval");
+    parse_fragment(b"readonly class DynEvalReadonlyClassDefault { public int $id = 1; }")
+        .expect_err("readonly class instance properties cannot have defaults in eval");
 }
 
 /// Verifies abstract and final class modifiers lower into dynamic class metadata.
