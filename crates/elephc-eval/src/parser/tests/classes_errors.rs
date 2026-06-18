@@ -62,6 +62,34 @@ fn parse_fragment_accepts_interface_declaration_source() {
         ))]
     );
 }
+
+/// Verifies interface property hook contracts lower to eval interface metadata.
+#[test]
+fn parse_fragment_accepts_interface_property_hook_contracts() {
+    let program = parse_fragment(
+        br#"interface DynEvalHookIface {
+    public string $value { get; set; }
+    public int $id { get; }
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::InterfaceDecl(
+            EvalInterface::with_constants_and_properties(
+                "DynEvalHookIface",
+                Vec::new(),
+                Vec::new(),
+                vec![
+                    EvalInterfaceProperty::new("value", true, true),
+                    EvalInterfaceProperty::new("id", true, false),
+                ],
+                Vec::new(),
+            )
+        )]
+    );
+}
+
 /// Verifies public property and method class members lower into dynamic class metadata.
 #[test]
 fn parse_fragment_accepts_public_class_members() {
@@ -238,6 +266,19 @@ fn parse_fragment_rejects_invalid_property_hooks() {
         .expect_err("static properties cannot have hooks in eval");
     parse_fragment(b"class DynEvalHookAbstract { public int $id { get; } }")
         .expect_err("abstract property hooks are not supported in eval classes");
+}
+
+/// Verifies eval rejects concrete hook bodies in interface property contracts.
+#[test]
+fn parse_fragment_rejects_invalid_interface_property_hooks() {
+    parse_fragment(b"interface DynEvalIfaceHookBody { public int $id { get => 1; } }")
+        .expect_err("interface property hooks cannot have concrete bodies");
+    parse_fragment(b"interface DynEvalIfaceHookDuplicate { public int $id { get; get; } }")
+        .expect_err("interface property hooks cannot repeat contracts");
+    parse_fragment(b"interface DynEvalIfaceHookEmpty { public int $id { } }")
+        .expect_err("interface property hooks require at least one contract");
+    parse_fragment(b"interface DynEvalIfaceHookDefault { public int $id = 1 { get; } }")
+        .expect_err("interface property hook contracts cannot have defaults");
 }
 
 /// Verifies abstract and final class modifiers lower into dynamic class metadata.

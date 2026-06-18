@@ -13,8 +13,9 @@ use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalCatch, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum,
-    EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInterface, EvalInterfaceMethod, EvalStmt,
-    EvalSwitchCase, EvalTrait, EvalTraitAdaptation, EvalVisibility,
+    EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInterface, EvalInterfaceMethod,
+    EvalInterfaceProperty, EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation,
+    EvalVisibility,
 };
 use crate::lexer::TokenKind;
 
@@ -997,20 +998,19 @@ impl Parser {
         let parents = self.parse_interface_parent_clause()?;
         self.expect(TokenKind::LBrace)?;
         let mut constants = Vec::new();
+        let mut properties = Vec::new();
         let mut methods = Vec::new();
         while !self.consume(TokenKind::RBrace) {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
-            if let Some(constant) = self.parse_optional_interface_constant_decl()? {
-                constants.push(constant);
-            } else {
-                methods.push(self.parse_interface_method_decl()?);
-            }
+            self.parse_interface_member(&mut constants, &mut properties, &mut methods)?;
         }
         self.consume_semicolon();
         Ok(vec![EvalStmt::InterfaceDecl(
-            EvalInterface::with_constants(name, parents, constants, methods),
+            EvalInterface::with_constants_and_properties(
+                name, parents, constants, properties, methods,
+            ),
         )])
     }
 
@@ -1031,36 +1031,35 @@ impl Parser {
         Ok(parents)
     }
 
-    /// Parses an interface constant declaration when the current member starts with `const`.
-    pub(super) fn parse_optional_interface_constant_decl(
+    /// Parses one eval interface constant, property contract, or method signature.
+    pub(super) fn parse_interface_member(
         &mut self,
-    ) -> Result<Option<EvalClassConstant>, EvalParseError> {
-        let visibility = if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "public"))
-        {
-            self.advance();
-            EvalVisibility::Public
-        } else {
-            EvalVisibility::Public
-        };
-        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
-            return Ok(None);
-        }
-        Ok(Some(self.parse_class_const_decl(visibility)?))
-    }
-
-    /// Parses one eval interface method signature.
-    pub(super) fn parse_interface_method_decl(
-        &mut self,
-    ) -> Result<EvalInterfaceMethod, EvalParseError> {
+        constants: &mut Vec<EvalClassConstant>,
+        properties: &mut Vec<EvalInterfaceProperty>,
+        methods: &mut Vec<EvalInterfaceMethod>,
+    ) -> Result<(), EvalParseError> {
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "public")) {
             self.advance();
         } else if matches!(self.current(), TokenKind::Ident(name) if is_unsupported_class_member_modifier(name))
         {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
-            return Err(EvalParseError::UnsupportedConstruct);
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
+            constants.push(self.parse_class_const_decl(EvalVisibility::Public)?);
+            return Ok(());
         }
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
+            methods.push(self.parse_interface_method_decl_after_function_keyword()?);
+            return Ok(());
+        }
+        properties.push(self.parse_interface_property_decl()?);
+        Ok(())
+    }
+
+    /// Parses one eval interface method signature after `function` has been selected.
+    pub(super) fn parse_interface_method_decl_after_function_keyword(
+        &mut self,
+    ) -> Result<EvalInterfaceMethod, EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -1071,6 +1070,71 @@ impl Parser {
         let params = self.parse_function_params()?;
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params))
+    }
+
+    /// Parses one interface property hook contract.
+    pub(super) fn parse_interface_property_decl(
+        &mut self,
+    ) -> Result<EvalInterfaceProperty, EvalParseError> {
+        self.skip_optional_property_type()?;
+        let TokenKind::DollarIdent(name) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let name = name.clone();
+        self.advance();
+        if matches!(self.current(), TokenKind::Equal) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        let (requires_get, requires_set) = self.parse_interface_property_hook_contracts()?;
+        Ok(EvalInterfaceProperty::new(name, requires_get, requires_set))
+    }
+
+    /// Parses `{ get; set; }` hook contracts for an interface property.
+    pub(super) fn parse_interface_property_hook_contracts(
+        &mut self,
+    ) -> Result<(bool, bool), EvalParseError> {
+        self.expect(TokenKind::LBrace)?;
+        let mut requires_get = false;
+        let mut requires_set = false;
+        while !self.consume(TokenKind::RBrace) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            if self.consume(TokenKind::Ampersand) {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            let TokenKind::Ident(hook_name) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            let is_get = ident_eq(hook_name, "get");
+            let is_set = ident_eq(hook_name, "set");
+            if !is_get && !is_set {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            self.advance();
+            if matches!(
+                self.current(),
+                TokenKind::LParen | TokenKind::FatArrow | TokenKind::LBrace
+            ) {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            self.expect_semicolon()?;
+            if is_get {
+                if requires_get {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                requires_get = true;
+            } else {
+                if requires_set {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                requires_set = true;
+            }
+        }
+        if !requires_get && !requires_set {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        Ok((requires_get, requires_set))
     }
 
     /// Consumes a simple declared property type before the `$property` token.

@@ -130,13 +130,14 @@ containers to eval-declared functions.
 ## Classes and objects
 
 Eval-declared classes support inheritance, public/protected/private properties
-and methods, concrete property `get` / `set` hooks, property-level `readonly`,
-`readonly class`, `__construct()`, abstract classes and methods, final classes
-and methods, trait composition with `insteadof` conflict resolution and `as`
-aliases/visibility adaptations, interface implementation checks, static
-properties, static methods, class constants, interface constants, trait
-constants, and `ClassName::class` literals. Member visibility is checked at
-runtime for eval-declared objects and static/class-constant accesses.
+and methods, concrete property `get` / `set` hooks, interface property hook
+contract checks, property-level `readonly`, `readonly class`, `__construct()`,
+abstract classes and methods, final classes and methods, trait composition with
+`insteadof` conflict resolution and `as` aliases/visibility adaptations,
+interface implementation checks, static properties, static methods, class
+constants, interface constants, trait constants, and `ClassName::class`
+literals. Member visibility is checked at runtime for eval-declared objects and
+static/class-constant accesses.
 Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the
@@ -291,9 +292,9 @@ arguments are supported for eval-declared methods but not for every generated
 native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
-remaining class-system gaps are enum trait-use declarations, abstract/interface
-property-hook contracts, attributes/reflection metadata, and generated/AOT
-dynamic static-method call forms.
+remaining class-system gaps are enum trait-use declarations, abstract property
+hook contracts, attributes/reflection metadata, and generated/AOT dynamic
+static-method call forms.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

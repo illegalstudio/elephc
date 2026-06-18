@@ -314,6 +314,7 @@ pub struct EvalInterface {
     name: String,
     parents: Vec<String>,
     constants: Vec<EvalClassConstant>,
+    properties: Vec<EvalInterfaceProperty>,
     methods: Vec<EvalInterfaceMethod>,
 }
 
@@ -334,10 +335,22 @@ impl EvalInterface {
         constants: Vec<EvalClassConstant>,
         methods: Vec<EvalInterfaceMethod>,
     ) -> Self {
+        Self::with_constants_and_properties(name, parents, constants, Vec::new(), methods)
+    }
+
+    /// Creates a dynamic eval interface with constants, property contracts, and methods.
+    pub fn with_constants_and_properties(
+        name: impl Into<String>,
+        parents: Vec<String>,
+        constants: Vec<EvalClassConstant>,
+        properties: Vec<EvalInterfaceProperty>,
+        methods: Vec<EvalInterfaceMethod>,
+    ) -> Self {
         Self {
             name: name.into(),
             parents,
             constants,
+            properties,
             methods,
         }
     }
@@ -364,9 +377,57 @@ impl EvalInterface {
             .find(|constant| constant.name() == name)
     }
 
+    /// Returns property hook contracts declared directly by this eval interface.
+    pub fn properties(&self) -> &[EvalInterfaceProperty] {
+        &self.properties
+    }
+
     /// Returns method signatures declared directly by this eval interface.
     pub fn methods(&self) -> &[EvalInterfaceMethod] {
         &self.methods
+    }
+}
+
+/// Property hook contract metadata for a runtime eval interface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalInterfaceProperty {
+    name: String,
+    requires_get: bool,
+    requires_set: bool,
+}
+
+impl EvalInterfaceProperty {
+    /// Creates one eval interface property contract.
+    pub fn new(name: impl Into<String>, requires_get: bool, requires_set: bool) -> Self {
+        Self {
+            name: name.into(),
+            requires_get,
+            requires_set,
+        }
+    }
+
+    /// Returns the PHP-visible property name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns whether the interface requires the property to be readable.
+    pub const fn requires_get(&self) -> bool {
+        self.requires_get
+    }
+
+    /// Returns whether the interface requires the property to be writable.
+    pub const fn requires_set(&self) -> bool {
+        self.requires_set
+    }
+
+    /// Returns a merged contract containing either side's get/set requirements.
+    pub fn merged_with(&self, other: &Self) -> Self {
+        Self {
+            name: self.name.clone(),
+            requires_get: self.requires_get || other.requires_get,
+            requires_set: self.requires_set || other.requires_set,
+        }
     }
 }
 

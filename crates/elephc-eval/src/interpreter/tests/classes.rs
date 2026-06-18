@@ -265,3 +265,106 @@ return $box->shout();"#,
     assert_eq!(values.output, "Ada!:");
     assert_eq!(values.get(result), FakeValue::String("Ada!?".to_string()));
 }
+
+/// Verifies eval interface property hook contracts are enforced through inheritance.
+#[test]
+fn execute_program_accepts_interface_property_hook_contracts() {
+    let program = parse_fragment(
+        br#"interface EvalHookContract {
+    public string $value { get; set; }
+}
+interface EvalNamedHookContract extends EvalHookContract {
+    public string $name { get; }
+}
+class EvalHookContractBox implements EvalNamedHookContract {
+    public string $name = "box";
+    public string $value {
+        get => $this->value;
+        set { $this->value = $value . "!"; }
+    }
+}
+$box = new EvalHookContractBox();
+$box->value = "Ada";
+echo $box->name; echo ":";
+echo $box->value;
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "box:Ada!");
+    assert_eq!(values.get(result), FakeValue::String("Ada!".to_string()));
+}
+
+/// Verifies a normal public mutable property satisfies an eval interface get/set contract.
+#[test]
+fn execute_program_accepts_plain_property_for_interface_hook_contracts() {
+    let program = parse_fragment(
+        br#"interface EvalPlainHookContract {
+    public string $value { get; set; }
+}
+class EvalPlainHookContractBox implements EvalPlainHookContract {
+    public string $value = "Ada";
+}
+$box = new EvalPlainHookContractBox();
+echo $box->value; echo ":";
+$box->value = "Grace";
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Ada:");
+    assert_eq!(values.get(result), FakeValue::String("Grace".to_string()));
+}
+
+/// Verifies a get-only hook cannot satisfy a writable eval interface contract.
+#[test]
+fn execute_program_rejects_get_only_hook_for_interface_set_contract() {
+    let program = parse_fragment(
+        br#"interface EvalHookSetContract {
+    public int $answer { get; set; }
+}
+class EvalHookGetOnlyContractBox implements EvalHookSetContract {
+    public int $answer {
+        get => 42;
+    }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("get-only hook should fail writable interface contract");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies readonly properties cannot satisfy writable eval interface contracts.
+#[test]
+fn execute_program_rejects_readonly_property_for_interface_set_contract() {
+    let program = parse_fragment(
+        br#"interface EvalReadonlyHookContract {
+    public int $id { get; set; }
+}
+class EvalReadonlyHookContractBox implements EvalReadonlyHookContract {
+    public readonly int $id;
+    public function __construct($id) { $this->id = $id; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("readonly property should fail writable interface contract");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}

@@ -17,7 +17,7 @@ use std::ffi::c_void;
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
     EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum, EvalFunction,
-    EvalInterface, EvalInterfaceMethod, EvalTrait,
+    EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalTrait,
 };
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
@@ -761,6 +761,50 @@ impl ElephcEvalContext {
             let key = method.name().to_ascii_lowercase();
             if seen_methods.insert(key) {
                 methods.push(method.clone());
+            }
+        }
+    }
+
+    /// Returns direct and inherited property contracts for an eval interface.
+    pub fn interface_property_requirements(
+        &self,
+        interface_name: &str,
+    ) -> Vec<EvalInterfaceProperty> {
+        let mut properties = Vec::new();
+        let mut seen_interfaces = HashSet::new();
+        self.collect_interface_property_requirements(
+            interface_name,
+            &mut properties,
+            &mut seen_interfaces,
+        );
+        properties
+    }
+
+    /// Collects eval interface property contracts, merging duplicate inherited names.
+    fn collect_interface_property_requirements(
+        &self,
+        interface_name: &str,
+        properties: &mut Vec<EvalInterfaceProperty>,
+        seen_interfaces: &mut HashSet<String>,
+    ) {
+        let key = normalize_class_name(interface_name);
+        if !seen_interfaces.insert(key) {
+            return;
+        }
+        let Some(interface) = self.interface(interface_name) else {
+            return;
+        };
+        for parent in interface.parents() {
+            self.collect_interface_property_requirements(parent, properties, seen_interfaces);
+        }
+        for property in interface.properties() {
+            if let Some(existing) = properties
+                .iter_mut()
+                .find(|existing| existing.name() == property.name())
+            {
+                *existing = existing.merged_with(property);
+            } else {
+                properties.push(property.clone());
             }
         }
     }

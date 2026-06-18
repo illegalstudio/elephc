@@ -4989,6 +4989,58 @@ $box->answer = 7;');
     );
 }
 
+/// Verifies eval-declared interface property hook contracts validate class properties.
+#[test]
+fn test_eval_declared_interface_property_hook_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalIfaceHookContract {
+    public string $value { get; set; }
+}
+interface EvalIfaceNamedHookContract extends EvalIfaceHookContract {
+    public string $name { get; }
+}
+class EvalIfaceHookBox implements EvalIfaceNamedHookContract {
+    public string $name = "box";
+    public string $value {
+        get => $this->value;
+        set { $this->value = $value . "!"; }
+    }
+}
+class EvalIfacePlainBox implements EvalIfaceHookContract {
+    public string $value = "Grace";
+}
+$box = new EvalIfaceHookBox();
+$box->value = "Ada";
+$plain = new EvalIfacePlainBox();
+echo $box->name . ":" . $box->value . ":" . $plain->value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "box:Ada!:Grace");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalIfaceHookSetContract {
+    public int $answer { get; set; }
+}
+class EvalIfaceHookReadOnlyBox implements EvalIfaceHookSetContract {
+    public int $answer {
+        get => 42;
+    }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared static properties and static methods work through the bridge.
 #[test]
 fn test_eval_declared_static_members_and_late_static_binding() {

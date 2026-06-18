@@ -1178,6 +1178,11 @@ fn validate_class_implements_eval_interface(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
+    for requirement in context.interface_property_requirements(interface_name) {
+        if !class_has_interface_property(class, &requirement, context) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
     Ok(())
 }
 
@@ -1202,6 +1207,43 @@ fn class_has_interface_method(
                 && !method.is_abstract()
                 && method.params().len() == requirement.params().len()
         })
+}
+
+/// Returns whether a class or its eval parents satisfy one interface property contract.
+fn class_has_interface_property(
+    class: &EvalClass,
+    requirement: &EvalInterfaceProperty,
+    context: &ElephcEvalContext,
+) -> bool {
+    pending_class_property(class, requirement.name(), context).is_some_and(|property| {
+        if property.visibility() != EvalVisibility::Public || property.is_static() {
+            return false;
+        }
+        if requirement.requires_set() {
+            return property.has_set_hook()
+                || (!property.has_get_hook() && !property.is_readonly());
+        }
+        requirement.requires_get()
+    })
+}
+
+/// Returns a property from a pending class or one of its already registered parents.
+fn pending_class_property(
+    class: &EvalClass,
+    property_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<EvalClassProperty> {
+    if let Some(property) = class
+        .properties()
+        .iter()
+        .find(|property| property.name() == property_name)
+    {
+        return Some(property.clone());
+    }
+    class
+        .parent()
+        .and_then(|parent| context.class_property(parent, property_name))
+        .map(|(_, property)| property)
 }
 
 /// Reads one object property while enforcing eval-declared member visibility.
