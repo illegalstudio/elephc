@@ -172,19 +172,34 @@ impl EvalFunction {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalClass {
     name: String,
+    parent: Option<String>,
+    interfaces: Vec<String>,
     properties: Vec<EvalClassProperty>,
     methods: Vec<EvalClassMethod>,
 }
 
 impl EvalClass {
-    /// Creates a dynamic eval class with public properties and methods.
+    /// Creates a dynamic eval class with public properties and methods, and no relations.
     pub fn new(
         name: impl Into<String>,
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
+        Self::with_relations(name, None, Vec::new(), properties, methods)
+    }
+
+    /// Creates a dynamic eval class with optional parent and implemented interfaces.
+    pub fn with_relations(
+        name: impl Into<String>,
+        parent: Option<String>,
+        interfaces: Vec<String>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
         Self {
             name: name.into(),
+            parent,
+            interfaces,
             properties,
             methods,
         }
@@ -193,6 +208,16 @@ impl EvalClass {
     /// Returns the original source spelling of this eval-declared class name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the parent class name declared by this eval class, when present.
+    pub fn parent(&self) -> Option<&str> {
+        self.parent.as_deref()
+    }
+
+    /// Returns interface names implemented directly by this eval class.
+    pub fn interfaces(&self) -> &[String] {
+        &self.interfaces
     }
 
     /// Returns public properties declared directly by this eval class.

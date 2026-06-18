@@ -414,34 +414,39 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
         .resolve_class_name(target_class)
         .unwrap_or_else(|| target_class.to_string());
     let is_object = values.type_tag(object_or_class)? == 6;
-    let result =
-        if is_object
-            && dynamic_object_is_a(object_or_class, &resolved_target_class, context, values)?
-        {
-            !matches!(name, "is_subclass_of")
-        } else if is_object || allow_string {
-            values.object_is_a(
-                object_or_class,
-                &resolved_target_class,
-                name == "is_subclass_of",
-            )?
-        } else {
-            false
-        };
+    let exclude_self = name == "is_subclass_of";
+    let result = if is_object {
+        dynamic_object_is_a(
+            object_or_class,
+            &resolved_target_class,
+            exclude_self,
+            context,
+            values,
+        )?
+        .map_or_else(
+            || values.object_is_a(object_or_class, &resolved_target_class, exclude_self),
+            Ok,
+        )?
+    } else if allow_string {
+        values.object_is_a(object_or_class, &resolved_target_class, exclude_self)?
+    } else {
+        false
+    };
     values.bool_value(result)
 }
 
-/// Returns whether an eval-created object matches a dynamic class name exactly.
+/// Returns whether an eval-created object matches a dynamic class/interface target.
 pub(in crate::interpreter) fn dynamic_object_is_a(
     object: RuntimeCellHandle,
     target_class: &str,
+    exclude_self: bool,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
+) -> Result<Option<bool>, EvalStatus> {
     let identity = values.object_identity(object)?;
     Ok(context
         .dynamic_object_class(identity)
-        .is_some_and(|class| class.name().eq_ignore_ascii_case(target_class)))
+        .map(|class| context.class_is_a(class.name(), target_class, exclude_self)))
 }
 
 /// Evaluates PHP's `isset(...)` language construct over eval-visible values.

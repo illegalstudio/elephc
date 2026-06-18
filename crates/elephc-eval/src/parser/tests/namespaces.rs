@@ -102,6 +102,30 @@ return Alias(LocalValue, new BoxAlias\Inner());"#,
         }))]
     );
 }
+/// Verifies namespace class imports apply to eval class relation clauses.
+#[test]
+fn parse_fragment_accepts_imported_class_relations() {
+    let program = parse_fragment(
+        br#"namespace Eval\UseNs;
+use Lib\Base as BaseAlias;
+use Lib\Contracts\Iface;
+class Child extends BaseAlias implements Iface, \Shared\Root {}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::with_relations(
+            "Eval\\UseNs\\Child",
+            Some("Lib\\Base".to_string()),
+            vec![
+                "Lib\\Contracts\\Iface".to_string(),
+                "Shared\\Root".to_string()
+            ],
+            Vec::new(),
+            Vec::new(),
+        ))]
+    );
+}
 /// Verifies grouped namespace imports resolve functions, constants, and class aliases.
 #[test]
 fn parse_fragment_accepts_grouped_namespace_use_imports() {

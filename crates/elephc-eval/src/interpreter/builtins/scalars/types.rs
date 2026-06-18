@@ -134,14 +134,33 @@ pub(in crate::interpreter) fn eval_builtin_get_parent_class(
         return Err(EvalStatus::RuntimeFatal);
     };
     let object_or_class = eval_expr(object_or_class, context, scope, values)?;
-    eval_get_parent_class_result(object_or_class, values)
+    eval_get_parent_class_result(object_or_class, context, values)
 }
 
 /// Resolves the PHP-visible parent class name for one object or class-name cell.
 pub(in crate::interpreter) fn eval_get_parent_class_result(
     object_or_class: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Ok(identity) = values.object_identity(object_or_class) {
+        if let Some(class) = context.dynamic_object_class(identity) {
+            if let Some(parent) = context.class_parent_names(class.name()).into_iter().next() {
+                return values.string(&parent);
+            }
+            return values.string("");
+        }
+    }
+    if values.type_tag(object_or_class)? == EVAL_TAG_STRING {
+        let name = values.string_bytes(object_or_class)?;
+        let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
+        if context.class(&name).is_some() {
+            if let Some(parent) = context.class_parent_names(&name).into_iter().next() {
+                return values.string(&parent);
+            }
+            return values.string("");
+        }
+    }
     values.parent_class_name(object_or_class)
 }
 

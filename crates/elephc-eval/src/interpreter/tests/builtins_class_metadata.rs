@@ -5,7 +5,8 @@
 //! - `cargo test -p elephc-eval` through Rust's test harness.
 //!
 //! Key details:
-//! - Eval class declarations currently carry no parent/interface/trait/attribute metadata.
+//! - Eval class declarations expose parent/interface metadata while trait and
+//!   attribute metadata remains empty.
 //! - Tests verify direct calls, dynamic calls, named arguments, and builtin probes.
 
 use super::super::*;
@@ -39,6 +40,37 @@ return true;"#,
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.output, "impl:parents:uses:missing:call:named:111");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+/// Verifies eval-declared parent and interface metadata is exposed to relation builtins.
+#[test]
+fn execute_program_reports_eval_class_relation_metadata() {
+    let program = parse_fragment(
+        br#"class EvalMetaBase {}
+class EvalMetaChild extends EvalMetaBase implements KnownInterface {}
+$object = new EvalMetaChild();
+$implements = class_implements($object);
+echo count($implements); echo ":";
+echo $implements["KnownInterface"]; echo ":";
+$parents = class_parents("EvalMetaChild");
+echo count($parents); echo ":";
+echo $parents["EvalMetaBase"]; echo ":";
+$call = call_user_func("class_implements", "EvalMetaChild");
+echo $call["KnownInterface"]; echo ":";
+$named = call_user_func_array("class_parents", ["object_or_class" => $object]);
+echo $named["EvalMetaBase"];
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "1:KnownInterface:1:EvalMetaBase:KnownInterface:EvalMetaBase"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
