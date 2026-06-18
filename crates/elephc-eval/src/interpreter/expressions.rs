@@ -590,6 +590,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "rawurldecode" | "urldecode" => eval_builtin_url_decode(name, args, context, scope, values),
         "rawurlencode" | "urlencode" => eval_builtin_url_encode(name, args, context, scope, values),
         "readfile" => eval_builtin_readfile(args, context, scope, values),
+        "readline" => eval_builtin_readline(args, context, scope, values),
         "readlink" => eval_builtin_readlink(args, context, scope, values),
         "realpath" => eval_builtin_realpath(args, context, scope, values),
         "realpath_cache_get" => eval_builtin_realpath_cache_get(args, values),
