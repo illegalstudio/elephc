@@ -266,6 +266,22 @@ var_dump(true);
     assert_eq!(out, "int(1)\nstring(2) \"hi\"\nbool(true)\n");
 }
 
+/// Regression: `var_dump` of a heterogeneous (Mixed) indexed array must emit one typed line per
+/// element, not an empty body. The Mixed-array walker previously masked the value_type stamp with
+/// `0xff`, leaving the COW bit set so the `== Mixed` check failed and skipped the whole body.
+#[test]
+fn test_var_dump_mixed_indexed_array() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump([1, "x", 2.5]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  string(1) \"x\"\n  [2]=>\n  float(2.5)\n}\n"
+    );
+}
+
 /// `var_export` renders scalars the way PHP does: bare integers, `'…'`-quoted strings with
 /// `\\`/`\'` escaping, `true`/`false`, `NULL`, and an integer-valued float gaining a `.0`.
 #[test]

@@ -185,13 +185,21 @@ echo $b[1.2];
 }
 
 /// Verifies nullable integer array literals preserve null tags when boxed as mixed values.
+///
+/// Elements are dumped individually rather than `var_dump($items)`: the EIR backend now renders the
+/// full Mixed-array body, while the frozen legacy backend only emits the header (its Mixed-array
+/// walker was never implemented and is being removed in v0.26). Per-element `var_dump` exercises the
+/// same null-tag preservation and stays identical across both backends; the full-body Mixed `var_dump`
+/// output is covered by `codegen::io::printing::test_var_dump_mixed_indexed_array`.
 #[test]
 fn parity_nullable_int_array_literal_preserves_nulls() {
     assert_backend_parity(
         "nullable_int_array_literal_preserves_nulls",
         r#"<?php
 $items = [1, null, 3];
-var_dump($items);
+var_dump($items[0]);
+var_dump($items[1]);
+var_dump($items[2]);
 echo json_encode($items);
 "#,
         &[],

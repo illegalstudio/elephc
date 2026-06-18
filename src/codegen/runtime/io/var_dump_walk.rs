@@ -767,7 +767,7 @@ pub fn emit_var_dump_array_mixed(emitter: &mut Emitter) {
     //    packed heap kind word at [arr - 8] byte 1. --
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed array kind word
     emitter.instruction("lsr x9, x9, #8");                                      // shift the value_type tag into the low byte
-    emitter.instruction("and x9, x9, #0xff");                                   // isolate the tag
+    emitter.instruction("and x9, x9, #0x0f");                                   // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("cmp x9, #7");                                          // Mixed?
     emitter.instruction("b.ne __rt_vd_arr_mixed_skip");                         // not Mixed → leave the body empty
 
@@ -845,7 +845,7 @@ fn emit_var_dump_array_mixed_linux_x86_64(emitter: &mut Emitter) {
     // whose value_type stamp says Mixed (=7).
     emitter.instruction("mov r9, QWORD PTR [rdi - 8]");                         // packed array kind word
     emitter.instruction("shr r9, 8");                                           // shift the value_type tag into the low byte
-    emitter.instruction("and r9, 0xff");                                        // isolate the tag
+    emitter.instruction("and r9, 0x0f");                                        // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("cmp r9, 7");                                           // Mixed?
     emitter.instruction("jne __rt_vd_arr_mixed_skip_x86");                      // not Mixed → leave the body empty
 
