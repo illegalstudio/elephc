@@ -99,6 +99,7 @@ pub struct ElephcEvalContext {
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     pending_throw: Option<RuntimeCellHandle>,
+    spl_autoload_extensions: String,
     streams: EvalStreamResources,
     json_last_error: i64,
     json_last_error_msg: String,
@@ -125,6 +126,7 @@ impl ElephcEvalContext {
             global_scope: None,
             function_stack: Vec::new(),
             pending_throw: None,
+            spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
             json_last_error: 0,
             json_last_error_msg: String::from("No error"),
@@ -152,6 +154,7 @@ impl ElephcEvalContext {
             global_scope: None,
             function_stack: Vec::new(),
             pending_throw: None,
+            spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
             json_last_error: 0,
             json_last_error_msg: String::from("No error"),
@@ -393,6 +396,16 @@ impl ElephcEvalContext {
     /// Returns and clears the Throwable cell currently escaping through eval.
     pub fn take_pending_throw(&mut self) -> Option<RuntimeCellHandle> {
         self.pending_throw.take()
+    }
+
+    /// Returns the eval-local SPL autoload extension list.
+    pub fn spl_autoload_extensions(&self) -> &str {
+        &self.spl_autoload_extensions
+    }
+
+    /// Replaces the eval-local SPL autoload extension list.
+    pub fn set_spl_autoload_extensions(&mut self, extensions: impl Into<String>) {
+        self.spl_autoload_extensions = extensions.into();
     }
 
     /// Returns the eval-local stream resource table.

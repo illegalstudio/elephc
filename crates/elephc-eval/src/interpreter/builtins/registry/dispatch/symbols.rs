@@ -25,6 +25,18 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
             }
             eval_spl_classes_result(values)?
         }
+        "spl_autoload_register" | "spl_autoload_unregister" => {
+            eval_spl_autoload_bool_result(name, evaluated_args, values)?
+        }
+        "spl_autoload" | "spl_autoload_call" => {
+            eval_spl_autoload_void_result(name, evaluated_args, values)?
+        }
+        "spl_autoload_functions" => {
+            eval_spl_autoload_functions_result(evaluated_args, values)?
+        }
+        "spl_autoload_extensions" => {
+            eval_spl_autoload_extensions_result(evaluated_args, context, values)?
+        }
         "spl_object_id" | "spl_object_hash" => {
             let [object] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);

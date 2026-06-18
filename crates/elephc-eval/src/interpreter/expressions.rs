@@ -599,6 +599,18 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "isset" => eval_builtin_isset(args, context, scope, values),
         "sleep" => eval_builtin_sleep(args, context, scope, values),
         "sqrt" => eval_builtin_sqrt(args, context, scope, values),
+        "spl_autoload_register" | "spl_autoload_unregister" => {
+            eval_builtin_spl_autoload_bool(name, args, context, scope, values)
+        }
+        "spl_autoload" | "spl_autoload_call" => {
+            eval_builtin_spl_autoload_void(name, args, context, scope, values)
+        }
+        "spl_autoload_functions" => {
+            eval_builtin_spl_autoload_functions(args, context, scope, values)
+        }
+        "spl_autoload_extensions" => {
+            eval_builtin_spl_autoload_extensions(args, context, scope, values)
+        }
         "spl_classes" => eval_builtin_spl_classes(args, values),
         "spl_object_id" | "spl_object_hash" => {
             eval_builtin_spl_object_identity(name, args, context, scope, values)
