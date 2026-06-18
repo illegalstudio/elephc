@@ -1,197 +1,21 @@
 //! Purpose:
-//! Bridges EvalIR value operations to elephc runtime values.
-//! Calls C-ABI wrapper symbols emitted by the main runtime object when eval is
-//! enabled, avoiding a duplicate PHP value representation inside this crate.
+//! Implements RuntimeValueOps by delegating each eval value operation to the
+//! generated elephc runtime wrapper symbols.
 //!
 //! Called from:
-//! - `crate::__elephc_eval_execute()` in non-test builds.
+//! - `crate::interpreter` when executing EvalIR in non-test builds.
 //!
 //! Key details:
-//! - The wrapper symbols adapt to elephc's target-specific internal helper ABI.
-//! - Unit tests do not link the generated runtime object, so this module's real
-//!   hook implementation is compiled only outside `cfg(test)`.
+//! - Every returned runtime pointer is checked before becoming a handle.
+//! - Temporary argument arrays are released after object and method bridge calls.
 
-#[cfg(not(test))]
+use super::externs::*;
+use super::tags::{bitwise_op_tag, compare_op_tag};
+use super::ElephcRuntimeOps;
 use crate::errors::EvalStatus;
-#[cfg(not(test))]
 use crate::eval_ir::EvalBinOp;
-#[cfg(not(test))]
 use crate::interpreter::RuntimeValueOps;
-#[cfg(not(test))]
-use crate::value::{RuntimeCell, RuntimeCellHandle};
-
-#[cfg(not(test))]
-unsafe extern "C" {
-    fn __elephc_eval_value_array_new(capacity: u64) -> *mut RuntimeCell;
-    fn __elephc_eval_value_assoc_new(capacity: u64) -> *mut RuntimeCell;
-    fn __elephc_eval_value_array_get(
-        array: *mut RuntimeCell,
-        index: *mut RuntimeCell,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_array_key_exists(
-        key: *mut RuntimeCell,
-        array: *mut RuntimeCell,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_array_iter_key(
-        array: *mut RuntimeCell,
-        position: u64,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_array_set(
-        array: *mut RuntimeCell,
-        index: *mut RuntimeCell,
-        value: *mut RuntimeCell,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_property_get(
-        object: *mut RuntimeCell,
-        name_ptr: *const u8,
-        name_len: u64,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_property_set(
-        object: *mut RuntimeCell,
-        name_ptr: *const u8,
-        name_len: u64,
-        value: *mut RuntimeCell,
-    ) -> u64;
-    fn __elephc_eval_value_object_property_len(object: *mut RuntimeCell) -> u64;
-    fn __elephc_eval_value_object_property_iter_key(
-        object: *mut RuntimeCell,
-        position: u64,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_method_call(
-        object: *mut RuntimeCell,
-        name_ptr: *const u8,
-        name_len: u64,
-        args: *mut RuntimeCell,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_new_object(name_ptr: *const u8, name_len: u64) -> *mut RuntimeCell;
-    fn __elephc_eval_value_construct_object(
-        object: *mut RuntimeCell,
-        args: *mut RuntimeCell,
-    ) -> u64;
-    fn __elephc_eval_class_exists(name_ptr: *const u8, name_len: u64) -> u64;
-    fn __elephc_eval_interface_exists(name_ptr: *const u8, name_len: u64) -> u64;
-    fn __elephc_eval_value_is_a(
-        object_or_class: *mut RuntimeCell,
-        target_ptr: *const u8,
-        target_len: u64,
-        exclude_self: u64,
-    ) -> u64;
-    fn __elephc_eval_value_object_class_name(object: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_parent_class_name(object_or_class: *mut RuntimeCell)
-        -> *mut RuntimeCell;
-    /// Returns whether generated trait metadata contains the requested PHP name.
-    fn __elephc_eval_trait_exists(name_ptr: *const u8, name_len: u64) -> u64;
-    /// Returns whether generated enum metadata contains the requested PHP name.
-    fn __elephc_eval_enum_exists(name_ptr: *const u8, name_len: u64) -> u64;
-    fn __elephc_eval_value_array_len(array: *mut RuntimeCell) -> u64;
-    fn __elephc_eval_value_is_array_like(value: *mut RuntimeCell) -> u64;
-    fn __elephc_eval_value_is_null(value: *mut RuntimeCell) -> u64;
-    fn __elephc_eval_value_type_tag(value: *mut RuntimeCell) -> u64;
-    /// Returns the unboxed object payload pointer for object-tagged eval values.
-    fn __elephc_eval_value_object_identity(value: *mut RuntimeCell) -> u64;
-    fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);
-    fn __elephc_eval_value_null() -> *mut RuntimeCell;
-    fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
-    fn __elephc_eval_value_int(value: i64) -> *mut RuntimeCell;
-    fn __elephc_eval_value_float(value: f64) -> *mut RuntimeCell;
-    fn __elephc_eval_value_string(ptr: *const u8, len: u64) -> *mut RuntimeCell;
-    fn __elephc_eval_value_cast_int(value: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_cast_float(value: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_cast_string(value: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_cast_bool(value: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_abs(value: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_ceil(value: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_floor(value: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_sqrt(value: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_strrev(value: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_fdiv(
-        left: *mut RuntimeCell,
-        right: *mut RuntimeCell,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_fmod(
-        left: *mut RuntimeCell,
-        right: *mut RuntimeCell,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_add(left: *mut RuntimeCell, right: *mut RuntimeCell)
-        -> *mut RuntimeCell;
-    fn __elephc_eval_value_sub(left: *mut RuntimeCell, right: *mut RuntimeCell)
-        -> *mut RuntimeCell;
-    fn __elephc_eval_value_mul(left: *mut RuntimeCell, right: *mut RuntimeCell)
-        -> *mut RuntimeCell;
-    fn __elephc_eval_value_div(left: *mut RuntimeCell, right: *mut RuntimeCell)
-        -> *mut RuntimeCell;
-    fn __elephc_eval_value_mod(left: *mut RuntimeCell, right: *mut RuntimeCell)
-        -> *mut RuntimeCell;
-    fn __elephc_eval_value_pow(left: *mut RuntimeCell, right: *mut RuntimeCell)
-        -> *mut RuntimeCell;
-    fn __elephc_eval_value_round(
-        value: *mut RuntimeCell,
-        precision: *mut RuntimeCell,
-        has_precision: u64,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_bitwise(
-        left: *mut RuntimeCell,
-        right: *mut RuntimeCell,
-        op: u64,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_bit_not(value: *mut RuntimeCell) -> *mut RuntimeCell;
-    fn __elephc_eval_value_concat(
-        left: *mut RuntimeCell,
-        right: *mut RuntimeCell,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_compare(
-        left: *mut RuntimeCell,
-        right: *mut RuntimeCell,
-        op: u64,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_spaceship(
-        left: *mut RuntimeCell,
-        right: *mut RuntimeCell,
-    ) -> *mut RuntimeCell;
-    fn __elephc_eval_value_echo(value: *mut RuntimeCell);
-    fn __elephc_eval_value_string_bytes(
-        value: *mut RuntimeCell,
-        out_ptr: *mut *const u8,
-        out_len: *mut u64,
-    ) -> u64;
-    fn __elephc_eval_value_truthy(value: *mut RuntimeCell) -> u64;
-    fn __elephc_eval_value_release(value: *mut RuntimeCell);
-    fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
-}
-
-/// Runtime hook adapter that produces and consumes boxed elephc Mixed cells.
-#[cfg(not(test))]
-pub struct ElephcRuntimeOps;
-
-#[cfg(not(test))]
-impl ElephcRuntimeOps {
-    /// Creates a new stateless runtime hook adapter.
-    pub const fn new() -> Self {
-        Self
-    }
-
-    /// Converts a runtime wrapper result into an interpreter handle.
-    fn handle(ptr: *mut RuntimeCell) -> Result<RuntimeCellHandle, EvalStatus> {
-        if ptr.is_null() {
-            Err(EvalStatus::RuntimeFatal)
-        } else {
-            Ok(RuntimeCellHandle::from_raw(ptr))
-        }
-    }
-
-    /// Packs source-order argument cells into the boxed eval array ABI.
-    fn arg_array(args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
-        let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
-        let arg_array = Self::handle(arg_array)?;
-        for (index, value) in args.into_iter().enumerate() {
-            let index = Self::handle(unsafe { __elephc_eval_value_int(index as i64) })?;
-            Self::handle(unsafe {
-                __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
-            })?;
-        }
-        Ok(arg_array)
-    }
-}
+use crate::value::RuntimeCellHandle;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
@@ -700,67 +524,5 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     /// Converts one boxed Mixed cell to PHP truthiness through the generated runtime wrapper.
     fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_truthy(value.as_ptr()) != 0 })
-    }
-}
-
-/// Maps an EvalIR comparison operator to the bridge ABI opcode.
-#[cfg(not(test))]
-fn compare_op_tag(op: EvalBinOp) -> u64 {
-    match op {
-        EvalBinOp::LooseEq => 0,
-        EvalBinOp::LooseNotEq => 1,
-        EvalBinOp::Lt => 2,
-        EvalBinOp::LtEq => 3,
-        EvalBinOp::Gt => 4,
-        EvalBinOp::GtEq => 5,
-        EvalBinOp::StrictEq => 6,
-        EvalBinOp::StrictNotEq => 7,
-        EvalBinOp::Add
-        | EvalBinOp::Sub
-        | EvalBinOp::Mul
-        | EvalBinOp::Div
-        | EvalBinOp::Mod
-        | EvalBinOp::Pow
-        | EvalBinOp::BitAnd
-        | EvalBinOp::BitOr
-        | EvalBinOp::BitXor
-        | EvalBinOp::ShiftLeft
-        | EvalBinOp::ShiftRight
-        | EvalBinOp::Concat
-        | EvalBinOp::Spaceship
-        | EvalBinOp::LogicalAnd
-        | EvalBinOp::LogicalOr
-        | EvalBinOp::LogicalXor => 0,
-    }
-}
-
-/// Maps bitwise EvalIR operators onto the generated runtime wrapper opcode table.
-#[cfg(not(test))]
-fn bitwise_op_tag(op: EvalBinOp) -> u64 {
-    match op {
-        EvalBinOp::BitAnd => 0,
-        EvalBinOp::BitOr => 1,
-        EvalBinOp::BitXor => 2,
-        EvalBinOp::ShiftLeft => 3,
-        EvalBinOp::ShiftRight => 4,
-        EvalBinOp::Add
-        | EvalBinOp::Sub
-        | EvalBinOp::Mul
-        | EvalBinOp::Div
-        | EvalBinOp::Mod
-        | EvalBinOp::Pow
-        | EvalBinOp::Concat
-        | EvalBinOp::LogicalAnd
-        | EvalBinOp::LogicalOr
-        | EvalBinOp::LogicalXor
-        | EvalBinOp::LooseEq
-        | EvalBinOp::LooseNotEq
-        | EvalBinOp::StrictEq
-        | EvalBinOp::StrictNotEq
-        | EvalBinOp::Lt
-        | EvalBinOp::LtEq
-        | EvalBinOp::Gt
-        | EvalBinOp::GtEq
-        | EvalBinOp::Spaceship => 0,
     }
 }
