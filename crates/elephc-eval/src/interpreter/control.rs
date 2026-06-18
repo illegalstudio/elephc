@@ -39,6 +39,10 @@ pub(super) enum EvaluatedCallable {
         object: RuntimeCellHandle,
         method: String,
     },
+    StaticMethod {
+        class_name: String,
+        method: String,
+    },
 }
 
 /// Bound argument tuple for direct `array_splice()` calls.

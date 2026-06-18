@@ -4878,6 +4878,32 @@ echo EvalNamedMethodBox::join(right: "H", left: "G");');
     assert_eq!(out.stdout, "AB:C:D:AB:E:F:G-H");
 }
 
+/// Verifies eval dynamic static callables dispatch eval-declared static methods.
+#[test]
+fn test_eval_declared_static_method_dynamic_callables() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalStaticCallableBox {
+    public static function join($left, $right) {
+        return $left . $right;
+    }
+}
+$cb = ["EvalStaticCallableBox", "join"];
+echo $cb(right: "B", left: "A") . ":";
+echo call_user_func($cb, "C", "D") . ":";
+echo call_user_func_array($cb, ["right" => "F", "left" => "E"]) . ":";
+$named = "EvalStaticCallableBox::join";
+echo $named(right: "H", left: "G");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "AB:CD:EF:GH");
+}
+
 /// Verifies eval-declared class constants work through the bridge.
 #[test]
 fn test_eval_declared_class_constants_and_scoped_fetches() {
