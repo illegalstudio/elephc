@@ -174,6 +174,33 @@ return call_user_func_array([$box, "add2_x"], [1, 2]);"#,
 
     assert_eq!(values.get(result), FakeValue::Int(42));
 }
+
+/// Verifies static method callable arrays dispatch eval-declared static methods.
+#[test]
+fn execute_program_static_callable_array_dispatches_eval_method() {
+    let program = parse_fragment(
+        br#"class EvalStaticCallableBox {
+    public static function join($left, $right) {
+        return $left . $right;
+    }
+}
+$cb = ["EvalStaticCallableBox", "join"];
+echo $cb(right: "B", left: "A"); echo ":";
+echo call_user_func($cb, "C", "D"); echo ":";
+echo call_user_func_array($cb, ["right" => "F", "left" => "E"]); echo ":";
+$named = "EvalStaticCallableBox::join";
+return $named(right: "H", left: "G");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "AB:CD:EF:");
+    assert_eq!(values.get(result), FakeValue::String("GH".to_string()));
+}
+
 /// Verifies `call_user_func_array` inside eval can dispatch an eval-declared function.
 #[test]
 fn execute_program_call_user_func_array_dispatches_declared_function() {

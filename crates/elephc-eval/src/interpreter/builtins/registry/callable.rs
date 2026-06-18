@@ -79,10 +79,10 @@ pub(in crate::interpreter) fn eval_callable(
     if values.is_array_like(callback)? {
         return eval_array_callable(callback, values);
     }
-    eval_callable_name(callback, values).map(EvaluatedCallable::Named)
+    eval_string_callable(callback, values)
 }
 
-/// Normalizes one two-element object-method callable array.
+/// Normalizes one two-element object-method or static-method callable array.
 pub(in crate::interpreter) fn eval_array_callable(
     callback: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -92,17 +92,46 @@ pub(in crate::interpreter) fn eval_array_callable(
     }
     let zero = values.int(0)?;
     let one = values.int(1)?;
-    let object = values.array_get(callback, zero)?;
-    if values.type_tag(object)? != EVAL_TAG_OBJECT {
-        return Err(EvalStatus::UnsupportedConstruct);
-    }
+    let receiver = values.array_get(callback, zero)?;
     let method = values.array_get(callback, one)?;
     let method =
         String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
-    Ok(EvaluatedCallable::ObjectMethod { object, method })
+    match values.type_tag(receiver)? {
+        EVAL_TAG_OBJECT => Ok(EvaluatedCallable::ObjectMethod {
+            object: receiver,
+            method,
+        }),
+        EVAL_TAG_STRING => {
+            let class_name = String::from_utf8(values.string_bytes(receiver)?)
+                .map_err(|_| EvalStatus::RuntimeFatal)?;
+            Ok(EvaluatedCallable::StaticMethod { class_name, method })
+        }
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
 }
 
 /// Normalizes one string callback name for eval dynamic callable dispatch.
+pub(in crate::interpreter) fn eval_string_callable(
+    callback: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedCallable, EvalStatus> {
+    let callback = values.string_bytes(callback)?;
+    let callback = String::from_utf8(callback).map_err(|_| EvalStatus::RuntimeFatal)?;
+    if let Some((class_name, method)) = callback.split_once("::") {
+        if class_name.is_empty() || method.is_empty() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(EvaluatedCallable::StaticMethod {
+            class_name: class_name.trim_start_matches('\\').to_string(),
+            method: method.to_string(),
+        });
+    }
+    Ok(EvaluatedCallable::Named(
+        callback.trim_start_matches('\\').to_ascii_lowercase(),
+    ))
+}
+
+/// Normalizes one string function callback name for builtin callback positions.
 pub(in crate::interpreter) fn eval_callable_name(
     callback: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -130,6 +159,13 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
         EvaluatedCallable::ObjectMethod { object, method } => {
             eval_method_call_result(*object, method, evaluated_args, context, values)
         }
+        EvaluatedCallable::StaticMethod { class_name, method } => eval_static_method_call_result(
+            class_name,
+            method,
+            positional_args(evaluated_args),
+            context,
+            values,
+        ),
     }
 }
 
@@ -150,6 +186,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
             }
             let evaluated_args = evaluated_args.into_iter().map(|arg| arg.value).collect();
             eval_method_call_result(*object, method, evaluated_args, context, values)
+        }
+        EvaluatedCallable::StaticMethod { class_name, method } => {
+            eval_static_method_call_result(class_name, method, evaluated_args, context, values)
         }
     }
 }

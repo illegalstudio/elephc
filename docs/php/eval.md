@@ -116,7 +116,10 @@ eval-declared functions, and registered AOT functions.
 Inside eval fragments, two-element object-method callable arrays such as
 `[$this, "method"]` can be invoked through `$cb(...)`, `call_user_func($cb,
 ...)`, `call_user_func_array($cb, [...])`, and `iterator_apply()` with
-positional arguments.
+positional arguments. Static method callables for eval-declared static methods
+can use `["ClassName", "method"]` or `"ClassName::method"` through `$cb(...)`,
+`call_user_func()`, and `call_user_func_array()`; `call_user_func_array()` can
+also bind string-keyed named arguments for these eval-declared static methods.
 
 Post-barrier native direct calls and string-literal `call_user_func()` callbacks
 currently accept simple positional arguments. Post-barrier
@@ -263,15 +266,15 @@ fail at runtime with an eval fatal diagnostic.
 
 The fragment subset is broad but not the full elephc language surface. In
 particular, advanced native callable descriptors, closure callback values, and
-static-method callable arrays are still outside eval fragments. Runtime/AOT
-object-method fallback from eval remains positional, so named method arguments
-are supported for eval-declared methods but not for every generated native
-method bridge.
+generated/AOT static-method callable arrays are still outside eval fragments.
+Runtime/AOT object-method fallback from eval remains positional, so named method
+arguments are supported for eval-declared methods but not for every generated
+native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are eval-declared enums, property hooks,
-attributes/reflection metadata, readonly semantics, dynamic static callables,
-and dynamic static-method call forms.
+attributes/reflection metadata, readonly semantics, and generated/AOT dynamic
+static-method call forms.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`
