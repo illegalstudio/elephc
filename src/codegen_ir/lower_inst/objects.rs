@@ -1111,8 +1111,8 @@ pub(super) fn lower_dynamic_object_new_mixed(
     let done_label = ctx.next_label("dynamic_new_mixed_done");
     let non_string_label = ctx.next_label("dynamic_new_mixed_non_string");
     if !emit_generic_dynamic_new_class_string(ctx, class_name_value, &non_string_label)? {
-        emit_boxed_null(ctx);
-        return store_if_result(ctx, inst);
+        emit_dynamic_new_invalid_class_name_fatal(ctx);
+        return Ok(());
     }
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
@@ -1141,8 +1141,7 @@ pub(super) fn lower_dynamic_object_new_mixed(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&non_string_label);
-    emit_boxed_null(ctx);
-    ctx.store_result_value(result)?;
+    emit_dynamic_new_invalid_class_name_fatal(ctx);
 
     ctx.emitter.label(&done_label);
     Ok(())
@@ -1500,30 +1499,34 @@ fn emit_dynamic_new_mixed_constructor_call(
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
-/// Invokes the runtime class-name registry fallback and boxes object/null as Mixed.
+/// Invokes the runtime class-name registry fallback and boxes a matched object as Mixed.
 fn emit_dynamic_new_mixed_fallback(ctx: &mut FunctionContext<'_>) {
-    let null_label = ctx.next_label("dynamic_new_mixed_null");
+    let miss_label = ctx.next_label("dynamic_new_mixed_missing_class");
     let done_label = ctx.next_label("dynamic_new_mixed_fallback_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
             abi::emit_call_label(ctx.emitter, "__rt_new_by_name");
-            ctx.emitter.instruction(&format!("cbz x0, {}", null_label));        // registry miss returns PHP null for dynamic construction
+            ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // registry miss is PHP's class-not-found fatal for source-level dynamic construction
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip null boxing after a registry allocation
-            ctx.emitter.label(&null_label);
-            emit_boxed_null(ctx);
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the fatal path after a registry allocation
+            ctx.emitter.label(&miss_label);
+            emit_dynamic_new_class_not_found_fatal(ctx);
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
             abi::emit_call_label(ctx.emitter, "__rt_new_by_name");
-            ctx.emitter.instruction("test rax, rax");                           // registry miss returns PHP null for dynamic construction
-            ctx.emitter.instruction(&format!("jz {}", null_label));             // box PHP null when no runtime class table entry matched
+            ctx.emitter.instruction("test rax, rax");                           // did the runtime class registry produce an object?
+            ctx.emitter.instruction(&format!("jz {}", miss_label));             // registry miss is PHP's class-not-found fatal
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip null boxing after a registry allocation
-            ctx.emitter.label(&null_label);
-            emit_boxed_null(ctx);
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the fatal path after a registry allocation
+            ctx.emitter.label(&miss_label);
+            emit_dynamic_new_class_not_found_fatal(ctx);
             ctx.emitter.label(&done_label);
         }
     }
@@ -1817,6 +1820,57 @@ fn emit_dynamic_new_fatal(ctx: &mut FunctionContext<'_>, required_parent: &str) 
         required_parent
     );
     emit_fatal_message(ctx, message.as_bytes());
+}
+
+/// Emits PHP's fatal diagnostic for source-level `new $name` with a missing class.
+fn emit_dynamic_new_class_not_found_fatal(ctx: &mut FunctionContext<'_>) {
+    let (prefix_label, prefix_len) =
+        ctx.data.add_string(b"Fatal error: Uncaught Error: Class \"");
+    let (suffix_label, suffix_len) = ctx.data.add_string(b"\" not found\n");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the class-not-found prefix
+            ctx.emitter.adrp("x1", &prefix_label);
+            ctx.emitter.add_lo12("x1", "x1", &prefix_label);
+            ctx.emitter.instruction(&format!("mov x2, #{}", prefix_len));       // pass the class-not-found prefix byte length
+            ctx.emitter.syscall(4);
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the missing class name
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
+            ctx.emitter.syscall(4);
+            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the class-not-found suffix
+            ctx.emitter.adrp("x1", &suffix_label);
+            ctx.emitter.add_lo12("x1", "x1", &suffix_label);
+            ctx.emitter.instruction(&format!("mov x2, #{}", suffix_len));       // pass the class-not-found suffix byte length
+            ctx.emitter.syscall(4);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rsi", &prefix_label);
+            ctx.emitter.instruction(&format!("mov edx, {}", prefix_len));       // pass the class-not-found prefix byte length
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the class-not-found prefix
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the prefix
+            ctx.emitter.instruction("syscall");                                 // write the class-not-found prefix
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the missing class name
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the class name
+            ctx.emitter.instruction("syscall");                                 // write the missing class name
+            abi::emit_symbol_address(ctx.emitter, "rsi", &suffix_label);
+            ctx.emitter.instruction(&format!("mov edx, {}", suffix_len));       // pass the class-not-found suffix byte length
+            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the class-not-found suffix
+            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall for the suffix
+            ctx.emitter.instruction("syscall");                                 // write the class-not-found suffix
+        }
+    }
+    abi::emit_exit(ctx.emitter, 1);
+}
+
+/// Emits PHP's fatal diagnostic for `new $name` when the class expression is not a string.
+fn emit_dynamic_new_invalid_class_name_fatal(ctx: &mut FunctionContext<'_>) {
+    emit_fatal_message(
+        ctx,
+        b"Fatal error: Uncaught Error: Class name must be a valid object or a string\n",
+    );
 }
 
 /// Writes a fatal diagnostic to stderr and exits.

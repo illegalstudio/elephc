@@ -9,7 +9,8 @@
 //! Key details:
 //! - This is intentionally narrower than full PHP expression lowering: only
 //!   scalar, string, null, indexed-array literals with scalar/string/null
-//!   elements, and empty associative arrays land here.
+//!   elements, empty object-typed indexed arrays, and empty associative arrays
+//!   land here.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{
@@ -680,6 +681,7 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
         | PhpType::Bool
         | PhpType::Float
         | PhpType::Mixed
+        | PhpType::Object(_)
         | PhpType::Union(_)
         | PhpType::Iterable
         | PhpType::Void => Ok(8),
