@@ -122,6 +122,40 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionAttribute::newInstance instantiates eval-declared attribute classes.
+#[test]
+fn execute_program_instantiates_eval_declared_reflection_attribute() {
+    let program = parse_fragment(
+        br#"class EvalRoute {
+    public $path;
+    public $code;
+    public $enabled;
+    public function __construct($path, $code, $enabled) {
+        $this->path = $path;
+        $this->code = $code;
+        $this->enabled = $enabled;
+    }
+    public function summary() {
+        return $this->path . ":" . $this->code . ":" . ($this->enabled ? "T" : "F");
+    }
+}
+#[EvalRoute("/home", -7, true)]
+class EvalRouteTarget {}
+$attrs = class_get_attributes("EvalRouteTarget");
+$instance = $attrs[0]->newInstance();
+echo get_class($instance); echo ":"; echo $instance->summary();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "EvalRoute:/home:-7:T");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies unsupported attribute argument metadata remains name-visible but not materializable.
 #[test]
 fn execute_program_rejects_unsupported_class_attribute_args_metadata() {

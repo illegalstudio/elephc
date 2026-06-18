@@ -140,9 +140,11 @@ properties, static methods, class constants, interface constants, trait
 constants, class-level attributes, and `ClassName::class` literals. Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,
-interfaces, traits, and enums are visible through `class_attribute_names()` and
-`class_attribute_args()` when their arguments are supported literal positional
-values (`string`, `int`, `bool`, `null`, or negated integer literals).
+interfaces, traits, and enums are visible through `class_attribute_names()`,
+`class_attribute_args()`, and `class_get_attributes()` when their arguments are
+supported literal positional values (`string`, `int`, `bool`, `null`, or negated
+integer literals). `ReflectionAttribute::newInstance()` instantiates
+eval-declared attribute classes from those materialized class-level attributes.
 Attribute names remain visible when an attribute uses unsupported argument
 syntax, but requesting those arguments is a runtime fatal. Attributes on
 methods, properties, constants, interface members, trait members, and enum cases
@@ -301,10 +303,9 @@ fallback from eval remains positional, so named method arguments are supported
 for eval-declared methods but not for every generated native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
-remaining class-system gaps are ReflectionAttribute `newInstance()` factories
-for eval-declared attribute classes, Reflection exposure for member-level
-attributes, and broader generated/AOT method bridge signatures beyond the
-current public scalar zero-to-two-argument slice.
+remaining class-system gaps are Reflection exposure for member-level attributes
+and broader generated/AOT method bridge signatures beyond the current public
+scalar zero-to-two-argument slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

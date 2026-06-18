@@ -1981,6 +1981,14 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
         return values.method_call(object, method_name, evaluated_args);
     };
+    if let Some(attribute) = context.eval_reflection_attribute(identity).cloned() {
+        if method_name.eq_ignore_ascii_case("newInstance") {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            return eval_reflection_attribute_new_instance_result(&attribute, context, values);
+        }
+    }
     let Some(class) = context.dynamic_object_class(identity) else {
         let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
         return values.method_call(object, method_name, evaluated_args);
@@ -2002,6 +2010,46 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         context,
         values,
     )
+}
+
+/// Instantiates an eval-declared attribute class for `ReflectionAttribute::newInstance()`.
+fn eval_reflection_attribute_new_instance_result(
+    attribute: &EvalAttribute,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(class) = context.class(attribute.name()).cloned() else {
+        return values.null();
+    };
+    let args = eval_reflection_attribute_arg_values(attribute, values)?;
+    let mut scope = ElephcEvalScope::new();
+    eval_dynamic_class_new_object(&class, positional_args(args), context, &mut scope, values)
+}
+
+/// Materializes eval attribute literal arguments as constructor argument cells.
+fn eval_reflection_attribute_arg_values(
+    attribute: &EvalAttribute,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let Some(args) = attribute.args() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    args.iter()
+        .map(|arg| eval_reflection_attribute_arg_value(arg, values))
+        .collect()
+}
+
+/// Materializes one eval attribute literal as a constructor argument cell.
+fn eval_reflection_attribute_arg_value(
+    arg: &EvalAttributeArg,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match arg {
+        EvalAttributeArg::String(value) => values.string(value),
+        EvalAttributeArg::Int(value) => values.int(*value),
+        EvalAttributeArg::Bool(value) => values.bool_value(*value),
+        EvalAttributeArg::Null => values.null(),
+    }
 }
 
 /// Resolves the method metadata visible from the current class scope.
