@@ -4855,6 +4855,44 @@ echo $box->readProtected(2);');
     assert_eq!(out.stdout, "7:7");
 }
 
+/// Verifies eval-declared readonly properties can be initialized only in constructors.
+#[test]
+fn test_eval_declared_readonly_property_rules() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReadonlyBox {
+    public readonly int $id;
+    public function __construct($id) { $this->id = $id; }
+    public function id() { return $this->id; }
+}
+$box = new EvalReadonlyBox(7);
+echo $box->id();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReadonlyFailBox {
+    public readonly int $id;
+    public function __construct($id) { $this->id = $id; }
+    public function replace($id) { $this->id = $id; }
+}
+$box = new EvalReadonlyFailBox(7);
+$box->replace(8);');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared static properties and static methods work through the bridge.
 #[test]
 fn test_eval_declared_static_members_and_late_static_binding() {

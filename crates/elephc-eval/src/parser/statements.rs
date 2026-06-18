@@ -354,7 +354,8 @@ impl Parser {
         traits: &mut Vec<String>,
         trait_adaptations: &mut Vec<EvalTraitAdaptation>,
     ) -> Result<(), EvalParseError> {
-        let (visibility, is_static, is_abstract, is_final) = self.parse_class_member_modifiers()?;
+        let (visibility, is_static, is_abstract, is_final, is_readonly) =
+            self.parse_class_member_modifiers()?;
 
         if is_abstract && is_final {
             return Err(EvalParseError::UnsupportedConstruct);
@@ -364,6 +365,7 @@ impl Parser {
             && !is_static
             && !is_abstract
             && !is_final
+            && !is_readonly
             && matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "use"))
         {
             self.parse_class_trait_use(traits, trait_adaptations)?;
@@ -371,7 +373,7 @@ impl Parser {
         }
 
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
-            if is_static || is_abstract || is_final {
+            if is_static || is_abstract || is_final || is_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             constants
@@ -380,6 +382,9 @@ impl Parser {
         }
 
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
+            if is_readonly {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             methods.push(self.parse_class_method_decl(
                 visibility.unwrap_or(EvalVisibility::Public),
                 is_static,
@@ -393,7 +398,7 @@ impl Parser {
         if is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        properties.push(self.parse_class_property_decl(visibility, is_static)?);
+        properties.push(self.parse_class_property_decl(visibility, is_static, is_readonly)?);
         Ok(())
     }
 
@@ -538,11 +543,12 @@ impl Parser {
     /// Parses method modifiers supported by eval class declarations.
     pub(super) fn parse_class_member_modifiers(
         &mut self,
-    ) -> Result<(Option<EvalVisibility>, bool, bool, bool), EvalParseError> {
+    ) -> Result<(Option<EvalVisibility>, bool, bool, bool, bool), EvalParseError> {
         let mut visibility = None;
         let mut is_static = false;
         let mut is_abstract = false;
         let mut is_final = false;
+        let mut is_readonly = false;
         loop {
             match self.current() {
                 TokenKind::Ident(name) if ident_eq(name, "public") => {
@@ -587,10 +593,17 @@ impl Parser {
                     is_final = true;
                     self.advance();
                 }
+                TokenKind::Ident(name) if ident_eq(name, "readonly") => {
+                    if is_readonly {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    is_readonly = true;
+                    self.advance();
+                }
                 TokenKind::Ident(name) if is_unsupported_class_member_modifier(name) => {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
-                _ => return Ok((visibility, is_static, is_abstract, is_final)),
+                _ => return Ok((visibility, is_static, is_abstract, is_final, is_readonly)),
             }
         }
     }
@@ -633,7 +646,11 @@ impl Parser {
         &mut self,
         visibility: EvalVisibility,
         is_static: bool,
+        is_readonly: bool,
     ) -> Result<EvalClassProperty, EvalParseError> {
+        if is_static && is_readonly {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
         self.skip_optional_property_type()?;
         let TokenKind::DollarIdent(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -641,13 +658,20 @@ impl Parser {
         let name = name.clone();
         self.advance();
         let default = if self.consume(TokenKind::Equal) {
+            if is_readonly {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             Some(self.parse_expr()?)
         } else {
             None
         };
         self.expect_semicolon()?;
-        Ok(EvalClassProperty::with_visibility_and_static(
-            name, visibility, is_static, default,
+        Ok(EvalClassProperty::with_visibility_static_and_readonly(
+            name,
+            visibility,
+            is_static,
+            is_readonly,
+            default,
         ))
     }
 
@@ -682,12 +706,13 @@ impl Parser {
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
     ) -> Result<(), EvalParseError> {
-        let (visibility, is_static, is_abstract, is_final) = self.parse_class_member_modifiers()?;
+        let (visibility, is_static, is_abstract, is_final, is_readonly) =
+            self.parse_class_member_modifiers()?;
         if is_abstract && is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
-            if is_static || is_abstract || is_final {
+            if is_static || is_abstract || is_final || is_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             constants
@@ -695,6 +720,9 @@ impl Parser {
             return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
+            if is_readonly {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             methods.push(self.parse_class_method_decl(
                 visibility.unwrap_or(EvalVisibility::Public),
                 is_static,
@@ -707,7 +735,7 @@ impl Parser {
         if is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        properties.push(self.parse_class_property_decl(visibility, is_static)?);
+        properties.push(self.parse_class_property_decl(visibility, is_static, is_readonly)?);
         Ok(())
     }
 
@@ -774,8 +802,9 @@ impl Parser {
             cases.push(self.parse_enum_case_decl()?);
             return Ok(());
         }
-        let (visibility, is_static, is_abstract, is_final) = self.parse_class_member_modifiers()?;
-        if is_abstract {
+        let (visibility, is_static, is_abstract, is_final, is_readonly) =
+            self.parse_class_member_modifiers()?;
+        if is_abstract || is_readonly {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {

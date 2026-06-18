@@ -1217,8 +1217,40 @@ pub(in crate::interpreter) fn eval_property_set_result(
         eval_dynamic_property_for_access(class.name(), property_name, context)
     {
         validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+        validate_eval_readonly_property_write(&declaring_class, &property, context)?;
     }
     values.property_set(object, property_name, value)
+}
+
+/// Rejects writes to readonly eval-declared properties outside their declaring constructor.
+fn validate_eval_readonly_property_write(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    if !property.is_readonly() {
+        return Ok(());
+    }
+    current_eval_method_is_declaring_constructor(declaring_class, context)
+        .then_some(())
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Returns true while executing `__construct` for the property declaring class.
+fn current_eval_method_is_declaring_constructor(
+    declaring_class: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    let Some(current_class) = context.current_class_scope() else {
+        return false;
+    };
+    if !same_eval_class_name(current_class, declaring_class) {
+        return false;
+    }
+    context
+        .current_function()
+        .and_then(|function| function.rsplit_once("::"))
+        .is_some_and(|(_, method)| method.eq_ignore_ascii_case("__construct"))
 }
 
 /// Resolves the property metadata visible from the current class scope, if any.
@@ -1307,6 +1339,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
         return Err(EvalStatus::RuntimeFatal);
     }
     validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+    validate_eval_readonly_property_write(&declaring_class, &property, context)?;
     if let Some(replaced) = context.set_static_property(&declaring_class, property.name(), value) {
         values.release(replaced)?;
     }
@@ -1591,6 +1624,8 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
         {
             let value = if let Some(default) = property.default() {
                 eval_expr(default, context, caller_scope, values)?
+            } else if property.is_readonly() {
+                continue;
             } else {
                 values.null()?
             };

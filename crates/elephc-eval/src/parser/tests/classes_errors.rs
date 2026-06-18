@@ -119,6 +119,37 @@ fn parse_fragment_accepts_private_and_protected_class_members() {
         ))]
     );
 }
+
+/// Verifies readonly property modifiers lower into dynamic class metadata.
+#[test]
+fn parse_fragment_accepts_readonly_class_property() {
+    let program = parse_fragment(b"class DynEvalReadonly { public readonly int $id; }")
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::new(
+            "DynEvalReadonly",
+            vec![EvalClassProperty::with_visibility_static_and_readonly(
+                "id",
+                EvalVisibility::Public,
+                false,
+                true,
+                None
+            )],
+            Vec::new()
+        ))]
+    );
+}
+
+/// Verifies eval rejects readonly property forms that PHP does not allow.
+#[test]
+fn parse_fragment_rejects_invalid_readonly_class_properties() {
+    parse_fragment(b"class DynEvalReadonlyDefault { public readonly int $id = 1; }")
+        .expect_err("readonly properties cannot have defaults in eval");
+    parse_fragment(b"class DynEvalReadonlyStatic { public static readonly int $id; }")
+        .expect_err("static properties cannot be readonly in eval");
+}
+
 /// Verifies abstract and final class modifiers lower into dynamic class metadata.
 #[test]
 fn parse_fragment_accepts_abstract_and_final_class_members() {

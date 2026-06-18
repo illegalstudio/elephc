@@ -724,6 +724,7 @@ pub struct EvalClassProperty {
     name: String,
     visibility: EvalVisibility,
     is_static: bool,
+    is_readonly: bool,
     default: Option<EvalExpr>,
 }
 
@@ -749,10 +750,22 @@ impl EvalClassProperty {
         is_static: bool,
         default: Option<EvalExpr>,
     ) -> Self {
+        Self::with_visibility_static_and_readonly(name, visibility, is_static, false, default)
+    }
+
+    /// Creates an eval class property with explicit storage and readonly metadata.
+    pub fn with_visibility_static_and_readonly(
+        name: impl Into<String>,
+        visibility: EvalVisibility,
+        is_static: bool,
+        is_readonly: bool,
+        default: Option<EvalExpr>,
+    ) -> Self {
         Self {
             name: name.into(),
             visibility,
             is_static,
+            is_readonly,
             default,
         }
     }
@@ -770,6 +783,11 @@ impl EvalClassProperty {
     /// Returns whether this property was declared `static`.
     pub const fn is_static(&self) -> bool {
         self.is_static
+    }
+
+    /// Returns whether this property was declared `readonly`.
+    pub const fn is_readonly(&self) -> bool {
+        self.is_readonly
     }
 
     /// Returns the property initializer expression, when one was declared.

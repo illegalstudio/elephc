@@ -130,12 +130,14 @@ containers to eval-declared functions.
 ## Classes and objects
 
 Eval-declared classes support inheritance, public/protected/private properties
-and methods, `__construct()`, abstract classes and methods, final classes and
-methods, trait composition with `insteadof` conflict resolution and `as`
-aliases/visibility adaptations, interface implementation checks, static
-properties, static methods, class constants, interface constants, trait
-constants, and `ClassName::class` literals. Member visibility is checked at
-runtime for eval-declared objects and static/class-constant accesses. `self::`,
+and methods, property-level `readonly`, `__construct()`, abstract classes and
+methods, final classes and methods, trait composition with `insteadof` conflict
+resolution and `as` aliases/visibility adaptations, interface implementation
+checks, static properties, static methods, class constants, interface
+constants, trait constants, and `ClassName::class` literals. Member visibility
+is checked at runtime for eval-declared objects and static/class-constant
+accesses. `readonly` eval properties may be assigned from the constructor of
+the declaring class and later writes fail as eval runtime fatals. `self::`,
 `parent::`, and late-bound `static::` work for supported static members, class
 constants, and class-name literals.
 
@@ -286,8 +288,8 @@ native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are enum trait-use declarations, property hooks,
-attributes/reflection metadata, readonly semantics, and generated/AOT dynamic
-static-method call forms.
+attributes/reflection metadata, `readonly class` declarations, and generated/AOT
+dynamic static-method call forms.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

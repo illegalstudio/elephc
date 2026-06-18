@@ -36,6 +36,7 @@ mod builtins_strings_text;
 mod builtins_symbols;
 mod builtins_system_network;
 mod class_constants;
+mod classes;
 mod control_flow;
 mod core;
 mod dynamic_calls;
