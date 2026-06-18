@@ -14,6 +14,7 @@ mod array_literals;
 mod builtins_arrays_core;
 mod builtins_arrays_iterators;
 mod builtins_arrays_sets;
+mod builtins_class_metadata;
 mod builtins_directory_streams;
 mod builtins_file_streams;
 mod builtins_filesystem_metadata;

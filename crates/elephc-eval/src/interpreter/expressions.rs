@@ -424,7 +424,16 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
         "class_alias" => eval_builtin_class_alias(args, context, scope, values),
+        "class_attribute_args" => {
+            eval_builtin_class_attribute_metadata(name, args, context, scope, values)
+        }
+        "class_attribute_names" | "class_get_attributes" => {
+            eval_builtin_class_attribute_metadata(name, args, context, scope, values)
+        }
         "class_exists" => eval_builtin_class_exists(args, context, scope, values),
+        "class_implements" | "class_parents" | "class_uses" => {
+            eval_builtin_class_relation(name, args, context, scope, values)
+        }
         "interface_exists" => eval_builtin_interface_exists(args, context, scope, values),
         "trait_exists" | "enum_exists" => {
             eval_builtin_class_like_exists(name, args, context, scope, values)

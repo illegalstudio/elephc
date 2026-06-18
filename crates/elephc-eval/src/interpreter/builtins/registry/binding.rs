@@ -142,7 +142,12 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_alias" => Some(&["class", "alias", "autoload"]),
+        "class_attribute_args" => Some(&["class_name", "attribute_name"]),
+        "class_attribute_names" | "class_get_attributes" => Some(&["class_name"]),
         "class_exists" => Some(&["class", "autoload"]),
+        "class_implements" | "class_parents" | "class_uses" => {
+            Some(&["object_or_class", "autoload"])
+        }
         "enum_exists" => Some(&["enum", "autoload"]),
         "interface_exists" => Some(&["interface", "autoload"]),
         "trait_exists" => Some(&["trait", "autoload"]),

@@ -12,6 +12,7 @@
 //! - Runtime value creation and PHP coercions still flow through `RuntimeValueOps`.
 
 mod arrays;
+mod class_metadata;
 mod filesystem;
 mod formatting;
 mod network_env;
@@ -23,6 +24,7 @@ mod symbols;
 mod time;
 
 pub(super) use arrays::*;
+pub(super) use class_metadata::*;
 pub(super) use filesystem::*;
 pub(super) use formatting::*;
 pub(super) use network_env::*;
