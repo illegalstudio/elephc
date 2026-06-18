@@ -19,4 +19,5 @@ mod exceptions_control;
 mod magic_comments;
 mod namespaces;
 mod operators;
+mod static_members;
 mod support;

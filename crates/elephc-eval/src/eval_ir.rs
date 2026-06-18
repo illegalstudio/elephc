@@ -100,6 +100,11 @@ pub enum EvalStmt {
         property: String,
         value: EvalExpr,
     },
+    StaticPropertySet {
+        class_name: String,
+        property: String,
+        value: EvalExpr,
+    },
     StaticVar {
         name: String,
         init: EvalExpr,
@@ -405,6 +410,7 @@ impl EvalTrait {
 pub struct EvalClassProperty {
     name: String,
     visibility: EvalVisibility,
+    is_static: bool,
     default: Option<EvalExpr>,
 }
 
@@ -420,9 +426,20 @@ impl EvalClassProperty {
         visibility: EvalVisibility,
         default: Option<EvalExpr>,
     ) -> Self {
+        Self::with_visibility_and_static(name, visibility, false, default)
+    }
+
+    /// Creates an eval class property with explicit PHP visibility and static metadata.
+    pub fn with_visibility_and_static(
+        name: impl Into<String>,
+        visibility: EvalVisibility,
+        is_static: bool,
+        default: Option<EvalExpr>,
+    ) -> Self {
         Self {
             name: name.into(),
             visibility,
+            is_static,
             default,
         }
     }
@@ -435,6 +452,11 @@ impl EvalClassProperty {
     /// Returns the PHP visibility declared for this property.
     pub const fn visibility(&self) -> EvalVisibility {
         self.visibility
+    }
+
+    /// Returns whether this property was declared `static`.
+    pub const fn is_static(&self) -> bool {
+        self.is_static
     }
 
     /// Returns the property initializer expression, when one was declared.
@@ -456,6 +478,7 @@ pub enum EvalVisibility {
 pub struct EvalClassMethod {
     name: String,
     visibility: EvalVisibility,
+    is_static: bool,
     is_abstract: bool,
     is_final: bool,
     params: Vec<String>,
@@ -479,6 +502,7 @@ impl EvalClassMethod {
         Self::with_visibility_and_modifiers(
             name,
             EvalVisibility::Public,
+            false,
             is_abstract,
             is_final,
             params,
@@ -490,6 +514,7 @@ impl EvalClassMethod {
     pub fn with_visibility_and_modifiers(
         name: impl Into<String>,
         visibility: EvalVisibility,
+        is_static: bool,
         is_abstract: bool,
         is_final: bool,
         params: Vec<String>,
@@ -498,6 +523,7 @@ impl EvalClassMethod {
         Self {
             name: name.into(),
             visibility,
+            is_static,
             is_abstract,
             is_final,
             params,
@@ -513,6 +539,11 @@ impl EvalClassMethod {
     /// Returns the PHP visibility declared for this method.
     pub const fn visibility(&self) -> EvalVisibility {
         self.visibility
+    }
+
+    /// Returns whether this method was declared `static`.
+    pub const fn is_static(&self) -> bool {
+        self.is_static
     }
 
     /// Returns whether this eval-declared method was declared `abstract`.
@@ -583,6 +614,15 @@ pub enum EvalExpr {
     NewObject {
         class_name: String,
         args: Vec<EvalCallArg>,
+    },
+    StaticMethodCall {
+        class_name: String,
+        method: String,
+        args: Vec<EvalCallArg>,
+    },
+    StaticPropertyGet {
+        class_name: String,
+        property: String,
     },
     NullCoalesce {
         value: Box<EvalExpr>,

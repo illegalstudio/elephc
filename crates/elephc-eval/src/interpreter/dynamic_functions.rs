@@ -285,6 +285,7 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
             | EvalStmt::PropertySet { .. }
             | EvalStmt::ReferenceAssign { .. }
             | EvalStmt::Return(_)
+            | EvalStmt::StaticPropertySet { .. }
             | EvalStmt::StoreVar { .. }
             | EvalStmt::Throw(_)
             | EvalStmt::TraitDecl(_)

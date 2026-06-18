@@ -63,7 +63,16 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Return(Some(expr))])
             }
-            TokenKind::Ident(name) if ident_eq(name, "static") => self.parse_static_var_stmt(),
+            TokenKind::Ident(name)
+                if ident_eq(name, "static") && self.current_starts_static_property_assignment() =>
+            {
+                self.parse_static_property_set_stmt(true)
+            }
+            TokenKind::Ident(name)
+                if ident_eq(name, "static") && !matches!(self.peek(), TokenKind::DoubleColon) =>
+            {
+                self.parse_static_var_stmt()
+            }
             TokenKind::Ident(name) if ident_eq(name, "switch") => self.parse_switch_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "throw") => self.parse_throw_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "try") => self.parse_try_stmt(),
@@ -78,6 +87,11 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
             TokenKind::Ident(name) if is_unsupported_statement_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
+            }
+            TokenKind::Ident(_) | TokenKind::Backslash
+                if self.current_starts_static_property_assignment() =>
+            {
+                self.parse_static_property_set_stmt(true)
             }
             TokenKind::PlusPlus | TokenKind::MinusMinus => self.parse_prefix_inc_dec_stmt(true),
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
@@ -102,6 +116,36 @@ impl Parser {
                 Ok(vec![EvalStmt::Expr(expr)])
             }
         }
+    }
+
+    /// Returns true when the current tokens form `Class::$property <assign-op>`.
+    pub(super) fn current_starts_static_property_assignment(&self) -> bool {
+        let mut pos = self.pos;
+        if matches!(self.tokens.get(pos), Some(TokenKind::Backslash)) {
+            pos += 1;
+        }
+        if !matches!(self.tokens.get(pos), Some(TokenKind::Ident(_))) {
+            return false;
+        }
+        pos += 1;
+        while matches!(self.tokens.get(pos), Some(TokenKind::Backslash)) {
+            pos += 1;
+            if !matches!(self.tokens.get(pos), Some(TokenKind::Ident(_))) {
+                return false;
+            }
+            pos += 1;
+        }
+        if !matches!(self.tokens.get(pos), Some(TokenKind::DoubleColon)) {
+            return false;
+        }
+        pos += 1;
+        let Some(TokenKind::DollarIdent(_)) = self.tokens.get(pos) else {
+            return false;
+        };
+        pos += 1;
+        self.tokens
+            .get(pos)
+            .is_some_and(|token| assignment_op(token).is_some())
     }
 
     /// Parses `do { ... } while (expr);`.
@@ -296,13 +340,14 @@ impl Parser {
         methods: &mut Vec<EvalClassMethod>,
         traits: &mut Vec<String>,
     ) -> Result<(), EvalParseError> {
-        let (visibility, is_abstract, is_final) = self.parse_class_member_modifiers()?;
+        let (visibility, is_static, is_abstract, is_final) = self.parse_class_member_modifiers()?;
 
         if is_abstract && is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
 
         if visibility.is_none()
+            && !is_static
             && !is_abstract
             && !is_final
             && matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "use"))
@@ -314,19 +359,18 @@ impl Parser {
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
             methods.push(self.parse_class_method_decl(
                 visibility.unwrap_or(EvalVisibility::Public),
+                is_static,
                 is_abstract,
                 is_final,
             )?);
             return Ok(());
         }
 
-        let Some(visibility) = visibility else {
-            return Err(EvalParseError::UnsupportedConstruct);
-        };
+        let visibility = visibility.unwrap_or(EvalVisibility::Public);
         if is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        properties.push(self.parse_class_property_decl(visibility)?);
+        properties.push(self.parse_class_property_decl(visibility, is_static)?);
         Ok(())
     }
 
@@ -349,8 +393,9 @@ impl Parser {
     /// Parses method modifiers supported by eval class declarations.
     pub(super) fn parse_class_member_modifiers(
         &mut self,
-    ) -> Result<(Option<EvalVisibility>, bool, bool), EvalParseError> {
+    ) -> Result<(Option<EvalVisibility>, bool, bool, bool), EvalParseError> {
         let mut visibility = None;
+        let mut is_static = false;
         let mut is_abstract = false;
         let mut is_final = false;
         loop {
@@ -376,6 +421,13 @@ impl Parser {
                     visibility = Some(EvalVisibility::Private);
                     self.advance();
                 }
+                TokenKind::Ident(name) if ident_eq(name, "static") => {
+                    if is_static {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    is_static = true;
+                    self.advance();
+                }
                 TokenKind::Ident(name) if ident_eq(name, "abstract") => {
                     if is_abstract {
                         return Err(EvalParseError::UnsupportedConstruct);
@@ -393,7 +445,7 @@ impl Parser {
                 TokenKind::Ident(name) if is_unsupported_class_member_modifier(name) => {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
-                _ => return Ok((visibility, is_abstract, is_final)),
+                _ => return Ok((visibility, is_static, is_abstract, is_final)),
             }
         }
     }
@@ -402,6 +454,7 @@ impl Parser {
     pub(super) fn parse_class_method_decl(
         &mut self,
         visibility: EvalVisibility,
+        is_static: bool,
         is_abstract: bool,
         is_final: bool,
     ) -> Result<EvalClassMethod, EvalParseError> {
@@ -422,6 +475,7 @@ impl Parser {
         Ok(EvalClassMethod::with_visibility_and_modifiers(
             name,
             visibility,
+            is_static,
             is_abstract,
             is_final,
             params,
@@ -433,6 +487,7 @@ impl Parser {
     pub(super) fn parse_class_property_decl(
         &mut self,
         visibility: EvalVisibility,
+        is_static: bool,
     ) -> Result<EvalClassProperty, EvalParseError> {
         self.skip_optional_property_type()?;
         let TokenKind::DollarIdent(name) = self.current() else {
@@ -446,8 +501,8 @@ impl Parser {
             None
         };
         self.expect_semicolon()?;
-        Ok(EvalClassProperty::with_visibility(
-            name, visibility, default,
+        Ok(EvalClassProperty::with_visibility_and_static(
+            name, visibility, is_static, default,
         ))
     }
 
@@ -480,25 +535,24 @@ impl Parser {
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
     ) -> Result<(), EvalParseError> {
-        let (visibility, is_abstract, is_final) = self.parse_class_member_modifiers()?;
+        let (visibility, is_static, is_abstract, is_final) = self.parse_class_member_modifiers()?;
         if is_abstract && is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
             methods.push(self.parse_class_method_decl(
                 visibility.unwrap_or(EvalVisibility::Public),
+                is_static,
                 is_abstract,
                 is_final,
             )?);
             return Ok(());
         }
-        let Some(visibility) = visibility else {
-            return Err(EvalParseError::UnsupportedConstruct);
-        };
+        let visibility = visibility.unwrap_or(EvalVisibility::Public);
         if is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        properties.push(self.parse_class_property_decl(visibility)?);
+        properties.push(self.parse_class_property_decl(visibility, is_static)?);
         Ok(())
     }
 
@@ -1000,6 +1054,45 @@ impl Parser {
         }
         let value = assignment_value(&name, op, value);
         Ok(vec![EvalStmt::StoreVar { name, value }])
+    }
+
+    /// Parses `Class::$property = expr` and simple static-property compound assignments.
+    pub(super) fn parse_static_property_set_stmt(
+        &mut self,
+        require_semicolon: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let class_name = self.parse_qualified_name()?;
+        let class_name = self.resolve_static_class_name(class_name);
+        self.expect(TokenKind::DoubleColon)?;
+        let TokenKind::DollarIdent(property) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let property = property.clone();
+        self.advance();
+        let Some(op) = assignment_op(self.current()) else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        self.advance();
+        let value = self.parse_expr()?;
+        if require_semicolon {
+            self.expect_semicolon()?;
+        }
+        let value = match op {
+            Some(op) => EvalExpr::Binary {
+                op,
+                left: Box::new(EvalExpr::StaticPropertyGet {
+                    class_name: class_name.clone(),
+                    property: property.clone(),
+                }),
+                right: Box::new(value),
+            },
+            None => value,
+        };
+        Ok(vec![EvalStmt::StaticPropertySet {
+            class_name,
+            property,
+            value,
+        }])
     }
 
     /// Parses prefix `++$name` and `--$name` as simple statement effects.

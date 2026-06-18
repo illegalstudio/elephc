@@ -109,6 +109,7 @@ fn parse_fragment_accepts_private_and_protected_class_members() {
                 EvalVisibility::Protected,
                 false,
                 false,
+                false,
                 Vec::new(),
                 vec![EvalStmt::Return(Some(EvalExpr::PropertyGet {
                     object: Box::new(EvalExpr::LoadVar("this".to_string())),

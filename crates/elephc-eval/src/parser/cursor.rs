@@ -131,7 +131,8 @@ pub(super) fn is_unsupported_statement_keyword(name: &str) -> bool {
 
 /// Returns true for class member modifiers outside the current eval class subset.
 pub(super) fn is_unsupported_class_member_modifier(name: &str) -> bool {
-    ["static"].iter().any(|modifier| ident_eq(name, modifier))
+    let _ = name;
+    false
 }
 
 /// Returns true when an identifier is an include/require expression construct.

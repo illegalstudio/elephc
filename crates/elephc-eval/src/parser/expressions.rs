@@ -457,7 +457,9 @@ impl Parser {
                 Err(EvalParseError::UnsupportedConstruct)
             }
             TokenKind::Backslash => self.parse_qualified_name_expr(),
-            TokenKind::Ident(_) if matches!(self.peek(), TokenKind::Backslash) => {
+            TokenKind::Ident(_)
+                if matches!(self.peek(), TokenKind::Backslash | TokenKind::DoubleColon) =>
+            {
                 self.parse_qualified_name_expr()
             }
             TokenKind::Ident(name) if matches!(self.peek(), TokenKind::LParen) => {
@@ -567,6 +569,10 @@ impl Parser {
     /// Parses an explicitly qualified call or constant-fetch expression.
     pub(super) fn parse_qualified_name_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
         let name = self.parse_qualified_name()?;
+        if self.consume(TokenKind::DoubleColon) {
+            let class_name = self.resolve_static_class_name(name);
+            return self.parse_static_member_expr(class_name);
+        }
         let name = self.resolve_qualified_name(name);
         if matches!(self.current(), TokenKind::LParen) {
             let args = self.parse_call_args()?;
@@ -576,6 +582,34 @@ impl Parser {
             });
         }
         Ok(EvalExpr::ConstFetch(name))
+    }
+
+    /// Parses `Class::$property` and `Class::method(...)` expressions.
+    pub(super) fn parse_static_member_expr(
+        &mut self,
+        class_name: String,
+    ) -> Result<EvalExpr, EvalParseError> {
+        match self.current() {
+            TokenKind::DollarIdent(property) => {
+                let property = property.clone();
+                self.advance();
+                Ok(EvalExpr::StaticPropertyGet {
+                    class_name,
+                    property,
+                })
+            }
+            TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen) => {
+                let method = method.to_ascii_lowercase();
+                self.advance();
+                let args = self.parse_call_args()?;
+                Ok(EvalExpr::StaticMethodCall {
+                    class_name,
+                    method,
+                    args,
+                })
+            }
+            _ => Err(EvalParseError::UnsupportedConstruct),
+        }
     }
 
     /// Parses `new ClassName(...)` expressions in eval fragments.
@@ -604,6 +638,18 @@ impl Parser {
             self.advance();
         }
         Ok(ParsedQualifiedName { name, absolute })
+    }
+
+    /// Resolves a class name used before `::`, preserving PHP relative class keywords.
+    pub(super) fn resolve_static_class_name(&self, name: ParsedQualifiedName) -> String {
+        if !name.absolute
+            && ["self", "parent", "static"]
+                .iter()
+                .any(|keyword| ident_eq(&name.name, keyword))
+        {
+            return name.name.to_ascii_lowercase();
+        }
+        self.resolve_class_name(name)
     }
 
     /// Builds a call expression, adding namespace fallback for unqualified names.

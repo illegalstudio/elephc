@@ -41,4 +41,5 @@ mod dynamic_calls;
 mod expressions;
 mod functions_namespaces;
 mod native_scope;
+mod static_members;
 mod support;

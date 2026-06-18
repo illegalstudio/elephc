@@ -107,7 +107,7 @@ pub(in crate::interpreter) fn execute_stmt(
             values,
         ),
         EvalStmt::ClassDecl(class) => {
-            execute_class_decl_stmt(class, context, values)?;
+            execute_class_decl_stmt(class, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::InterfaceDecl(interface) => {
@@ -180,6 +180,15 @@ pub(in crate::interpreter) fn execute_stmt(
             let object = eval_expr(object, context, scope, values)?;
             let value = eval_expr(value, context, scope, values)?;
             eval_property_set_result(object, property, value, context, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::StaticPropertySet {
+            class_name,
+            property,
+            value,
+        } => {
+            let value = eval_expr(value, context, scope, values)?;
+            eval_static_property_set_result(class_name, property, value, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {
@@ -349,6 +358,7 @@ pub(in crate::interpreter) fn catch_types_match_thrown(
 pub(in crate::interpreter) fn execute_class_decl_stmt(
     class: &EvalClass,
     context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let name = class.name().trim_start_matches('\\');
@@ -381,10 +391,34 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         validate_concrete_class_requirements(class, context)?;
     }
     if context.define_class(class.clone()) {
-        Ok(())
+        initialize_eval_static_properties(class, context, scope, values)
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Initializes static property cells for a newly declared eval class.
+fn initialize_eval_static_properties(
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for property in class
+        .properties()
+        .iter()
+        .filter(|property| property.is_static())
+    {
+        let value = if let Some(default) = property.default() {
+            eval_expr(default, context, scope, values)?
+        } else {
+            values.null()?
+        };
+        if let Some(replaced) = context.set_static_property(class.name(), property.name(), value) {
+            values.release(replaced)?;
+        }
+    }
+    Ok(())
 }
 
 /// Registers an eval-declared interface in the dynamic interface table.
@@ -560,6 +594,9 @@ fn validate_eval_class_modifiers(
         if method.is_abstract() && method.visibility() == EvalVisibility::Private {
             return Err(EvalStatus::RuntimeFatal);
         }
+        if method.is_static() && method.name().eq_ignore_ascii_case("__construct") {
+            return Err(EvalStatus::RuntimeFatal);
+        }
         if method.is_abstract() && !class.is_abstract() {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -582,6 +619,9 @@ fn validate_method_parent_override(
     };
     if parent_method.visibility() == EvalVisibility::Private {
         return Ok(());
+    }
+    if parent_method.is_static() != method.is_static() {
+        return Err(EvalStatus::RuntimeFatal);
     }
     if method_visibility_rank(method.visibility())
         < method_visibility_rank(parent_method.visibility())
@@ -727,6 +767,7 @@ fn class_has_interface_method(
 ) -> bool {
     if let Some(method) = class.method(requirement.name()) {
         return method.visibility() == EvalVisibility::Public
+            && !method.is_static()
             && !method.is_abstract()
             && method.params().len() == requirement.params().len();
     }
@@ -735,6 +776,7 @@ fn class_has_interface_method(
         .and_then(|parent| context.class_method(parent, requirement.name()))
         .is_some_and(|(_, method)| {
             method.visibility() == EvalVisibility::Public
+                && !method.is_static()
                 && !method.is_abstract()
                 && method.params().len() == requirement.params().len()
         })
@@ -803,6 +845,130 @@ fn eval_dynamic_property_for_access(
     context.class_property(object_class_name, property_name)
 }
 
+/// Reads one eval-declared static property after resolving the class-like receiver.
+pub(in crate::interpreter) fn eval_static_property_get_result(
+    class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    _values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let class_name = resolve_eval_static_class_name(class_name, context)?;
+    let (declaring_class, property) = context
+        .class_property(&class_name, property_name)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    if !property.is_static() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+    context
+        .static_property(&declaring_class, property.name())
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Writes one eval-declared static property after resolving the class-like receiver.
+pub(in crate::interpreter) fn eval_static_property_set_result(
+    class_name: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let class_name = resolve_eval_static_class_name(class_name, context)?;
+    let (declaring_class, property) = context
+        .class_property(&class_name, property_name)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    if !property.is_static() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+    if let Some(replaced) = context.set_static_property(&declaring_class, property.name(), value) {
+        values.release(replaced)?;
+    }
+    Ok(())
+}
+
+/// Dispatches a static method call to an eval-declared static method.
+pub(in crate::interpreter) fn eval_static_method_call_result(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let class_name = resolve_eval_static_class_name(class_name, context)?;
+    let (declaring_class, method) =
+        eval_dynamic_static_method_for_call(&class_name, method_name, context)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+    if !method.is_static() || method.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
+    eval_dynamic_static_method_with_values(
+        &declaring_class,
+        &class_name,
+        &method,
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Resolves a static method using private-method scope rules.
+fn eval_dynamic_static_method_for_call(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<(String, EvalClassMethod)> {
+    if let Some(current_class) = context.current_class_scope() {
+        if eval_classes_are_related(current_class, class_name, context) {
+            if let Some((declaring_class, method)) =
+                context.class_own_method(current_class, method_name)
+            {
+                if method.visibility() == EvalVisibility::Private {
+                    return Some((declaring_class, method));
+                }
+            }
+        }
+    }
+    context.class_method(class_name, method_name)
+}
+
+/// Resolves `self`, `parent`, and `static` for eval static member access.
+fn resolve_eval_static_class_name(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<String, EvalStatus> {
+    match class_name.to_ascii_lowercase().as_str() {
+        "self" => context
+            .current_class_scope()
+            .map(str::to_string)
+            .ok_or(EvalStatus::RuntimeFatal),
+        "static" => context
+            .current_called_class_scope()
+            .or_else(|| context.current_class_scope())
+            .map(str::to_string)
+            .ok_or(EvalStatus::RuntimeFatal),
+        "parent" => {
+            let current = context
+                .current_class_scope()
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            context
+                .class(current)
+                .and_then(EvalClass::parent)
+                .map(str::to_string)
+                .ok_or(EvalStatus::RuntimeFatal)
+        }
+        _ => context
+            .resolve_class_name(class_name)
+            .or_else(|| {
+                context
+                    .has_class(class_name)
+                    .then(|| class_name.to_string())
+            })
+            .ok_or(EvalStatus::RuntimeFatal),
+    }
+}
+
 /// Creates a backing object for an eval-declared class and runs its constructor.
 pub(in crate::interpreter) fn eval_dynamic_class_new_object(
     class: &EvalClass,
@@ -822,7 +988,11 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
         class_chain.push(class.clone());
     }
     for class in &class_chain {
-        for property in class.properties() {
+        for property in class
+            .properties()
+            .iter()
+            .filter(|property| !property.is_static())
+        {
             let value = if let Some(default) = property.default() {
                 eval_expr(default, context, caller_scope, values)?
             } else {
@@ -837,6 +1007,7 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
         validate_eval_member_access(&constructor_class, constructor.visibility(), context)?;
         eval_dynamic_method_with_values(
             &constructor_class,
+            class.name(),
             &constructor,
             object,
             evaluated_args,
@@ -863,14 +1034,17 @@ pub(in crate::interpreter) fn eval_method_call_result(
     let Some(class) = context.dynamic_object_class(identity) else {
         return values.method_call(object, method_name, evaluated_args);
     };
-    let (class_name, method) = eval_dynamic_method_for_call(class.name(), method_name, context)
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    let called_class_name = class.name().to_string();
+    let (class_name, method) =
+        eval_dynamic_method_for_call(&called_class_name, method_name, context)
+            .ok_or(EvalStatus::RuntimeFatal)?;
     validate_eval_member_access(&class_name, method.visibility(), context)?;
-    if method.is_abstract() {
+    if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
     eval_dynamic_method_with_values(
         &class_name,
+        &called_class_name,
         &method,
         object,
         evaluated_args,
@@ -940,6 +1114,7 @@ fn eval_classes_are_related(left: &str, right: &str, context: &ElephcEvalContext
 /// Executes one eval-declared class method with `$this` bound in method scope.
 pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     class_name: &str,
+    called_class_name: &str,
     method: &EvalClassMethod,
     object: RuntimeCellHandle,
     evaluated_args: Vec<RuntimeCellHandle>,
@@ -958,6 +1133,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     let static_names = static_var_names(method.body());
     context.push_function(qualified_method_name.clone());
     context.push_class_scope(class_name.to_string());
+    context.push_called_class_scope(called_class_name.to_string());
     let result = execute_statements(method.body(), context, &mut method_scope, values);
     let persist_result = persist_static_locals(
         context,
@@ -966,6 +1142,51 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
         &method_scope,
         values,
     );
+    context.pop_called_class_scope();
+    context.pop_class_scope();
+    context.pop_function();
+    persist_result?;
+    match result? {
+        EvalControl::None => values.null(),
+        EvalControl::Return(result) => Ok(result),
+        EvalControl::Throw(result) => {
+            context.set_pending_throw(result);
+            Err(EvalStatus::UncaughtThrowable)
+        }
+        EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Executes one eval-declared static class method without binding `$this`.
+pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
+    class_name: &str,
+    called_class_name: &str,
+    method: &EvalClassMethod,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let evaluated_args =
+        bind_evaluated_function_args(method.params(), positional_args(evaluated_args))?;
+    let mut method_scope = ElephcEvalScope::new();
+    for (name, value) in method.params().iter().zip(evaluated_args) {
+        method_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);
+    }
+    let qualified_method_name =
+        format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
+    let static_names = static_var_names(method.body());
+    context.push_function(qualified_method_name.clone());
+    context.push_class_scope(class_name.to_string());
+    context.push_called_class_scope(called_class_name.to_string());
+    let result = execute_statements(method.body(), context, &mut method_scope, values);
+    let persist_result = persist_static_locals(
+        context,
+        &qualified_method_name,
+        &static_names,
+        &method_scope,
+        values,
+    );
+    context.pop_called_class_scope();
     context.pop_class_scope();
     context.pop_function();
     persist_result?;

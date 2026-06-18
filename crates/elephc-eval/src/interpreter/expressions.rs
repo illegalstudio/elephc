@@ -76,6 +76,18 @@ pub(in crate::interpreter) fn eval_expr(
                     .and_then(|object| values.construct_object(object, args).map(|()| object))
             }
         }
+        EvalExpr::StaticMethodCall {
+            class_name,
+            method,
+            args,
+        } => {
+            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+            eval_static_method_call_result(class_name, method, evaluated_args, context, values)
+        }
+        EvalExpr::StaticPropertyGet {
+            class_name,
+            property,
+        } => eval_static_property_get_result(class_name, property, context, values),
         EvalExpr::MethodCall {
             object,
             method,

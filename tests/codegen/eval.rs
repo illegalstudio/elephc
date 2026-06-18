@@ -4748,6 +4748,47 @@ echo $box->readProtected(2);');
     assert_eq!(out.stdout, "7:7");
 }
 
+/// Verifies eval-declared static properties and static methods work through the bridge.
+#[test]
+fn test_eval_declared_static_members_and_late_static_binding() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalStaticCounter {
+    public static int $count = 1;
+    public static function bump($step) {
+        self::$count += $step;
+        return self::$count;
+    }
+}
+class EvalStaticBase {
+    protected static int $n = 2;
+    public static function add($x) {
+        static::$n += $x;
+        return static::$n;
+    }
+    public static function baseRead() {
+        return self::$n;
+    }
+}
+class EvalStaticChild extends EvalStaticBase {
+    protected static int $n = 10;
+}
+echo EvalStaticCounter::$count . ":";
+echo EvalStaticCounter::bump(2) . ":";
+echo EvalStaticCounter::$count . ":";
+echo EvalStaticChild::add(4) . ":";
+echo EvalStaticBase::add(3) . ":";
+echo EvalStaticBase::baseRead();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "1:3:3:14:5:5");
+}
+
 /// Verifies eval rejects private member access from outside the declaring class.
 #[test]
 fn test_eval_declared_private_member_access_fails() {
@@ -4758,6 +4799,23 @@ eval('class EvalPrivateAccessBox {
 }
 $box = new EvalPrivateAccessBox();
 echo $box->secret;');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval rejects private static member access from outside the declaring class.
+#[test]
+fn test_eval_declared_private_static_member_access_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalPrivateStaticAccessBox {
+    private static int $secret = 4;
+}
+echo EvalPrivateStaticAccessBox::$secret;');
 "#,
     );
     assert!(

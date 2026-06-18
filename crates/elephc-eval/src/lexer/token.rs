@@ -75,6 +75,7 @@ pub(crate) enum TokenKind {
     RBrace,
     Comma,
     Colon,
+    DoubleColon,
     Backslash,
     Eof,
 }

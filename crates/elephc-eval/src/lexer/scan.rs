@@ -286,7 +286,12 @@ impl<'a> Lexer<'a> {
             }
             ':' => {
                 self.bump_char();
-                Ok(TokenKind::Colon)
+                if self.peek_char() == Some(':') {
+                    self.bump_char();
+                    Ok(TokenKind::DoubleColon)
+                } else {
+                    Ok(TokenKind::Colon)
+                }
             }
             '\\' => {
                 self.bump_char();

@@ -101,11 +101,13 @@ pub struct ElephcEvalContext {
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
+    static_properties: HashMap<(String, String), RuntimeCellHandle>,
     included_files: HashSet<String>,
     dynamic_objects: HashMap<u64, String>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     class_stack: Vec<String>,
+    called_class_stack: Vec<String>,
     pending_throw: Option<RuntimeCellHandle>,
     spl_autoload_extensions: String,
     streams: EvalStreamResources,
@@ -133,11 +135,13 @@ impl ElephcEvalContext {
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
+            static_properties: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
+            called_class_stack: Vec::new(),
             pending_throw: None,
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
@@ -166,11 +170,13 @@ impl ElephcEvalContext {
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             static_locals: HashMap::new(),
+            static_properties: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
+            called_class_stack: Vec::new(),
             pending_throw: None,
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
@@ -668,6 +674,26 @@ impl ElephcEvalContext {
         previous.filter(|previous| *previous != cell)
     }
 
+    /// Returns a stored static property cell for an eval-declared class.
+    pub fn static_property(&self, class_name: &str, name: &str) -> Option<RuntimeCellHandle> {
+        self.static_properties
+            .get(&(normalize_class_name(class_name), name.to_string()))
+            .copied()
+    }
+
+    /// Stores one eval static property cell and returns any replaced distinct cell.
+    pub fn set_static_property(
+        &mut self,
+        class_name: &str,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let previous = self
+            .static_properties
+            .insert((normalize_class_name(class_name), name.into()), cell);
+        previous.filter(|previous| *previous != cell)
+    }
+
     /// Returns true when an eval include key was already loaded by this context.
     pub fn has_included_file(&self, path: &str) -> bool {
         self.included_files.contains(path)
@@ -722,6 +748,21 @@ impl ElephcEvalContext {
     /// Returns the current eval class scope, if execution is inside a method.
     pub fn current_class_scope(&self) -> Option<&str> {
         self.class_stack.last().map(String::as_str)
+    }
+
+    /// Pushes the class name used to dispatch the current eval method call.
+    pub fn push_called_class_scope(&mut self, name: impl Into<String>) {
+        self.called_class_stack.push(name.into());
+    }
+
+    /// Pops the current late-static-bound eval class scope.
+    pub fn pop_called_class_scope(&mut self) {
+        self.called_class_stack.pop();
+    }
+
+    /// Returns the current late-static-bound eval class scope, if execution is inside a method.
+    pub fn current_called_class_scope(&self) -> Option<&str> {
+        self.called_class_stack.last().map(String::as_str)
     }
 
     /// Records a Throwable cell that escaped from an eval-executed function call.
