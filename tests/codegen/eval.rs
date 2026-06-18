@@ -4621,6 +4621,52 @@ echo count($implements) . ":" . $implements["EvalDynNamedReader"] . ":" . $imple
     );
 }
 
+/// Verifies eval-declared abstract classes can defer interface methods to concrete children.
+#[test]
+fn test_eval_declared_abstract_class_and_final_method_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalAbstractContract {
+    function read($n);
+}
+abstract class EvalAbstractBase implements EvalAbstractContract {
+    abstract public function read($n);
+    final public function label() { return "base"; }
+    public function wrap($n) { return $this->read($n) + 1; }
+}
+class EvalAbstractChild extends EvalAbstractBase {
+    public function read($n) { return $n + 2; }
+}
+$box = new EvalAbstractChild();
+echo $box->wrap(5) . ":";
+echo $box->label() . ":";
+echo is_a($box, "EvalAbstractContract") ? "iface" : "bad"; echo ":";
+echo is_subclass_of($box, "EvalAbstractBase") ? "abstract" : "bad";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "8:base:iface:abstract");
+}
+
+/// Verifies eval-declared final classes cannot be extended.
+#[test]
+fn test_eval_declared_final_class_extension_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('final class EvalFinalBase {}
+class EvalFinalChild extends EvalFinalBase {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {

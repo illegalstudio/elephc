@@ -238,6 +238,8 @@ impl EvalInterfaceMethod {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalClass {
     name: String,
+    is_abstract: bool,
+    is_final: bool,
     parent: Option<String>,
     interfaces: Vec<String>,
     properties: Vec<EvalClassProperty>,
@@ -251,7 +253,7 @@ impl EvalClass {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
-        Self::with_relations(name, None, Vec::new(), properties, methods)
+        Self::with_modifiers(name, false, false, None, Vec::new(), properties, methods)
     }
 
     /// Creates a dynamic eval class with optional parent and implemented interfaces.
@@ -262,8 +264,23 @@ impl EvalClass {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
+        Self::with_modifiers(name, false, false, parent, interfaces, properties, methods)
+    }
+
+    /// Creates a dynamic eval class with optional modifiers, parent, and interfaces.
+    pub fn with_modifiers(
+        name: impl Into<String>,
+        is_abstract: bool,
+        is_final: bool,
+        parent: Option<String>,
+        interfaces: Vec<String>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
         Self {
             name: name.into(),
+            is_abstract,
+            is_final,
             parent,
             interfaces,
             properties,
@@ -274,6 +291,16 @@ impl EvalClass {
     /// Returns the original source spelling of this eval-declared class name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns whether this eval-declared class was declared `abstract`.
+    pub const fn is_abstract(&self) -> bool {
+        self.is_abstract
+    }
+
+    /// Returns whether this eval-declared class was declared `final`.
+    pub const fn is_final(&self) -> bool {
+        self.is_final
     }
 
     /// Returns the parent class name declared by this eval class, when present.
@@ -335,6 +362,8 @@ impl EvalClassProperty {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalClassMethod {
     name: String,
+    is_abstract: bool,
+    is_final: bool,
     params: Vec<String>,
     body: Vec<EvalStmt>,
 }
@@ -342,8 +371,21 @@ pub struct EvalClassMethod {
 impl EvalClassMethod {
     /// Creates a public eval class method with source-order parameters and body.
     pub fn new(name: impl Into<String>, params: Vec<String>, body: Vec<EvalStmt>) -> Self {
+        Self::with_modifiers(name, false, false, params, body)
+    }
+
+    /// Creates a public eval class method with optional abstract/final modifiers.
+    pub fn with_modifiers(
+        name: impl Into<String>,
+        is_abstract: bool,
+        is_final: bool,
+        params: Vec<String>,
+        body: Vec<EvalStmt>,
+    ) -> Self {
         Self {
             name: name.into(),
+            is_abstract,
+            is_final,
             params,
             body,
         }
@@ -352,6 +394,16 @@ impl EvalClassMethod {
     /// Returns the PHP-visible method name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns whether this eval-declared method was declared `abstract`.
+    pub const fn is_abstract(&self) -> bool {
+        self.is_abstract
+    }
+
+    /// Returns whether this eval-declared method was declared `final`.
+    pub const fn is_final(&self) -> bool {
+        self.is_final
     }
 
     /// Returns source-order parameter names without leading `$`.

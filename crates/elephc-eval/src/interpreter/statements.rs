@@ -355,17 +355,22 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
+    validate_eval_class_modifiers(class, context)?;
     if let Some(parent) = class.parent() {
-        if context.class(parent).is_none() || context.class_is_a(parent, name, false) {
+        let Some(parent_class) = context.class(parent) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        if parent_class.is_final() || context.class_is_a(parent, name, false) {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
     for interface in class.interfaces() {
-        if context.has_interface(interface) {
-            validate_class_implements_eval_interface(class, interface, context)?;
-        } else if !values.interface_exists(interface)? {
+        if !context.has_interface(interface) && !values.interface_exists(interface)? {
             return Err(EvalStatus::RuntimeFatal);
         }
+    }
+    if !class.is_abstract() {
+        validate_concrete_class_requirements(class, context)?;
     }
     if context.define_class(class.clone()) {
         Ok(())
@@ -389,7 +394,8 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
         return Err(EvalStatus::RuntimeFatal);
     }
     for parent in interface.parents() {
-        if context.interface_parent_names(parent)
+        if context
+            .interface_parent_names(parent)
             .iter()
             .any(|ancestor| ancestor.eq_ignore_ascii_case(name))
         {
@@ -403,6 +409,146 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
         Ok(())
     } else {
         Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Validates abstract/final modifiers on an eval-declared class and its methods.
+fn validate_eval_class_modifiers(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    if class.is_abstract() && class.is_final() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    for method in class.methods() {
+        if method.is_abstract() && method.is_final() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if method.is_abstract() && !class.is_abstract() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        validate_method_parent_override(class, method, context)?;
+    }
+    Ok(())
+}
+
+/// Validates one method declaration against inherited eval method metadata.
+fn validate_method_parent_override(
+    class: &EvalClass,
+    method: &EvalClassMethod,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    let Some(parent) = class.parent() else {
+        return Ok(());
+    };
+    let Some((_, parent_method)) = context.class_method(parent, method.name()) else {
+        return Ok(());
+    };
+    if parent_method.is_final() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if method.is_abstract() && !parent_method.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(())
+}
+
+/// Validates that a concrete class has satisfied inherited abstract and interface requirements.
+fn validate_concrete_class_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    if !pending_class_abstract_method_requirements(class, context).is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    for interface in pending_class_interface_names(class, context) {
+        if context.has_interface(&interface) {
+            validate_class_implements_eval_interface(class, &interface, context)?;
+        }
+    }
+    Ok(())
+}
+
+/// Returns inherited abstract methods that the pending class has not concretized.
+fn pending_class_abstract_method_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Vec<EvalClassMethod> {
+    let mut requirements = std::collections::HashMap::new();
+    if let Some(parent) = class.parent() {
+        collect_class_abstract_method_requirements(parent, context, &mut requirements);
+    }
+    apply_class_abstract_method_requirements(class, &mut requirements);
+    requirements.into_values().collect()
+}
+
+/// Collects abstract method requirements from one declared eval class ancestry chain.
+fn collect_class_abstract_method_requirements(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    requirements: &mut std::collections::HashMap<String, EvalClassMethod>,
+) {
+    let Some(class) = context.class(class_name) else {
+        return;
+    };
+    if let Some(parent) = class.parent() {
+        collect_class_abstract_method_requirements(parent, context, requirements);
+    }
+    apply_class_abstract_method_requirements(class, requirements);
+}
+
+/// Applies one class's methods to the open abstract-method requirement set.
+fn apply_class_abstract_method_requirements(
+    class: &EvalClass,
+    requirements: &mut std::collections::HashMap<String, EvalClassMethod>,
+) {
+    for method in class.methods() {
+        let key = method.name().to_ascii_lowercase();
+        if method.is_abstract() {
+            requirements.insert(key, method.clone());
+        } else {
+            requirements.remove(&key);
+        }
+    }
+}
+
+/// Returns interface names inherited or directly declared by a pending eval class.
+fn pending_class_interface_names(class: &EvalClass, context: &ElephcEvalContext) -> Vec<String> {
+    let mut interfaces = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(parent) = class.parent() {
+        for interface in context.class_interface_names(parent) {
+            push_pending_class_interface_name(&interface, &mut interfaces, &mut seen);
+        }
+    }
+    for interface in class.interfaces() {
+        push_pending_class_interface_tree(interface, context, &mut interfaces, &mut seen);
+    }
+    interfaces
+}
+
+/// Adds one interface and its eval-declared parent interfaces to a pending class list.
+fn push_pending_class_interface_tree(
+    interface: &str,
+    context: &ElephcEvalContext,
+    interfaces: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    push_pending_class_interface_name(interface, interfaces, seen);
+    for parent in context.interface_parent_names(interface) {
+        push_pending_class_interface_name(&parent, interfaces, seen);
+    }
+}
+
+/// Adds one interface name once using PHP class-name case-insensitive matching.
+fn push_pending_class_interface_name(
+    interface: &str,
+    interfaces: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let interface = interface.trim_start_matches('\\');
+    if seen.insert(interface.to_ascii_lowercase()) {
+        interfaces.push(interface.to_string());
     }
 }
 
@@ -427,12 +573,14 @@ fn class_has_interface_method(
     context: &ElephcEvalContext,
 ) -> bool {
     if let Some(method) = class.method(requirement.name()) {
-        return method.params().len() == requirement.params().len();
+        return !method.is_abstract() && method.params().len() == requirement.params().len();
     }
     class
         .parent()
         .and_then(|parent| context.class_method(parent, requirement.name()))
-        .is_some_and(|(_, method)| method.params().len() == requirement.params().len())
+        .is_some_and(|(_, method)| {
+            !method.is_abstract() && method.params().len() == requirement.params().len()
+        })
 }
 
 /// Creates a backing object for an eval-declared class and runs its constructor.
@@ -443,6 +591,9 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if class.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     let object = values.new_object("stdClass")?;
     let identity = values.object_identity(object)?;
     context.register_dynamic_object(identity, class.name());
@@ -494,6 +645,9 @@ pub(in crate::interpreter) fn eval_method_call_result(
     let (class_name, method) = context
         .class_method(class.name(), method_name)
         .ok_or(EvalStatus::RuntimeFatal)?;
+    if method.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     eval_dynamic_method_with_values(
         &class_name,
         &method,
