@@ -123,9 +123,8 @@ fn function_exists_reports_declared_eval_function() {
     let existing = b"DYN_PROBE";
     let missing = b"missing";
 
-    let existing_result = unsafe {
-        __elephc_eval_function_exists(&ctx, existing.as_ptr(), existing.len() as u64)
-    };
+    let existing_result =
+        unsafe { __elephc_eval_function_exists(&ctx, existing.as_ptr(), existing.len() as u64) };
     let missing_result =
         unsafe { __elephc_eval_function_exists(&ctx, missing.as_ptr(), missing.len() as u64) };
 
@@ -144,12 +143,10 @@ fn constant_exists_reports_defined_eval_constant() {
     let wrong_case = b"dynconstprobe";
     let missing = b"missing";
 
-    let existing_result = unsafe {
-        __elephc_eval_constant_exists(&ctx, existing.as_ptr(), existing.len() as u64)
-    };
-    let qualified_result = unsafe {
-        __elephc_eval_constant_exists(&ctx, qualified.as_ptr(), qualified.len() as u64)
-    };
+    let existing_result =
+        unsafe { __elephc_eval_constant_exists(&ctx, existing.as_ptr(), existing.len() as u64) };
+    let qualified_result =
+        unsafe { __elephc_eval_constant_exists(&ctx, qualified.as_ptr(), qualified.len() as u64) };
     let wrong_case_result = unsafe {
         __elephc_eval_constant_exists(&ctx, wrong_case.as_ptr(), wrong_case.len() as u64)
     };
@@ -182,12 +179,10 @@ fn dynamic_class_exists_reports_declared_eval_class() {
     let qualified_result = unsafe {
         __elephc_eval_dynamic_class_exists(&ctx, qualified.as_ptr(), qualified.len() as u64)
     };
-    let folded_result = unsafe {
-        __elephc_eval_dynamic_class_exists(&ctx, folded.as_ptr(), folded.len() as u64)
-    };
-    let missing_result = unsafe {
-        __elephc_eval_dynamic_class_exists(&ctx, missing.as_ptr(), missing.len() as u64)
-    };
+    let folded_result =
+        unsafe { __elephc_eval_dynamic_class_exists(&ctx, folded.as_ptr(), folded.len() as u64) };
+    let missing_result =
+        unsafe { __elephc_eval_dynamic_class_exists(&ctx, missing.as_ptr(), missing.len() as u64) };
 
     assert_eq!(existing_result, 1);
     assert_eq!(qualified_result, 1);

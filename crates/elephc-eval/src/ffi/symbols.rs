@@ -13,9 +13,9 @@
 use super::util::abi_name_to_string;
 #[cfg(not(test))]
 use super::util::clear_result;
-use crate::abi::{ElephcEvalContext, ABI_VERSION};
 #[cfg(not(test))]
 use crate::abi::ElephcEvalResult;
+use crate::abi::{ElephcEvalContext, ABI_VERSION};
 #[cfg(not(test))]
 use crate::errors::EvalStatus;
 #[cfg(not(test))]
@@ -64,10 +64,8 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_class_exists(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
-        eval_dynamic_class_exists_inner(ctx, name_ptr, name_len)
-    })
-    .unwrap_or(0)
+    std::panic::catch_unwind(|| unsafe { eval_dynamic_class_exists_inner(ctx, name_ptr, name_len) })
+        .unwrap_or(0)
 }
 
 /// Fetches a constant previously defined through `eval()`.
@@ -83,10 +81,8 @@ pub unsafe extern "C" fn __elephc_eval_constant_fetch(
     name_len: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
-        eval_constant_fetch_inner(ctx, name_ptr, name_len, out)
-    })
-    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+    std::panic::catch_unwind(|| unsafe { eval_constant_fetch_inner(ctx, name_ptr, name_len, out) })
+        .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
 /// Runs the eval function-exists ABI body after installing a panic boundary.

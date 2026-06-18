@@ -29,10 +29,7 @@ unsafe extern "C" {
 }
 
 /// Converts an ABI name byte slice into an owned Rust string.
-pub(crate) fn abi_name_to_string(
-    name_ptr: *const u8,
-    name_len: u64,
-) -> Result<String, EvalStatus> {
+pub(crate) fn abi_name_to_string(name_ptr: *const u8, name_len: u64) -> Result<String, EvalStatus> {
     if name_len > 0 && name_ptr.is_null() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -97,10 +94,7 @@ pub(crate) unsafe fn clear_result(out: *mut ElephcEvalResult) {
 
 /// Writes an eval execution outcome into optional ABI result storage.
 #[cfg(not(test))]
-pub(crate) unsafe fn write_outcome(
-    outcome: EvalOutcome,
-    out: *mut ElephcEvalResult,
-) -> EvalStatus {
+pub(crate) unsafe fn write_outcome(outcome: EvalOutcome, out: *mut ElephcEvalResult) -> EvalStatus {
     match outcome {
         EvalOutcome::Value(result) => {
             if !out.is_null() {

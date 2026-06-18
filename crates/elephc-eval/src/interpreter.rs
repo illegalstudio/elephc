@@ -138,8 +138,8 @@ const EVAL_STREAM_WRAPPERS: &[&str] = &[
 
 /// Built-in stream transports reported by eval `stream_get_transports()`.
 const EVAL_STREAM_TRANSPORTS: &[&str] = &[
-    "tcp", "udp", "unix", "udg", "tls", "ssl", "sslv2", "sslv3", "tlsv1.0", "tlsv1.1",
-    "tlsv1.2", "tlsv1.3",
+    "tcp", "udp", "unix", "udg", "tls", "ssl", "sslv2", "sslv3", "tlsv1.0", "tlsv1.1", "tlsv1.2",
+    "tlsv1.3",
 ];
 
 /// Monotonic salt mixed into eval `rand()`/`mt_rand()` and array key sampling.
@@ -295,10 +295,7 @@ unsafe extern "C" {
 
     /// Looks up one internet service entry by port and protocol.
     #[link_name = "getservbyport"]
-    fn libc_getservbyport(
-        port: libc::c_int,
-        proto: *const libc::c_char,
-    ) -> *mut libc::servent;
+    fn libc_getservbyport(port: libc::c_int, proto: *const libc::c_char) -> *mut libc::servent;
 }
 
 /// Runtime value hooks required by the EvalIR interpreter.
@@ -1903,9 +1900,7 @@ fn eval_positional_expr_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "abs" => eval_builtin_abs(args, context, scope, values),
-        "addslashes" | "stripslashes" => {
-            eval_builtin_slashes(name, args, context, scope, values)
-        }
+        "addslashes" | "stripslashes" => eval_builtin_slashes(name, args, context, scope, values),
         "array_combine" => eval_builtin_array_combine(args, context, scope, values),
         "array_chunk" => eval_builtin_array_chunk(args, context, scope, values),
         "array_column" => eval_builtin_array_column(args, context, scope, values),
@@ -2062,21 +2057,15 @@ fn eval_positional_expr_call(
         "preg_match" => eval_builtin_preg_match(args, context, scope, values),
         "preg_match_all" => eval_builtin_preg_match_all(args, context, scope, values),
         "preg_replace" => eval_builtin_preg_replace(args, context, scope, values),
-        "preg_replace_callback" => {
-            eval_builtin_preg_replace_callback(args, context, scope, values)
-        }
+        "preg_replace_callback" => eval_builtin_preg_replace_callback(args, context, scope, values),
         "preg_split" => eval_builtin_preg_split(args, context, scope, values),
         "print_r" => eval_builtin_print_r(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
         "rand" | "mt_rand" => eval_builtin_rand(args, context, scope, values),
         "random_int" => eval_builtin_random_int(args, context, scope, values),
         "range" => eval_builtin_range(args, context, scope, values),
-        "rawurldecode" | "urldecode" => {
-            eval_builtin_url_decode(name, args, context, scope, values)
-        }
-        "rawurlencode" | "urlencode" => {
-            eval_builtin_url_encode(name, args, context, scope, values)
-        }
+        "rawurldecode" | "urldecode" => eval_builtin_url_decode(name, args, context, scope, values),
+        "rawurlencode" | "urlencode" => eval_builtin_url_encode(name, args, context, scope, values),
         "readfile" => eval_builtin_readfile(args, context, scope, values),
         "readlink" => eval_builtin_readlink(args, context, scope, values),
         "realpath" => eval_builtin_realpath(args, context, scope, values),
@@ -2529,7 +2518,7 @@ fn eval_function_probe_exists(context: &ElephcEvalContext, name: &str) -> bool {
 fn eval_php_visible_builtin_exists(name: &str) -> bool {
     matches!(
         name,
-            "abs"
+        "abs"
             | "addslashes"
             | "array_chunk"
             | "array_column"
@@ -2908,9 +2897,10 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "array_walk" => Some(&["array", "callback"]),
         "uasort" | "uksort" | "usort" => Some(&["array", "callback"]),
         "array_flip" | "array_keys" | "array_pop" | "array_product" | "array_shift"
-        | "array_sum" | "array_unique" | "array_rand" | "array_values" | "arsort"
-        | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort"
-        | "shuffle" | "sort" => Some(&["array"]),
+        | "array_sum" | "array_unique" | "array_rand" | "array_values" | "arsort" | "asort"
+        | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort" | "shuffle" | "sort" => {
+            Some(&["array"])
+        }
         "array_push" | "array_unshift" => Some(&["array", "values"]),
         "array_key_exists" => Some(&["key", "array"]),
         "array_pad" => Some(&["array", "length", "value"]),
@@ -2927,11 +2917,9 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
             Some(&["string"])
         }
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
-        | "is_finite" | "is_float" | "is_infinite" | "is_int" | "is_integer"
-        | "is_iterable" | "is_long" | "is_nan" | "is_null" | "is_numeric" | "is_object"
-        | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => {
-            Some(&["value"])
-        }
+        | "is_finite" | "is_float" | "is_infinite" | "is_int" | "is_integer" | "is_iterable"
+        | "is_long" | "is_nan" | "is_null" | "is_numeric" | "is_object" | "is_real"
+        | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
         "settype" => Some(&["var", "type"]),
         "get_class" => Some(&["object"]),
         "get_parent_class" => Some(&["object_or_class"]),
@@ -3004,7 +2992,12 @@ fn eval_builtin_param_names(name: &str) -> Option<&'static [&'static str]> {
         "microtime" => Some(&["as_float"]),
         "mktime" => Some(&["hour", "minute", "second", "month", "day", "year"]),
         "nl2br" => Some(&["string", "use_xhtml"]),
-        "number_format" => Some(&["num", "decimals", "decimal_separator", "thousands_separator"]),
+        "number_format" => Some(&[
+            "num",
+            "decimals",
+            "decimal_separator",
+            "thousands_separator",
+        ]),
         "ord" => Some(&["character"]),
         "pathinfo" => Some(&["path", "flags"]),
         "pi" => Some(&[]),
@@ -3142,8 +3135,8 @@ fn eval_array_callable(
         return Err(EvalStatus::UnsupportedConstruct);
     }
     let method = values.array_get(callback, one)?;
-    let method = String::from_utf8(values.string_bytes(method)?)
-        .map_err(|_| EvalStatus::RuntimeFatal)?;
+    let method =
+        String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
     Ok(EvaluatedCallable::ObjectMethod { object, method })
 }
 
@@ -3352,9 +3345,7 @@ fn eval_builtin_with_values(
         }
         "array_splice" => {
             let result = match evaluated_args {
-                [array, offset] => {
-                    eval_array_splice_value_result(*array, *offset, None, values)?
-                }
+                [array, offset] => eval_array_splice_value_result(*array, *offset, None, values)?,
                 [array, offset, length] => {
                     eval_array_splice_value_result(*array, *offset, Some(*length), values)?
                 }
@@ -3780,13 +3771,9 @@ fn eval_builtin_with_values(
             [value, length, pad_string] => {
                 eval_str_pad_result(*value, *length, Some(*pad_string), None, values)?
             }
-            [value, length, pad_string, pad_type] => eval_str_pad_result(
-                *value,
-                *length,
-                Some(*pad_string),
-                Some(*pad_type),
-                values,
-            )?,
+            [value, length, pad_string, pad_type] => {
+                eval_str_pad_result(*value, *length, Some(*pad_string), Some(*pad_type), values)?
+            }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "str_split" => match evaluated_args {
@@ -3877,7 +3864,7 @@ fn eval_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_mktime_result(*hour, *minute, *second, *month, *day, *year, values)?
-        },
+        }
         "nl2br" => match evaluated_args {
             [value] => eval_nl2br_result(*value, true, values)?,
             [value, use_xhtml] => {
@@ -3950,16 +3937,14 @@ fn eval_builtin_with_values(
             [json, associative] => {
                 eval_json_decode_result(*json, Some(*associative), None, None, context, values)?
             }
-            [json, associative, depth] => {
-                eval_json_decode_result(
-                    *json,
-                    Some(*associative),
-                    Some(*depth),
-                    None,
-                    context,
-                    values,
-                )?
-            }
+            [json, associative, depth] => eval_json_decode_result(
+                *json,
+                Some(*associative),
+                Some(*depth),
+                None,
+                context,
+                values,
+            )?,
             [json, associative, depth, flags] => eval_json_decode_result(
                 *json,
                 Some(*associative),
@@ -3972,9 +3957,7 @@ fn eval_builtin_with_values(
         },
         "json_encode" => match evaluated_args {
             [value] => eval_json_encode_result(*value, None, None, context, values)?,
-            [value, flags] => {
-                eval_json_encode_result(*value, Some(*flags), None, context, values)?
-            }
+            [value, flags] => eval_json_encode_result(*value, Some(*flags), None, context, values)?,
             [value, flags, depth] => {
                 eval_json_encode_result(*value, Some(*flags), Some(*depth), context, values)?
             }
@@ -4866,8 +4849,15 @@ fn eval_builtin_array_pop_shift_call(
     }
     if matches!(
         name,
-        "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort"
-            | "shuffle" | "sort"
+        "arsort"
+            | "asort"
+            | "krsort"
+            | "ksort"
+            | "natcasesort"
+            | "natsort"
+            | "rsort"
+            | "shuffle"
+            | "sort"
     ) {
         return eval_builtin_array_sort_call(name, args, context, scope, values);
     }
@@ -4884,7 +4874,8 @@ fn eval_builtin_array_pop_shift_call(
     let EvalExpr::LoadVar(var_name) = arg.value() else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let Some(entry) = scope_entry(context, scope, var_name).filter(|entry| entry.flags().is_visible())
+    let Some(entry) =
+        scope_entry(context, scope, var_name).filter(|entry| entry.flags().is_visible())
     else {
         return Err(EvalStatus::RuntimeFatal);
     };
@@ -4919,7 +4910,8 @@ fn eval_builtin_array_push_unshift_call(
     for arg in &args[1..] {
         inserted.push(eval_expr(arg.value(), context, scope, values)?);
     }
-    let Some(entry) = scope_entry(context, scope, var_name).filter(|entry| entry.flags().is_visible())
+    let Some(entry) =
+        scope_entry(context, scope, var_name).filter(|entry| entry.flags().is_visible())
     else {
         return Err(EvalStatus::RuntimeFatal);
     };
@@ -5143,8 +5135,14 @@ fn eval_user_sort_entries_in_place(
     for pass in 0..entries.len() {
         let upper = entries.len().saturating_sub(pass + 1);
         for index in 0..upper {
-            let comparison =
-                eval_user_sort_compare(name, callback, &entries[index], &entries[index + 1], context, values)?;
+            let comparison = eval_user_sort_compare(
+                name,
+                callback,
+                &entries[index],
+                &entries[index + 1],
+                context,
+                values,
+            )?;
             if comparison > 0 {
                 entries.swap(index, index + 1);
             }
@@ -5406,9 +5404,9 @@ fn eval_array_natural_sort_key(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalArraySortKey, EvalStatus> {
     match values.type_tag(value)? {
-        EVAL_TAG_INT | EVAL_TAG_FLOAT => Ok(EvalArraySortKey::Numeric(eval_float_value(
-            value, values,
-        )?)),
+        EVAL_TAG_INT | EVAL_TAG_FLOAT => {
+            Ok(EvalArraySortKey::Numeric(eval_float_value(value, values)?))
+        }
         EVAL_TAG_STRING => {
             let mut bytes = values.string_bytes(value)?;
             if case_insensitive {
@@ -5426,9 +5424,9 @@ fn eval_array_sort_key(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalArraySortKey, EvalStatus> {
     match values.type_tag(value)? {
-        EVAL_TAG_INT | EVAL_TAG_FLOAT => Ok(EvalArraySortKey::Numeric(eval_float_value(
-            value, values,
-        )?)),
+        EVAL_TAG_INT | EVAL_TAG_FLOAT => {
+            Ok(EvalArraySortKey::Numeric(eval_float_value(value, values)?))
+        }
         EVAL_TAG_STRING => {
             let bytes = values.string_bytes(value)?;
             match eval_array_numeric_string_sort_key(&bytes) {
@@ -5480,8 +5478,7 @@ fn eval_natural_bytes_cmp(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
     let mut right_index = 0;
     while left_index < left.len() && right_index < right.len() {
         if left[left_index].is_ascii_digit() && right[right_index].is_ascii_digit() {
-            let order =
-                eval_natural_digit_run_cmp(left, &mut left_index, right, &mut right_index);
+            let order = eval_natural_digit_run_cmp(left, &mut left_index, right, &mut right_index);
             if order != std::cmp::Ordering::Equal {
                 return order;
             }
@@ -5688,7 +5685,9 @@ fn eval_array_splice_removed(
         let source_key = values.array_iter_key(array, position)?;
         let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
             let key = values.int(next_int_key)?;
-            next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            next_int_key = next_int_key
+                .checked_add(1)
+                .ok_or(EvalStatus::RuntimeFatal)?;
             key
         } else {
             source_key
@@ -5767,7 +5766,9 @@ fn eval_array_splice_replacement(
         let source_key = values.array_iter_key(array, position)?;
         let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
             let key = values.int(next_int_key)?;
-            next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            next_int_key = next_int_key
+                .checked_add(1)
+                .ok_or(EvalStatus::RuntimeFatal)?;
             key
         } else {
             source_key
@@ -5777,14 +5778,18 @@ fn eval_array_splice_replacement(
     }
     for value in inserted {
         let target_key = values.int(next_int_key)?;
-        next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+        next_int_key = next_int_key
+            .checked_add(1)
+            .ok_or(EvalStatus::RuntimeFatal)?;
         result = values.array_set(result, target_key, *value)?;
     }
     for position in end..len {
         let source_key = values.array_iter_key(array, position)?;
         let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
             let key = values.int(next_int_key)?;
-            next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            next_int_key = next_int_key
+                .checked_add(1)
+                .ok_or(EvalStatus::RuntimeFatal)?;
             key
         } else {
             source_key
@@ -5919,7 +5924,9 @@ fn eval_array_pop_shift_assoc_replacement(
     len: usize,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if name == "array_shift" && eval_array_remaining_keys_are_int(array, removed_position, len, values)? {
+    if name == "array_shift"
+        && eval_array_remaining_keys_are_int(array, removed_position, len, values)?
+    {
         return eval_array_pop_shift_indexed_replacement(array, removed_position, len, values);
     }
 
@@ -5932,7 +5939,9 @@ fn eval_array_pop_shift_assoc_replacement(
         let source_key = values.array_iter_key(array, position)?;
         let target_key = if name == "array_shift" && values.type_tag(source_key)? == EVAL_TAG_INT {
             let key = values.int(next_int_key)?;
-            next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            next_int_key = next_int_key
+                .checked_add(1)
+                .ok_or(EvalStatus::RuntimeFatal)?;
             key
         } else {
             source_key
@@ -5990,7 +5999,9 @@ fn eval_array_push_unshift_replacement(
         ("array_push", EVAL_TAG_ARRAY) => {
             eval_array_push_indexed_replacement(array, inserted, values)
         }
-        ("array_push", EVAL_TAG_ASSOC) => eval_array_push_assoc_replacement(array, inserted, values),
+        ("array_push", EVAL_TAG_ASSOC) => {
+            eval_array_push_assoc_replacement(array, inserted, values)
+        }
         ("array_unshift", EVAL_TAG_ARRAY) => {
             eval_array_unshift_indexed_replacement(array, inserted, values)
         }
@@ -6012,7 +6023,8 @@ fn eval_array_push_indexed_replacement(
     for position in 0..len {
         let source_key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, source_key)?;
-        let target_key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        let target_key =
+            values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
         result = values.array_set(result, target_key, value)?;
     }
     for (offset, value) in inserted.iter().copied().enumerate() {
@@ -6087,14 +6099,18 @@ fn eval_array_unshift_assoc_replacement(
     let mut next_int_key = 0_i64;
     for value in inserted.iter().copied() {
         let key = values.int(next_int_key)?;
-        next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+        next_int_key = next_int_key
+            .checked_add(1)
+            .ok_or(EvalStatus::RuntimeFatal)?;
         result = values.array_set(result, key, value)?;
     }
     for position in 0..len {
         let source_key = values.array_iter_key(array, position)?;
         let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
             let key = values.int(next_int_key)?;
-            next_int_key = next_int_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+            next_int_key = next_int_key
+                .checked_add(1)
+                .ok_or(EvalStatus::RuntimeFatal)?;
             key
         } else {
             source_key
@@ -6305,8 +6321,8 @@ fn eval_array_slice_result(
     for source_position in start..end {
         let source_key = values.array_iter_key(array, source_position)?;
         let source_value = values.array_get(array, source_key)?;
-        let target_key = i64::try_from(source_position - start)
-            .map_err(|_| EvalStatus::RuntimeFatal)?;
+        let target_key =
+            i64::try_from(source_position - start).map_err(|_| EvalStatus::RuntimeFatal)?;
         let target_key = values.int(target_key)?;
         result = values.array_set(result, target_key, source_value)?;
     }
@@ -6392,8 +6408,7 @@ fn eval_array_pad_result(
     }
 
     if target > 0 {
-        result =
-            eval_array_pad_append_repeated(result, output_index, pad_count, value, values)?.0;
+        result = eval_array_pad_append_repeated(result, output_index, pad_count, value, values)?.0;
     }
 
     Ok(result)
@@ -6581,7 +6596,13 @@ fn eval_iterator_apply_result(
         Ok(count) => count,
         Err(EvalStatus::UnsupportedConstruct) => {
             let iterator = values.method_call(iterator, "getiterator", Vec::new())?;
-            eval_iterator_apply_iterator_object(iterator, callback, &callback_args, context, values)?
+            eval_iterator_apply_iterator_object(
+                iterator,
+                callback,
+                &callback_args,
+                context,
+                values,
+            )?
         }
         Err(err) => return Err(err),
     };
@@ -6848,7 +6869,9 @@ fn eval_array_value_set_result(
         let key = values.array_iter_key(left, position)?;
         let value = values.array_get(left, key)?;
         let comparable = values.string_bytes(value)?;
-        let found = right_values.iter().any(|right_value| right_value == &comparable);
+        let found = right_values
+            .iter()
+            .any(|right_value| right_value == &comparable);
         let keep = match name {
             "array_diff" => !found,
             "array_intersect" => found,
@@ -7091,7 +7114,9 @@ fn eval_array_merge_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let left_len = values.array_len(left)?;
     let right_len = values.array_len(right)?;
-    let capacity = left_len.checked_add(right_len).ok_or(EvalStatus::RuntimeFatal)?;
+    let capacity = left_len
+        .checked_add(right_len)
+        .ok_or(EvalStatus::RuntimeFatal)?;
     let mut result = values.assoc_new(capacity)?;
     let mut next_numeric_key = 0_i64;
     result = eval_array_merge_append_operand(result, left, &mut next_numeric_key, values)?;
@@ -7802,7 +7827,11 @@ fn eval_format_sprintf_int(
         }
         _ => {
             let value = value as i128;
-            let magnitude = if value < 0 { (-value) as u128 } else { value as u128 };
+            let magnitude = if value < 0 {
+                (-value) as u128
+            } else {
+                value as u128
+            };
             if value < 0 {
                 output.push(b'-');
             } else if spec.force_sign {
@@ -8208,8 +8237,7 @@ fn eval_str_pad_result(
         Some(pad_type) => eval_int_value(pad_type, values)?,
         None => 1,
     };
-    let (left_pad, right_pad) =
-        eval_str_pad_sides(target_length - bytes.len(), pad_type)?;
+    let (left_pad, right_pad) = eval_str_pad_sides(target_length - bytes.len(), pad_type)?;
     let capacity = bytes
         .len()
         .checked_add(left_pad)
@@ -9061,9 +9089,8 @@ fn eval_push_date_token(
         b's' => eval_push_padded_number(output, i64::from(tm.tm_sec), 2),
         b'l' => output.extend_from_slice(EVAL_WEEKDAY_NAMES[eval_tm_weekday_index(tm)?].as_bytes()),
         b'F' => output.extend_from_slice(EVAL_MONTH_NAMES[eval_tm_month_index(tm)?].as_bytes()),
-        b'D' => {
-            output.extend_from_slice(EVAL_WEEKDAY_SHORT_NAMES[eval_tm_weekday_index(tm)?].as_bytes())
-        }
+        b'D' => output
+            .extend_from_slice(EVAL_WEEKDAY_SHORT_NAMES[eval_tm_weekday_index(tm)?].as_bytes()),
         b'M' => {
             output.extend_from_slice(EVAL_MONTH_SHORT_NAMES[eval_tm_month_index(tm)?].as_bytes())
         }
@@ -9755,7 +9782,9 @@ fn eval_filesize_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
-    let len = std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+    let len = std::fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
     values.int(i64::try_from(len).map_err(|_| EvalStatus::RuntimeFatal)?)
 }
 
@@ -10114,7 +10143,10 @@ fn eval_glob_matches(pattern: &str) -> Vec<String> {
             .collect();
     }
     let absolute = pattern.starts_with('/');
-    let components: Vec<&str> = pattern.split('/').filter(|component| !component.is_empty()).collect();
+    let components: Vec<&str> = pattern
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect();
     let mut matches = Vec::new();
     let base = if absolute {
         std::path::PathBuf::from("/")
@@ -10501,7 +10533,10 @@ fn eval_path_is_writable(path: &std::path::Path) -> bool {
     if !path.is_dir() {
         return false;
     }
-    let probe = path.join(format!(".elephc_eval_writable_probe_{}", std::process::id()));
+    let probe = path.join(format!(
+        ".elephc_eval_writable_probe_{}",
+        std::process::id()
+    ));
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -10860,7 +10895,14 @@ fn eval_fnmatch_at(
         filename_index == filename.len()
     } else {
         match pattern[pattern_index] {
-            b'*' => eval_fnmatch_star(pattern, filename, flags, pattern_index, filename_index, memo),
+            b'*' => eval_fnmatch_star(
+                pattern,
+                filename,
+                flags,
+                pattern_index,
+                filename_index,
+                memo,
+            ),
             b'?' => {
                 eval_fnmatch_single_wildcard(filename, flags, filename_index)
                     && eval_fnmatch_at(
@@ -11069,7 +11111,9 @@ fn eval_fnmatch_wildcard_can_consume(filename: &[u8], flags: i64, filename_index
     if flags & EVAL_FNM_PATHNAME != 0 && filename[filename_index] == b'/' {
         return false;
     }
-    if flags & EVAL_FNM_PERIOD != 0 && eval_fnmatch_is_leading_period(filename, flags, filename_index) {
+    if flags & EVAL_FNM_PERIOD != 0
+        && eval_fnmatch_is_leading_period(filename, flags, filename_index)
+    {
         return false;
     }
     true
@@ -11330,21 +11374,20 @@ fn eval_preg_match_all_pattern_order_array(
     for capture_index in 0..capture_count {
         let mut row = values.array_new(captures.len())?;
         for (match_index, capture) in captures.iter().enumerate() {
-            let key = values
-                .int(i64::try_from(match_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-            let value =
-                eval_preg_capture_value(
-                    subject,
-                    capture,
-                    capture_index,
-                    offset_capture,
-                    unmatched_as_null,
-                    values,
-                )?;
+            let key =
+                values.int(i64::try_from(match_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            let value = eval_preg_capture_value(
+                subject,
+                capture,
+                capture_index,
+                offset_capture,
+                unmatched_as_null,
+                values,
+            )?;
             row = values.array_set(row, key, value)?;
         }
-        let key = values
-            .int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        let key =
+            values.int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
         outer = values.array_set(outer, key, row)?;
     }
     Ok(outer)
@@ -11364,21 +11407,19 @@ fn eval_preg_match_all_set_order_array(
     for (match_index, capture) in captures.iter().enumerate() {
         let mut row = values.array_new(capture_count)?;
         for capture_index in 0..capture_count {
-            let key = values
-                .int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-            let value =
-                eval_preg_capture_value(
-                    subject,
-                    capture,
-                    capture_index,
-                    offset_capture,
-                    unmatched_as_null,
-                    values,
-                )?;
+            let key =
+                values.int(i64::try_from(capture_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+            let value = eval_preg_capture_value(
+                subject,
+                capture,
+                capture_index,
+                offset_capture,
+                unmatched_as_null,
+                values,
+            )?;
             row = values.array_set(row, key, value)?;
         }
-        let key = values
-            .int(i64::try_from(match_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        let key = values.int(i64::try_from(match_index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
         outer = values.array_set(outer, key, row)?;
     }
     Ok(outer)
@@ -11580,8 +11621,7 @@ struct EvalPregSplitPiece {
 
 /// Splits a PHP delimited regex into body bytes and supported modifiers.
 fn eval_preg_pattern_parts(pattern: &[u8]) -> Result<(Vec<u8>, EvalPregModifiers), EvalStatus> {
-    if pattern.len() < 2 || pattern[0].is_ascii_alphanumeric() || pattern[0].is_ascii_whitespace()
-    {
+    if pattern.len() < 2 || pattern[0].is_ascii_alphanumeric() || pattern[0].is_ascii_whitespace() {
         return Err(EvalStatus::RuntimeFatal);
     }
     let delimiter = pattern[0];
@@ -11726,9 +11766,9 @@ fn eval_preg_capture_value(
     let value = if matched.is_none() && unmatched_as_null {
         values.null()?
     } else {
-        let bytes = matched
-            .as_ref()
-            .map_or(b"".as_slice(), |matched| &subject[matched.start()..matched.end()]);
+        let bytes = matched.as_ref().map_or(b"".as_slice(), |matched| {
+            &subject[matched.start()..matched.end()]
+        });
         values.string_bytes_value(bytes)?
     };
     if !offset_capture {
@@ -11855,9 +11895,8 @@ fn eval_preg_split_flags(
         return Ok(0);
     };
     let flags = eval_int_value(flags, values)?;
-    let supported = EVAL_PREG_SPLIT_NO_EMPTY
-        | EVAL_PREG_SPLIT_DELIM_CAPTURE
-        | EVAL_PREG_SPLIT_OFFSET_CAPTURE;
+    let supported =
+        EVAL_PREG_SPLIT_NO_EMPTY | EVAL_PREG_SPLIT_DELIM_CAPTURE | EVAL_PREG_SPLIT_OFFSET_CAPTURE;
     if flags & !supported != 0 {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -12003,7 +12042,7 @@ fn eval_gethostbyname_result(
                     std::net::IpAddr::V6(_) => None,
                 })
                 .next()
-    });
+        });
     values.string(resolved.as_deref().unwrap_or_else(|| hostname.as_ref()))
 }
 
@@ -12685,8 +12724,7 @@ fn eval_base64_encode_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(value)?;
     let mut output = String::with_capacity(((bytes.len() + 2) / 3) * 4);
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     for chunk in bytes.chunks(3) {
         let first = chunk[0];
         let second = chunk.get(1).copied().unwrap_or(0);
@@ -13864,10 +13902,7 @@ fn eval_include_missing_file(
 }
 
 /// Resolves eval include paths using PHP's cwd-first and caller-directory fallback.
-fn eval_resolve_include_path(
-    path: &str,
-    context: &ElephcEvalContext,
-) -> std::path::PathBuf {
+fn eval_resolve_include_path(path: &str, context: &ElephcEvalContext) -> std::path::PathBuf {
     let raw_path = std::path::Path::new(path);
     if raw_path.is_absolute() || raw_path.exists() {
         return raw_path.to_path_buf();
@@ -14357,10 +14392,7 @@ fn eval_json_decode_number_to_cell(
 
 /// Returns true when one integer-grammar JSON number exceeds PHP's int range.
 fn eval_json_number_overflows_i64(value: &[u8]) -> bool {
-    if value
-        .iter()
-        .any(|byte| matches!(*byte, b'.' | b'e' | b'E'))
-    {
+    if value.iter().any(|byte| matches!(*byte, b'.' | b'e' | b'E')) {
         return false;
     }
     let (negative, digits) = if let Some(digits) = value.strip_prefix(b"-") {
@@ -14510,10 +14542,7 @@ fn eval_json_parse_error_status(error: JsonParseErrorKind) -> (i64, &'static str
             EVAL_JSON_ERROR_CTRL_CHAR,
             "Control character error, possibly incorrectly encoded",
         ),
-        JsonParseErrorKind::Utf8 => (
-            EVAL_JSON_ERROR_UTF8,
-            EVAL_JSON_UTF8_MESSAGE,
-        ),
+        JsonParseErrorKind::Utf8 => (EVAL_JSON_ERROR_UTF8, EVAL_JSON_UTF8_MESSAGE),
         JsonParseErrorKind::Utf16 => (
             EVAL_JSON_ERROR_UTF16,
             "Single unpaired UTF-16 surrogate in unicode escape",
@@ -14522,11 +14551,7 @@ fn eval_json_parse_error_status(error: JsonParseErrorKind) -> (i64, &'static str
 }
 
 /// Adds PHP's JSON line/column suffix to one base error message.
-fn eval_json_error_message_with_location(
-    message: &str,
-    bytes: &[u8],
-    offset: usize,
-) -> String {
+fn eval_json_error_message_with_location(message: &str, bytes: &[u8], offset: usize) -> String {
     let (line, column) = eval_json_error_location(bytes, offset);
     format!("{message} near location {line}:{column}")
 }
@@ -14652,9 +14677,7 @@ fn eval_json_encode_append_float(
     let bytes = values.string_bytes(value)?;
     output.extend_from_slice(&bytes);
     if flags & EVAL_JSON_PRESERVE_ZERO_FRACTION != 0
-        && !bytes
-            .iter()
-            .any(|byte| matches!(*byte, b'.' | b'e' | b'E'))
+        && !bytes.iter().any(|byte| matches!(*byte, b'.' | b'e' | b'E'))
     {
         output.extend_from_slice(b".0");
     }
@@ -14985,7 +15008,10 @@ fn eval_json_encode_append_invalid_utf8_bytes(
                 {
                     eval_json_encode_append_char(character, flags, output);
                 }
-                let invalid_len = error.error_len().unwrap_or(bytes.len() - valid.len()).max(1);
+                let invalid_len = error
+                    .error_len()
+                    .unwrap_or(bytes.len() - valid.len())
+                    .max(1);
                 if flags & EVAL_JSON_INVALID_UTF8_IGNORE == 0 {
                     eval_json_encode_append_char('\u{fffd}', flags, output);
                 }
@@ -15758,9 +15784,7 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "PREG_PATTERN_ORDER" => Some(EvalPredefinedConstant::Int(EVAL_PREG_PATTERN_ORDER)),
         "PREG_SET_ORDER" => Some(EvalPredefinedConstant::Int(EVAL_PREG_SET_ORDER)),
         "PREG_OFFSET_CAPTURE" => Some(EvalPredefinedConstant::Int(EVAL_PREG_OFFSET_CAPTURE)),
-        "PREG_UNMATCHED_AS_NULL" => {
-            Some(EvalPredefinedConstant::Int(EVAL_PREG_UNMATCHED_AS_NULL))
-        }
+        "PREG_UNMATCHED_AS_NULL" => Some(EvalPredefinedConstant::Int(EVAL_PREG_UNMATCHED_AS_NULL)),
         "JSON_ERROR_NONE" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_NONE)),
         "JSON_ERROR_DEPTH" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_DEPTH)),
         "JSON_ERROR_STATE_MISMATCH" => {
@@ -15771,14 +15795,12 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "JSON_ERROR_UTF8" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF8)),
         "JSON_ERROR_RECURSION" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_RECURSION)),
         "JSON_ERROR_INF_OR_NAN" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_INF_OR_NAN)),
-        "JSON_ERROR_UNSUPPORTED_TYPE" => {
-            Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UNSUPPORTED_TYPE))
-        }
-        "JSON_ERROR_INVALID_PROPERTY_NAME" => {
-            Some(EvalPredefinedConstant::Int(
-                EVAL_JSON_ERROR_INVALID_PROPERTY_NAME,
-            ))
-        }
+        "JSON_ERROR_UNSUPPORTED_TYPE" => Some(EvalPredefinedConstant::Int(
+            EVAL_JSON_ERROR_UNSUPPORTED_TYPE,
+        )),
+        "JSON_ERROR_INVALID_PROPERTY_NAME" => Some(EvalPredefinedConstant::Int(
+            EVAL_JSON_ERROR_INVALID_PROPERTY_NAME,
+        )),
         "JSON_ERROR_UTF16" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF16)),
         "JSON_HEX_TAG" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_TAG)),
         "JSON_HEX_AMP" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_AMP)),
@@ -15789,27 +15811,19 @@ fn eval_predefined_constant_value(name: &str) -> Option<EvalPredefinedConstant> 
         "JSON_NUMERIC_CHECK" => Some(EvalPredefinedConstant::Int(EVAL_JSON_NUMERIC_CHECK)),
         "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
         "JSON_UNESCAPED_UNICODE" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_UNICODE)),
-        "JSON_PARTIAL_OUTPUT_ON_ERROR" => {
-            Some(EvalPredefinedConstant::Int(
-                EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR,
-            ))
-        }
+        "JSON_PARTIAL_OUTPUT_ON_ERROR" => Some(EvalPredefinedConstant::Int(
+            EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR,
+        )),
         "JSON_PRETTY_PRINT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_PRETTY_PRINT)),
-        "JSON_PRESERVE_ZERO_FRACTION" => {
-            Some(EvalPredefinedConstant::Int(
-                EVAL_JSON_PRESERVE_ZERO_FRACTION,
-            ))
-        }
+        "JSON_PRESERVE_ZERO_FRACTION" => Some(EvalPredefinedConstant::Int(
+            EVAL_JSON_PRESERVE_ZERO_FRACTION,
+        )),
         "JSON_INVALID_UTF8_IGNORE" => {
-            Some(EvalPredefinedConstant::Int(
-                EVAL_JSON_INVALID_UTF8_IGNORE,
-            ))
+            Some(EvalPredefinedConstant::Int(EVAL_JSON_INVALID_UTF8_IGNORE))
         }
-        "JSON_INVALID_UTF8_SUBSTITUTE" => {
-            Some(EvalPredefinedConstant::Int(
-                EVAL_JSON_INVALID_UTF8_SUBSTITUTE,
-            ))
-        }
+        "JSON_INVALID_UTF8_SUBSTITUTE" => Some(EvalPredefinedConstant::Int(
+            EVAL_JSON_INVALID_UTF8_SUBSTITUTE,
+        )),
         "JSON_THROW_ON_ERROR" => Some(EvalPredefinedConstant::Int(EVAL_JSON_THROW_ON_ERROR)),
         "INF" => Some(EvalPredefinedConstant::Float(f64::INFINITY)),
         "NAN" => Some(EvalPredefinedConstant::Float(f64::NAN)),
@@ -15922,7 +15936,11 @@ mod tests {
                 FakeValue::Bytes(value) => eval_numeric_string_array_key(&value)
                     .map(FakeKey::Int)
                     .map_or_else(
-                        || Ok(FakeKey::String(String::from_utf8_lossy(&value).into_owned())),
+                        || {
+                            Ok(FakeKey::String(
+                                String::from_utf8_lossy(&value).into_owned(),
+                            ))
+                        },
                         Ok,
                     ),
                 FakeValue::Null => Ok(FakeKey::String(String::new())),
@@ -16100,10 +16118,7 @@ mod tests {
         }
 
         /// Returns the number of fake object properties in insertion order.
-        fn object_property_len(
-            &mut self,
-            object: RuntimeCellHandle,
-        ) -> Result<usize, EvalStatus> {
+        fn object_property_len(&mut self, object: RuntimeCellHandle) -> Result<usize, EvalStatus> {
             match self.get(object) {
                 FakeValue::Object(properties) => Ok(properties.len()),
                 FakeValue::Iterator { .. } => Ok(0),
@@ -16168,8 +16183,8 @@ mod tests {
                     let [arg] = args.as_slice() else {
                         return Err(EvalStatus::UnsupportedConstruct);
                     };
-                    let x = Self::object_property(&properties, "x")
-                        .ok_or(EvalStatus::RuntimeFatal)?;
+                    let x =
+                        Self::object_property(&properties, "x").ok_or(EvalStatus::RuntimeFatal)?;
                     let FakeValue::Int(x) = self.get(x) else {
                         return Err(EvalStatus::UnsupportedConstruct);
                     };
@@ -16182,8 +16197,8 @@ mod tests {
                     let [left, right] = args.as_slice() else {
                         return Err(EvalStatus::UnsupportedConstruct);
                     };
-                    let x = Self::object_property(&properties, "x")
-                        .ok_or(EvalStatus::RuntimeFatal)?;
+                    let x =
+                        Self::object_property(&properties, "x").ok_or(EvalStatus::RuntimeFatal)?;
                     let FakeValue::Int(x) = self.get(x) else {
                         return Err(EvalStatus::UnsupportedConstruct);
                     };
@@ -16261,7 +16276,9 @@ mod tests {
                 FakeValue::Object(_) if target_class.eq_ignore_ascii_case("KnownClass") => {
                     Ok(!exclude_self)
                 }
-                FakeValue::Object(_) if target_class.eq_ignore_ascii_case("ParentClass") => Ok(true),
+                FakeValue::Object(_) if target_class.eq_ignore_ascii_case("ParentClass") => {
+                    Ok(true)
+                }
                 _ => Ok(false),
             }
         }
@@ -16891,13 +16908,9 @@ mod tests {
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
-        let outcome = execute_program_outcome_with_context(
-            &mut context,
-            &program,
-            &mut scope,
-            &mut values,
-        )
-        .expect("throw should be an eval outcome");
+        let outcome =
+            execute_program_outcome_with_context(&mut context, &program, &mut scope, &mut values)
+                .expect("throw should be an eval outcome");
 
         match outcome {
             EvalOutcome::Throwable(value) => {
@@ -17104,16 +17117,14 @@ mod tests {
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
-        let outcome = execute_program_outcome_with_context(
-            &mut context,
-            &program,
-            &mut scope,
-            &mut values,
-        )
-        .expect("throw should be an eval outcome");
+        let outcome =
+            execute_program_outcome_with_context(&mut context, &program, &mut scope, &mut values)
+                .expect("throw should be an eval outcome");
 
         match outcome {
-            EvalOutcome::Throwable(value) => assert_eq!(values.type_tag(value), Ok(EVAL_TAG_OBJECT)),
+            EvalOutcome::Throwable(value) => {
+                assert_eq!(values.type_tag(value), Ok(EVAL_TAG_OBJECT))
+            }
             EvalOutcome::Value(value) => panic!("expected Throwable, got {:?}", values.get(value)),
         }
         assert_eq!(values.output, "finally");
@@ -17146,9 +17157,8 @@ mod tests {
             .new_object("Exception")
             .expect("allocate second fake exception");
 
-        let first =
-            execute_context_function(&mut context, "dyn", vec![first_thrown], &mut values)
-                .expect("execute first dynamic function call");
+        let first = execute_context_function(&mut context, "dyn", vec![first_thrown], &mut values)
+            .expect("execute first dynamic function call");
         let second =
             execute_context_function(&mut context, "dyn", vec![second_thrown], &mut values)
                 .expect("execute second dynamic function call");
@@ -17197,7 +17207,9 @@ mod tests {
         let mut values = FakeOps::default();
         execute_program_with_context(&mut context, &program, &mut scope, &mut values)
             .expect("declare dynamic function");
-        let thrown = values.new_object("Exception").expect("allocate fake exception");
+        let thrown = values
+            .new_object("Exception")
+            .expect("allocate fake exception");
 
         let outcome =
             execute_context_function_outcome(&mut context, "dyn", vec![thrown], &mut values)
@@ -17216,16 +17228,14 @@ mod tests {
         let mut context = ElephcEvalContext::new();
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
-        let thrown = values.new_object("Exception").expect("allocate fake exception");
+        let thrown = values
+            .new_object("Exception")
+            .expect("allocate fake exception");
         scope.set("e", thrown, ScopeCellOwnership::Borrowed);
 
-        let outcome = execute_program_outcome_with_context(
-            &mut context,
-            &program,
-            &mut scope,
-            &mut values,
-        )
-        .expect("nested throw should be an eval outcome");
+        let outcome =
+            execute_program_outcome_with_context(&mut context, &program, &mut scope, &mut values)
+                .expect("nested throw should be an eval outcome");
 
         match outcome {
             EvalOutcome::Throwable(value) => assert_eq!(value, thrown),
@@ -17252,7 +17262,8 @@ mod tests {
             ),
         )
         .expect("write include fixture");
-        let program = parse_fragment(br#"return include "piece.php";"#).expect("parse eval fragment");
+        let program =
+            parse_fragment(br#"return include "piece.php";"#).expect("parse eval fragment");
         let mut context = ElephcEvalContext::new();
         context.set_call_site(
             dir.join("main.php").to_string_lossy().into_owned(),
@@ -17279,10 +17290,8 @@ mod tests {
     /// Verifies regular include marks a file so later include_once skips it and returns true.
     #[test]
     fn execute_program_include_once_skips_regularly_included_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "elephc-eval-include-{}-once",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("elephc-eval-include-{}-once", std::process::id()));
         let path = dir.join("once.php");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create include_once fixture directory");
@@ -17308,8 +17317,10 @@ mod tests {
     /// Verifies missing include warns and returns false without aborting the eval program.
     #[test]
     fn execute_program_missing_include_warns_and_returns_false() {
-        let missing = std::env::temp_dir()
-            .join(format!("elephc-eval-missing-{}-include.php", std::process::id()));
+        let missing = std::env::temp_dir().join(format!(
+            "elephc-eval-missing-{}-include.php",
+            std::process::id()
+        ));
         let source = format!(r#"return include "{}";"#, missing.to_string_lossy());
         let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
         let mut context = ElephcEvalContext::new();
@@ -17326,17 +17337,18 @@ mod tests {
     /// Verifies missing require emits warnings and aborts the eval program.
     #[test]
     fn execute_program_missing_require_is_runtime_fatal() {
-        let missing = std::env::temp_dir()
-            .join(format!("elephc-eval-missing-{}-require.php", std::process::id()));
+        let missing = std::env::temp_dir().join(format!(
+            "elephc-eval-missing-{}-require.php",
+            std::process::id()
+        ));
         let source = format!(r#"require "{}";"#, missing.to_string_lossy());
         let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
         let mut context = ElephcEvalContext::new();
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
-        let err =
-            execute_program_with_context(&mut context, &program, &mut scope, &mut values)
-                .expect_err("missing require should fail");
+        let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect_err("missing require should fail");
 
         assert_eq!(err, EvalStatus::RuntimeFatal);
         assert_eq!(values.warnings.len(), 2);
@@ -17881,10 +17893,9 @@ return $box->x;"#,
     /// Verifies match expressions use strict comparison across comma-separated patterns.
     #[test]
     fn execute_program_match_uses_strict_pattern_comparison() {
-        let program = parse_fragment(
-            br#"return match ($x) { 1, "1" => "string", default => "other" };"#,
-        )
-        .expect("parse eval fragment");
+        let program =
+            parse_fragment(br#"return match ($x) { 1, "1" => "string", default => "other" };"#)
+                .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
         let x = values.string("1").expect("create fake string");
@@ -17898,9 +17909,10 @@ return $box->x;"#,
     /// Verifies match expressions evaluate only the selected arm result.
     #[test]
     fn execute_program_match_skips_unselected_results() {
-        let program =
-            parse_fragment(br#"return match (2) { 1 => missing(), 2 => "two", default => missing() };"#)
-                .expect("parse eval fragment");
+        let program = parse_fragment(
+            br#"return match (2) { 1 => missing(), 2 => "two", default => missing() };"#,
+        )
+        .expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
@@ -20554,10 +20566,7 @@ return function_exists("ctype_space");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(
-            values.output,
-            "A:D:N:S:empty:not-digit:not-space:111"
-        );
+        assert_eq!(values.output, "A:D:N:S:empty:not-digit:not-space:111");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
@@ -20601,10 +20610,7 @@ return count($algos);"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(
-            values.output,
-            "28:md2:sha256:crc:whirlpool:joaat:exists"
-        );
+        assert_eq!(values.output, "28:md2:sha256:crc:whirlpool:joaat:exists");
         assert_eq!(values.get(result), FakeValue::Int(28));
     }
 
@@ -21664,7 +21670,10 @@ return function_exists("ucwords");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "Hello World:Hello-World:Hello\tWorld:A B:A-B:");
+        assert_eq!(
+            values.output,
+            "Hello World:Hello-World:Hello\tWorld:A B:A-B:"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
@@ -21757,10 +21766,7 @@ return function_exists("strstr");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(
-            values.output,
-            "@example.com:hel:F:hello:bcabc:a:"
-        );
+        assert_eq!(values.output, "@example.com:hel:F:hello:bcabc:a:");
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
@@ -22034,7 +22040,10 @@ return call_user_func_array("get_class", ["object" => $object]);"#,
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
         assert_eq!(values.output, "stdClass:stdClass:");
-        assert_eq!(values.get(result), FakeValue::String("stdClass".to_string()));
+        assert_eq!(
+            values.get(result),
+            FakeValue::String("stdClass".to_string())
+        );
     }
 
     /// Verifies eval `get_parent_class()` reads object and class-string parents by callable.
@@ -22054,11 +22063,11 @@ return call_user_func_array("get_parent_class", ["object_or_class" => "ChildClas
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
+        assert_eq!(values.output, "ParentClass:ParentClass:ParentClass:");
         assert_eq!(
-            values.output,
-            "ParentClass:ParentClass:ParentClass:"
+            values.get(result),
+            FakeValue::String("ParentClass".to_string())
         );
-        assert_eq!(values.get(result), FakeValue::String("ParentClass".to_string()));
     }
 
     /// Verifies eval `abs()` dispatches through runtime numeric hooks directly and by callable.
@@ -22336,8 +22345,7 @@ return is_callable("clamp");"#,
     /// Verifies eval `clamp()` rejects a lower bound greater than the upper bound.
     #[test]
     fn execute_program_rejects_clamp_invalid_bounds() {
-        let program =
-            parse_fragment(br#"return clamp(5, 10, 0);"#).expect("parse eval fragment");
+        let program = parse_fragment(br#"return clamp(5, 10, 0);"#).expect("parse eval fragment");
         let mut scope = ElephcEvalScope::new();
         let mut values = FakeOps::default();
 
@@ -22574,7 +22582,10 @@ return function_exists("addslashes") && function_exists("stripslashes");"#,
 
         let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-        assert_eq!(values.output, "615c30625c5c635c22645c27:6100625c63226427:x\\\"y:o\"k:");
+        assert_eq!(
+            values.output,
+            "615c30625c5c635c22645c27:6100625c63226427:x\\\"y:o\"k:"
+        );
         assert_eq!(values.get(result), FakeValue::Bool(true));
     }
 
