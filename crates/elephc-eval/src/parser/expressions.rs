@@ -608,6 +608,14 @@ impl Parser {
                     args,
                 })
             }
+            TokenKind::Ident(constant) => {
+                let constant = constant.clone();
+                self.advance();
+                Ok(EvalExpr::ClassConstantFetch {
+                    class_name,
+                    constant,
+                })
+            }
             _ => Err(EvalParseError::UnsupportedConstruct),
         }
     }

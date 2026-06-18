@@ -249,6 +249,7 @@ pub struct EvalClass {
     parent: Option<String>,
     interfaces: Vec<String>,
     traits: Vec<String>,
+    constants: Vec<EvalClassConstant>,
     properties: Vec<EvalClassProperty>,
     methods: Vec<EvalClassMethod>,
 }
@@ -307,6 +308,31 @@ impl EvalClass {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
+        Self::with_modifiers_traits_and_constants(
+            name,
+            is_abstract,
+            is_final,
+            parent,
+            interfaces,
+            traits,
+            Vec::new(),
+            properties,
+            methods,
+        )
+    }
+
+    /// Creates a dynamic eval class with modifiers, relations, trait uses, constants, and members.
+    pub fn with_modifiers_traits_and_constants(
+        name: impl Into<String>,
+        is_abstract: bool,
+        is_final: bool,
+        parent: Option<String>,
+        interfaces: Vec<String>,
+        traits: Vec<String>,
+        constants: Vec<EvalClassConstant>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
         Self {
             name: name.into(),
             is_abstract,
@@ -314,6 +340,7 @@ impl EvalClass {
             parent,
             interfaces,
             traits,
+            constants,
             properties,
             methods,
         }
@@ -349,6 +376,11 @@ impl EvalClass {
         &self.traits
     }
 
+    /// Returns class constants declared directly by this eval class.
+    pub fn constants(&self) -> &[EvalClassConstant] {
+        &self.constants
+    }
+
     /// Returns public properties declared directly by this eval class.
     pub fn properties(&self) -> &[EvalClassProperty] {
         &self.properties
@@ -364,6 +396,56 @@ impl EvalClass {
         self.methods()
             .iter()
             .find(|method| method.name().eq_ignore_ascii_case(name))
+    }
+
+    /// Returns a class constant by PHP case-sensitive constant name.
+    pub fn constant(&self, name: &str) -> Option<&EvalClassConstant> {
+        self.constants()
+            .iter()
+            .find(|constant| constant.name() == name)
+    }
+}
+
+/// Constant metadata for a runtime eval class.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalClassConstant {
+    name: String,
+    visibility: EvalVisibility,
+    value: EvalExpr,
+}
+
+impl EvalClassConstant {
+    /// Creates a public eval class constant with a value expression.
+    pub fn new(name: impl Into<String>, value: EvalExpr) -> Self {
+        Self::with_visibility(name, EvalVisibility::Public, value)
+    }
+
+    /// Creates an eval class constant with explicit PHP visibility.
+    pub fn with_visibility(
+        name: impl Into<String>,
+        visibility: EvalVisibility,
+        value: EvalExpr,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            visibility,
+            value,
+        }
+    }
+
+    /// Returns the PHP-visible class constant name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the PHP visibility declared for this constant.
+    pub const fn visibility(&self) -> EvalVisibility {
+        self.visibility
+    }
+
+    /// Returns the constant initializer expression.
+    pub fn value(&self) -> &EvalExpr {
+        &self.value
     }
 }
 
@@ -623,6 +705,10 @@ pub enum EvalExpr {
     StaticPropertyGet {
         class_name: String,
         property: String,
+    },
+    ClassConstantFetch {
+        class_name: String,
+        constant: String,
     },
     NullCoalesce {
         value: Box<EvalExpr>,

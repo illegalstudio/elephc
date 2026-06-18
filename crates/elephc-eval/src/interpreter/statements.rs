@@ -391,10 +391,29 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         validate_concrete_class_requirements(class, context)?;
     }
     if context.define_class(class.clone()) {
+        initialize_eval_class_constants(class, context, scope, values)?;
         initialize_eval_static_properties(class, context, scope, values)
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Initializes class constant cells for a newly declared eval class.
+fn initialize_eval_class_constants(
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for constant in class.constants() {
+        let value = eval_expr(constant.value(), context, scope, values)?;
+        if let Some(replaced) =
+            context.set_class_constant_cell(class.name(), constant.name(), value)
+        {
+            values.release(replaced)?;
+        }
+    }
+    Ok(())
 }
 
 /// Initializes static property cells for a newly declared eval class.
@@ -587,6 +606,7 @@ fn validate_eval_class_modifiers(
     if class.is_abstract() && class.is_final() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    validate_eval_class_constants(class)?;
     for method in class.methods() {
         if method.is_abstract() && method.is_final() {
             return Err(EvalStatus::RuntimeFatal);
@@ -601,6 +621,17 @@ fn validate_eval_class_modifiers(
             return Err(EvalStatus::RuntimeFatal);
         }
         validate_method_parent_override(class, method, context)?;
+    }
+    Ok(())
+}
+
+/// Validates constant declarations that can be checked before registration.
+fn validate_eval_class_constants(class: &EvalClass) -> Result<(), EvalStatus> {
+    let mut names = std::collections::HashSet::new();
+    for constant in class.constants() {
+        if !names.insert(constant.name().to_string()) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
     }
     Ok(())
 }
@@ -862,6 +893,23 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
     validate_eval_member_access(&declaring_class, property.visibility(), context)?;
     context
         .static_property(&declaring_class, property.name())
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Reads one eval-declared class constant after resolving the class-like receiver.
+pub(in crate::interpreter) fn eval_class_constant_fetch_result(
+    class_name: &str,
+    constant_name: &str,
+    context: &mut ElephcEvalContext,
+    _values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let class_name = resolve_eval_static_class_name(class_name, context)?;
+    let (declaring_class, constant) = context
+        .class_constant(&class_name, constant_name)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    validate_eval_member_access(&declaring_class, constant.visibility(), context)?;
+    context
+        .class_constant_cell(&declaring_class, constant.name())
         .ok_or(EvalStatus::RuntimeFatal)
 }
 
