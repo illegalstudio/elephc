@@ -71,6 +71,7 @@ pub(in crate::interpreter) fn eval_expr(
                 let class_name = context
                     .resolve_class_name(class_name)
                     .unwrap_or_else(|| class_name.clone());
+                let args = positional_evaluated_arg_values(args)?;
                 values
                     .new_object(&class_name)
                     .and_then(|object| values.construct_object(object, args).map(|()| object))
@@ -102,7 +103,13 @@ pub(in crate::interpreter) fn eval_expr(
         } => {
             let object = eval_expr(object, context, scope, values)?;
             let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_method_call_result(object, method, evaluated_args, context, values)
+            eval_method_call_result_with_evaluated_args(
+                object,
+                method,
+                evaluated_args,
+                context,
+                values,
+            )
         }
         EvalExpr::NullCoalesce { value, default } => {
             let value = eval_expr(value, context, scope, values)?;
@@ -268,18 +275,14 @@ pub(in crate::interpreter) fn eval_positional_call_arg_values(
     Ok(evaluated_args)
 }
 
-/// Evaluates method-call arguments, allowing numeric spread but not named args.
+/// Evaluates method-call arguments, preserving named metadata for eval method binding.
 pub(in crate::interpreter) fn eval_method_call_arg_values(
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
-    if evaluated_args.iter().any(|arg| arg.name.is_some()) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    Ok(evaluated_args.into_iter().map(|arg| arg.value).collect())
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    eval_call_arg_values(args, context, scope, values)
 }
 
 /// Evaluates supported function-like calls from a runtime eval fragment.

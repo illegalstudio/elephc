@@ -1141,7 +1141,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
 pub(in crate::interpreter) fn eval_static_method_call_result(
     class_name: &str,
     method_name: &str,
-    evaluated_args: Vec<RuntimeCellHandle>,
+    evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -1248,7 +1248,7 @@ fn resolve_eval_class_name_literal(
 /// Creates a backing object for an eval-declared class and runs its constructor.
 pub(in crate::interpreter) fn eval_dynamic_class_new_object(
     class: &EvalClass,
-    evaluated_args: Vec<RuntimeCellHandle>,
+    evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
@@ -1304,10 +1304,29 @@ pub(in crate::interpreter) fn eval_method_call_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_method_call_result_with_evaluated_args(
+        object,
+        method_name,
+        positional_args(evaluated_args),
+        context,
+        values,
+    )
+}
+
+/// Dispatches an object method call while preserving named-argument metadata for eval methods.
+pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let Ok(identity) = values.object_identity(object) else {
+        let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
         return values.method_call(object, method_name, evaluated_args);
     };
     let Some(class) = context.dynamic_object_class(identity) else {
+        let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
         return values.method_call(object, method_name, evaluated_args);
     };
     let called_class_name = class.name().to_string();
@@ -1393,12 +1412,11 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     called_class_name: &str,
     method: &EvalClassMethod,
     object: RuntimeCellHandle,
-    evaluated_args: Vec<RuntimeCellHandle>,
+    evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args =
-        bind_evaluated_function_args(method.params(), positional_args(evaluated_args))?;
+    let evaluated_args = bind_evaluated_function_args(method.params(), evaluated_args)?;
     let mut method_scope = ElephcEvalScope::new();
     method_scope.set("this", object, ScopeCellOwnership::Borrowed);
     for (name, value) in method.params().iter().zip(evaluated_args) {
@@ -1438,12 +1456,11 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
     class_name: &str,
     called_class_name: &str,
     method: &EvalClassMethod,
-    evaluated_args: Vec<RuntimeCellHandle>,
+    evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args =
-        bind_evaluated_function_args(method.params(), positional_args(evaluated_args))?;
+    let evaluated_args = bind_evaluated_function_args(method.params(), evaluated_args)?;
     let mut method_scope = ElephcEvalScope::new();
     for (name, value) in method.params().iter().zip(evaluated_args) {
         method_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);
@@ -1484,6 +1501,16 @@ pub(in crate::interpreter) fn positional_args(
     args.into_iter()
         .map(|value| EvaluatedCallArg { name: None, value })
         .collect()
+}
+
+/// Extracts positional runtime values and rejects named args before runtime method dispatch.
+pub(in crate::interpreter) fn positional_evaluated_arg_values(
+    args: Vec<EvaluatedCallArg>,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    if args.iter().any(|arg| arg.name.is_some()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(args.into_iter().map(|arg| arg.value).collect())
 }
 
 /// Executes a PHP `static $name = expr;` declaration in the current eval scope.
