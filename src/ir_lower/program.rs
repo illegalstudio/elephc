@@ -451,6 +451,7 @@ fn lower_function_declarations(
                 name,
                 params,
                 variadic: _,
+                variadic_type: _,
                 return_type,
                 body,
             } => function::lower_user_function(
@@ -544,6 +545,16 @@ fn lower_class_like_methods(
             }
             StmtKind::TraitDecl { .. } => {}
             StmtKind::InterfaceDecl { name, methods, .. } => {
+                lower_methods_for_class_like(name, methods, module, check_result, constants, fiber_return_sigs);
+            }
+            StmtKind::EnumDecl { name, methods, .. } => {
+                // Enum methods are lowered like class methods on the case singleton; prefer the
+                // checker's flattened declarations (with `self` types resolved to the enum).
+                let methods = check_result
+                    .classes
+                    .get(name)
+                    .map(|class_info| class_info.method_decls.as_slice())
+                    .unwrap_or(methods.as_slice());
                 lower_methods_for_class_like(name, methods, module, check_result, constants, fiber_return_sigs);
             }
             StmtKind::NamespaceBlock { body, .. }

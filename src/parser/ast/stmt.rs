@@ -173,6 +173,9 @@ pub enum StmtKind {
         name: String,
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         variadic: Option<String>,
+        /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each
+        /// argument collected into the variadic is checked against this type.
+        variadic_type: Option<TypeExpr>,
         return_type: Option<TypeExpr>,
         body: Vec<Stmt>,
     },
@@ -216,6 +219,13 @@ pub enum StmtKind {
         name: String,
         backing_type: Option<TypeExpr>,
         cases: Vec<EnumCaseDecl>,
+        /// Interfaces the enum implements (`enum E implements Foo, Bar`).
+        implements: Vec<Name>,
+        /// User-declared enum methods (instance and static). Enums dispatch instance methods on
+        /// the case singleton, like a class.
+        methods: Vec<ClassMethod>,
+        /// User-declared enum constants.
+        constants: Vec<ClassConst>,
     },
     PackedClassDecl {
         name: String,

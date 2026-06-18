@@ -40,6 +40,7 @@ pub(super) fn resolve_decl_stmt(
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         } => {
@@ -49,6 +50,7 @@ pub(super) fn resolve_decl_stmt(
                     name: canonical_name_for_decl(namespace, name),
                     params: resolve_params(params, namespace, imports, symbols),
                     variadic: variadic.clone(),
+                    variadic_type: variadic_type.clone(),
                     return_type: return_type
                         .as_ref()
                         .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
@@ -103,6 +105,9 @@ pub(super) fn resolve_decl_stmt(
             name,
             backing_type,
             cases,
+            implements,
+            methods,
+            constants,
         } => {
             let resolved_cases = cases
                 .iter()
@@ -121,11 +126,20 @@ pub(super) fn resolve_decl_stmt(
                     ),
                 })
                 .collect();
+            let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
             Ok(Some(Stmt::with_attributes(
                 StmtKind::EnumDecl {
                     name: canonical_name_for_decl(namespace, name),
                     backing_type: backing_type.clone(),
                     cases: resolved_cases,
+                    implements: implements
+                        .iter()
+                        .map(|name| {
+                            resolved_name(resolved_class_name(name, namespace, imports, symbols))
+                        })
+                        .collect(),
+                    methods: resolved_methods,
+                    constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
                 stmt.span,
                 stmt_attributes,

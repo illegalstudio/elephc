@@ -25,6 +25,8 @@ pub mod intrinsics;
 pub mod ir;
 /// AST-to-EIR lowering pass used by `--emit-ir` diagnostics.
 pub mod ir_lower;
+/// IR-level analyses and transforms (liveness, intervals, register allocation).
+pub mod ir_passes;
 /// Lexer for tokenizing PHP source.
 pub mod lexer;
 /// Magic constant substitution.

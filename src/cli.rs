@@ -15,7 +15,7 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--ast-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--ast-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
 
 /// Backend selected for assembly generation after frontend and optimization passes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +39,8 @@ pub(crate) struct CliConfig {
     pub(crate) check_only: bool,
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
+    pub(crate) regalloc_linear: bool,
+    pub(crate) ir_opt: bool,
     pub(crate) target: Target,
     pub(crate) extra_link_libs: Vec<String>,
     pub(crate) extra_link_paths: Vec<String>,
@@ -75,6 +77,20 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         Ok("tagged") => crate::codegen::NullRepr::Tagged,
         Ok("sentinel") => crate::codegen::NullRepr::Sentinel,
         _ => crate::codegen::NullRepr::default(),
+    };
+    // The register allocator is on by default; an env override lets the test
+    // harness compile the whole suite under the stack fallback for comparison.
+    let mut regalloc_linear = match std::env::var("ELEPHC_REGALLOC").as_deref() {
+        Ok("stack") => false,
+        Ok("linear") => true,
+        _ => true,
+    };
+    // EIR optimization passes are on by default; an env override lets the test
+    // harness or a benchmark compile with the IR pass driver disabled.
+    let mut ir_opt = match std::env::var("ELEPHC_IR_OPT").as_deref() {
+        Ok("off") => false,
+        Ok("on") => true,
+        _ => true,
     };
 
     let mut i = 1;
@@ -114,6 +130,12 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             emit_source_map = true;
         } else if let Some(value) = arg.strip_prefix("--null-repr=") {
             null_repr = parse_null_repr(value);
+        } else if let Some(value) = arg.strip_prefix("--regalloc=") {
+            regalloc_linear = parse_regalloc(value);
+        } else if let Some(value) = arg.strip_prefix("--ir-opt=") {
+            ir_opt = parse_ir_opt(value);
+        } else if arg == "--no-ir-opt" {
+            ir_opt = false;
         } else if arg == "--define" {
             i += 1;
             let symbol = required_value(args, i, "Missing symbol after --define");
@@ -188,6 +210,8 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         check_only,
         emit_timings,
         emit_source_map,
+        regalloc_linear,
+        ir_opt,
         target,
         extra_link_libs,
         extra_link_paths,
@@ -240,6 +264,24 @@ fn parse_null_repr(value: &str) -> crate::codegen::NullRepr {
         "sentinel" => crate::codegen::NullRepr::Sentinel,
         "tagged" => crate::codegen::NullRepr::Tagged,
         other => fail(&format!("Unknown null representation: {}", other)),
+    }
+}
+
+/// Parse a `--regalloc=` value into the linear-scan toggle, or fail.
+fn parse_regalloc(value: &str) -> bool {
+    match value {
+        "linear" => true,
+        "stack" => false,
+        other => fail(&format!("Unknown register allocator: {}", other)),
+    }
+}
+
+/// Parse an `--ir-opt=` value into the EIR optimization-pass toggle, or fail.
+fn parse_ir_opt(value: &str) -> bool {
+    match value {
+        "on" => true,
+        "off" => false,
+        other => fail(&format!("Unknown --ir-opt value: {} (expected on|off)", other)),
     }
 }
 
@@ -310,5 +352,20 @@ mod tests {
         assert_eq!(parse_emit("bin"), Emit::Executable);
         assert_eq!(parse_emit("dylib"), Emit::Cdylib);
         assert_eq!(parse_emit("shared"), Emit::Cdylib);
+    }
+
+    /// Verifies the canonical `--ir-opt=` spellings toggle the EIR optimization
+    /// pass driver, with `on` enabling it and `off` disabling it.
+    #[test]
+    fn ir_opt_parses_on_and_off() {
+        assert!(parse_ir_opt("on"));
+        assert!(!parse_ir_opt("off"));
+    }
+
+    /// Verifies the register-allocator toggle parses its canonical spellings.
+    #[test]
+    fn regalloc_parses_linear_and_stack() {
+        assert!(parse_regalloc("linear"));
+        assert!(!parse_regalloc("stack"));
     }
 }

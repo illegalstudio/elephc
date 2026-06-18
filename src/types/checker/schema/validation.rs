@@ -60,7 +60,7 @@ pub(crate) fn build_method_sig(
         )?,
         None => super::super::infer_return_type_syntactic(&method.body),
     };
-    Ok(Checker::callable_wrapper_sig(&FunctionSig {
+    let mut sig = Checker::callable_wrapper_sig(&FunctionSig {
         params,
         defaults,
         return_type,
@@ -70,11 +70,28 @@ pub(crate) fn build_method_sig(
             .params
             .iter()
             .map(|(_, type_ann, _, _)| type_ann.is_some())
-            .chain(method.variadic.iter().map(|_| false))
+            .chain(method.variadic.iter().map(|_| method.variadic_type.is_some()))
             .collect(),
         variadic: method.variadic.clone(),
         deprecation: extract_deprecation(&method.attributes),
-    }))
+    });
+    // A declared element type on the variadic (`int ...$xs`) constrains every collected argument.
+    // `callable_wrapper_sig` defaults the variadic container to `array<mixed>`; refine it to the
+    // declared element type so call validation enforces it.
+    if let Some(variadic_type) = &method.variadic_type {
+        let elem_ty = checker.resolve_declared_param_type_hint(
+            variadic_type,
+            method.span,
+            &format!(
+                "Method variadic parameter ${}",
+                method.variadic.as_deref().unwrap_or_default()
+            ),
+        )?;
+        if let Some((_, ty)) = sig.params.last_mut() {
+            *ty = PhpType::Array(Box::new(elem_ty));
+        }
+    }
+    Ok(sig)
 }
 
 /// Returns `Some(reason)` when the attribute list contains a `#[\Deprecated]`

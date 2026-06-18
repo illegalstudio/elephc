@@ -62,6 +62,7 @@ fn test_parse_backed_enum_decl() {
             name,
             backing_type,
             cases,
+            ..
         } => {
             assert_eq!(name, "Color");
             assert_eq!(backing_type, &Some(TypeExpr::Int));
@@ -265,3 +266,35 @@ fn test_parse_global_multiple() {
 }
 
 // --- Static variable ---
+
+/// Verifies that an enum may declare methods, constants, and an `implements` clause alongside its
+/// cases, all parsed into the `EnumDecl`.
+#[test]
+fn test_parse_enum_with_methods_implements_constants() {
+    let stmts = parse_source(
+        "<?php interface HasLabel {} enum Suit implements HasLabel { case Hearts; case Spades; const COUNT = 2; public function label(): string { return \"x\"; } public static function make(): self { return Suit::Hearts; } }",
+    );
+    let enum_decl = stmts
+        .iter()
+        .find(|s| matches!(s.kind, StmtKind::EnumDecl { .. }))
+        .expect("enum declared");
+    match &enum_decl.kind {
+        StmtKind::EnumDecl {
+            cases,
+            implements,
+            methods,
+            constants,
+            ..
+        } => {
+            assert_eq!(cases.len(), 2);
+            assert_eq!(implements.len(), 1);
+            assert_eq!(implements[0].as_str(), "HasLabel");
+            assert_eq!(methods.len(), 2);
+            assert!(methods.iter().any(|m| m.name == "label" && !m.is_static));
+            assert!(methods.iter().any(|m| m.name == "make" && m.is_static));
+            assert_eq!(constants.len(), 1);
+            assert_eq!(constants[0].name, "COUNT");
+        }
+        other => panic!("Expected EnumDecl, got {:?}", other),
+    }
+}

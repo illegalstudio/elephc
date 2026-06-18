@@ -18,8 +18,8 @@ use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, codegen_ir, conditional, errors, exports, ir, ir_lower, lexer, linker,
-    magic_constants, name_resolver, optimize, parser, pdo_prelude, resolver, runtime_cache,
+    autoload, codegen, codegen_ir, conditional, errors, exports, ir, ir_lower, ir_passes, lexer,
+    linker, magic_constants, name_resolver, optimize, parser, pdo_prelude, resolver, runtime_cache,
     source_map, types,
 };
 
@@ -48,6 +48,8 @@ pub(crate) fn compile(config: CliConfig) {
         check_only,
         emit_timings,
         emit_source_map,
+        regalloc_linear,
+        ir_opt,
         target,
         mut extra_link_libs,
         extra_link_paths,
@@ -160,11 +162,7 @@ pub(crate) fn compile(config: CliConfig) {
     for warning in &check_result.warnings {
         errors::report_warning(warning);
     }
-    codegen::prepare_declared_name_order(
-        &ast,
-        &check_result.classes,
-        &check_result.interfaces,
-    );
+    codegen::prepare_declared_name_order(&ast, &check_result.classes, &check_result.interfaces);
 
     if !target.supports_current_backend() {
         eprintln!(
@@ -215,7 +213,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     if emit_ir {
         let phase_started = Instant::now();
-        let module = match ir_lower::lower_program_with_source_path(
+        let mut module = match ir_lower::lower_program_with_source_path(
             &ast,
             &check_result,
             target,
@@ -228,6 +226,12 @@ pub(crate) fn compile(config: CliConfig) {
             }
         };
         timings.record_since("ir-lower", phase_started);
+
+        let phase_started = Instant::now();
+        if ir_opt {
+            ir_passes::optimize_module(&mut module);
+        }
+        timings.record_since("ir-opt", phase_started);
 
         let phase_started = Instant::now();
         let text = ir::print_module(&module);
@@ -239,7 +243,7 @@ pub(crate) fn compile(config: CliConfig) {
 
     let ir_module = if matches!(backend, CodegenBackend::Eir) {
         let phase_started = Instant::now();
-        let module = match ir_lower::lower_program_with_source_path(
+        let mut module = match ir_lower::lower_program_with_source_path(
             &ast,
             &check_result,
             target,
@@ -252,6 +256,12 @@ pub(crate) fn compile(config: CliConfig) {
             }
         };
         timings.record_since("ir-lower", phase_started);
+
+        let phase_started = Instant::now();
+        if ir_opt {
+            ir_passes::optimize_module(&mut module);
+        }
+        timings.record_since("ir-opt", phase_started);
         Some(module)
     } else {
         None
@@ -272,7 +282,12 @@ pub(crate) fn compile(config: CliConfig) {
 
     let phase_started = Instant::now();
     let runtime_pic = matches!(emit, Emit::Cdylib);
-    let runtime_object = match runtime_cache::prepare_runtime_object(heap_size, target, runtime_features, runtime_pic) {
+    let runtime_object = match runtime_cache::prepare_runtime_object(
+        heap_size,
+        target,
+        runtime_features,
+        runtime_pic,
+    ) {
         Ok(runtime_object) => runtime_object,
         Err(err) => {
             eprintln!("Runtime cache error: {}", err);
@@ -296,6 +311,7 @@ pub(crate) fn compile(config: CliConfig) {
             requires_elephc_tls,
             emit,
             &exported_functions,
+            regalloc_linear,
         ) {
             Ok(asm) => asm,
             Err(err) => {
@@ -389,7 +405,11 @@ pub(crate) fn compile(config: CliConfig) {
     let _ = fs::remove_file(&output_paths.obj);
 
     timings.report();
-    println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
+    println!(
+        "Compiled '{}' -> '{}'",
+        filename,
+        output_paths.bin.display()
+    );
 }
 
 /// Computes output paths for .s (assembly), .o (object), binary, and .map (source map) files
@@ -400,7 +420,10 @@ pub(crate) fn compile(config: CliConfig) {
 /// shared-library naming that `dlopen(3)` and linker `-l` flags expect.
 fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
     let path = Path::new(filename);
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
     let parent = path.parent().unwrap_or(Path::new("."));
     let bin_name = match emit {
         Emit::Executable => stem.to_string(),

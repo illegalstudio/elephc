@@ -190,7 +190,7 @@ class Square extends Shape {
 }
 ```
 
-The concrete redeclaration reuses the parent's slot (offsets are stable across the inheritance chain), so the property is accessible to both parent and child methods. elephc supports hook contracts (`{ get; }`, `{ set; }`, and `{ get; set; }`) in abstract classes, interfaces, and traits; executable hook bodies are not implemented yet.
+The concrete redeclaration reuses the parent's slot (offsets are stable across the inheritance chain), so the property is accessible to both parent and child methods. elephc supports hook contracts (`{ get; }`, `{ set; }`, and `{ get; set; }`) in abstract classes, interfaces, and traits, and executable hook bodies on concrete properties (see [Property hooks](#property-hooks-get--set)).
 
 ## Final classes, methods, and properties
 ```php
@@ -237,6 +237,35 @@ Property type declarations are checked at compile time for both instance and sta
 
 Property default values are applied both for the normal `new ClassName()` form and for dynamic `new $variable()` instantiation (and therefore for runtime-instantiated stream wrappers and stream filters). When the class name resolves to a known class, dynamic instantiation follows the same allocation path as direct construction, so constructor arguments are evaluated and `__construct` runs normally.
 
+### Asymmetric visibility (`private(set)`)
+
+PHP 8.4 asymmetric visibility lets a property be read more widely than it can be written. A `(set)` modifier after a visibility keyword sets the write visibility independently of the read visibility:
+
+```php
+<?php
+class Counter {
+    public private(set) int $value = 0;     // read: public, write: private
+
+    public function increment(): void {
+        $this->value = $this->value + 1;     // allowed: write from inside the class
+    }
+}
+
+$c = new Counter();
+$c->increment();
+echo $c->value;   // 2 — public read
+// $c->value = 9; // rejected: write is private
+```
+
+Rules:
+
+- The `set` visibility applies to writes; the ordinary (read) visibility applies to reads.
+- A lone `private(set)` / `protected(set)` leaves the read visibility at its `public` default.
+- `protected(set)` allows writes from the declaring class and its subclasses; `private(set)` only from the declaring class.
+- The write visibility must not be weaker than the read visibility (`private public(set)` is rejected).
+- The property must be typed, and the modifier is not allowed on static properties.
+- Indirect writes through an array element (`$obj->items[] = x`, `$obj->items['k'] = x`) are writes too, so they honor the `set` visibility — not the (wider) read visibility.
+
 ### Property redeclaration
 
 A child class may redeclare a property inherited from a non-private parent. The redeclaration is checked at compile time and must follow PHP rules:
@@ -262,6 +291,75 @@ echo (new Child())->value; // 5
 ```
 
 Private parent properties are still considered separate slots in PHP, but elephc rejects same-named redeclarations through them; declare a different name in the child for now.
+
+### Property hooks (`get` / `set`)
+
+A property can define **hooks** that run when it is read or written, replacing hand-written getter and setter methods. The hooks live in a `{ ... }` block after the property name. Reading the property runs its `get` hook; assigning to it runs its `set` hook.
+
+A `get`-only property is **virtual** — it has no stored value of its own and is read-only. The short form `get => expr;` returns `expr`; the block form `get { ... }` runs statements and returns a value:
+
+```php
+<?php
+class Person {
+    public string $first = "Ada";
+    public string $last = "Lovelace";
+
+    public string $full {
+        get => $this->first . " " . $this->last;
+    }
+}
+
+echo (new Person())->full; // Ada Lovelace
+```
+
+A property with both `get` and `set` typically reads from and writes to a separate backing field. The value assigned to the property is available inside the `set` hook as `$value` (rename it with `set(Type $other)`):
+
+```php
+<?php
+class Thermostat {
+    private float $c = 0.0;
+
+    public float $celsius {
+        get => $this->c;
+        set { $this->c = $value; }
+    }
+
+    public float $fahrenheit {
+        get => $this->c * 9.0 / 5.0 + 32.0;
+        set { $this->c = ($value - 32.0) * 5.0 / 9.0; }
+    }
+}
+
+$t = new Thermostat();
+$t->fahrenheit = 212.0;
+echo $t->celsius; // 100
+```
+
+Inside a property's own hook, `$this->prop` accesses the raw stored value rather than re-running the hook, so a hook may read and write the property it belongs to (a *backed* property):
+
+```php
+<?php
+class Name {
+    public string $value {
+        get => $this->value;
+        set { $this->value = trim($value); }
+    }
+}
+
+$n = new Name();
+$n->value = "  Ada  ";
+echo $n->value; // Ada
+```
+
+Rules:
+
+- A property with a `get` hook but no `set` hook is read-only. Writing it is a compile-time error.
+- Hooked properties cannot have a default value and cannot be `static`, `final`, or `readonly`.
+- Each hook may be declared at most once per property.
+- The short `set => expr;` form is not supported; use a block `set { ... }`.
+- Hooks are inherited by subclasses along with the property.
+
+Abstract classes, interfaces, and traits may declare hook *contracts* (`{ get; }`, `{ set; }`, `{ get; set; }`) with no body; see [Abstract properties](#abstract-properties) and [Interfaces](#interfaces).
 
 ## Static properties
 Static properties use class-scoped storage and are accessed with `::`.
@@ -430,6 +528,42 @@ class Child extends Base {
 
 `new static()` follows PHP late static binding and constructs an instance of the called class.
 
+## Relative class types (`self`, `static`, `parent`)
+
+`self`, `static`, and `parent` may be used as type declarations on method parameters, method return types, and properties. They resolve to the enclosing class (`self`, `static`) or its parent (`parent`):
+
+```php
+<?php
+class Money {
+    public function __construct(public int $amount) {}
+
+    // `self` return type: enables fluent chaining.
+    public function add(self $other): self {
+        return new Money($this->amount + $other->amount);
+    }
+}
+
+class Node {
+    public ?self $next = null;     // a same-class (nullable) property
+    public function __construct(public int $value) {}
+}
+
+trait Fluent {
+    // In a trait, `static` resolves to the class that uses the trait.
+    public function copy(): static {
+        return clone $this;
+    }
+}
+```
+
+Rules:
+
+- `self` and `static` resolve to the class the member is declared in; `parent` resolves to that class's parent.
+- They are accepted in parameter, return, and property type positions, and may be combined with the nullable shorthand (`?self`) or unions (`self|null`).
+- Used inside a trait, `self`/`static` resolve to the class that uses the trait, not the trait itself.
+- Using `self`, `static`, or `parent` as a type outside of a class is rejected.
+- For type checking, `static` is treated as the declaring class. A `static` return type chained directly on its declaring class works as expected; when a `static`-returning method is inherited and called on a subclass, the result is typed as the declaring class rather than the subclass.
+
 ## Dynamic instantiation (`new $variable()`)
 
 `new $variable()` constructs an instance whose class is selected at runtime from a string variable:
@@ -449,6 +583,60 @@ echo gettype($bad);                      // "NULL"
 ```
 
 elephc resolves the class name case-insensitively against compile-time class metadata, matching PHP class lookup. A match dispatches through the same allocation path as `new ClassName()`, including constructor calls, declared property defaults, and supported built-in/SPL runtime storage initialization. An unknown name currently yields PHP `null`; the missing-class fatal path is not yet tightened.
+
+## Dynamic method and static calls
+
+A method or static method can be called by a name held in a variable:
+
+```php
+<?php
+class Calculator {
+    public function add(int $a, int $b): int { return $a + $b; }
+    public static function version(): string { return "1.0"; }
+}
+
+$calc = new Calculator();
+$method = "add";
+echo $calc->$method(2, 3);        // 5 — dynamic instance method
+echo $calc->{$method}(2, 3);      // 5 — brace form
+
+$class = "Calculator";
+echo $class::version();           // 1.0 — dynamic static call
+$static = "version";
+echo $class::$static();           // 1.0 — both class and method dynamic
+```
+
+`$obj->$name(...)` and `$class::$name(...)` are equivalent to `call_user_func([$obj, $name], ...)` / `call_user_func([$class, $name], ...)`. A dynamic method name on a literal class also works (`ClassName::$name(...)`). Arguments are forwarded positionally. A nullsafe dynamic method call (`$obj?->$name()`) is not yet supported, and **named arguments are rejected** in dynamic calls because the target method — and therefore its parameter names — is not known at compile time.
+
+## Anonymous classes (`new class {}`)
+
+An anonymous class defines and instantiates a class in one expression. It may take constructor arguments, extend a class, and implement interfaces:
+
+```php
+<?php
+interface Logger {
+    public function log(string $message): string;
+}
+
+function make_logger(string $prefix): Logger {
+    return new class($prefix) implements Logger {
+        public function __construct(private string $prefix) {}
+
+        public function log(string $message): string {
+            return $this->prefix . ": " . $message;
+        }
+    };
+}
+
+echo make_logger("INFO")->log("started"); // INFO: started
+```
+
+Rules:
+
+- Constructor arguments go before any `extends`/`implements` clause: `new class(args) extends P implements I { ... }`.
+- Each anonymous class is compiled to its own uniquely-named class, so two `new class {}` expressions produce two independent types.
+- Like a named class, an anonymous class does **not** capture variables from the enclosing scope; pass data in through the constructor.
+- `new readonly class { ... }` is supported.
 
 ## Override rules
 Same parameter count, same pass-by-reference positions, same default layout, same variadic shape.
@@ -492,6 +680,53 @@ echo Color::Red->value;          // 1
 echo Color::from(2) === Color::Green; // 1
 ```
 Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
+
+### Enum methods, constants, and interfaces
+
+Enums may declare instance methods, static methods, constants, and an `implements` clause. Instance methods dispatch on the case singleton, so `$this` is the case:
+
+```php
+<?php
+interface HasLabel {
+    public function label(): string;
+}
+
+enum Suit: string implements HasLabel {
+    case Hearts = "H";
+    case Spades = "S";
+
+    const COUNT = 2;
+
+    public function label(): string {
+        return match ($this) {
+            Suit::Hearts => "Hearts",
+            Suit::Spades => "Spades",
+        };
+    }
+
+    public function code(): string {
+        return $this->value;          // backing value
+    }
+
+    public static function default(): self {
+        return Suit::Hearts;          // static factory
+    }
+}
+
+echo Suit::Hearts->label();           // Hearts
+echo Suit::default()->code();         // H
+```
+
+Rules:
+
+- Instance methods may use `$this` (the case), `match ($this)`, the backing `$this->value`, and `self::CONST`.
+- Static methods dispatch like class static methods and can act as factories.
+- An enum can `implements` one or more interfaces and be used through them.
+- `self`/`static` type hints in enum methods resolve to the enum.
+
+Enum constants are readable both inside the enum (`self::CONST`) and from outside it (`EnumName::CONST`). Enum method bodies are type-checked like class method bodies, so a mismatched return type or an undefined variable inside an enum method is reported.
+
+Current limitations: the `$this->name` property is not yet readable inside a method, and using a trait inside an enum is not supported.
 
 ### Built-in `SortDirection`
 
@@ -769,8 +1004,7 @@ Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfa
 
 ## Limitations
 - `readonly static` properties are rejected to match PHP. Static properties in a `readonly class` are still mutable.
-- Property hook bodies are not implemented; elephc supports hook contracts only.
+- Backed property hooks may read and write their own backing slot, but the short `set => expr;` form is not supported; use a block `set { ... }`.
 - Shadowing a private parent property with a same-named child property is not yet supported (PHP gives them separate slots; elephc uses one slot per name)
 - Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
-- Anonymous classes (`new class { ... }`) are not yet supported.
 - Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` APIs; parameter reflection is not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).

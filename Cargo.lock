@@ -509,7 +509,7 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
 name = "elephc"
-version = "0.23.12"
+version = "0.24.3"
 dependencies = [
  "bitflags",
  "bzip2-rs",

@@ -64,6 +64,11 @@ pub fn emit_expr(
     }
 
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::BoolLiteral(b) => {
             scalars::emit_bool_literal(*b, emitter)
         }
@@ -181,6 +186,7 @@ pub fn emit_expr(
             is_arrow: _,
             is_static: _,
             variadic,
+            variadic_type: _,
             captures,
             capture_refs,
         } => calls::emit_closure(

@@ -54,6 +54,7 @@ impl Checker {
                 name,
                 params,
                 variadic,
+                variadic_type,
                 return_type,
                 body,
                 ..
@@ -90,6 +91,7 @@ impl Checker {
                         defaults,
                         ref_params: ref_flags,
                         variadic: variadic.clone(),
+                        variadic_type: variadic_type.clone(),
                         return_type: return_type.clone(),
                         span: stmt.span,
                         body: body.clone(),

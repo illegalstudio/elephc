@@ -39,7 +39,7 @@ pub(super) fn parse_function_decl(
         &Token::LParen,
         "Expected '(' after function name",
     )?;
-    let (params, variadic) = parse_params(tokens, pos, span)?;
+    let (params, variadic, variadic_type) = parse_params(tokens, pos, span)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after parameters")?;
 
     // Parse optional return type: `: TypeExpr`
@@ -57,6 +57,7 @@ pub(super) fn parse_function_decl(
             name,
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
         },
@@ -93,7 +94,7 @@ pub(crate) fn parse_type_expr(
     pos: &mut usize,
     span: Span,
 ) -> Result<TypeExpr, CompileError> {
-    let mut ty = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Question)) {
+    let ty = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Question)) {
         *pos += 1;
         TypeExpr::Nullable(Box::new(parse_atomic_type_expr(tokens, pos, span)?))
     } else {
@@ -109,17 +110,87 @@ pub(crate) fn parse_type_expr(
         ));
     }
 
+    // `?A&B` is a syntax error in PHP: the nullable shorthand may not be combined with an
+    // intersection. Reject it rather than silently dropping a member.
+    if matches!(ty, TypeExpr::Nullable(_))
+        && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand))
+        && type_starts_at(tokens, *pos + 1)
+    {
+        return Err(CompileError::new(
+            span,
+            "Nullable shorthand cannot be combined with intersection types",
+        ));
+    }
+
+    // Intersection type `A&B`: an `&` immediately followed by another type. A bare `&` followed
+    // by a `$variable`/`...` is the by-reference marker, handled by the parameter parser, so it is
+    // left in place here.
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand))
+        && type_starts_at(tokens, *pos + 1)
+    {
+        let mut members = vec![ty];
+        while matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand))
+            && type_starts_at(tokens, *pos + 1)
+        {
+            *pos += 1; // consume '&'
+            members.push(parse_atomic_type_expr(tokens, pos, span)?);
+        }
+        return Ok(TypeExpr::Intersection(members));
+    }
+
     let mut members = vec![ty];
     while matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Pipe)) {
         *pos += 1;
         members.push(parse_atomic_type_expr(tokens, pos, span)?);
     }
 
+    Ok(normalize_union_members(members))
+}
+
+/// Returns true if the token at `index` can begin a (non-nullable) type — used to tell an
+/// intersection `A&B` apart from a by-reference parameter `A &$x`.
+fn type_starts_at(tokens: &[(Token, Span)], index: usize) -> bool {
+    matches!(
+        tokens.get(index).map(|(token, _)| token),
+        Some(
+            Token::Identifier(_)
+                | Token::Backslash
+                | Token::Self_
+                | Token::Static
+                | Token::Parent
+        )
+    )
+}
+
+/// Collapses a parsed union member list into its canonical `TypeExpr`.
+///
+/// A lone member is unwrapped. A `null` member (lowered to `TypeExpr::Void`) reproduces the
+/// nullable shorthand so that `T|null` is identical to `?T`: with a single remaining non-null
+/// member the union becomes `Nullable`, while a wider union keeps exactly one null sentinel so
+/// the checker's `union_contains_void` still recognizes it as nullable. Pure non-null unions
+/// are returned unchanged.
+fn normalize_union_members(members: Vec<TypeExpr>) -> TypeExpr {
+    let null_count = members
+        .iter()
+        .filter(|member| matches!(member, TypeExpr::Void))
+        .count();
+    if null_count > 0 && members.len() > null_count {
+        let mut non_null: Vec<TypeExpr> = members
+            .into_iter()
+            .filter(|member| !matches!(member, TypeExpr::Void))
+            .collect();
+        if non_null.len() == 1 {
+            return TypeExpr::Nullable(Box::new(
+                non_null.pop().expect("non-null member exists"),
+            ));
+        }
+        non_null.push(TypeExpr::Void);
+        return TypeExpr::Union(non_null);
+    }
     if members.len() == 1 {
-        ty = members.pop().expect("type member exists");
-        Ok(ty)
+        members.into_iter().next().expect("type member exists")
     } else {
-        Ok(TypeExpr::Union(members))
+        TypeExpr::Union(members)
     }
 }
 
@@ -205,6 +276,34 @@ fn parse_atomic_type_expr(
             )?;
             Ok(TypeExpr::Buffer(Box::new(inner)))
         }
+        // `null` is a first-class type that only ever means "the null value". It shares the
+        // runtime null sentinel with `void`/`?T`, so it lowers to `TypeExpr::Void`; the caller
+        // folds a `null` union member back into the canonical `Nullable` shorthand.
+        Some(Token::Null) => {
+            *pos += 1;
+            Ok(TypeExpr::Void)
+        }
+        // `false` and `true` are literal bool subtypes. elephc does not track literal-bool
+        // precision, so both widen to `bool`; the runtime representation is identical.
+        Some(Token::False) | Some(Token::True) => {
+            *pos += 1;
+            Ok(TypeExpr::Bool)
+        }
+        // `self`, `static`, and `parent` are relative class types. They are kept symbolic here
+        // (their concrete class is not known until inheritance/trait flattening) and resolved to
+        // the enclosing class by `substitute_relative_class_types` before type checking.
+        Some(Token::Self_) => {
+            *pos += 1;
+            Ok(TypeExpr::Named(Name::unqualified("self")))
+        }
+        Some(Token::Static) => {
+            *pos += 1;
+            Ok(TypeExpr::Named(Name::unqualified("static")))
+        }
+        Some(Token::Parent) => {
+            *pos += 1;
+            Ok(TypeExpr::Named(Name::unqualified("parent")))
+        }
         Some(Token::Identifier(_)) | Some(Token::Backslash) => Ok(TypeExpr::Named(parse_name(
             tokens,
             pos,
@@ -236,11 +335,13 @@ pub(super) fn parse_params(
     (
         Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         Option<String>,
+        Option<TypeExpr>,
     ),
     CompileError,
 > {
     let mut params = Vec::new();
     let mut variadic = None;
+    let mut variadic_type = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() || variadic.is_some() {
             expect_token(
@@ -275,16 +376,13 @@ pub(super) fn parse_params(
             false
         };
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-            if type_ann.is_some() {
-                return Err(CompileError::new(
-                    span,
-                    "Typed variadic parameters are not supported yet",
-                ));
-            }
+            // A type annotation on a variadic (`int ...$xs`) constrains each passed argument; the
+            // declared element type is preserved so call validation can check every collected arg.
             *pos += 1;
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(n)) => {
                     variadic = Some(n.clone());
+                    variadic_type = type_ann;
                     *pos += 1;
                 }
                 _ => return Err(CompileError::new(span, "Expected variable after '...'")),
@@ -306,7 +404,7 @@ pub(super) fn parse_params(
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }
     }
-    Ok((params, variadic))
+    Ok((params, variadic, variadic_type))
 }
 
 /// Parses a comma-separated list of `Name`s until a token that does not start a name is

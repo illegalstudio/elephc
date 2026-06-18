@@ -23,6 +23,14 @@ mod modifiers_and_properties;
 mod callables;
 #[path = "oop/union_types.rs"]
 mod union_types;
+#[path = "oop/relative_types.rs"]
+mod relative_types;
+#[path = "oop/anonymous_classes.rs"]
+mod anonymous_classes;
+#[path = "oop/intersection_types.rs"]
+mod intersection_types;
+#[path = "oop/dynamic_dispatch.rs"]
+mod dynamic_dispatch;
 #[path = "oop/misc.rs"]
 mod misc;
 #[path = "oop/attributes.rs"]
@@ -31,3 +39,5 @@ mod attributes;
 mod constants;
 #[path = "oop/abstract_properties.rs"]
 mod abstract_properties;
+#[path = "oop/property_hooks.rs"]
+mod property_hooks;

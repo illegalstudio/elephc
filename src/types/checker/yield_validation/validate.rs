@@ -245,6 +245,11 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
 /// incremented for that closure's body, preserving the outer value on exit.
 fn visit_expr(expr: &Expr, st: &mut State) {
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::Yield { key, value } => {
             check_yield_context(expr.span, st);
             if let Some(k) = key {

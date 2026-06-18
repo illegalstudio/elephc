@@ -31,7 +31,7 @@ pub use calls::{
 pub use frame::{
     emit_cleanup_callback_epilogue, emit_cleanup_callback_prologue, emit_frame_prologue,
     emit_frame_restore, emit_frame_slot_address, emit_load_from_address,
-    emit_preserve_return_value, emit_restore_return_value, emit_return,
+    emit_preserve_return_value, emit_reg_move, emit_restore_return_value, emit_return,
     emit_store_to_address, emit_store_zero_to_address, emit_store_zero_to_local_slot, load_at_offset,
     load_at_offset_scratch, load_from_caller_stack, store_at_offset, store_at_offset_scratch,
 };

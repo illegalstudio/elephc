@@ -17,6 +17,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::{BlockId, DataId, Function, LocalSlotId, Module, Op, Ownership, ValueDef, ValueId};
+use crate::ir_passes::Allocation;
 use crate::types::PhpType;
 
 use super::frame::FrameLayout;
@@ -30,6 +31,8 @@ pub(super) struct FunctionContext<'a> {
     pub(super) emitter: &'a mut Emitter,
     pub(super) data: &'a mut DataSection,
     pub(super) placement: ValuePlacement,
+    pub(super) allocation: Allocation,
+    pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
     local_offsets: HashMap<LocalSlotId, usize>,
     promoted_ref_cells: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
@@ -62,6 +65,8 @@ impl<'a> FunctionContext<'a> {
             emitter,
             data,
             placement: layout.value_placement,
+            allocation: layout.allocation,
+            callee_saved_offsets: layout.callee_saved_offsets,
             local_offsets: layout.local_offsets,
             promoted_ref_cells: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
@@ -208,18 +213,37 @@ impl<'a> FunctionContext<'a> {
     }
 
     /// Loads a stored SSA value into the target's canonical result register(s).
+    ///
+    /// When the value lives in an allocated register, it is moved from there
+    /// into the result register instead of loaded from a stack slot.
     pub(super) fn load_value_to_result(&mut self, value: ValueId) -> Result<PhpType> {
         let ty = self.value_php_type(value)?;
-        let offset = self.value_offset(value)?;
-        abi::emit_load(self.emitter, &ty.codegen_repr(), offset);
+        if let Some(reg) = self.allocation.register_of(value) {
+            let dst = if ty.codegen_repr() == PhpType::Float {
+                abi::float_result_reg(self.emitter)
+            } else {
+                abi::int_result_reg(self.emitter)
+            };
+            abi::emit_reg_move(self.emitter, dst, reg);
+        } else {
+            let offset = self.value_offset(value)?;
+            abi::emit_load(self.emitter, &ty.codegen_repr(), offset);
+        }
         Ok(ty)
     }
 
     /// Loads a single-register SSA value into a caller-selected register.
+    ///
+    /// When the value lives in an allocated register, it is moved register to
+    /// register (a no-op when the source already is the requested register).
     pub(super) fn load_value_to_reg(&mut self, value: ValueId, reg: &str) -> Result<PhpType> {
         let ty = self.value_php_type(value)?;
-        let offset = self.value_offset(value)?;
-        abi::load_at_offset(self.emitter, reg, offset);
+        if let Some(home) = self.allocation.register_of(value) {
+            abi::emit_reg_move(self.emitter, reg, home);
+        } else {
+            let offset = self.value_offset(value)?;
+            abi::load_at_offset(self.emitter, reg, offset);
+        }
         Ok(ty)
     }
 
@@ -286,11 +310,23 @@ impl<'a> FunctionContext<'a> {
         Ok(ty)
     }
 
-    /// Stores the current result register(s) into the SSA value's fixed stack slot.
+    /// Stores the current result register(s) into the SSA value's home.
+    ///
+    /// When the value lives in an allocated register, the result register is
+    /// moved into it; otherwise it is stored into the value's stack slot.
     pub(super) fn store_result_value(&mut self, value: ValueId) -> Result<()> {
         let ty = self.value_php_type(value)?;
-        let offset = self.value_offset(value)?;
-        self.store_current_result_at_offset(&ty, offset);
+        if let Some(reg) = self.allocation.register_of(value) {
+            let src = if ty.codegen_repr() == PhpType::Float {
+                abi::float_result_reg(self.emitter)
+            } else {
+                abi::int_result_reg(self.emitter)
+            };
+            abi::emit_reg_move(self.emitter, reg, src);
+        } else {
+            let offset = self.value_offset(value)?;
+            self.store_current_result_at_offset(&ty, offset);
+        }
         Ok(())
     }
 

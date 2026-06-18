@@ -41,10 +41,12 @@ pub(crate) fn inject_builtin_enums(
                 value: None,
             },
         ],
+        &[],
+        &[],
+        &[],
         checker,
         next_class_id,
-    );
-    Ok(())
+    )
 }
 
 /// Ensures a builtin enum name does not collide with any user-visible class-like symbol.

@@ -244,10 +244,13 @@ impl Checker {
                     && method.is_static == is_static
             })
             .map(|method| {
+                // A typed variadic (`int ...$xs`) is a declared parameter too, so its element
+                // type survives the undeclared-params-become-mixed pass and stays enforceable.
                 method
                     .params
                     .iter()
                     .map(|(_, type_ann, _, _)| type_ann.is_some())
+                    .chain(method.variadic.iter().map(|_| method.variadic_type.is_some()))
                     .collect()
             })
             .unwrap_or_default()

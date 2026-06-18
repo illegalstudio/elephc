@@ -399,7 +399,7 @@ fn collect_type_expr(ty: &TypeExpr, out: &mut HashSet<String>) {
         TypeExpr::Named(name) => push_name(name, out),
         TypeExpr::Array(inner) => collect_type_expr(inner, out),
         TypeExpr::Nullable(inner) => collect_type_expr(inner, out),
-        TypeExpr::Union(parts) => {
+        TypeExpr::Union(parts) | TypeExpr::Intersection(parts) => {
             for p in parts {
                 collect_type_expr(p, out);
             }

@@ -308,3 +308,42 @@ fn test_error_cannot_instantiate_throwable_interface() {
         "Cannot instantiate interface: Throwable",
     );
 }
+
+/// Verifies that a `case` declaration outside of an enum body is rejected.
+#[test]
+fn test_error_case_outside_enum() {
+    expect_error(
+        "<?php class C { case Foo; }",
+        "'case' is only valid inside an enum",
+    );
+}
+
+/// Verifies that using a trait inside an enum is rejected (not yet supported).
+#[test]
+fn test_error_enum_using_trait() {
+    expect_error(
+        "<?php trait T {} enum E { use T; case A; }",
+        "Enums using traits are not supported yet",
+    );
+}
+
+/// Verifies that an enum method body is type-checked like a class method: a declared return type
+/// that does not match the returned value is rejected. Regression test — enum method bodies
+/// previously bypassed type checking entirely.
+#[test]
+fn test_error_enum_method_return_type_mismatch() {
+    expect_error(
+        "<?php enum E { case A; public function f(): int { return \"nope\"; } }",
+        "return type expects Int, got Str",
+    );
+}
+
+/// Verifies that an undefined variable referenced inside an enum method body is reported.
+/// Regression test — enum method bodies previously skipped name/variable checking.
+#[test]
+fn test_error_enum_method_undefined_variable() {
+    expect_error(
+        "<?php enum E { case A; public function f(): int { return $missing; } }",
+        "Undefined variable: $missing",
+    );
+}

@@ -34,7 +34,9 @@ use super::function_variants;
 use super::literal_defaults::{
     emit_array_literal_default_to_result, emit_assoc_array_literal_default_to_result,
     emit_boxed_null_literal_to_result,
-    emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
+    emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
+    emit_boxed_int_literal_to_result, emit_boxed_string_literal_default_to_result,
+    emit_empty_assoc_array_literal_to_result,
     emit_string_literal_default_to_result, emit_tagged_null_literal_to_result,
     literal_default_value, LiteralDefaultValue,
 };
@@ -53,16 +55,17 @@ pub(super) fn emit_module(
     heap_debug: bool,
     requires_elephc_tls: bool,
     emit: Emit,
+    regalloc_linear: bool,
 ) -> Result<()> {
     function_variants::emit_dispatchers(module, emitter, data);
     for function in module.functions.iter().filter(|function| !is_main(function)) {
-        emit_user_function(module, function, emitter, data)?;
+        emit_user_function(module, function, emitter, data, regalloc_linear)?;
     }
     for method in &module.class_methods {
-        emit_class_method(module, method, emitter, data)?;
+        emit_class_method(module, method, emitter, data, regalloc_linear)?;
     }
     for closure in &module.closures {
-        emit_user_function(module, closure, emitter, data)?;
+        emit_user_function(module, closure, emitter, data, regalloc_linear)?;
     }
     emit_eir_fiber_wrappers(module, emitter);
     if matches!(emit, Emit::Cdylib) {
@@ -81,6 +84,7 @@ pub(super) fn emit_module(
         gc_stats,
         heap_debug,
         requires_elephc_tls,
+        regalloc_linear,
     )
 }
 
@@ -138,12 +142,13 @@ fn emit_user_function(
     function: &Function,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    regalloc_linear: bool,
 ) -> Result<()> {
     if function.flags.is_generator {
         let entry_label = user_function_entry_symbol(function);
         return emit_generator_function(module, function, &entry_label, emitter, data);
     }
-    let layout = frame::layout_for_function(function);
+    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
         module,
@@ -190,12 +195,13 @@ fn emit_class_method(
     function: &Function,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = class_method_entry_symbol(function)?;
     if function.flags.is_generator {
         return emit_generator_function(module, function, &entry_label, emitter, data);
     }
-    let layout = frame::layout_for_function(function);
+    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
         module,
@@ -319,8 +325,9 @@ fn emit_main_function(
     gc_stats: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
+    regalloc_linear: bool,
 ) -> Result<()> {
-    let layout = frame::layout_for_function(function);
+    let layout = frame::layout_for_function(function, emitter.target, regalloc_linear);
     let mut ctx = FunctionContext::new(
         module,
         function,
@@ -594,6 +601,15 @@ fn emit_static_property_default_value(
         }
         LiteralDefaultValue::BoxedStr(value) => {
             emit_boxed_string_literal_default_to_result(ctx, value);
+        }
+        LiteralDefaultValue::BoxedInt(value) => {
+            emit_boxed_int_literal_to_result(ctx, *value);
+        }
+        LiteralDefaultValue::BoxedBool(value) => {
+            emit_boxed_bool_literal_to_result(ctx, *value);
+        }
+        LiteralDefaultValue::BoxedFloat(value) => {
+            emit_boxed_float_literal_to_result(ctx, *value);
         }
         LiteralDefaultValue::Array {
             elem_type,

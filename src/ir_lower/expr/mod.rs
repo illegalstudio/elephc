@@ -11,15 +11,15 @@
 //!   conservative effects until Phase 04 gives them target-specific meaning.
 
 use crate::ir::{
-    BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, MixedNumericOp, Op,
-    Ownership, Terminator, ValueId,
+    BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, MixedNumericOp, Op, Ownership,
+    Terminator, ValueId,
 };
 use crate::ir_lower::context::{
     value_ir_type, ClosureCapture, LoweredValue, LoweringContext, StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::function;
-use crate::names::{php_symbol_key, Name};
+use crate::names::{php_symbol_key, property_hook_get_method, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget, MagicConstant,
     StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
@@ -27,8 +27,8 @@ use crate::parser::ast::{
 use crate::span::Span;
 use crate::types::checker::builtins::canonical_builtin_function_name;
 use crate::types::{
-    array_key_type_from_value_type, checker::infer_expr_type_syntactic,
-    merge_array_key_types, normalized_array_key_type, ExternFunctionSig, FunctionSig, PhpType,
+    array_key_type_from_value_type, checker::infer_expr_type_syntactic, merge_array_key_types,
+    normalized_array_key_type, ExternFunctionSig, FunctionSig, PhpType,
 };
 
 mod constants;
@@ -41,6 +41,11 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
     }
 
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => {
+            unreachable!("ExprKind::IncludeValue must be expanded by the resolver")
+        }
         ExprKind::StringLiteral(value) => lower_string_literal(ctx, value, expr),
         ExprKind::IntLiteral(value) => lower_int_literal(ctx, *value, expr),
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
@@ -55,9 +60,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::Throw(inner) => lower_throw_expr(ctx, inner, expr),
         ExprKind::ErrorSuppress(inner) => lower_error_suppress(ctx, inner, expr),
         ExprKind::Print(inner) => lower_print(ctx, inner, expr),
-        ExprKind::NullCoalesce { value, default } => {
-            lower_null_coalesce(ctx, value, default, expr)
-        }
+        ExprKind::NullCoalesce { value, default } => lower_null_coalesce(ctx, value, default, expr),
         ExprKind::Pipe { value, callable } => lower_pipe(ctx, value, callable, expr),
         ExprKind::Assignment {
             target,
@@ -81,15 +84,22 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::FunctionCall { name, args } => lower_function_call(ctx, name, args, expr),
         ExprKind::ArrayLiteral(items) => lower_array_literal(ctx, items, expr),
         ExprKind::ArrayLiteralAssoc(pairs) => lower_assoc_array_literal(ctx, pairs, expr),
-        ExprKind::Match { subject, arms, default } => lower_match(ctx, subject, arms, default.as_deref(), expr),
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => lower_match(ctx, subject, arms, default.as_deref(), expr),
         ExprKind::ArrayAccess { array, index } => lower_array_access(ctx, array, index, expr),
-        ExprKind::Ternary { condition, then_expr, else_expr } => {
-            lower_ternary(ctx, condition, then_expr, else_expr, expr)
-        }
-        ExprKind::ShortTernary { value, default } => {
-            lower_short_ternary(ctx, value, default, expr)
-        }
-        ExprKind::Cast { target, expr: inner } => lower_cast(ctx, target, inner, expr),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => lower_ternary(ctx, condition, then_expr, else_expr, expr),
+        ExprKind::ShortTernary { value, default } => lower_short_ternary(ctx, value, default, expr),
+        ExprKind::Cast {
+            target,
+            expr: inner,
+        } => lower_cast(ctx, target, inner, expr),
         ExprKind::Closure {
             params,
             variadic,
@@ -114,14 +124,19 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::ExprCall { callee, args } => lower_expr_call(ctx, callee, args, expr),
         ExprKind::ConstRef(name) => constants::lower_const_ref(ctx, name, expr),
         ExprKind::NewObject { class_name, args } => lower_new_object(ctx, class_name, args, expr),
-        ExprKind::NewDynamic { name_expr, args } => {
-            lower_new_dynamic(ctx, name_expr, args, expr)
+        ExprKind::NewDynamic { name_expr, args } => lower_new_dynamic(ctx, name_expr, args, expr),
+        ExprKind::NewDynamicObject {
+            class_name,
+            fallback_class,
+            required_parent,
+            args,
+        } => lower_new_dynamic_object(ctx, class_name, fallback_class, required_parent, args, expr),
+        ExprKind::PropertyAccess { object, property } => {
+            lower_property_get(ctx, object, property, Op::PropGet, expr)
         }
-        ExprKind::NewDynamicObject { class_name, fallback_class, required_parent, args } => {
-            lower_new_dynamic_object(ctx, class_name, fallback_class, required_parent, args, expr)
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            lower_dynamic_property_get(ctx, object, property, expr)
         }
-        ExprKind::PropertyAccess { object, property } => lower_property_get(ctx, object, property, Op::PropGet, expr),
-        ExprKind::DynamicPropertyAccess { object, property } => lower_dynamic_property_get(ctx, object, property, expr),
         ExprKind::NullsafePropertyAccess { object, property } => {
             lower_property_get(ctx, object, property, Op::NullsafePropGet, expr)
         }
@@ -131,22 +146,35 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::StaticPropertyAccess { receiver, property } => {
             lower_static_property_get(ctx, receiver, property, expr)
         }
-        ExprKind::MethodCall { object, method, args } => lower_method_call(ctx, object, method, args, Op::MethodCall, expr),
-        ExprKind::NullsafeMethodCall { object, method, args } => {
-            lower_nullsafe_method_call(ctx, object, method, args, expr)
-        }
-        ExprKind::StaticMethodCall { receiver, method, args } => {
-            lower_static_method_call(ctx, receiver, method, args, expr)
-        }
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+        } => lower_method_call(ctx, object, method, args, Op::MethodCall, expr),
+        ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => lower_nullsafe_method_call(ctx, object, method, args, expr),
+        ExprKind::StaticMethodCall {
+            receiver,
+            method,
+            args,
+        } => lower_static_method_call(ctx, receiver, method, args, expr),
         ExprKind::FirstClassCallable(target) => lower_first_class_callable(ctx, target, expr),
         ExprKind::This => ctx.load_local("this", Some(expr.span)),
-        ExprKind::PtrCast { target_type, expr: inner } => lower_ptr_cast(ctx, target_type, inner, expr),
+        ExprKind::PtrCast {
+            target_type,
+            expr: inner,
+        } => lower_ptr_cast(ctx, target_type, inner, expr),
         ExprKind::BufferNew { element_type, len } => lower_buffer_new(ctx, element_type, len, expr),
         ExprKind::ClassConstant { receiver } => lower_class_constant(ctx, receiver, expr),
         ExprKind::ScopedConstantAccess { receiver, name } => {
             lower_scoped_constant(ctx, receiver, name, expr)
         }
-        ExprKind::NewScopedObject { receiver, args } => lower_new_scoped_object(ctx, receiver, args, expr),
+        ExprKind::NewScopedObject { receiver, args } => {
+            lower_new_scoped_object(ctx, receiver, args, expr)
+        }
         ExprKind::MagicConstant(kind) => lower_magic_constant(ctx, kind, expr),
         ExprKind::Yield { key, value } => lower_yield(ctx, key.as_deref(), value.as_deref(), expr),
         ExprKind::YieldFrom(inner) => lower_yield_from(ctx, inner, expr),
@@ -154,7 +182,11 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
 }
 
 /// Lowers a string literal.
-fn lower_string_literal(ctx: &mut LoweringContext<'_, '_>, value: &str, expr: &Expr) -> LoweredValue {
+fn lower_string_literal(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &str,
+    expr: &Expr,
+) -> LoweredValue {
     let data = ctx.intern_string(value);
     let value = ctx
         .builder
@@ -169,7 +201,10 @@ fn lower_string_literal(ctx: &mut LoweringContext<'_, '_>, value: &str, expr: &E
             Some(expr.span),
         )
         .expect("const_str produces a value");
-    LoweredValue { value, ir_type: IrType::Str }
+    LoweredValue {
+        value,
+        ir_type: IrType::Str,
+    }
 }
 
 /// Lowers an integer literal.
@@ -187,7 +222,10 @@ fn lower_int_literal(ctx: &mut LoweringContext<'_, '_>, value: i64, expr: &Expr)
             Some(expr.span),
         )
         .expect("const_i64 produces a value");
-    LoweredValue { value, ir_type: IrType::I64 }
+    LoweredValue {
+        value,
+        ir_type: IrType::I64,
+    }
 }
 
 /// Lowers a float literal.
@@ -205,7 +243,10 @@ fn lower_float_literal(ctx: &mut LoweringContext<'_, '_>, value: f64, expr: &Exp
             Some(expr.span),
         )
         .expect("const_f64 produces a value");
-    LoweredValue { value, ir_type: IrType::F64 }
+    LoweredValue {
+        value,
+        ir_type: IrType::F64,
+    }
 }
 
 /// Lowers a boolean literal.
@@ -223,7 +264,10 @@ fn lower_bool_literal(ctx: &mut LoweringContext<'_, '_>, value: bool, expr: &Exp
             Some(expr.span),
         )
         .expect("const_bool produces a value");
-    LoweredValue { value, ir_type: IrType::I64 }
+    LoweredValue {
+        value,
+        ir_type: IrType::I64,
+    }
 }
 
 /// Lowers PHP null.
@@ -241,7 +285,10 @@ fn lower_null(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
             Some(expr.span),
         )
         .expect("const_null produces a value");
-    LoweredValue { value, ir_type: IrType::I64 }
+    LoweredValue {
+        value,
+        ir_type: IrType::I64,
+    }
 }
 
 /// Lowers a nullsafe expression that is known to short-circuit to PHP null.
@@ -267,14 +314,26 @@ fn lower_binary(
 ) -> LoweredValue {
     match op {
         BinOp::Concat => lower_concat(ctx, left, right, expr),
-        BinOp::Eq | BinOp::NotEq | BinOp::StrictEq | BinOp::StrictNotEq
-        | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq | BinOp::Spaceship => {
-            lower_compare(ctx, left, op, right, expr)
-        }
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow
-        | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
-            lower_numeric_binary(ctx, left, op, right, expr)
-        }
+        BinOp::Eq
+        | BinOp::NotEq
+        | BinOp::StrictEq
+        | BinOp::StrictNotEq
+        | BinOp::Lt
+        | BinOp::Gt
+        | BinOp::LtEq
+        | BinOp::GtEq
+        | BinOp::Spaceship => lower_compare(ctx, left, op, right, expr),
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Mod
+        | BinOp::Pow
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::BitXor
+        | BinOp::ShiftLeft
+        | BinOp::ShiftRight => lower_numeric_binary(ctx, left, op, right, expr),
         BinOp::And | BinOp::Or => lower_logical_binary(ctx, left, op, right, expr),
         BinOp::NullCoalesce => lower_null_coalesce(ctx, left, right, expr),
         BinOp::Xor => lower_logical_xor(ctx, left, right, expr),
@@ -365,7 +424,14 @@ fn lower_numeric_binary(
             BinOp::Div => Op::FDiv,
             _ => Op::RuntimeCall,
         };
-        return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, fop.default_effects(), Some(expr.span));
+        return ctx.emit_value(
+            fop,
+            vec![lhs.value, rhs.value],
+            None,
+            PhpType::Float,
+            fop.default_effects(),
+            Some(expr.span),
+        );
     }
     if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
         let iop = match op {
@@ -382,14 +448,34 @@ fn lower_numeric_binary(
             BinOp::ShiftRight => Op::IShrA,
             _ => Op::MixedNumericBinop,
         };
-        let php_type = if matches!(op, BinOp::Div) { PhpType::Float } else { PhpType::Int };
-        let result_type = if matches!(op, BinOp::Div) { IrType::F64 } else { IrType::I64 };
+        let php_type = if matches!(op, BinOp::Div) {
+            PhpType::Float
+        } else {
+            PhpType::Int
+        };
+        let result_type = if matches!(op, BinOp::Div) {
+            IrType::F64
+        } else {
+            IrType::I64
+        };
         let ownership = Ownership::for_php_type(&php_type);
         let value = ctx
             .builder
-            .emit_with_effects(iop, vec![lhs.value, rhs.value], None, result_type, php_type, ownership, iop.default_effects(), Some(expr.span))
+            .emit_with_effects(
+                iop,
+                vec![lhs.value, rhs.value],
+                None,
+                result_type,
+                php_type,
+                ownership,
+                iop.default_effects(),
+                Some(expr.span),
+            )
             .expect("numeric binary produces a value");
-        return LoweredValue { value, ir_type: result_type };
+        return LoweredValue {
+            value,
+            ir_type: result_type,
+        };
     }
     if let Some(mixed_op) = mixed_numeric_op(op) {
         return lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
@@ -433,24 +519,20 @@ fn array_union_plan(
                 value: Box::new(array_union_value_type(left_value, right_value)),
             },
         )),
-        (PhpType::Array(left_elem), PhpType::AssocArray { key, value }) => {
-            Some((
-                Op::ArrayHashUnion,
-                PhpType::AssocArray {
-                    key: Box::new(merge_array_key_types(PhpType::Int, key.codegen_repr())),
-                    value: Box::new(array_union_value_type(left_elem, value)),
-                },
-            ))
-        }
-        (PhpType::AssocArray { key, value }, PhpType::Array(right_elem)) => {
-            Some((
-                Op::HashArrayUnion,
-                PhpType::AssocArray {
-                    key: Box::new(merge_array_key_types(key.codegen_repr(), PhpType::Int)),
-                    value: Box::new(array_union_value_type(value, right_elem)),
-                },
-            ))
-        }
+        (PhpType::Array(left_elem), PhpType::AssocArray { key, value }) => Some((
+            Op::ArrayHashUnion,
+            PhpType::AssocArray {
+                key: Box::new(merge_array_key_types(PhpType::Int, key.codegen_repr())),
+                value: Box::new(array_union_value_type(left_elem, value)),
+            },
+        )),
+        (PhpType::AssocArray { key, value }, PhpType::Array(right_elem)) => Some((
+            Op::HashArrayUnion,
+            PhpType::AssocArray {
+                key: Box::new(merge_array_key_types(key.codegen_repr(), PhpType::Int)),
+                value: Box::new(array_union_value_type(value, right_elem)),
+            },
+        )),
         _ => None,
     }
 }
@@ -502,8 +584,7 @@ fn array_union_value_type(left: &PhpType, right: &PhpType) -> PhpType {
 
 /// Returns true when runtime mixed numeric dispatch is needed before float coercion.
 fn should_use_mixed_numeric_binop(lhs: IrType, rhs: IrType) -> bool {
-    !matches!(lhs, IrType::I64 | IrType::F64)
-        || !matches!(rhs, IrType::I64 | IrType::F64)
+    !matches!(lhs, IrType::I64 | IrType::F64) || !matches!(rhs, IrType::I64 | IrType::F64)
 }
 
 /// Emits a mixed-numeric EIR opcode with the operation immediate required by the backend.
@@ -535,7 +616,12 @@ fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
 }
 
 /// Lowers string concatenation.
-fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right: &Expr, expr: &Expr) -> LoweredValue {
+fn lower_concat(
+    ctx: &mut LoweringContext<'_, '_>,
+    left: &Expr,
+    right: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
     let lhs = coerce_to_string(ctx, lhs, expr);
     let lhs = persist_concat_lhs_if_rhs_can_reset(ctx, lhs, right, expr.span);
@@ -616,6 +702,11 @@ pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
 /// Returns whether evaluating an expression can reset the caller's concat scratch storage.
 fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => {
+            unreachable!("ExprKind::IncludeValue must be expanded by the resolver")
+        }
         ExprKind::FunctionCall { .. }
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }
@@ -647,8 +738,7 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::BufferNew { len: inner, .. } => expr_can_reset_concat_storage(inner),
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default } => {
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             expr_can_reset_concat_storage(value) || expr_can_reset_concat_storage(default)
         }
         ExprKind::Assignment {
@@ -666,9 +756,9 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
                     .is_some_and(|target| expr_can_reset_concat_storage(target))
         }
         ExprKind::ArrayLiteral(items) => items.iter().any(expr_can_reset_concat_storage),
-        ExprKind::ArrayLiteralAssoc(items) => items
-            .iter()
-            .any(|(key, value)| expr_can_reset_concat_storage(key) || expr_can_reset_concat_storage(value)),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
+            expr_can_reset_concat_storage(key) || expr_can_reset_concat_storage(value)
+        }),
         ExprKind::Match {
             subject,
             arms,
@@ -700,9 +790,7 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
             expr_can_reset_concat_storage(object) || expr_can_reset_concat_storage(property)
         }
         ExprKind::PropertyAccess { object, .. }
-        | ExprKind::NullsafePropertyAccess { object, .. } => {
-            expr_can_reset_concat_storage(object)
-        }
+        | ExprKind::NullsafePropertyAccess { object, .. } => expr_can_reset_concat_storage(object),
         ExprKind::FirstClassCallable(target) => callable_target_can_reset_concat_storage(target),
         ExprKind::Closure { .. }
         | ExprKind::StringLiteral(_)
@@ -765,7 +853,11 @@ fn lower_compare(
     } else {
         None
     };
-    let php_type = if matches!(op, BinOp::Spaceship) { PhpType::Int } else { PhpType::Bool };
+    let php_type = if matches!(op, BinOp::Spaceship) {
+        PhpType::Int
+    } else {
+        PhpType::Bool
+    };
     let result = ctx.emit_value(
         opcode,
         vec![lhs.value, rhs.value],
@@ -815,30 +907,84 @@ fn lower_numeric_unary(
 ) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     match value.ir_type {
-        IrType::F64 => ctx.emit_value(float_op, vec![value.value], None, PhpType::Float, float_op.default_effects(), Some(expr.span)),
-        IrType::I64 => ctx.emit_value(int_op, vec![value.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span)),
+        IrType::F64 => ctx.emit_value(
+            float_op,
+            vec![value.value],
+            None,
+            PhpType::Float,
+            float_op.default_effects(),
+            Some(expr.span),
+        ),
+        IrType::I64 => ctx.emit_value(
+            int_op,
+            vec![value.value],
+            None,
+            PhpType::Int,
+            int_op.default_effects(),
+            Some(expr.span),
+        ),
         IrType::TaggedScalar => {
             let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
-            ctx.emit_value(int_op, vec![narrowed.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span))
+            ctx.emit_value(
+                int_op,
+                vec![narrowed.value],
+                None,
+                PhpType::Int,
+                int_op.default_effects(),
+                Some(expr.span),
+            )
         }
         _ if int_op == Op::INeg => {
             let zero = lower_int_literal(ctx, 0, expr);
             lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr)
         }
-        _ => ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Mixed, Effects::all(), Some(expr.span)),
+        _ => ctx.emit_value(
+            Op::RuntimeCall,
+            vec![value.value],
+            None,
+            PhpType::Mixed,
+            Effects::all(),
+            Some(expr.span),
+        ),
     }
 }
 
 /// Lowers an integer unary operation.
-fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, op: Op, expr: &Expr) -> LoweredValue {
+fn lower_int_unary(
+    ctx: &mut LoweringContext<'_, '_>,
+    inner: &Expr,
+    op: Op,
+    expr: &Expr,
+) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     if value.ir_type == IrType::I64 {
-        ctx.emit_value(op, vec![value.value], None, PhpType::Int, op.default_effects(), Some(expr.span))
+        ctx.emit_value(
+            op,
+            vec![value.value],
+            None,
+            PhpType::Int,
+            op.default_effects(),
+            Some(expr.span),
+        )
     } else if value.ir_type == IrType::TaggedScalar {
         let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
-        ctx.emit_value(op, vec![narrowed.value], None, PhpType::Int, op.default_effects(), Some(expr.span))
+        ctx.emit_value(
+            op,
+            vec![narrowed.value],
+            None,
+            PhpType::Int,
+            op.default_effects(),
+            Some(expr.span),
+        )
     } else {
-        ctx.emit_value(Op::RuntimeCall, vec![value.value], None, PhpType::Mixed, Effects::all(), Some(expr.span))
+        ctx.emit_value(
+            Op::RuntimeCall,
+            vec![value.value],
+            None,
+            PhpType::Mixed,
+            Effects::all(),
+            Some(expr.span),
+        )
     }
 }
 
@@ -876,22 +1022,50 @@ fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> Lo
 /// Lowers throw used as an expression and returns a placeholder null value.
 fn lower_throw_expr(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    ctx.emit_void(Op::ThrowException, vec![value.value], None, Op::ThrowException.default_effects(), Some(expr.span));
+    ctx.emit_void(
+        Op::ThrowException,
+        vec![value.value],
+        None,
+        Op::ThrowException.default_effects(),
+        Some(expr.span),
+    );
     lower_null(ctx, expr)
 }
 
 /// Lowers an error-suppressed expression.
-fn lower_error_suppress(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
-    ctx.emit_void(Op::ErrorSuppressBegin, Vec::new(), None, Op::ErrorSuppressBegin.default_effects(), Some(expr.span));
+fn lower_error_suppress(
+    ctx: &mut LoweringContext<'_, '_>,
+    inner: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    ctx.emit_void(
+        Op::ErrorSuppressBegin,
+        Vec::new(),
+        None,
+        Op::ErrorSuppressBegin.default_effects(),
+        Some(expr.span),
+    );
     let value = lower_expr(ctx, inner);
-    ctx.emit_void(Op::ErrorSuppressEnd, Vec::new(), None, Op::ErrorSuppressEnd.default_effects(), Some(expr.span));
+    ctx.emit_void(
+        Op::ErrorSuppressEnd,
+        Vec::new(),
+        None,
+        Op::ErrorSuppressEnd.default_effects(),
+        Some(expr.span),
+    );
     value
 }
 
 /// Lowers `print`.
 fn lower_print(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    ctx.emit_void(Op::PrintValue, vec![value.value], None, Op::PrintValue.default_effects(), Some(expr.span));
+    ctx.emit_void(
+        Op::PrintValue,
+        vec![value.value],
+        None,
+        Op::PrintValue.default_effects(),
+        Some(expr.span),
+    );
     lower_int_literal(ctx, 1, expr)
 }
 
@@ -1019,7 +1193,9 @@ fn lower_null_coalesce(
     );
     let result_type = null_coalesce_result_type(ctx, value.value, default);
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
-    let default_block = ctx.builder.create_named_block("coalesce.default", Vec::new());
+    let default_block = ctx
+        .builder
+        .create_named_block("coalesce.default", Vec::new());
     let value_block = ctx.builder.create_named_block("coalesce.value", Vec::new());
     let merge = ctx.builder.create_named_block("coalesce.merge", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -1107,9 +1283,15 @@ fn lower_short_ternary(
     let cond = ctx.truthy(value, Some(condition_span));
     let result_type = fallback_expr_type(expr);
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
-    let value_block = ctx.builder.create_named_block("short_ternary.value", Vec::new());
-    let default_block = ctx.builder.create_named_block("short_ternary.default", Vec::new());
-    let merge = ctx.builder.create_named_block("short_ternary.merge", Vec::new());
+    let value_block = ctx
+        .builder
+        .create_named_block("short_ternary.value", Vec::new());
+    let default_block = ctx
+        .builder
+        .create_named_block("short_ternary.default", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("short_ternary.merge", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: value_block,
@@ -1131,7 +1313,12 @@ fn lower_short_ternary(
 }
 
 /// Lowers a pipe operation.
-fn lower_pipe(ctx: &mut LoweringContext<'_, '_>, value: &Expr, callable: &Expr, expr: &Expr) -> LoweredValue {
+fn lower_pipe(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+    callable: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
     match &callable.kind {
         ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
             let arg = lower_pipe_value_temp(ctx, value, expr);
@@ -1186,18 +1373,24 @@ fn lower_pipe_callable_variable(
         return lower_pipe_runtime_call(ctx, &arg, &callable, expr);
     };
     if matches!(target, StaticCallableBinding::InstanceMethod { .. }) {
-        emit_backend_comment_marker(ctx, &format!("call descriptor variable ${}()", name), expr.span);
+        emit_backend_comment_marker(
+            ctx,
+            &format!("call descriptor variable ${}()", name),
+            expr.span,
+        );
         return lower_pipe_runtime_call(ctx, &arg, &callable, expr);
     }
     emit_backend_comment_marker(
         ctx,
-        &format!("uninvoked FCC wrapper ${} (stubbed by EIR direct pipe call)", name),
+        &format!(
+            "uninvoked FCC wrapper ${} (stubbed by EIR direct pipe call)",
+            name
+        ),
         expr.span,
     );
     let fallback_arg = arg.clone();
-    lower_static_callable_call(ctx, target, &[arg], expr).unwrap_or_else(|| {
-        lower_pipe_runtime_call(ctx, &fallback_arg, &callable, expr)
-    })
+    lower_static_callable_call(ctx, target, &[arg], expr)
+        .unwrap_or_else(|| lower_pipe_runtime_call(ctx, &fallback_arg, &callable, expr))
 }
 
 /// Emits a backend-only comment marker using a void EIR NOP instruction.
@@ -1343,9 +1536,15 @@ fn lower_conditional_non_local_null_coalesce_assignment(
     );
     let result_type = null_coalesce_result_type(ctx, current.value, default);
     ctx.declare_hidden_temp_with_name(temp_name, result_type.clone());
-    let assign_block = ctx.builder.create_named_block("coalesce_assign.default", Vec::new());
-    let keep_block = ctx.builder.create_named_block("coalesce_assign.value", Vec::new());
-    let merge = ctx.builder.create_named_block("coalesce_assign.merge", Vec::new());
+    let assign_block = ctx
+        .builder
+        .create_named_block("coalesce_assign.default", Vec::new());
+    let keep_block = ctx
+        .builder
+        .create_named_block("coalesce_assign.value", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("coalesce_assign.merge", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: is_null.value,
         then_target: assign_block,
@@ -1462,13 +1661,29 @@ fn lower_inc_dec(
     let one = lower_int_literal(ctx, 1, expr);
     let operand = coerce_to_int(ctx, old, expr);
     let op = if increment { Op::IAdd } else { Op::ISub };
-    let new = ctx.emit_value(op, vec![operand.value, one.value], None, PhpType::Int, op.default_effects(), Some(expr.span));
+    let new = ctx.emit_value(
+        op,
+        vec![operand.value, one.value],
+        None,
+        PhpType::Int,
+        op.default_effects(),
+        Some(expr.span),
+    );
     ctx.store_local(name, new, PhpType::Int, Some(expr.span));
-    if post { old } else { new }
+    if post {
+        old
+    } else {
+        new
+    }
 }
 
 /// Lowers a direct function, builtin, or extern call.
-fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
+fn lower_function_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &Name,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     constants::register_static_define_call(ctx, name, args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;
@@ -1583,8 +1798,7 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
 
 /// Returns true when a dynamic eval fallback can preserve simple positional call semantics.
 fn plain_positional_call_args(args: &[Expr]) -> bool {
-    !crate::types::call_args::has_named_args(args)
-        && !args.iter().any(is_spread_arg)
+    !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg)
 }
 
 /// Lowers post-eval function-name probes through the eval context's dynamic table.
@@ -1608,8 +1822,7 @@ fn lower_eval_function_probe(
     let ExprKind::StringLiteral(function_name) = &args[0].kind else {
         return None;
     };
-    if function_name.contains("::")
-        || resolve_static_string_callable(ctx, function_name).is_some()
+    if function_name.contains("::") || resolve_static_string_callable(ctx, function_name).is_some()
     {
         return None;
     }
@@ -1690,8 +1903,12 @@ fn lower_lazy_isset(
     }
 
     let temp_name = ctx.declare_hidden_temp(PhpType::Int);
-    let false_block = ctx.builder.create_named_block("isset.lazy_false", Vec::new());
-    let merge = ctx.builder.create_named_block("isset.lazy_merge", Vec::new());
+    let false_block = ctx
+        .builder
+        .create_named_block("isset.lazy_false", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("isset.lazy_merge", Vec::new());
     let data = ctx.intern_function_name(name);
 
     for (idx, arg) in args.iter().enumerate() {
@@ -1707,9 +1924,11 @@ fn lower_lazy_isset(
             )
         });
         let then_target = if idx + 1 == args.len() {
-            ctx.builder.create_named_block("isset.lazy_true", Vec::new())
+            ctx.builder
+                .create_named_block("isset.lazy_true", Vec::new())
         } else {
-            ctx.builder.create_named_block("isset.lazy_next", Vec::new())
+            ctx.builder
+                .create_named_block("isset.lazy_next", Vec::new())
         };
         ctx.builder.terminate(Terminator::CondBr {
             cond: checked.value,
@@ -1735,10 +1954,7 @@ fn lower_lazy_isset(
 }
 
 /// Lowers a single `isset()` operand that has special lazy PHP semantics.
-fn lower_lazy_isset_operand(
-    ctx: &mut LoweringContext<'_, '_>,
-    arg: &Expr,
-) -> Option<LoweredValue> {
+fn lower_lazy_isset_operand(ctx: &mut LoweringContext<'_, '_>, arg: &Expr) -> Option<LoweredValue> {
     let ExprKind::ArrayAccess { array, index } = &arg.kind else {
         return None;
     };
@@ -1796,8 +2012,9 @@ fn static_callable_binding_is_callable(
     match target {
         StaticCallableBinding::StaticMethod { receiver, method }
         | StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
-            static_receiver_class_name(ctx, receiver)
-                .is_some_and(|class_name| static_method_callback_is_callable(ctx, &class_name, method))
+            static_receiver_class_name(ctx, receiver).is_some_and(|class_name| {
+                static_method_callback_is_callable(ctx, &class_name, method)
+            })
         }
         StaticCallableBinding::UserFunction(_)
         | StaticCallableBinding::ExternFunction(_)
@@ -1819,7 +2036,12 @@ fn lower_static_call_user_func(
             let callback_expr = args.first()?;
             let callback_args = &args[1..];
             let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
-            if call_user_func_should_use_descriptor(ctx, callback_expr, callback_args, signature.as_ref()) {
+            if call_user_func_should_use_descriptor(
+                ctx,
+                callback_expr,
+                callback_args,
+                signature.as_ref(),
+            ) {
                 return lower_call_user_func_descriptor_invoke(
                     ctx,
                     callback_expr,
@@ -1847,8 +2069,9 @@ fn lower_static_call_user_func(
                 return None;
             };
             if matches!(arg_array.kind, ExprKind::ArrayLiteralAssoc(_))
-                && static_callable_binding_for_expr(ctx, callback_arg)
-                    .is_some_and(|target| matches!(target, StaticCallableBinding::InstanceMethod { .. }))
+                && static_callable_binding_for_expr(ctx, callback_arg).is_some_and(|target| {
+                    matches!(target, StaticCallableBinding::InstanceMethod { .. })
+                })
             {
                 return None;
             }
@@ -1885,8 +2108,7 @@ fn lower_eval_call_user_func_fallback(
     let ExprKind::StringLiteral(callback_name) = &callback_expr.kind else {
         return None;
     };
-    if callback_name.contains("::")
-        || resolve_static_string_callable(ctx, callback_name).is_some()
+    if callback_name.contains("::") || resolve_static_string_callable(ctx, callback_name).is_some()
     {
         return None;
     }
@@ -1916,8 +2138,7 @@ fn lower_eval_call_user_func_array_fallback(
     let ExprKind::StringLiteral(callback_name) = &callback_expr.kind else {
         return None;
     };
-    if callback_name.contains("::")
-        || resolve_static_string_callable(ctx, callback_name).is_some()
+    if callback_name.contains("::") || resolve_static_string_callable(ctx, callback_name).is_some()
     {
         return None;
     }
@@ -1968,7 +2189,11 @@ fn lower_instance_callable_call_user_func(
     let result_type = static_callable_return_type(ctx, &callback);
     let signature = instance_callable_signature(&callback).cloned();
     let mut operands = vec![lower_expr(ctx, callback_expr).value];
-    operands.extend(lower_args_with_signature(ctx, signature.as_ref(), callback_args));
+    operands.extend(lower_args_with_signature(
+        ctx,
+        signature.as_ref(),
+        callback_args,
+    ));
     Some(ctx.emit_value(
         Op::ExprCall,
         operands,
@@ -1989,12 +2214,17 @@ fn lower_dynamic_call_user_func(
     if php_symbol_key(name.trim_start_matches('\\')) != "call_user_func" || args.is_empty() {
         return None;
     }
-    if matches!(args[0].kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)) {
+    if matches!(
+        args[0].kind,
+        ExprKind::NamedArg { .. } | ExprKind::Spread(_)
+    ) {
         return None;
     }
     let signature = callable_descriptor_signature_for_expr(ctx, &args[0]);
     let callback = lower_expr(ctx, &args[0]);
-    if descriptor_callback_php_type_supported(&ctx.builder.value_php_type(callback.value).codegen_repr()) {
+    if descriptor_callback_php_type_supported(
+        &ctx.builder.value_php_type(callback.value).codegen_repr(),
+    ) {
         return lower_call_user_func_descriptor_invoke_from_value(
             ctx,
             callback,
@@ -2037,13 +2267,12 @@ fn lower_dynamic_call_user_func_array(
     }
     let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
     let callback = lower_expr(ctx, callback_expr);
-    let arg_array =
-        lower_descriptor_invoker_arg_array_for_call_user_func_array(
-            ctx,
-            arg_array_expr,
-            signature.as_ref(),
-        )
-        .unwrap_or_else(|| lower_expr(ctx, arg_array_expr));
+    let arg_array = lower_descriptor_invoker_arg_array_for_call_user_func_array(
+        ctx,
+        arg_array_expr,
+        signature.as_ref(),
+    )
+    .unwrap_or_else(|| lower_expr(ctx, arg_array_expr));
     Some(ctx.emit_value(
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_array.value],
@@ -2060,7 +2289,11 @@ fn callable_descriptor_signature_for_expr(
     callback: &Expr,
 ) -> Option<FunctionSig> {
     match &callback.kind {
-        ExprKind::Ternary { then_expr, else_expr, .. } => {
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => {
             let left = callable_descriptor_signature_for_expr(ctx, then_expr)?;
             let right = callable_descriptor_signature_for_expr(ctx, else_expr)?;
             compatible_descriptor_signature(left, &right)
@@ -2070,12 +2303,10 @@ fn callable_descriptor_signature_for_expr(
             let right = callable_descriptor_signature_for_expr(ctx, default)?;
             compatible_descriptor_signature(left, &right)
         }
-        ExprKind::Variable(name) => ctx
-            .callable_param_signature(name)
-            .cloned()
-            .or_else(|| ctx.static_callable_local(name).and_then(|target| {
-                signature_for_static_callable_binding(ctx, target)
-            })),
+        ExprKind::Variable(name) => ctx.callable_param_signature(name).cloned().or_else(|| {
+            ctx.static_callable_local(name)
+                .and_then(|target| signature_for_static_callable_binding(ctx, target))
+        }),
         _ => static_callable_binding_for_expr(ctx, callback)
             .and_then(|target| signature_for_static_callable_binding(ctx, target))
             .or_else(|| invokable_object_signature_for_expr(ctx, callback)),
@@ -2140,9 +2371,12 @@ fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
     let ExprKind::ArrayLiteral(items) = &arg_array.kind else {
         return None;
     };
-    if items.iter().any(is_spread_arg) || !items.iter().enumerate().any(|(index, item)| {
-        invoker_ref_arg_variable(ctx, sig, index, item).is_some()
-    }) {
+    if items.iter().any(is_spread_arg)
+        || !items
+            .iter()
+            .enumerate()
+            .any(|(index, item)| invoker_ref_arg_variable(ctx, sig, index, item).is_some())
+    {
         return None;
     }
 
@@ -2249,7 +2483,9 @@ fn lower_call_user_func_descriptor_invoke(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let callback = lower_expr(ctx, callback_expr);
-    if !descriptor_callback_php_type_supported(&ctx.builder.value_php_type(callback.value).codegen_repr()) {
+    if !descriptor_callback_php_type_supported(
+        &ctx.builder.value_php_type(callback.value).codegen_repr(),
+    ) {
         return None;
     }
     lower_call_user_func_descriptor_invoke_from_value(ctx, callback, args, sig, expr)
@@ -2263,7 +2499,8 @@ fn lower_call_user_func_descriptor_invoke_from_value(
     sig: Option<&FunctionSig>,
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let arg_container = lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span)?;
+    let arg_container =
+        lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span)?;
     let result_type = sig
         .map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
         .unwrap_or(PhpType::Mixed);
@@ -2296,9 +2533,13 @@ fn lower_descriptor_invoker_arg_container_for_call_user_func(
         if args.iter().any(is_spread_arg) {
             return None;
         }
-        return Some(lower_named_descriptor_invoker_arg_container(ctx, args, sig, span));
+        return Some(lower_named_descriptor_invoker_arg_container(
+            ctx, args, sig, span,
+        ));
     }
-    Some(lower_indexed_descriptor_invoker_arg_array(ctx, args, sig, span))
+    Some(lower_indexed_descriptor_invoker_arg_array(
+        ctx, args, sig, span,
+    ))
 }
 
 /// Builds an indexed `array<mixed>` argument container, expanding positional spreads.
@@ -2325,12 +2566,13 @@ fn lower_indexed_descriptor_invoker_arg_array(
             lower_indexed_array_spread_into_array(ctx, array, source, Some(&elem_ty), arg.span);
             continue;
         }
-        let value = if let Some(var_name) = invoker_ref_arg_variable(ctx, sig, positional_index, arg) {
-            lower_invoker_ref_arg_marker(ctx, var_name, arg.span)
-        } else {
-            let value = lower_expr(ctx, arg);
-            coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
-        };
+        let value =
+            if let Some(var_name) = invoker_ref_arg_variable(ctx, sig, positional_index, arg) {
+                lower_invoker_ref_arg_marker(ctx, var_name, arg.span)
+            } else {
+                let value = lower_expr(ctx, arg);
+                coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
+            };
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -2445,7 +2687,8 @@ fn invoker_ref_arg_storage_compatible(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return true;
     };
-    value_ir_type(&param_ty.codegen_repr()) == value_ir_type(&ctx.local_type(var_name).codegen_repr())
+    value_ir_type(&param_ty.codegen_repr())
+        == value_ir_type(&ctx.local_type(var_name).codegen_repr())
 }
 
 /// Emits an invoker reference-cell marker for a local variable argument.
@@ -2496,7 +2739,8 @@ fn lower_static_array_map(
         Some(expr.span),
     );
     for item in items {
-        let value = lower_static_callable_call(ctx, callback.clone(), std::slice::from_ref(item), expr)?;
+        let value =
+            lower_static_callable_call(ctx, callback.clone(), std::slice::from_ref(item), expr)?;
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -2792,7 +3036,8 @@ pub(crate) fn lower_callable_array_for_assignment(
         method,
         signature,
         ..
-    } = target? else {
+    } = target?
+    else {
         return None;
     };
     let receiver = lower_expr(ctx, object);
@@ -2807,7 +3052,10 @@ pub(crate) fn lower_callable_array_for_assignment(
         signature: signature.clone(),
         direct_call: true,
     };
-    Some(LoweredCallableArrayAssignment { value: array, target })
+    Some(LoweredCallableArrayAssignment {
+        value: array,
+        target,
+    })
 }
 
 /// Lowers a callable-array literal after its receiver has already been captured.
@@ -2892,10 +3140,7 @@ fn static_array_callable_parts(
 }
 
 /// Extracts a compile-time class name for a static callable array.
-fn static_callable_class_name(
-    ctx: &LoweringContext<'_, '_>,
-    class_expr: &Expr,
-) -> Option<String> {
+fn static_callable_class_name(ctx: &LoweringContext<'_, '_>, class_expr: &Expr) -> Option<String> {
     match &class_expr.kind {
         ExprKind::StringLiteral(name) => Some(name.clone()),
         ExprKind::ClassConstant { receiver } => static_receiver_class_name(ctx, receiver),
@@ -2924,7 +3169,9 @@ fn static_method_callback_is_callable(
     class_name: &str,
     method: &str,
 ) -> bool {
-    let Some(class_name) = lookup_folded_name(ctx.classes.keys(), class_name.trim_start_matches('\\')) else {
+    let Some(class_name) =
+        lookup_folded_name(ctx.classes.keys(), class_name.trim_start_matches('\\'))
+    else {
         return false;
     };
     let Some(class_info) = ctx.classes.get(&class_name) else {
@@ -3008,7 +3255,8 @@ fn lower_static_callable_call(
         }
         StaticCallableBinding::Builtin(function_name) => {
             let sig = call_signature(ctx, &function_name, callback_args);
-            let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
+            let operands =
+                lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             let data = ctx.intern_function_name(&function_name);
             Some(ctx.emit_value(
@@ -3038,24 +3286,29 @@ fn lower_static_callable_call(
                 Some(expr.span),
             ))
         }
-        StaticCallableBinding::StaticMethod { receiver, method } => {
-            Some(lower_static_method_call(ctx, &receiver, &method, callback_args, expr))
-        }
-        StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
-            Some(lower_static_method_descriptor_call(
-                ctx,
-                &receiver,
-                &method,
-                callback_args,
-                expr,
-            ))
-        }
+        StaticCallableBinding::StaticMethod { receiver, method } => Some(lower_static_method_call(
+            ctx,
+            &receiver,
+            &method,
+            callback_args,
+            expr,
+        )),
+        StaticCallableBinding::StaticMethodDescriptor { receiver, method } => Some(
+            lower_static_method_descriptor_call(ctx, &receiver, &method, callback_args, expr),
+        ),
         StaticCallableBinding::InstanceMethod {
             object,
             method,
             direct_call: true,
             ..
-        } => Some(lower_method_call(ctx, &object, &method, callback_args, Op::MethodCall, expr)),
+        } => Some(lower_method_call(
+            ctx,
+            &object,
+            &method,
+            callback_args,
+            Op::MethodCall,
+            expr,
+        )),
         StaticCallableBinding::InstanceMethod { .. } => None,
     }
 }
@@ -3067,7 +3320,8 @@ fn resolve_static_string_callable(
 ) -> Option<StaticCallableBinding> {
     let callback = callback.trim_start_matches('\\');
     if let Some((class_name, method)) = callback.rsplit_once("::") {
-        let class_name = lookup_folded_name(ctx.classes.keys(), class_name.trim_start_matches('\\'))?;
+        let class_name =
+            lookup_folded_name(ctx.classes.keys(), class_name.trim_start_matches('\\'))?;
         return resolve_static_method_callable(
             ctx,
             StaticReceiver::Named(Name::from(class_name)),
@@ -3126,15 +3380,9 @@ fn direct_static_callable_binding(target: StaticCallableBinding) -> Option<Stati
 }
 
 /// Resolves the concrete class for an object expression used in an instance FCC.
-fn instance_callable_object_class(
-    ctx: &LoweringContext<'_, '_>,
-    object: &Expr,
-) -> Option<String> {
+fn instance_callable_object_class(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<String> {
     match &object.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .and_then(class_name_from_php_type),
+        ExprKind::Variable(name) => ctx.local_types.get(name).and_then(class_name_from_php_type),
         ExprKind::This => ctx.current_class.as_deref().and_then(normalized_class_name),
         ExprKind::NewObject { class_name, .. } => normalized_class_name(class_name.as_str()),
         ExprKind::NewDynamicObject { fallback_class, .. } => {
@@ -3179,11 +3427,7 @@ where
 }
 
 /// Returns the caller-visible signature used to normalize direct call operands.
-fn call_signature(
-    ctx: &LoweringContext<'_, '_>,
-    name: &str,
-    args: &[Expr],
-) -> Option<FunctionSig> {
+fn call_signature(ctx: &LoweringContext<'_, '_>, name: &str, args: &[Expr]) -> Option<FunctionSig> {
     if let Some(sig) = ctx.functions.get(name) {
         return Some(sig.clone());
     }
@@ -3240,10 +3484,7 @@ fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
 }
 
 /// Returns true when an array-access unset receiver is a static ArrayAccess object.
-fn unset_array_access_has_object_receiver(
-    ctx: &LoweringContext<'_, '_>,
-    array: &Expr,
-) -> bool {
+fn unset_array_access_has_object_receiver(ctx: &LoweringContext<'_, '_>, array: &Expr) -> bool {
     let ty = match &array.kind {
         ExprKind::Variable(name) => ctx
             .local_types
@@ -3462,9 +3703,7 @@ fn static_settype_arg_exprs(
 }
 
 /// Returns the source expression assigned to a planned regular parameter.
-fn planned_regular_arg_expr(
-    arg: &crate::types::call_args::PlannedRegularArg,
-) -> Option<&Expr> {
+fn planned_regular_arg_expr(arg: &crate::types::call_args::PlannedRegularArg) -> Option<&Expr> {
     match arg {
         crate::types::call_args::PlannedRegularArg::Source { expr, .. } => Some(expr),
         crate::types::call_args::PlannedRegularArg::Default(_)
@@ -3545,10 +3784,7 @@ fn lower_preg_replace_callback_closure(
 }
 
 /// Returns the userland callback name accepted by the current regex runtime helper.
-fn preg_replace_static_callback(
-    ctx: &LoweringContext<'_, '_>,
-    callback: &Expr,
-) -> Option<String> {
+fn preg_replace_static_callback(ctx: &LoweringContext<'_, '_>, callback: &Expr) -> Option<String> {
     match &callback.kind {
         ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
             Some(name.as_str().to_string())
@@ -3763,7 +3999,8 @@ fn lower_positional_spread_args_with_signature(
         return None;
     }
     let first_spread_param_idx = spread_idx;
-    let required_len = required_positional_spread_len(sig, first_spread_param_idx, regular_param_count);
+    let required_len =
+        required_positional_spread_len(sig, first_spread_param_idx, regular_param_count);
     let ExprKind::Spread(inner) = &args[spread_idx].kind else {
         return None;
     };
@@ -3791,7 +4028,10 @@ fn lower_positional_spread_args_with_signature(
 
     for param_idx in first_spread_param_idx..regular_param_count {
         let element_idx = param_idx - first_spread_param_idx;
-        let default = sig.defaults.get(param_idx).and_then(|default| default.as_ref());
+        let default = sig
+            .defaults
+            .get(param_idx)
+            .and_then(|default| default.as_ref());
         let expr = if let Some(default) = default {
             if element_idx < required_len {
                 spread_element_expr_for_ir(
@@ -3858,10 +4098,7 @@ fn single_trailing_indexed_spread_arg(
 }
 
 /// Returns the indexed-array source type for spread-only EIR lowering.
-fn indexed_spread_source_type(
-    ctx: &LoweringContext<'_, '_>,
-    expr: &Expr,
-) -> Option<PhpType> {
+fn indexed_spread_source_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
     let ty = match &expr.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
@@ -3882,7 +4119,12 @@ fn required_positional_spread_len(
     regular_param_count: usize,
 ) -> usize {
     (start_param_idx..regular_param_count)
-        .rfind(|idx| sig.defaults.get(*idx).and_then(|default| default.as_ref()).is_none())
+        .rfind(|idx| {
+            sig.defaults
+                .get(*idx)
+                .and_then(|default| default.as_ref())
+                .is_none()
+        })
         .map(|idx| idx - start_param_idx + 1)
         .unwrap_or(0)
 }
@@ -3914,8 +4156,12 @@ fn emit_positional_spread_min_len_guard(
         Op::ICmp.default_effects(),
         Some(span),
     );
-    let ok = ctx.builder.create_named_block("call.spread.len.ok", Vec::new());
-    let fatal = ctx.builder.create_named_block("call.spread.len.fatal", Vec::new());
+    let ok = ctx
+        .builder
+        .create_named_block("call.spread.len.ok", Vec::new());
+    let fatal = ctx
+        .builder
+        .create_named_block("call.spread.len.fatal", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: has_required_args.value,
         then_target: ok,
@@ -3943,19 +4189,23 @@ fn lower_named_args_with_signature(
         .unwrap_or_else(crate::span::Span::dummy);
     let assoc_spread_sources = assoc_spread_sources(ctx, args);
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
-    let Ok(plan) = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
-        sig,
-        args,
-        call_span,
-        regular_param_count,
-        false,
-        true,
-        &assoc_spread_sources,
-    ) else {
+    let Ok(plan) =
+        crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+            sig,
+            args,
+            call_span,
+            regular_param_count,
+            false,
+            true,
+            &assoc_spread_sources,
+        )
+    else {
         return lower_args(ctx, args);
     };
     if plan.has_spread_args() {
-        if let Some(operands) = lower_named_args_with_spread_plan(ctx, sig, &plan, &assoc_spread_sources) {
+        if let Some(operands) =
+            lower_named_args_with_spread_plan(ctx, sig, &plan, &assoc_spread_sources)
+        {
             return operands;
         }
         if let Some(operands) = lower_dynamic_named_spread_variadic_args(ctx, sig, &plan) {
@@ -3969,7 +4219,8 @@ fn lower_named_args_with_signature(
         source_values.push(lower_call_source_arg(ctx, source_arg));
     }
 
-    let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
+    let mut operands =
+        Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
     for arg in &plan.regular_args {
         match arg {
             crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => {
@@ -3984,7 +4235,9 @@ fn lower_named_args_with_signature(
         }
     }
     if sig.variadic.is_some() {
-        operands.push(lower_named_variadic_tail_array(ctx, sig, &plan.source_values, &source_values).value);
+        operands.push(
+            lower_named_variadic_tail_array(ctx, sig, &plan.source_values, &source_values).value,
+        );
     }
     operands
 }
@@ -4006,12 +4259,21 @@ fn lower_dynamic_named_spread_variadic_args(
     let first_named_pos = plan.first_named_pos?;
     let prefix_expr = plan.positional_prefix_expr(call_span)?;
     let prefix = lower_expr(ctx, &prefix_expr);
-    if !matches!(ctx.builder.value_php_type(prefix.value).codegen_repr(), PhpType::AssocArray { .. }) {
+    if !matches!(
+        ctx.builder.value_php_type(prefix.value).codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
         return None;
     }
     let prefix_type = ctx.builder.value_php_type(prefix.value);
     let prefix_temp_name = ctx.declare_hidden_temp(prefix_type.clone());
-    store_value_into_temp(ctx, &prefix_temp_name, prefix_type, prefix, prefix_expr.span);
+    store_value_into_temp(
+        ctx,
+        &prefix_temp_name,
+        prefix_type,
+        prefix,
+        prefix_expr.span,
+    );
     let prefix_temp = Expr::new(ExprKind::Variable(prefix_temp_name), prefix_expr.span);
 
     let mut source_values = vec![None; plan.source_args.len()];
@@ -4124,8 +4386,12 @@ fn emit_dynamic_named_prefix_duplicate_guard(
         span,
     );
     let exists = lower_expr(ctx, &exists_expr);
-    let ok = ctx.builder.create_named_block("call.dynamic_named_prefix.ok", Vec::new());
-    let fatal = ctx.builder.create_named_block("call.dynamic_named_prefix.fatal", Vec::new());
+    let ok = ctx
+        .builder
+        .create_named_block("call.dynamic_named_prefix.ok", Vec::new());
+    let fatal = ctx
+        .builder
+        .create_named_block("call.dynamic_named_prefix.fatal", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: exists.value,
         then_target: fatal,
@@ -4169,7 +4435,13 @@ fn lower_named_args_with_spread_plan(
     let prefix = lower_expr(ctx, &prefix_expr);
     let prefix_type = ctx.builder.value_php_type(prefix.value);
     let prefix_temp_name = ctx.declare_hidden_temp(prefix_type.clone());
-    store_value_into_temp(ctx, &prefix_temp_name, prefix_type, prefix, prefix_expr.span);
+    store_value_into_temp(
+        ctx,
+        &prefix_temp_name,
+        prefix_type,
+        prefix,
+        prefix_expr.span,
+    );
     let single_prefix_spread = !matches!(prefix_expr.kind, ExprKind::ArrayLiteral(_));
     let prefix_temp = Expr::new(ExprKind::Variable(prefix_temp_name), prefix_expr.span);
 
@@ -4197,7 +4469,10 @@ fn lower_named_args_with_spread_plan(
                         param_idx,
                         None,
                         false,
-                        plan.source_args.get(*source_index).map(|arg| arg.span).unwrap_or(call_span),
+                        plan.source_args
+                            .get(*source_index)
+                            .map(|arg| arg.span)
+                            .unwrap_or(call_span),
                     );
                     operands.push(lower_expr(ctx, &expr).value);
                 } else {
@@ -4273,7 +4548,10 @@ fn static_indexed_variadic_prefix_len(prefix_expr: &Expr) -> Option<usize> {
     let ExprKind::ArrayLiteral(items) = &prefix_expr.kind else {
         return None;
     };
-    if items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) {
+    if items
+        .iter()
+        .any(|item| matches!(item.kind, ExprKind::Spread(_)))
+    {
         return None;
     }
     Some(items.len())
@@ -4306,7 +4584,9 @@ fn lower_named_spread_static_variadic_tail_hash(
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
-        Some(Immediate::Capacity((prefix_tail_len + named_tail_len) as u32)),
+        Some(Immediate::Capacity(
+            (prefix_tail_len + named_tail_len) as u32,
+        )),
         hash_ty,
         Op::HashNew.default_effects(),
         Some(span),
@@ -4400,8 +4680,12 @@ fn emit_named_spread_min_len_guard(
         Op::ICmp.default_effects(),
         Some(span),
     );
-    let ok = ctx.builder.create_named_block("call.named_spread.min.ok", Vec::new());
-    let fatal = ctx.builder.create_named_block("call.named_spread.min.fatal", Vec::new());
+    let ok = ctx
+        .builder
+        .create_named_block("call.named_spread.min.ok", Vec::new());
+    let fatal = ctx
+        .builder
+        .create_named_block("call.named_spread.min.fatal", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: has_required_args.value,
         then_target: ok,
@@ -4437,8 +4721,12 @@ fn emit_named_spread_max_len_guard(
         Op::ICmp.default_effects(),
         Some(span),
     );
-    let ok = ctx.builder.create_named_block("call.named_spread.max.ok", Vec::new());
-    let fatal = ctx.builder.create_named_block("call.named_spread.max.fatal", Vec::new());
+    let ok = ctx
+        .builder
+        .create_named_block("call.named_spread.max.ok", Vec::new());
+    let fatal = ctx
+        .builder
+        .create_named_block("call.named_spread.max.fatal", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: within_bound.value,
         then_target: ok,
@@ -4628,7 +4916,9 @@ fn assoc_spread_sources(ctx: &LoweringContext<'_, '_>, args: &[Expr]) -> Vec<boo
 /// Returns true when a spread expression should feed named parameters by key.
 fn is_assoc_spread_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::Variable(name) => matches!(ctx.local_types.get(name), Some(PhpType::AssocArray { .. })),
+        ExprKind::Variable(name) => {
+            matches!(ctx.local_types.get(name), Some(PhpType::AssocArray { .. }))
+        }
         ExprKind::ArrayLiteralAssoc(_) => true,
         _ => matches!(infer_expr_type_syntactic(expr), PhpType::AssocArray { .. }),
     }
@@ -4656,7 +4946,10 @@ fn lower_named_variadic_tail_array(
         .first()
         .map(|arg| arg.expr().span)
         .unwrap_or_else(crate::span::Span::dummy);
-    let variadic_count = tail.iter().filter(|source| source.param_idx().is_none()).count();
+    let variadic_count = tail
+        .iter()
+        .filter(|source| source.param_idx().is_none())
+        .count();
     let array_ty = variadic_array_type(sig);
     let array = ctx.emit_value(
         Op::ArrayNew,
@@ -4696,7 +4989,10 @@ fn lower_named_variadic_tail_hash(
         .map(|arg| arg.expr().span)
         .unwrap_or_else(crate::span::Span::dummy);
     let value_ty = variadic_tail_value_type(sig);
-    let variadic_count = tail.iter().filter(|source| source.param_idx().is_none()).count();
+    let variadic_count = tail
+        .iter()
+        .filter(|source| source.param_idx().is_none())
+        .count();
     let hash_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
         value: Box::new(value_ty.clone()),
@@ -4737,10 +5033,7 @@ fn lower_named_variadic_tail_hash(
 }
 
 /// Rebuilds lowering metadata for an already emitted value.
-fn lowered_value_from_id(
-    ctx: &LoweringContext<'_, '_>,
-    value: crate::ir::ValueId,
-) -> LoweredValue {
+fn lowered_value_from_id(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> LoweredValue {
     LoweredValue {
         value,
         ir_type: ctx.builder.value_type(value),
@@ -4875,9 +5168,11 @@ fn expand_static_indexed_spread_args(args: &[Expr]) -> Vec<Expr> {
         match &arg.kind {
             ExprKind::Spread(inner) => {
                 if let ExprKind::ArrayLiteral(items) = &inner.kind {
-                    expanded.extend(items.iter().map(|value| {
-                        Expr::new(value.kind.clone(), arg.span)
-                    }));
+                    expanded.extend(
+                        items
+                            .iter()
+                            .map(|value| Expr::new(value.kind.clone(), arg.span)),
+                    );
                 } else {
                     expanded.push(arg.clone());
                 }
@@ -4930,12 +5225,20 @@ fn eir_user_function_return_type(signature: &FunctionSig) -> PhpType {
 
 /// Returns true when a PHP signature has params that EIR must receive as Mixed.
 fn signature_has_dynamic_untyped_param(signature: &FunctionSig) -> bool {
-    signature.params.iter().enumerate().any(|(index, (name, _))| {
-        let declared = signature.declared_params.get(index).copied().unwrap_or(false);
-        let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
-        let variadic = signature.variadic.as_deref() == Some(name.as_str());
-        !declared && !by_ref && !variadic
-    })
+    signature
+        .params
+        .iter()
+        .enumerate()
+        .any(|(index, (name, _))| {
+            let declared = signature
+                .declared_params
+                .get(index)
+                .copied()
+                .unwrap_or(false);
+            let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
+            let variadic = signature.variadic.as_deref() == Some(name.as_str());
+            !declared && !by_ref && !variadic
+        })
 }
 
 /// Widens inferred container return elements that may be built from dynamic params.
@@ -4989,7 +5292,9 @@ fn array_fill_builtin_return_type_for_args(
             value: Box::new(PhpType::Mixed),
         });
     }
-    Some(PhpType::Array(Box::new(array_fill_indexed_element_type(value_ty))))
+    Some(PhpType::Array(Box::new(array_fill_indexed_element_type(
+        value_ty,
+    ))))
 }
 
 /// Returns the EIR result metadata for `array_map()` when a callable param signature is known.
@@ -5086,9 +5391,7 @@ fn pointer_builtin_return_type(
         "ptr" => Some(PhpType::Pointer(None)),
         "ptr_null" => Some(PhpType::Pointer(None)),
         "ptr_is_null" => Some(PhpType::Bool),
-        "ptr_get" | "ptr_read8" | "ptr_read16" | "ptr_read32" | "ptr_sizeof" => {
-            Some(PhpType::Int)
-        }
+        "ptr_get" | "ptr_read8" | "ptr_read16" | "ptr_read32" | "ptr_sizeof" => Some(PhpType::Int),
         "ptr_read_string" => Some(PhpType::Str),
         "ptr_set" | "ptr_write8" | "ptr_write16" | "ptr_write32" => Some(PhpType::Void),
         "ptr_write_string" => Some(PhpType::Int),
@@ -5220,7 +5523,11 @@ fn array_builtin_return_type(
         "array_fill" => array_fill_builtin_return_type(ctx, operands),
         "array_fill_keys" => array_fill_keys_builtin_return_type(ctx, operands),
         "array_merge" => array_merge_builtin_return_type(ctx, operands),
-        "array_splice" | "array_filter" | "array_diff" | "array_intersect" | "array_diff_key"
+        "array_splice"
+        | "array_filter"
+        | "array_diff"
+        | "array_intersect"
+        | "array_diff_key"
         | "array_intersect_key" => array_preserve_first_builtin_return_type(ctx, operands),
         "in_array" => Some(PhpType::Int),
         "range" => Some(PhpType::Array(Box::new(PhpType::Int))),
@@ -5257,7 +5564,9 @@ fn array_fill_builtin_return_type(
 ) -> Option<PhpType> {
     let value = operands.get(2)?;
     let value_ty = ctx.builder.value_php_type(*value).codegen_repr();
-    Some(PhpType::Array(Box::new(array_fill_indexed_element_type(value_ty))))
+    Some(PhpType::Array(Box::new(array_fill_indexed_element_type(
+        value_ty,
+    ))))
 }
 
 /// Returns the indexed element storage type for EIR `array_fill()` results.
@@ -5392,72 +5701,220 @@ fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
 /// Returns precise builtin return types needed by EIR value materialization.
 fn builtin_return_type_override(name: &str) -> Option<PhpType> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "chdir" | "chgrp" | "chmod" | "chown" | "lchgrp" | "lchown"
-        | "class_alias" | "class_exists" | "copy" | "define" | "defined"
-        | "empty" | "file_exists" | "fnmatch" | "function_exists" | "is_a" | "is_callable"
-        | "fdatasync" | "fflush" | "flock" | "fsync" | "ftruncate" | "interface_exists" | "is_dir"
-        | "is_executable" | "is_file" | "is_link" | "is_numeric" | "link" | "mkdir" | "rename"
-        | "enum_exists" | "trait_exists" | "putenv" | "rmdir" | "is_readable"
-        | "is_subclass_of" | "is_writeable" | "is_writable" | "settype"
-        | "is_resource" | "hash_equals" | "hash_update" | "spl_autoload_register"
-        | "spl_autoload_unregister" | "stream_context_set_option" | "stream_context_set_params"
-        | "stream_filter_register" | "stream_filter_remove" | "__elephc_phar_set_compression"
-        | "stream_wrapper_register" | "stream_wrapper_restore" | "stream_wrapper_unregister"
-        | "stream_isatty" | "stream_is_local" | "stream_set_blocking" | "stream_set_timeout"
-        | "stream_socket_enable_crypto" | "stream_socket_shutdown" | "stream_supports_lock" | "symlink" | "touch"
-        | "unlink" => {
-            Some(PhpType::Bool)
-        }
-        "basename" | "date" | "dirname" | "exec" | "get_class" | "get_parent_class"
-        | "getcwd" | "getenv" | "gethostname" | "gethostbyname" | "php_uname"
-        | "readline" | "shell_exec" | "sys_get_temp_dir"
-        | "fread" | "get_resource_type" | "gzcompress" | "gzdeflate" | "hash" | "hash_final" | "hash_hmac" | "long2ip"
-        | "stream_get_line" | "system" | "spl_autoload_extensions" | "tempnam" | "vsprintf" => {
-            Some(PhpType::Str)
-        }
+        "chdir"
+        | "chgrp"
+        | "chmod"
+        | "chown"
+        | "lchgrp"
+        | "lchown"
+        | "class_alias"
+        | "class_exists"
+        | "copy"
+        | "define"
+        | "defined"
+        | "empty"
+        | "file_exists"
+        | "fnmatch"
+        | "function_exists"
+        | "is_a"
+        | "is_callable"
+        | "fdatasync"
+        | "fflush"
+        | "flock"
+        | "fsync"
+        | "ftruncate"
+        | "interface_exists"
+        | "is_dir"
+        | "is_executable"
+        | "is_file"
+        | "is_link"
+        | "is_numeric"
+        | "link"
+        | "mkdir"
+        | "rename"
+        | "enum_exists"
+        | "trait_exists"
+        | "putenv"
+        | "rmdir"
+        | "is_readable"
+        | "is_subclass_of"
+        | "is_writeable"
+        | "is_writable"
+        | "settype"
+        | "is_resource"
+        | "hash_equals"
+        | "hash_update"
+        | "spl_autoload_register"
+        | "spl_autoload_unregister"
+        | "stream_context_set_option"
+        | "stream_context_set_params"
+        | "stream_filter_register"
+        | "stream_filter_remove"
+        | "__elephc_phar_set_compression"
+        | "stream_wrapper_register"
+        | "stream_wrapper_restore"
+        | "stream_wrapper_unregister"
+        | "stream_isatty"
+        | "stream_is_local"
+        | "stream_set_blocking"
+        | "stream_set_timeout"
+        | "stream_socket_enable_crypto"
+        | "stream_socket_shutdown"
+        | "stream_supports_lock"
+        | "symlink"
+        | "touch"
+        | "unlink" => Some(PhpType::Bool),
+        "basename"
+        | "date"
+        | "dirname"
+        | "exec"
+        | "get_class"
+        | "get_parent_class"
+        | "getcwd"
+        | "getenv"
+        | "gethostname"
+        | "gethostbyname"
+        | "php_uname"
+        | "readline"
+        | "shell_exec"
+        | "sys_get_temp_dir"
+        | "fread"
+        | "get_resource_type"
+        | "gzcompress"
+        | "gzdeflate"
+        | "hash"
+        | "hash_final"
+        | "hash_hmac"
+        | "long2ip"
+        | "stream_get_line"
+        | "system"
+        | "spl_autoload_extensions"
+        | "tempnam"
+        | "vsprintf" => Some(PhpType::Str),
         "disk_free_space" | "disk_total_space" | "microtime" => Some(PhpType::Float),
-        "clearstatcache" | "closedir" | "exit" | "die" | "passthru" | "rewinddir"
-        | "stream_bucket_append" | "stream_bucket_prepend" | "unset" => Some(PhpType::Void),
+        "clearstatcache"
+        | "closedir"
+        | "exit"
+        | "die"
+        | "passthru"
+        | "rewinddir"
+        | "stream_bucket_append"
+        | "stream_bucket_prepend"
+        | "unset" => Some(PhpType::Void),
         "fclose" | "feof" | "rewind" => Some(PhpType::Bool),
-        "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filemtime"
-        | "filesize" | "fprintf" | "fpassthru" | "fputcsv" | "fseek" | "ftell" | "fwrite"
-        | "crc32" | "get_resource_id" | "isset" | "linkinfo" | "mktime" | "sleep"
-        | "pclose" | "spl_object_id" | "stream_select" | "stream_set_chunk_size"
-        | "stream_set_read_buffer" | "stream_set_write_buffer" | "strtotime" | "time"
-        | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size" => {
-            Some(PhpType::Int)
-        }
+        "printf"
+        | "array_rand"
+        | "array_unshift"
+        | "file_put_contents"
+        | "filemtime"
+        | "filesize"
+        | "fprintf"
+        | "fpassthru"
+        | "fputcsv"
+        | "fseek"
+        | "ftell"
+        | "fwrite"
+        | "crc32"
+        | "get_resource_id"
+        | "isset"
+        | "linkinfo"
+        | "mktime"
+        | "sleep"
+        | "pclose"
+        | "spl_object_id"
+        | "stream_select"
+        | "stream_set_chunk_size"
+        | "stream_set_read_buffer"
+        | "stream_set_write_buffer"
+        | "strtotime"
+        | "time"
+        | "umask"
+        | "vfprintf"
+        | "vprintf"
+        | "realpath_cache_size" => Some(PhpType::Int),
         "spl_object_hash" => Some(PhpType::Str),
         "spl_autoload" | "spl_autoload_call" | "usleep" => Some(PhpType::Void),
         "stream_context_create" | "stream_context_get_default" | "stream_context_set_default" => {
             Some(PhpType::stream_resource())
         }
-        "realpath_cache_get" | "stream_context_get_options" | "stream_context_get_params"
+        "realpath_cache_get"
+        | "stream_context_get_options"
+        | "stream_context_get_params"
         | "stream_get_meta_data" => Some(PhpType::AssocArray {
             key: Box::new(PhpType::Str),
             value: Box::new(PhpType::Mixed),
         }),
-        "file_get_contents" | "fileatime" | "filectime" | "filegroup" | "fileinode"
-        | "fileowner" | "fileperms" | "filetype" | "readfile" | "readlink" | "realpath"
-        | "fgetc" | "fgets" | "fopen" | "fstat" | "hash_copy" | "hash_file" | "hash_init"
-        | "gethostbyaddr" | "getprotobyname" | "getprotobynumber" | "getservbyname"
-        | "getservbyport" | "fsockopen" | "inet_ntop" | "inet_pton" | "ip2long" | "opendir"
-        | "pfsockopen" | "readdir" | "popen" | "stat" | "lstat" | "stream_get_contents"
-        | "stream_bucket_make_writeable" | "stream_bucket_new" | "stream_filter_append"
-        | "stream_filter_prepend" | "stream_resolve_include_path" | "stream_socket_accept"
-        | "stream_socket_client" | "stream_socket_pair" | "stream_copy_to_stream"
-        | "stream_socket_get_name" | "stream_socket_recvfrom" | "stream_socket_sendto"
-        | "stream_socket_server" | "tmpfile" | "gzinflate" | "gzuncompress" | "strpos" | "strrpos" => {
-            Some(PhpType::Mixed)
-        }
+        "file_get_contents"
+        | "fileatime"
+        | "filectime"
+        | "filegroup"
+        | "fileinode"
+        | "fileowner"
+        | "fileperms"
+        | "filetype"
+        | "readfile"
+        | "readlink"
+        | "realpath"
+        | "fgetc"
+        | "fgets"
+        | "fopen"
+        | "fstat"
+        | "hash_copy"
+        | "hash_file"
+        | "hash_init"
+        | "gethostbyaddr"
+        | "getprotobyname"
+        | "getprotobynumber"
+        | "getservbyname"
+        | "getservbyport"
+        | "fsockopen"
+        | "inet_ntop"
+        | "inet_pton"
+        | "ip2long"
+        | "opendir"
+        | "pfsockopen"
+        | "readdir"
+        | "popen"
+        | "stat"
+        | "lstat"
+        | "stream_get_contents"
+        | "stream_bucket_make_writeable"
+        | "stream_bucket_new"
+        | "stream_filter_append"
+        | "stream_filter_prepend"
+        | "stream_resolve_include_path"
+        | "stream_socket_accept"
+        | "stream_socket_client"
+        | "stream_socket_pair"
+        | "stream_copy_to_stream"
+        | "stream_socket_get_name"
+        | "stream_socket_recvfrom"
+        | "stream_socket_sendto"
+        | "stream_socket_server"
+        | "tmpfile"
+        | "gzinflate"
+        | "gzuncompress"
+        | "strpos"
+        | "strrpos" => Some(PhpType::Mixed),
         "spl_autoload_functions" => Some(PhpType::Array(Box::new(PhpType::Int))),
-        "__elephc_phar_list_entries" | "class_attribute_names" | "explode" | "fgetcsv"
-        | "file" | "get_declared_classes" | "fscanf" | "get_declared_interfaces"
-        | "get_declared_traits" | "glob" | "hash_algos" | "scandir" | "spl_classes"
-        | "str_split" | "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers"
-        | "sscanf" => {
-            Some(PhpType::Array(Box::new(PhpType::Str)))
-        }
+        "__elephc_phar_list_entries"
+        | "class_attribute_names"
+        | "explode"
+        | "fgetcsv"
+        | "file"
+        | "get_declared_classes"
+        | "fscanf"
+        | "get_declared_interfaces"
+        | "get_declared_traits"
+        | "glob"
+        | "hash_algos"
+        | "scandir"
+        | "spl_classes"
+        | "str_split"
+        | "stream_get_filters"
+        | "stream_get_transports"
+        | "stream_get_wrappers"
+        | "sscanf" => Some(PhpType::Array(Box::new(PhpType::Str))),
         "class_attribute_args" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
         "class_get_attributes" => Some(PhpType::Array(Box::new(PhpType::Object(
             "ReflectionAttribute".to_string(),
@@ -5467,7 +5924,11 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
 }
 
 /// Lowers an indexed array literal.
-fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Expr], expr: &Expr) -> LoweredValue {
+fn lower_array_literal(
+    ctx: &mut LoweringContext<'_, '_>,
+    items: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     let array_ty = array_literal_type_for_ir(ctx, items, expr);
     let elem_ty = indexed_array_literal_element_type(&array_ty);
     let array = ctx.emit_value(
@@ -5485,7 +5946,13 @@ fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Expr], expr: 
             continue;
         }
         let value = lower_expr(ctx, item);
-        ctx.emit_void(Op::ArrayPush, vec![array.value, value.value], None, Op::ArrayPush.default_effects(), Some(item.span));
+        ctx.emit_void(
+            Op::ArrayPush,
+            vec![array.value, value.value],
+            None,
+            Op::ArrayPush.default_effects(),
+            Some(item.span),
+        );
         release_value_after_retaining_insert(ctx, elem_ty.as_ref(), value, item.span);
     }
     array
@@ -5512,10 +5979,19 @@ fn lower_indexed_array_spread_into_array(
         Some(span),
     );
     let zero = emit_i64_at_span(ctx, 0, span);
-    let header = ctx.builder.create_named_block("array.spread.next", vec![(IrType::I64, PhpType::Int)]);
-    let body = ctx.builder.create_named_block("array.spread.body", Vec::new());
-    let exit = ctx.builder.create_named_block("array.spread.exit", Vec::new());
-    ctx.builder.terminate(Terminator::Br { target: header, args: vec![zero.value] });
+    let header = ctx
+        .builder
+        .create_named_block("array.spread.next", vec![(IrType::I64, PhpType::Int)]);
+    let body = ctx
+        .builder
+        .create_named_block("array.spread.body", Vec::new());
+    let exit = ctx
+        .builder
+        .create_named_block("array.spread.exit", Vec::new());
+    ctx.builder.terminate(Terminator::Br {
+        target: header,
+        args: vec![zero.value],
+    });
 
     ctx.builder.position_at_end(header);
     let index = ctx.builder.block_param(header, 0);
@@ -5561,7 +6037,10 @@ fn lower_indexed_array_spread_into_array(
         Op::IAdd.default_effects(),
         Some(span),
     );
-    ctx.builder.terminate(Terminator::Br { target: header, args: vec![next.value] });
+    ctx.builder.terminate(Terminator::Br {
+        target: header,
+        args: vec![next.value],
+    });
 
     ctx.builder.position_at_end(exit);
     if ctx.value_is_owning_temporary(source) {
@@ -5623,25 +6102,22 @@ fn array_literal_type_for_ir(
     }
     let mut elem_ty = array_literal_element_type_for_ir(ctx, &items[0]);
     for item in items.iter().skip(1) {
-        elem_ty = merge_ir_indexed_element_type(
-            elem_ty,
-            array_literal_element_type_for_ir(ctx, item),
-        );
+        elem_ty =
+            merge_ir_indexed_element_type(elem_ty, array_literal_element_type_for_ir(ctx, item));
     }
     PhpType::Array(Box::new(elem_ty))
 }
 
 /// Returns the best EIR storage element type for one indexed-array literal item.
-fn array_literal_element_type_for_ir(
-    ctx: &LoweringContext<'_, '_>,
-    item: &Expr,
-) -> PhpType {
+fn array_literal_element_type_for_ir(ctx: &LoweringContext<'_, '_>, item: &Expr) -> PhpType {
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
-        ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
-            PhpType::Array(elem) => elem.codegen_repr(),
-            _ => PhpType::Mixed,
-        },
+        ExprKind::Spread(inner) => {
+            match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
+                PhpType::Array(elem) => elem.codegen_repr(),
+                _ => PhpType::Mixed,
+            }
+        }
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, item).codegen_repr(),
         ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, item),
         ExprKind::ConstRef(name) => ctx
@@ -5666,12 +6142,10 @@ fn array_literal_element_type_for_ir(
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
-        ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
-            ctx,
-            object,
-            property,
-        )
-        .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }
 }
@@ -5701,7 +6175,11 @@ fn merge_ir_indexed_element_type(left: PhpType, right: PhpType) -> PhpType {
 }
 
 /// Lowers an associative array literal.
-fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr) -> LoweredValue {
+fn lower_assoc_array_literal(
+    ctx: &mut LoweringContext<'_, '_>,
+    pairs: &[(Expr, Expr)],
+    expr: &Expr,
+) -> LoweredValue {
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
@@ -5713,7 +6191,13 @@ fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, 
     for (key, value) in pairs {
         let key = lower_expr(ctx, key);
         let value = lower_expr(ctx, value);
-        ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
+        ctx.emit_void(
+            Op::HashSet,
+            vec![hash.value, key.value, value.value],
+            None,
+            Op::HashSet.default_effects(),
+            Some(expr.span),
+        );
     }
     hash
 }
@@ -5727,20 +6211,15 @@ fn assoc_array_literal_type_for_ir(
     if pairs.is_empty() {
         return fallback_expr_type(expr);
     }
-    let mut key_ty = normalized_array_key_type(
-        &pairs[0].0,
-        infer_expr_type_syntactic(&pairs[0].0),
-    );
+    let mut key_ty = normalized_array_key_type(&pairs[0].0, infer_expr_type_syntactic(&pairs[0].0));
     let mut value_ty = assoc_array_literal_value_type_for_ir(ctx, &pairs[0].1);
     for (key, value) in pairs.iter().skip(1) {
         key_ty = merge_array_key_types(
             key_ty,
             normalized_array_key_type(key, infer_expr_type_syntactic(key)),
         );
-        value_ty = merge_ir_assoc_value_type(
-            value_ty,
-            assoc_array_literal_value_type_for_ir(ctx, value),
-        );
+        value_ty =
+            merge_ir_assoc_value_type(value_ty, assoc_array_literal_value_type_for_ir(ctx, value));
     }
     PhpType::AssocArray {
         key: Box::new(key_ty),
@@ -5749,10 +6228,7 @@ fn assoc_array_literal_type_for_ir(
 }
 
 /// Returns the best EIR storage value type for one associative-array literal value.
-fn assoc_array_literal_value_type_for_ir(
-    ctx: &LoweringContext<'_, '_>,
-    value: &Expr,
-) -> PhpType {
+fn assoc_array_literal_value_type_for_ir(ctx: &LoweringContext<'_, '_>, value: &Expr) -> PhpType {
     match &value.kind {
         ExprKind::Null => PhpType::Mixed,
         ExprKind::ConstRef(name) => ctx
@@ -5777,12 +6253,10 @@ fn assoc_array_literal_value_type_for_ir(
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
-        ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
-            ctx,
-            object,
-            property,
-        )
-        .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+        }
         _ => ir_array_storage_type(infer_expr_type_syntactic(value)),
     }
 }
@@ -5798,17 +6272,19 @@ fn array_access_expr_value_type_for_ir(
             property_access_expr_type_for_ir(ctx, object, property)
         }
         ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, array)),
-        ExprKind::ArrayLiteralAssoc(pairs) => Some(assoc_array_literal_type_for_ir(ctx, pairs, array)),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            Some(assoc_array_literal_type_for_ir(ctx, pairs, array))
+        }
         _ => None,
     }?
     .codegen_repr();
     match array_ty {
-        PhpType::Array(elem_ty) => {
-            Some(array_access_element_result_type(normalize_value_php_type(*elem_ty).codegen_repr()))
-        }
-        PhpType::AssocArray { value, .. } => {
-            Some(array_access_element_result_type(normalize_value_php_type(*value).codegen_repr()))
-        }
+        PhpType::Array(elem_ty) => Some(array_access_element_result_type(
+            normalize_value_php_type(*elem_ty).codegen_repr(),
+        )),
+        PhpType::AssocArray { value, .. } => Some(array_access_element_result_type(
+            normalize_value_php_type(*value).codegen_repr(),
+        )),
         PhpType::Str => Some(PhpType::Str),
         PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Mixed),
         _ => None,
@@ -5907,7 +6383,12 @@ fn lower_match(
 }
 
 /// Lowers array, hash, string, or ArrayAccess indexing.
-fn lower_array_access(ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &Expr, expr: &Expr) -> LoweredValue {
+fn lower_array_access(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
     let array_value = lower_expr(ctx, array);
     if value_is_nullable(ctx, array_value.value) {
         return lower_nullable_array_access(ctx, array_value, index, expr);
@@ -5964,9 +6445,15 @@ fn lower_nullable_array_access(
     );
     let result_type = PhpType::Mixed;
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
-    let null_block = ctx.builder.create_named_block("nullable.index.null", Vec::new());
-    let read_block = ctx.builder.create_named_block("nullable.index.read", Vec::new());
-    let merge = ctx.builder.create_named_block("nullable.index.merge", Vec::new());
+    let null_block = ctx
+        .builder
+        .create_named_block("nullable.index.null", Vec::new());
+    let read_block = ctx
+        .builder
+        .create_named_block("nullable.index.read", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("nullable.index.merge", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: is_null.value,
         then_target: null_block,
@@ -6060,10 +6547,7 @@ fn array_access_offset_get_return_type(
 }
 
 /// Returns true when a syntactic array receiver is statically known as `ArrayAccess`.
-fn array_access_expr_satisfies_array_access(
-    ctx: &LoweringContext<'_, '_>,
-    array: &Expr,
-) -> bool {
+fn array_access_expr_satisfies_array_access(ctx: &LoweringContext<'_, '_>, array: &Expr) -> bool {
     let ty = match &array.kind {
         ExprKind::Variable(name) => ctx
             .local_types
@@ -6129,15 +6613,11 @@ fn class_implements_interface_for_ir(
         let Some(info) = ctx.classes.get(candidate) else {
             return false;
         };
-        if info
-            .interfaces
-            .iter()
-            .any(|interface| {
-                let interface = interface.trim_start_matches('\\');
-                php_symbol_key(interface) == interface_key
-                    || interface_extends_interface_for_ir(ctx, interface, interface_name)
-            })
-        {
+        if info.interfaces.iter().any(|interface| {
+            let interface = interface.trim_start_matches('\\');
+            php_symbol_key(interface) == interface_key
+                || interface_extends_interface_for_ir(ctx, interface, interface_name)
+        }) {
             return true;
         }
         current = info.parent.as_deref();
@@ -6242,7 +6722,12 @@ fn lower_ternary(
 }
 
 /// Lowers a cast expression.
-fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr, expr: &Expr) -> LoweredValue {
+fn lower_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &CastType,
+    inner: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     let php_type = cast_php_type(target);
     let result = ctx.emit_value(
@@ -6374,10 +6859,19 @@ fn lower_closure_with_context(
             None
         };
         let captured = ctx.load_local(capture, Some(expr.span));
-        let php_type = php_type_override.unwrap_or_else(|| ctx.builder.value_php_type(captured.value));
+        let php_type =
+            php_type_override.unwrap_or_else(|| ctx.builder.value_php_type(captured.value));
         let immediate = by_ref.then_some(Immediate::I64(1));
-        ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
-        captured_values.push(ClosureCapture { value: captured.value });
+        ctx.emit_void(
+            Op::ClosureCapture,
+            vec![captured.value],
+            immediate,
+            Op::ClosureCapture.default_effects(),
+            Some(expr.span),
+        );
+        captured_values.push(ClosureCapture {
+            value: captured.value,
+        });
         capture_params.push((capture.clone(), php_type, by_ref));
     }
     let name = ctx.next_closure_name();
@@ -6468,16 +6962,29 @@ fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
                 || elseif_clauses.iter().any(|(condition, body)| {
                     expr_contains_eval_call(condition) || body_contains_eval_call(body)
                 })
-                || else_body.as_ref().is_some_and(|body| body_contains_eval_call(body))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body_contains_eval_call(body))
         }
-        StmtKind::IfDef { then_body, else_body, .. } => {
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
             body_contains_eval_call(then_body)
-                || else_body.as_ref().is_some_and(|body| body_contains_eval_call(body))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body_contains_eval_call(body))
         }
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
             expr_contains_eval_call(condition) || body_contains_eval_call(body)
         }
-        StmtKind::For { init, condition, update, body } => {
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
             init.as_deref().is_some_and(stmt_contains_eval_call)
                 || condition.as_ref().is_some_and(expr_contains_eval_call)
                 || update.as_deref().is_some_and(stmt_contains_eval_call)
@@ -6486,12 +6993,18 @@ fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
         StmtKind::Foreach { array, body, .. } => {
             expr_contains_eval_call(array) || body_contains_eval_call(body)
         }
-        StmtKind::Switch { subject, cases, default } => {
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
             expr_contains_eval_call(subject)
                 || cases.iter().any(|(patterns, body)| {
                     patterns.iter().any(expr_contains_eval_call) || body_contains_eval_call(body)
                 })
-                || default.as_ref().is_some_and(|body| body_contains_eval_call(body))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| body_contains_eval_call(body))
         }
         StmtKind::Include { path, .. } => expr_contains_eval_call(path),
         StmtKind::Synthetic(body)
@@ -6503,11 +7016,29 @@ fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
                 .any(|(_, _, default, _)| default.as_ref().is_some_and(expr_contains_eval_call))
                 || body_contains_eval_call(body)
         }
-        StmtKind::ClassDecl { properties, methods, constants, .. }
-        | StmtKind::TraitDecl { properties, methods, constants, .. }
-        | StmtKind::InterfaceDecl { properties, methods, constants, .. } => {
+        StmtKind::ClassDecl {
+            properties,
+            methods,
+            constants,
+            ..
+        }
+        | StmtKind::TraitDecl {
+            properties,
+            methods,
+            constants,
+            ..
+        }
+        | StmtKind::InterfaceDecl {
+            properties,
+            methods,
+            constants,
+            ..
+        } => {
             properties.iter().any(|property| {
-                property.default.as_ref().is_some_and(expr_contains_eval_call)
+                property
+                    .default
+                    .as_ref()
+                    .is_some_and(expr_contains_eval_call)
             }) || constants
                 .iter()
                 .any(|constant| expr_contains_eval_call(&constant.value))
@@ -6517,10 +7048,18 @@ fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
                     }) || body_contains_eval_call(&method.body)
                 })
         }
-        StmtKind::Try { try_body, catches, finally_body } => {
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
             body_contains_eval_call(try_body)
-                || catches.iter().any(|catch_clause| body_contains_eval_call(&catch_clause.body))
-                || finally_body.as_ref().is_some_and(|body| body_contains_eval_call(body))
+                || catches
+                    .iter()
+                    .any(|catch_clause| body_contains_eval_call(&catch_clause.body))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| body_contains_eval_call(body))
         }
         StmtKind::EnumDecl { cases, .. } => cases
             .iter()
@@ -6566,28 +7105,50 @@ fn expr_contains_eval_call(expr: &Expr) -> bool {
         | ExprKind::YieldFrom(expr) => expr_contains_eval_call(expr),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default }
-        | ExprKind::Pipe { value, callable: default }
-        | ExprKind::ArrayAccess { array: value, index: default } => {
-            expr_contains_eval_call(value) || expr_contains_eval_call(default)
+        | ExprKind::Pipe {
+            value,
+            callable: default,
         }
-        ExprKind::Assignment { target, value, result_target, prelude, .. } => {
+        | ExprKind::ArrayAccess {
+            array: value,
+            index: default,
+        } => expr_contains_eval_call(value) || expr_contains_eval_call(default),
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target,
+            prelude,
+            ..
+        } => {
             expr_contains_eval_call(target)
                 || expr_contains_eval_call(value)
-                || result_target.as_ref().is_some_and(|target| expr_contains_eval_call(target))
+                || result_target
+                    .as_ref()
+                    .is_some_and(|target| expr_contains_eval_call(target))
                 || body_contains_eval_call(prelude)
         }
         ExprKind::ArrayLiteral(items) => items.iter().any(expr_contains_eval_call),
         ExprKind::ArrayLiteralAssoc(entries) => entries
             .iter()
             .any(|(key, value)| expr_contains_eval_call(key) || expr_contains_eval_call(value)),
-        ExprKind::Match { subject, arms, default } => {
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
             expr_contains_eval_call(subject)
                 || arms.iter().any(|(patterns, value)| {
                     patterns.iter().any(expr_contains_eval_call) || expr_contains_eval_call(value)
                 })
-                || default.as_ref().is_some_and(|default| expr_contains_eval_call(default))
+                || default
+                    .as_ref()
+                    .is_some_and(|default| expr_contains_eval_call(default))
         }
-        ExprKind::Ternary { condition, then_expr, else_expr } => {
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
             expr_contains_eval_call(condition)
                 || expr_contains_eval_call(then_expr)
                 || expr_contains_eval_call(else_expr)
@@ -6609,9 +7170,9 @@ fn expr_contains_eval_call(expr: &Expr) -> bool {
         ExprKind::NewDynamic { name_expr, args } => {
             expr_contains_eval_call(name_expr) || args.iter().any(expr_contains_eval_call)
         }
-        ExprKind::NewDynamicObject { class_name, args, .. } => {
-            expr_contains_eval_call(class_name) || args.iter().any(expr_contains_eval_call)
-        }
+        ExprKind::NewDynamicObject {
+            class_name, args, ..
+        } => expr_contains_eval_call(class_name) || args.iter().any(expr_contains_eval_call),
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_contains_eval_call(object),
         ExprKind::DynamicPropertyAccess { object, property }
@@ -6625,7 +7186,9 @@ fn expr_contains_eval_call(expr: &Expr) -> bool {
         ExprKind::FirstClassCallable(target) => callable_target_contains_eval_call(target),
         ExprKind::Yield { key, value } => {
             key.as_ref().is_some_and(|key| expr_contains_eval_call(key))
-                || value.as_ref().is_some_and(|value| expr_contains_eval_call(value))
+                || value
+                    .as_ref()
+                    .is_some_and(|value| expr_contains_eval_call(value))
         }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
@@ -6643,6 +7206,11 @@ fn expr_contains_eval_call(expr: &Expr) -> bool {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => false,
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // EIR lowering only runs after resolution, so seeing it here is a pass-ordering bug.
+        ExprKind::IncludeValue { .. } => {
+            unreachable!("ExprKind::IncludeValue must be expanded by the resolver")
+        }
     }
 }
 
@@ -6668,7 +7236,12 @@ fn is_eval_call_name(name: &Name) -> bool {
 }
 
 /// Lowers a closure variable call.
-fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr], expr: &Expr) -> LoweredValue {
+fn lower_closure_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    var: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     if let Some(value) = lower_invokable_object_variable_call(ctx, var, args, expr) {
         return value;
     }
@@ -6682,9 +7255,12 @@ fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr
         }
     }
     let callable = ctx.load_local(var, Some(expr.span));
-    let result_type = result_type.unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+    let result_type =
+        result_type.unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
     if instance_signature.is_none() {
-        if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
+        if let Some(arg_container) =
+            lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+        {
             return ctx.emit_value(
                 Op::CallableDescriptorInvoke,
                 vec![callable.value, arg_container.value],
@@ -6696,8 +7272,19 @@ fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr
         }
     }
     let mut operands = vec![callable.value];
-    operands.extend(lower_args_with_signature(ctx, instance_signature.as_ref(), args));
-    ctx.emit_value(Op::ClosureCall, operands, None, result_type, Op::ClosureCall.default_effects(), Some(expr.span))
+    operands.extend(lower_args_with_signature(
+        ctx,
+        instance_signature.as_ref(),
+        args,
+    ));
+    ctx.emit_value(
+        Op::ClosureCall,
+        operands,
+        None,
+        result_type,
+        Op::ClosureCall.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Lowers `$object(...)` when the local object has an `__invoke` method.
@@ -6721,21 +7308,30 @@ fn lower_invokable_object_expr_call(
     if !is_invokable_object_expr(ctx, callee) {
         return None;
     }
-    Some(lower_method_call(ctx, callee, "__invoke", args, Op::MethodCall, expr))
+    Some(lower_method_call(
+        ctx,
+        callee,
+        "__invoke",
+        args,
+        Op::MethodCall,
+        expr,
+    ))
 }
 
 /// Returns true when an expression is known to evaluate to an object with `__invoke`.
-fn is_invokable_object_expr(
-    ctx: &LoweringContext<'_, '_>,
-    callee: &Expr,
-) -> bool {
+fn is_invokable_object_expr(ctx: &LoweringContext<'_, '_>, callee: &Expr) -> bool {
     instance_callable_object_class(ctx, callee)
         .and_then(|class_name| class_method_signature(ctx, &class_name, "__invoke"))
         .is_some()
 }
 
 /// Lowers an expression call.
-fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Expr], expr: &Expr) -> LoweredValue {
+fn lower_expr_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    callee: &Expr,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     if let Some(value) = lower_invokable_object_expr_call(ctx, callee, args, expr) {
         return value;
     }
@@ -6758,7 +7354,9 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
     }
     let lowered_callee = lower_expr(ctx, callee);
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
-    if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
+    if let Some(arg_container) =
+        lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+    {
         return ctx.emit_value(
             Op::CallableDescriptorInvoke,
             vec![lowered_callee.value, arg_container.value],
@@ -6770,7 +7368,14 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
     }
     let mut operands = vec![lowered_callee.value];
     operands.extend(lower_args(ctx, args));
-    ctx.emit_value(Op::ExprCall, operands, None, result_type, Op::ExprCall.default_effects(), Some(expr.span))
+    ctx.emit_value(
+        Op::ExprCall,
+        operands,
+        None,
+        result_type,
+        Op::ExprCall.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Lowers direct calls to literal callable arrays through descriptor metadata.
@@ -6786,7 +7391,9 @@ fn lower_literal_callable_array_expr_call(
     if let Some(StaticCallableBinding::StaticMethodDescriptor { receiver, method }) =
         static_array_callable_descriptor_target(ctx, items)
     {
-        return Some(lower_static_method_descriptor_call(ctx, &receiver, &method, args, expr));
+        return Some(lower_static_method_descriptor_call(
+            ctx, &receiver, &method, args, expr,
+        ));
     }
     instance_array_callable_target(ctx, items)?;
     let lowered_callee = lower_expr(ctx, callee);
@@ -6810,7 +7417,9 @@ fn lower_expr_call_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_callable_result_type(ctx, callee.value, expr);
-    if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
+    if let Some(arg_container) =
+        lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+    {
         return ctx.emit_value(
             Op::CallableDescriptorInvoke,
             vec![callee.value, arg_container.value],
@@ -6839,9 +7448,13 @@ fn lower_untyped_descriptor_invoker_arg_container(
     span: Span,
 ) -> Option<LoweredValue> {
     if crate::types::call_args::has_named_args(args) {
-        return Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span));
+        return Some(lower_untyped_descriptor_invoker_hash_container(
+            ctx, args, span,
+        ));
     }
-    Some(lower_untyped_descriptor_invoker_indexed_container(ctx, args, span))
+    Some(lower_untyped_descriptor_invoker_indexed_container(
+        ctx, args, span,
+    ))
 }
 
 /// Builds an indexed descriptor-invoker container for signature-unknown calls.
@@ -6974,10 +7587,19 @@ fn lower_untyped_descriptor_invoker_spread_into_hash(
         Some(span),
     );
     let zero = emit_i64_at_span(ctx, 0, span);
-    let header = ctx.builder.create_named_block("descriptor.spread.next", vec![(IrType::I64, PhpType::Int)]);
-    let body = ctx.builder.create_named_block("descriptor.spread.body", Vec::new());
-    let exit = ctx.builder.create_named_block("descriptor.spread.exit", Vec::new());
-    ctx.builder.terminate(Terminator::Br { target: header, args: vec![zero.value] });
+    let header = ctx
+        .builder
+        .create_named_block("descriptor.spread.next", vec![(IrType::I64, PhpType::Int)]);
+    let body = ctx
+        .builder
+        .create_named_block("descriptor.spread.body", Vec::new());
+    let exit = ctx
+        .builder
+        .create_named_block("descriptor.spread.exit", Vec::new());
+    ctx.builder.terminate(Terminator::Br {
+        target: header,
+        args: vec![zero.value],
+    });
 
     ctx.builder.position_at_end(header);
     let index = ctx.builder.block_param(header, 0);
@@ -7032,7 +7654,10 @@ fn lower_untyped_descriptor_invoker_spread_into_hash(
         Op::IAdd.default_effects(),
         Some(span),
     );
-    ctx.builder.terminate(Terminator::Br { target: header, args: vec![next.value] });
+    ctx.builder.terminate(Terminator::Br {
+        target: header,
+        args: vec![next.value],
+    });
 
     ctx.builder.position_at_end(exit);
     crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
@@ -7084,7 +7709,11 @@ fn dynamic_callable_result_type(
     expr: &Expr,
 ) -> PhpType {
     match ctx.builder.value_php_type(callable).codegen_repr() {
-        PhpType::Callable | PhpType::Str | PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
+        PhpType::Callable
+        | PhpType::Str
+        | PhpType::Array(_)
+        | PhpType::Mixed
+        | PhpType::Union(_) => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
 }
@@ -7125,7 +7754,8 @@ fn lower_first_class_callable_expr_call(
                 .as_ref()
                 .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
                 .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
-            let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
+            let arg_container =
+                lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
             Some(ctx.emit_value(
                 Op::CallableDescriptorInvoke,
                 vec![callable.value, arg_container.value],
@@ -7140,7 +7770,12 @@ fn lower_first_class_callable_expr_call(
 }
 
 /// Lowers fixed-class object construction.
-fn lower_new_object(ctx: &mut LoweringContext<'_, '_>, class_name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
+fn lower_new_object(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &Name,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     let sig = constructor_signature(ctx, class_name).cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());
@@ -7231,6 +7866,21 @@ fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
+    // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
+    // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.
+    if matches!(op, Op::PropGet | Op::NullsafePropGet)
+        && class_declares_hook_accessor(ctx, object.value, &property_hook_get_method(property))
+        && !ctx.in_own_property_accessor(property)
+    {
+        let accessor = property_hook_get_method(property);
+        let call_op = if op == Op::NullsafePropGet {
+            Op::NullsafeMethodCall
+        } else {
+            Op::MethodCall
+        };
+        return lower_method_call_with_receiver(ctx, object, &accessor, &[], call_op, expr);
+    }
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
     ctx.emit_value(
@@ -7245,7 +7895,10 @@ fn lower_property_get_from_value(
 
 /// Returns true when value metadata proves the runtime value is PHP null.
 fn value_is_definitely_null(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> bool {
-    matches!(ctx.builder.value_php_type(value), PhpType::Void | PhpType::Never)
+    matches!(
+        ctx.builder.value_php_type(value),
+        PhpType::Void | PhpType::Never
+    )
 }
 
 /// Returns true when value metadata permits PHP null at runtime.
@@ -7278,7 +7931,11 @@ fn property_get_result_type(
             let Some(class_info) = ctx.packed_classes.get(normalized) else {
                 return fallback_expr_type(expr);
             };
-            let Some(field) = class_info.fields.iter().find(|field| field.name == property) else {
+            let Some(field) = class_info
+                .fields
+                .iter()
+                .find(|field| field.name == property)
+            else {
                 return fallback_expr_type(expr);
             };
             return normalize_value_php_type(field.php_type.codegen_repr());
@@ -7304,7 +7961,11 @@ fn property_get_result_type(
             property_ty
         };
     }
-    let Some((_, property_ty)) = class_info.properties.iter().find(|(name, _)| name == property) else {
+    let Some((_, property_ty)) = class_info
+        .properties
+        .iter()
+        .find(|(name, _)| name == property)
+    else {
         if let Some(magic_ty) = magic_get_result_type(ctx, normalized) {
             return if nullable {
                 nullable_result_type(magic_ty)
@@ -7348,7 +8009,26 @@ fn nullable_result_type(php_type: PhpType) -> PhpType {
     }
 }
 
-/// Returns the single object class represented by a direct or nullable object type.
+/// Returns true when the runtime class of `object` declares the synthetic property-hook accessor
+/// `accessor_method` (`__propget_<p>` / `__propset_<p>`). Drives the decision to route a property
+/// read/write to a hook; inherited (flattened) methods count, so subclasses inherit hooks.
+fn class_declares_hook_accessor(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    accessor_method: &str,
+) -> bool {
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some((class_name, _nullable)) = singular_object_class(&object_ty) else {
+        return false;
+    };
+    let key = php_symbol_key(accessor_method);
+    ctx.classes
+        .get(class_name)
+        .is_some_and(|info| info.methods.contains_key(&key))
+}
+
+/// Returns the class name and nullability if `php_type` is a single object type (optionally
+/// nullable). Heterogeneous unions and non-object types return `None`.
 fn singular_object_class(php_type: &PhpType) -> Option<(&str, bool)> {
     match php_type {
         PhpType::Object(name) => Some((name.as_str(), false)),
@@ -7410,7 +8090,12 @@ fn class_extends_class(
 }
 
 /// Lowers a dynamic property read.
-fn lower_dynamic_property_get(ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &Expr, expr: &Expr) -> LoweredValue {
+fn lower_dynamic_property_get(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
     let object = lower_expr(ctx, object);
     lower_dynamic_property_get_from_value(ctx, object, property, expr)
 }
@@ -7510,7 +8195,12 @@ fn normalize_union_members(members: Vec<PhpType>) -> Option<PhpType> {
 }
 
 /// Lowers a static property read.
-fn lower_static_property_get(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, property: &str, expr: &Expr) -> LoweredValue {
+fn lower_static_property_get(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
     let name = format!("{}::{}", receiver_name(receiver), property);
     let data = ctx.intern_string(&name);
     let result_type = static_property_result_type(ctx, receiver, property, expr);
@@ -7655,9 +8345,15 @@ fn lower_nullable_regular_method_call(
 ) -> LoweredValue {
     let result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
-    let fatal_block = ctx.builder.create_named_block("method.null.fatal", Vec::new());
-    let call_block = ctx.builder.create_named_block("method.non_null.call", Vec::new());
-    let merge = ctx.builder.create_named_block("method.nullable.merge", Vec::new());
+    let fatal_block = ctx
+        .builder
+        .create_named_block("method.null.fatal", Vec::new());
+    let call_block = ctx
+        .builder
+        .create_named_block("method.non_null.call", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("method.nullable.merge", Vec::new());
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![object.value],
@@ -7688,7 +8384,10 @@ fn lower_nullable_regular_method_call(
 
 /// Emits the PHP fatal terminator for an ordinary method call on null.
 fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
-    let message = format!("Fatal error: Call to a member function {}() on null\n", method);
+    let message = format!(
+        "Fatal error: Call to a member function {}() on null\n",
+        method
+    );
     let message = ctx.intern_string(&message);
     ctx.builder.terminate(Terminator::Fatal { message });
 }
@@ -7716,17 +8415,18 @@ fn lower_nullsafe_method_call(
             expr,
         );
     };
-    let result_type = method_call_result_type(
-        ctx,
-        object.value,
-        method,
-        Op::NullsafeMethodCall,
-        expr,
-    );
+    let result_type =
+        method_call_result_type(ctx, object.value, method, Op::NullsafeMethodCall, expr);
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
-    let null_block = ctx.builder.create_named_block("nullsafe.method.null", Vec::new());
-    let call_block = ctx.builder.create_named_block("nullsafe.method.call", Vec::new());
-    let merge = ctx.builder.create_named_block("nullsafe.method.merge", Vec::new());
+    let null_block = ctx
+        .builder
+        .create_named_block("nullsafe.method.null", Vec::new());
+    let call_block = ctx
+        .builder
+        .create_named_block("nullsafe.method.call", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("nullsafe.method.merge", Vec::new());
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![object.value],
@@ -7761,14 +8461,8 @@ fn lower_nullsafe_method_call(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(call_block);
-    let call = lower_method_call_with_receiver(
-        ctx,
-        object,
-        method,
-        args,
-        Op::NullsafeMethodCall,
-        expr,
-    );
+    let call =
+        lower_method_call_with_receiver(ctx, object, method, args, Op::NullsafeMethodCall, expr);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
     branch_to(ctx, merge);
 
@@ -8099,13 +8793,19 @@ fn static_receiver_class_name(
         StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
         StaticReceiver::Parent => {
             let current = ctx.current_class.as_deref()?;
-            ctx.classes.get(current).and_then(|class_info| class_info.parent.clone())
+            ctx.classes
+                .get(current)
+                .and_then(|class_info| class_info.parent.clone())
         }
     }
 }
 
 /// Lowers first-class callable creation.
-fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
+fn lower_first_class_callable(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &CallableTarget,
+    expr: &Expr,
+) -> LoweredValue {
     let operands = if let CallableTarget::Method { object, .. } = target {
         vec![lower_expr(ctx, object).value]
     } else {
@@ -8123,7 +8823,12 @@ fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &Callab
 }
 
 /// Lowers a pointer cast.
-fn lower_ptr_cast(ctx: &mut LoweringContext<'_, '_>, target_type: &str, inner: &Expr, expr: &Expr) -> LoweredValue {
+fn lower_ptr_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    target_type: &str,
+    inner: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     let data = ctx.intern_string(target_type);
     ctx.emit_value(
@@ -8156,7 +8861,11 @@ fn lower_buffer_new(
 }
 
 /// Lowers `::class`.
-fn lower_class_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, expr: &Expr) -> LoweredValue {
+fn lower_class_constant(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    expr: &Expr,
+) -> LoweredValue {
     let name = match receiver {
         StaticReceiver::Static => receiver_name(receiver),
         _ => static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver)),
@@ -8173,7 +8882,12 @@ fn lower_class_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticRece
 }
 
 /// Lowers a scoped constant read.
-fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, name: &str, expr: &Expr) -> LoweredValue {
+fn lower_scoped_constant(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: &str,
+    expr: &Expr,
+) -> LoweredValue {
     let class_name = scoped_constant_receiver_name(ctx, receiver);
     let normalized_class_name = class_name.trim_start_matches('\\');
     if ctx
@@ -8208,7 +8922,10 @@ fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticRec
 }
 
 /// Returns the class name to use for a scoped constant lookup.
-fn scoped_constant_receiver_name(ctx: &LoweringContext<'_, '_>, receiver: &StaticReceiver) -> String {
+fn scoped_constant_receiver_name(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> String {
     match receiver {
         StaticReceiver::Static => receiver_name(receiver),
         _ => static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver)),
@@ -8216,9 +8933,17 @@ fn scoped_constant_receiver_name(ctx: &LoweringContext<'_, '_>, receiver: &Stati
 }
 
 /// Lowers `new self`, `new static`, or `new parent`.
-fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, args: &[Expr], expr: &Expr) -> LoweredValue {
+fn lower_new_scoped_object(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     if matches!(receiver, StaticReceiver::Static) {
-        let fallback_class = ctx.current_class.clone().unwrap_or_else(|| receiver_name(receiver));
+        let fallback_class = ctx
+            .current_class
+            .clone()
+            .unwrap_or_else(|| receiver_name(receiver));
         let class_name = lower_class_constant(ctx, receiver, expr);
         let mut operands = vec![class_name.value];
         operands.extend(lower_args(ctx, args));
@@ -8248,13 +8973,22 @@ fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticR
 }
 
 /// Lowers a residual magic constant.
-fn lower_magic_constant(ctx: &mut LoweringContext<'_, '_>, kind: &MagicConstant, expr: &Expr) -> LoweredValue {
+fn lower_magic_constant(
+    ctx: &mut LoweringContext<'_, '_>,
+    kind: &MagicConstant,
+    expr: &Expr,
+) -> LoweredValue {
     let value = format!("__{:?}__", kind);
     lower_string_literal(ctx, &value, expr)
 }
 
 /// Lowers `yield`.
-fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>, value: Option<&Expr>, expr: &Expr) -> LoweredValue {
+fn lower_yield(
+    ctx: &mut LoweringContext<'_, '_>,
+    key: Option<&Expr>,
+    value: Option<&Expr>,
+    expr: &Expr,
+) -> LoweredValue {
     let mut operands = Vec::new();
     if let Some(key) = key {
         operands.push(lower_expr(ctx, key).value);
@@ -8262,7 +8996,14 @@ fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>, value: Opt
     if let Some(value) = value {
         operands.push(lower_expr(ctx, value).value);
     }
-    ctx.emit_value(Op::GeneratorYield, operands, None, PhpType::Mixed, Op::GeneratorYield.default_effects(), Some(expr.span))
+    ctx.emit_value(
+        Op::GeneratorYield,
+        operands,
+        None,
+        PhpType::Mixed,
+        Op::GeneratorYield.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Lowers `yield from`.
@@ -8288,11 +9029,15 @@ fn lower_instanceof(
     let mut operands = vec![lower_expr(ctx, value).value];
     let immediate = match target {
         InstanceOfTarget::Name(name) => {
-            if name.as_str().trim_start_matches('\\') == "static" && ctx.local_slots.contains_key("this") {
+            if name.as_str().trim_start_matches('\\') == "static"
+                && ctx.local_slots.contains_key("this")
+            {
                 operands.push(ctx.load_local("this", Some(expr.span)).value);
                 None
             } else {
-                Some(Immediate::Data(ctx.intern_class_name(&instanceof_target_name(ctx, name.as_str()))))
+                Some(Immediate::Data(ctx.intern_class_name(
+                    &instanceof_target_name(ctx, name.as_str()),
+                )))
             }
         }
         InstanceOfTarget::Expr(expr) => {
@@ -8300,14 +9045,28 @@ fn lower_instanceof(
             None
         }
     };
-    let op = if immediate.is_some() { Op::InstanceOf } else { Op::InstanceOfDynamic };
-    ctx.emit_value(op, operands, immediate, PhpType::Bool, op.default_effects(), Some(expr.span))
+    let op = if immediate.is_some() {
+        Op::InstanceOf
+    } else {
+        Op::InstanceOfDynamic
+    };
+    ctx.emit_value(
+        op,
+        operands,
+        immediate,
+        PhpType::Bool,
+        op.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Resolves lexical `instanceof` target keywords to concrete class names when possible.
 fn instanceof_target_name(ctx: &LoweringContext<'_, '_>, name: &str) -> String {
     match name.trim_start_matches('\\') {
-        "self" => ctx.current_class.clone().unwrap_or_else(|| name.to_string()),
+        "self" => ctx
+            .current_class
+            .clone()
+            .unwrap_or_else(|| name.to_string()),
         "parent" => ctx
             .current_class
             .as_deref()
@@ -8319,7 +9078,11 @@ fn instanceof_target_name(ctx: &LoweringContext<'_, '_>, name: &str) -> String {
 }
 
 /// Coerces a value to integer storage before integer-only operations.
-fn coerce_to_int(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
+fn coerce_to_int(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
     coerce_to_int_at_span(ctx, value, Some(expr.span))
 }
 
@@ -8331,8 +9094,22 @@ pub(crate) fn coerce_to_int_at_span(
 ) -> LoweredValue {
     match value.ir_type {
         IrType::I64 => value,
-        IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), span),
-        IrType::Str => ctx.emit_value(Op::StrToI, vec![value.value], None, PhpType::Int, Op::StrToI.default_effects(), span),
+        IrType::F64 => ctx.emit_value(
+            Op::FToI,
+            vec![value.value],
+            None,
+            PhpType::Int,
+            Op::FToI.default_effects(),
+            span,
+        ),
+        IrType::Str => ctx.emit_value(
+            Op::StrToI,
+            vec![value.value],
+            None,
+            PhpType::Int,
+            Op::StrToI.default_effects(),
+            span,
+        ),
         _ => ctx.emit_value(
             Op::Cast,
             vec![value.value],
@@ -8345,7 +9122,11 @@ pub(crate) fn coerce_to_int_at_span(
 }
 
 /// Coerces a value to float when the storage type allows a direct conversion.
-fn coerce_to_float(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
+fn coerce_to_float(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
     coerce_to_float_at_span(ctx, value, Some(expr.span))
 }
 
@@ -8357,7 +9138,14 @@ fn coerce_to_float_at_span(
 ) -> LoweredValue {
     match value.ir_type {
         IrType::F64 => value,
-        IrType::I64 => ctx.emit_value(Op::IToF, vec![value.value], None, PhpType::Float, Op::IToF.default_effects(), span),
+        IrType::I64 => ctx.emit_value(
+            Op::IToF,
+            vec![value.value],
+            None,
+            PhpType::Float,
+            Op::IToF.default_effects(),
+            span,
+        ),
         _ => ctx.emit_value(
             Op::Cast,
             vec![value.value],
@@ -8370,7 +9158,11 @@ fn coerce_to_float_at_span(
 }
 
 /// Coerces a value to string when possible.
-fn coerce_to_string(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
+fn coerce_to_string(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
     coerce_to_string_at_span(ctx, value, Some(expr.span))
 }
 
@@ -8380,7 +9172,10 @@ fn coerce_to_string_at_span(
     value: LoweredValue,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
-    if matches!(ctx.builder.value_php_type(value.value), PhpType::Resource(_)) {
+    if matches!(
+        ctx.builder.value_php_type(value.value),
+        PhpType::Resource(_)
+    ) {
         return ctx.emit_value(
             Op::ResourceToStr,
             vec![value.value],
@@ -8392,8 +9187,22 @@ fn coerce_to_string_at_span(
     }
     match value.ir_type {
         IrType::Str => value,
-        IrType::I64 | IrType::TaggedScalar => ctx.emit_value(Op::IToStr, vec![value.value], None, PhpType::Str, Op::IToStr.default_effects(), span),
-        IrType::F64 => ctx.emit_value(Op::FToStr, vec![value.value], None, PhpType::Str, Op::FToStr.default_effects(), span),
+        IrType::I64 | IrType::TaggedScalar => ctx.emit_value(
+            Op::IToStr,
+            vec![value.value],
+            None,
+            PhpType::Str,
+            Op::IToStr.default_effects(),
+            span,
+        ),
+        IrType::F64 => ctx.emit_value(
+            Op::FToStr,
+            vec![value.value],
+            None,
+            PhpType::Str,
+            Op::FToStr.default_effects(),
+            span,
+        ),
         _ => {
             let result = ctx.emit_value(
                 Op::Cast,
@@ -8540,7 +9349,10 @@ fn coerce_value_for_temp(
 /// Emits a branch to a target block when the current block can still fall through.
 fn branch_to(ctx: &mut LoweringContext<'_, '_>, target: BlockId) {
     if !ctx.builder.insertion_block_is_terminated() {
-        ctx.builder.terminate(Terminator::Br { target, args: Vec::new() });
+        ctx.builder.terminate(Terminator::Br {
+            target,
+            args: Vec::new(),
+        });
     }
 }
 
@@ -8563,7 +9375,10 @@ fn emit_bool_literal(
             span,
         )
         .expect("const_bool produces a value");
-    LoweredValue { value, ir_type: IrType::I64 }
+    LoweredValue {
+        value,
+        ir_type: IrType::I64,
+    }
 }
 
 /// Returns a printable static receiver name.

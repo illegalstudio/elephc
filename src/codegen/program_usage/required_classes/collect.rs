@@ -255,6 +255,11 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
 /// - `unreachable!` if a `MagicConstant` is encountered (must be lowered before this pass).
 fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>) {
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::BinaryOp { left, right, .. } => {
             collect_required_class_names_in_expr(left, names);
             collect_required_class_names_in_expr(right, names);

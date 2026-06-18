@@ -81,6 +81,7 @@ PHP source
   -> AST optimizer passes
   -> AST -> EIR lowering
   -> EIR validation
+  -> EIR optimization passes (fixed-point driver)
   -> EIR -> assembly backend
   -> runtime cache
   -> assembler / linker
@@ -122,9 +123,10 @@ The compiler currently supports two assembly backends:
 
 `--ast-backend` is a deprecated escape hatch while the legacy emitter remains
 in-tree. It emits a warning and will be removed after the default EIR path has
-completed its validation window. EIR currently preserves the existing
-hand-written assembly style; register allocation and IR optimization passes are
-planned follow-up work.
+completed its validation window. EIR preserves the existing hand-written assembly
+style and adds linear-scan register allocation plus a fixed-point IR optimization
+pass driver (see [Optimization Passes](#optimization-passes)); further IR passes
+are incremental follow-up work.
 
 ## Design Invariants
 
@@ -865,6 +867,87 @@ Validation has two modes:
 6. `writes_heap` invalidates reads of possibly aliasing arrays, hashes, objects,
    mixed cells, iterators, buffers, generators, fibers, and callable descriptors.
 
+## Optimization Passes
+
+After lowering and the one-shot module validation, EIR runs a fixed-point pass
+driver (`src/ir_passes/driver.rs`) before codegen. The driver is where
+IR-level transformations live — the rewrites the AST optimizer could not express
+because they need value identity, basic blocks, or dominance.
+
+A pass implements the `IrPass` trait: a stable `name()` and a
+`run(&mut Function, &mut DataPool) -> bool` that mutates the function in place and
+reports whether it changed anything. The `DataPool` is the module's shared
+literal pool, threaded through so passes that materialize new constants (the
+peephole string-literal fold interns the joined string) can do so; passes that
+need no new literals ignore it. The driver runs the registered passes over each
+function-like body (functions, methods, closures, trampolines, invokers)
+repeatedly until a full sweep reports no change, capped at a fixed iteration
+budget.
+
+In debug and test builds (`debug_assertions`), the driver re-validates the
+function with `validate_function` after every pass and panics — naming the
+offending pass — if any pass produced malformed IR. The same builds panic if a
+pass set fails to converge within the cap, which only happens for a
+non-converging pass bug. Both guards compile out of `--release`, where hitting
+the cap simply stops and proceeds with the current IR.
+
+Mutating passes share the use-rewriting helper `replace_all_uses`
+(`src/ir_passes/rewrite.rs`), which redirects every *use* of a value — across
+instruction operands and all terminator slots — to a replacement, leaving
+definitions (block parameters and instruction results) untouched.
+
+### Identity Arithmetic Folding
+
+The first registered transform (`src/ir_passes/identity_arith.rs`) folds
+algebraic identities on integer and float arithmetic/bitwise operations using
+two dominance-safe, validator-clean rewrites:
+
+- Fold-to-operand: when the result equals an existing operand `x` (`x + 0`,
+  `x * 1`, `x | 0`, `x << 0`, `x & x`, `x / 1`, `x * 1.0`, …), the instruction is
+  neutralized to `nop` and its result uses are redirected to `x`. `x` was already
+  an operand, so it dominates every use.
+- Fold-to-zero: when the result is the integer `0` (`x ^ x`, `x - x`, `x * 0`,
+  `x & 0`, `x % 1`), the instruction is rewritten in place to `const_i64 0`,
+  keeping the same result value id so no use-rewrite is needed.
+
+Only PHP-equivalent identities are folded. Integer `x / 0` and `x % 0` are left
+to trap at runtime, and float additive-zero and `x * 0.0` are excluded because
+signed zero and `NaN` make them observable. Fold-to-operand chains within one
+sweep (`a = x + 0; b = a * 1`) are resolved transitively so a neutralized,
+dead value is never used as a replacement target.
+
+### Peephole Patterns
+
+The second registered transform (`src/ir_passes/peephole/`) applies local
+rewrites to the shape of lowered EIR. Each pattern collects rewrite intents into
+a shared accumulator (a fold-to-operand RAUW map, instructions to neutralize, and
+`str_concat` instructions to convert to interned `const_str`), and a single apply
+phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
+`neutralize_to_nop` with the identity pass.
+
+- **Box/unbox cancellation** — `unbox(box(x)) → x`, only for scalar (`NonHeap`)
+  payloads with matching ir/php type, so boxing a heap value (where unbox
+  extracts a borrowed reference) is never folded.
+- **Redundant `move`/`borrow`** — these pure forwarding ops fold to their operand
+  only when the result shares the operand's ownership and type, so RAUW cannot
+  shift cleanup responsibility. (Current lowering does not emit them; the rewrite
+  keeps them correct if it ever does.)
+- **Load/store forwarding and dead stores** — a per-block value-numbering tracks
+  the value resident in each scalar (`NonHeap`) `PhpLocal`/`HiddenTemp`/
+  `NamedArgTemp` slot. A `load_local` of a slot with a known resident value folds
+  to it; a `store_local` of the resident value is dropped. Any instruction naming
+  the slot (unset, ref-cell promote/alias/release/store) invalidates it, and state
+  resets at block boundaries — writes through aliases are never crossed. By-ref
+  locals use ref cells, not plain load/store, so plain scalar slots are not
+  aliased.
+- **Paired acquire/release cancellation** — an `acquire` whose result is used
+  exactly once, by its `release`, drops both. The single-use guard makes this
+  refcount-neutral on every path regardless of distance between the two ops.
+- **String-literal concat folding** — `str_concat(const_str a, const_str b)`
+  interns `a ++ b` into the data pool and becomes a single `const_str` marked
+  `persistent` so cleanup never frees the literal. Nested concats converge across
+  driver sweeps.
+
 ## AST Lowering Catalogue
 
 Lowering must cover every variant in `src/parser/ast/expr.rs` and
@@ -1077,6 +1160,69 @@ Then it materializes:
 - runtime helper calls
 - source-map comments
 - instruction comments at the repository-required column
+
+## Register Allocation
+
+The `src/ir_passes/` module runs a linear-scan register allocator
+(Poletto-Sarkar) over each function before backend lowering. It is the default;
+`--regalloc=stack` (or `ELEPHC_REGALLOC=stack`) selects the original
+spill-everything path, which keeps every SSA value in a stack slot.
+
+The pass has four stages:
+
+1. **Liveness** (`liveness.rs`): backward dataflow to a fixed point producing
+   per-block live-in/live-out value sets. Block parameters are definitions at
+   block entry; branch arguments are uses at the predecessor's terminator.
+2. **Intervals** (`intervals.rs`): blocks are numbered in reverse postorder and
+   each value gets one contiguous `[start, end]` live interval. A value live
+   across edges or a loop back-edge spans the intervening positions.
+3. **Scan** (`regalloc.rs`): intervals are walked in start order against an
+   active set; a free register from the matching pool is assigned, otherwise the
+   use-weighted spill heuristic evicts the cheapest interval. Integer and float
+   values draw from separate pools.
+4. **Frame integration** (`codegen_ir/frame.rs`): the allocation is stored in
+   the frame layout, each used callee-saved register gets a save slot, and the
+   value-access chokepoints (`load_value_to_result`, `load_value_to_reg`,
+   `store_result_value`) read and write registers instead of slots.
+
+### Caller-saved reuse for non-call-crossing intervals
+
+The allocator distinguishes two register classes. A value whose live range
+never crosses a **clobber point** — any instruction or terminator whose lowering
+emits a call or touches a caller-saved register — is *call-free* and prefers a
+**caller-saved** register, which needs no prologue save/restore. A value that
+does live across a clobber point uses a **callee-saved** register, which survives
+calls. `src/ir_passes/clobber.rs` holds the audited allowlist of volatile-safe
+opcodes (constants, integer/float arithmetic, comparisons, scalar conversions);
+it is safe-by-default, so an unlisted opcode merely forgoes the caller-saved
+optimization rather than risking a clobbered value. The caller-saved pools are
+disjoint from every register those volatile-safe lowerings touch:
+
+| Class | aarch64 int | aarch64 float | x86_64 int | x86_64 float |
+|---|---|---|---|---|
+| Caller-saved | `x12`–`x15` | `d16`–`d23` | `rsi`,`rdi`,`r8`,`r9` | `xmm2`–`xmm7` |
+| Callee-saved | `x21`–`x28` | `d8`–`d14` | `rbx` | (none) |
+
+This is especially valuable on x86_64, where the callee-saved integer pool is
+just `rbx` and there are no callee-saved XMM registers at all: call-free integer
+and float values can now use the caller-saved pools instead of always spilling.
+On x86_64 `r14` and `r15` are still never allocated — they are used as scratch by
+hand-written runtime routines and shared heap-marker codegen without
+ABI-compliant save/restore. A float that lives across a call on x86_64 still
+spills, because no XMM register survives the call.
+
+The spill heuristic is use-weighted: under pressure the allocator evicts the
+interval with the lowest use count, breaking ties toward the furthest end (the
+classic furthest-use rule), so frequently-used "hot" values keep their
+registers.
+
+The prologue saves and the epilogue restores exactly the callee-saved registers
+the allocator used; caller-saved registers need neither.
+
+The first cut register-allocates only single-word `NonHeap` scalars (`I64`,
+`F64`) that are neither block parameters nor branch arguments, keeping the
+slot-based block-parameter moves and the ownership/GC cleanup paths unchanged.
+Generators and functions containing exception handlers fall back to all-spilled.
 
 ## Phase 02 Implementation Contract
 

@@ -20,6 +20,8 @@ mod intrinsics;
 mod ir;
 #[allow(dead_code, unused_imports)]
 mod ir_lower;
+#[allow(dead_code, unused_imports)]
+mod ir_passes;
 mod linker;
 mod lexer;
 mod magic_constants;

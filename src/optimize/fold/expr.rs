@@ -34,6 +34,7 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
     ClassProperty {
         name: property.name,
         visibility: property.visibility,
+        set_visibility: property.set_visibility,
         type_expr: property.type_expr,
         hooks: property.hooks,
         readonly: property.readonly,
@@ -58,6 +59,7 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
         has_body: method.has_body,
         params: fold_params(method.params),
         variadic: method.variadic,
+        variadic_type: method.variadic_type,
         return_type: method.return_type,
         body: fold_block(method.body),
         span: method.span,
@@ -86,6 +88,11 @@ pub(in crate::optimize) fn fold_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
 pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
         ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
         ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
@@ -235,6 +242,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            variadic_type,
             return_type,
             body,
             is_arrow,
@@ -244,6 +252,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         } => ExprKind::Closure {
             params: fold_params(params),
             variadic,
+            variadic_type,
             return_type,
             body: fold_block(body),
             is_arrow,

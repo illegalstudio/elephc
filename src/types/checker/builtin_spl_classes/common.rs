@@ -79,6 +79,7 @@ pub(super) fn class_method_with_body(
         has_body: true,
         params,
         variadic: None,
+        variadic_type: None,
         return_type,
         body,
         span: crate::span::Span::dummy(),
@@ -125,6 +126,7 @@ pub(super) fn storage_property_with_visibility(
     ClassProperty {
         name: name.to_string(),
         visibility,
+        set_visibility: None,
         type_expr,
         hooks: PropertyHooks::none(),
         readonly: false,

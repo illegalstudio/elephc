@@ -21,6 +21,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_guard() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -68,6 +69,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_after_local_write() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -117,6 +119,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_null_guard() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -170,6 +173,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_zero_guard() {
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -215,6 +219,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_empty_string_guar
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -264,6 +269,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_string_zero_guard
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {
@@ -313,6 +319,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_zero_float_guard(
             name: "main".into(),
             params: Vec::new(),
             variadic: None,
+            variadic_type: None,
             return_type: None,
             body: vec![Stmt::new(
                 StmtKind::If {

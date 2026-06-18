@@ -153,6 +153,8 @@ pub(crate) struct FnDecl {
     pub defaults: Vec<Option<Expr>>,
     pub ref_params: Vec<bool>,
     pub variadic: Option<String>,
+    /// Declared element type hint on the variadic parameter (`int ...$xs`), if any.
+    pub variadic_type: Option<TypeExpr>,
     pub return_type: Option<TypeExpr>,
     pub span: crate::span::Span,
     pub body: Vec<crate::parser::ast::Stmt>,

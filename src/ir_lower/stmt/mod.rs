@@ -22,7 +22,7 @@ use crate::ir_lower::expr::{
     static_callable_binding_for_expr, string_op_uses_scratch_storage,
     type_satisfies_array_access_for_ir,
 };
-use crate::names::php_symbol_key;
+use crate::names::{php_symbol_key, property_hook_set_method};
 use crate::parser::ast::{CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::span::Span;
 use crate::types::PhpType;
@@ -1829,6 +1829,14 @@ fn lower_property_assign(
         lower_magic_property_set(ctx, object.value, property, value, span);
         return;
     }
+    // Route a write to a set-hooked property to its `__propset_<p>($value)` accessor, except inside
+    // that property's own accessor where `$this->prop = v` must write the raw backing slot.
+    if set_hook_receiver_has_accessor(ctx, object.value, property)
+        && !ctx.in_own_property_accessor(property)
+    {
+        lower_property_hook_set(ctx, object.value, property, value, span);
+        return;
+    }
     let data = ctx.intern_string(property);
     ctx.emit_void(
         Op::PropSet,
@@ -1900,6 +1908,43 @@ fn release_magic_set_value_after_call(
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
+}
+
+/// Returns true when the runtime class of `object` declares a `__propset_<property>` set-hook
+/// accessor, meaning a write to `property` should be routed through it.
+fn set_hook_receiver_has_accessor(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return false;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    ctx.classes.get(normalized).is_some_and(|info| {
+        info.methods
+            .contains_key(&php_symbol_key(&property_hook_set_method(property)))
+    })
+}
+
+/// Lowers a write to a set-hooked property as a call to its `__propset_<p>($value)` accessor,
+/// passing the assigned value as the single argument and releasing it if it was an owning temporary.
+fn lower_property_hook_set(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    value: LoweredValue,
+    span: Span,
+) {
+    let method_data = ctx.intern_string(&property_hook_set_method(property));
+    ctx.emit_void(
+        Op::MethodCall,
+        vec![object, value.value],
+        Some(Immediate::Data(method_data)),
+        Op::MethodCall.default_effects(),
+        Some(span),
+    );
+    release_magic_set_value_after_call(ctx, value, span);
 }
 
 /// Converts array literals to hash storage when a declared object property requires assoc storage.

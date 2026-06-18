@@ -19,6 +19,18 @@ Task-oriented guides for building real programs with elephc.
 
 - [Build a Fiber Web Server](how-to/fiber-web-server.md) — create a native HTTP server with non-blocking sockets, `poll()`, and one `Fiber` per connection
 
+## Compiling
+
+Everything about driving the compiler: the command-line flags and the full path from a `.php` file to a native binary.
+
+- [Compiling Overview](compiling/overview.md) — basic invocation, output naming, defaults, and a map of this section
+- [The compilation pipeline](compiling/compilation-pipeline.md) — every phase from source text to binary, in order
+- [CLI reference](compiling/cli-reference.md) — the complete, authoritative list of every flag, value, default, and env override
+- [Targets and cross-compilation](compiling/targets.md) — the supported target matrix and `--target`
+- [Optimization and codegen controls](compiling/optimization.md) — `--ir-opt` (EIR passes / identity folding), `--regalloc`, `--null-repr`
+- [Output formats and diagnostics](compiling/output-and-diagnostics.md) — `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--gc-stats`, `--heap-debug`
+- [Linking, heap, and conditional compilation](compiling/linking-and-conditional-compilation.md) — `--link`/`-l`, `--link-path`/`-L`, `--framework`, `--heap-size`, `--define`
+
 ## PHP Syntax
 
 Standard PHP features supported by elephc. Implemented PHP syntax is intended to match PHP behavior; known compatibility gaps are documented on the relevant reference pages and tracked in the roadmap.

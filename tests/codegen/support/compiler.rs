@@ -166,6 +166,10 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         }
         TestCodegenBackend::Ir => {
             let exported_functions = HashMap::new();
+            // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under
+            // both the linear-scan allocator (default) and the stack fallback.
+            let regalloc_linear =
+                !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
             let user_asm = elephc::codegen_ir::generate_user_asm_from_ir_with_options(
                 &ir_module,
                 gc_stats,
@@ -173,6 +177,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
                 requires_elephc_tls,
                 elephc::codegen::Emit::Executable,
                 &exported_functions,
+                regalloc_linear,
             )
             .expect("EIR backend codegen failed for codegen fixture");
             let runtime_features = ir_module.required_runtime_features;

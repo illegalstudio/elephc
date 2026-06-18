@@ -76,6 +76,40 @@ including file.
 
 Both `include 'f';` and `include('f');` syntax supported.
 
+`include`/`require` can also be used in expression position as the value of a
+`return` or a plain assignment. The expression evaluates to the included file's
+own top-level `return` value, exactly like PHP — the pattern config files and
+Composer-style bootstraps rely on:
+
+```php
+<?php
+// config.php: `<?php return ['host' => 'localhost', 'port' => 5432];`
+$config = require 'config.php';   // $config is the returned array
+echo $config['port'];             // 5432
+
+return require __DIR__ . '/bootstrap.php';
+```
+
+If the included file has no top-level `return`, the expression evaluates to `1`,
+the integer PHP yields for a successful include. Declarations (functions, classes)
+in the included file are hoisted to global scope as usual.
+
+The included file runs in the **calling scope**, exactly like PHP: it can read and
+write the caller's variables, and a variable first assigned in the included file
+becomes visible after the include.
+
+```php
+<?php
+$base = 10;
+$v = require 'double.php';   // double.php: `<?php return $base * 2;`
+echo $v;                     // 20 — the included file read the caller's $base
+```
+
+Expression-position includes are supported as the direct value of a `return` or a
+simple `=` assignment; nesting one deeper inside a larger expression is not. The
+included file's top-level code runs in its own scope, so top-level variables it
+defines are not shared back into the including scope.
+
 `include_once` and `require_once` use a runtime guard per resolved file. The
 guard is shared across top-level code, functions, closures, methods, loops, and
 branches, so a file is marked as included only when execution reaches the

@@ -109,8 +109,8 @@ Each test runs in an isolated temp directory. Tests run in parallel — the `com
 ```
 PHP source → Lexer → Parser → Magic constants → Conditional compilation → Resolver
 → NameResolver → Constant folding → Type Checker / warnings → AST optimizer passes
-→ EIR lowering / validation → EIR codegen → runtime cache → assembler/linker
-→ binary
+→ EIR lowering / validation → EIR optimization passes → EIR codegen → runtime cache
+→ assembler/linker → binary
 ```
 
 ### Backend policy
@@ -147,6 +147,7 @@ new PHP-visible behavior must be driven by EIR lowering and `src/codegen_ir/`.
 | `src/optimize/`, `src/optimize.rs` | `fold_constants()`, `propagate_constants()`, `eliminate_dead_code()` | AST-level constant folding/propagation, control-flow pruning/normalization, DCE, and effect modeling |
 | `src/ir/` | IR types / builders / validator | EIR program, function, block, instruction, terminator, value, local, effect, ownership, and textual-format definitions |
 | `src/ir_lower/` | `lower_program()` | Active AST → EIR lowering, including local slot creation, hidden temporaries, ownership annotations, and PHP call semantics |
+| `src/ir_passes/` | `optimize_module()` / `allocate_registers()` | EIR analyses and transformations over lowered functions: fixed-point optimization pass driver (identity folding, …; gated by `--ir-opt`) and linear-scan register allocation, before codegen |
 | `src/codegen_ir/` | `generate()` | Active EIR → target assembly backend |
 | `src/codegen/` | `generate()` / shared emitters | Frozen legacy direct AST backend plus shared ABI/runtime/target helpers still consumed by EIR |
 | `src/codegen/abi/` | ABI helpers | Target-specific argument materialization, frame layout, registers, stack slots, symbols, and call helpers |
@@ -225,6 +226,17 @@ Leaf builtin/runtime files contain exactly **one emitter function**. Keep dispat
 
 Do not list every builtin in this guide. `src/types/checker/builtins/catalog.rs` and `src/types/signatures.rs` are the canonical sources; update those instead of maintaining parallel lists.
 
+### Adding a new EIR optimization pass
+
+IR-level transformations run after EIR lowering/validation through a fixed-point driver, not in the AST optimizer.
+
+1. Implement the `IrPass` trait (`name()`, `run(&mut Function, &mut DataPool) -> bool`) in a new `src/ir_passes/<pass>.rs`; `run` mutates the function in place and returns whether it changed anything. The `DataPool` is the module's shared literal pool for passes that intern new constants (e.g. peephole string-literal concat folding); ignore it (`_data`) otherwise.
+2. Register the pass in `default_passes()` in `src/ir_passes/driver.rs`. Order matters: the driver re-runs the whole set per function until none reports a change, capped by `MAX_PASS_ITERATIONS`.
+3. Reuse `src/ir_passes/rewrite.rs` for value redirection (`replace_all_uses` for RAUW) and the shared fold helpers (`resolve_chains`, `neutralize_to_nop`, `defining_instruction`, `count_value_uses`) instead of re-walking operands/terminators. Keep rewrites dominance-safe and PHP-equivalent; cross-check edge cases (division by zero, signed-zero/`NaN` floats) with `php -r`.
+4. The driver re-validates each function with `validate_function` after every pass in debug/test builds and panics (naming the pass) on malformed IR or non-convergence; both guards compile out of `--release`. Rely on this during development.
+5. Add unit tests under `src/ir_passes/tests/` (hand-built EIR via `crate::ir::Builder`) and end-to-end tests under `tests/codegen/optimizer/`. In e2e fixtures, use runtime-unknown values (e.g. `$argc`) so the targeted IR construct survives AST-level folding and actually reaches EIR.
+6. Passes are gated by `--ir-opt=on|off` / `--no-ir-opt` (env `ELEPHC_IR_OPT`), default on. Behavior must be identical with the flag on or off except for performance; verify with `--emit-ir` and `--emit-ir --no-ir-opt`.
+
 ### Call argument semantics
 
 All function-like call surfaces must share the same argument rules instead of normalizing locally in individual emitters:
@@ -253,6 +265,7 @@ The optimizer assumes side effects are modeled conservatively. When changing cal
 - Keep constant folding in `src/optimize/fold/` limited to PHP-equivalent results. If PHP behavior is edge-case sensitive, cross-check with `php -r`.
 - Add optimizer regression tests under `tests/codegen/optimizer/` when DCE, constant propagation, control-flow pruning, or folding can observe the change.
 - Magic constants must be lowered before optimizer passes. Do not introduce optimizer paths that expect raw `ExprKind::MagicConstant`.
+- `src/optimize/` is the AST optimizer only. IR-level (EIR) transformations live in `src/ir_passes/` behind the fixed-point pass driver; see "Adding a new EIR optimization pass". Folds that need value identity, basic blocks, or dominance belong there, not in `src/optimize/`.
 
 ### Runtime ownership, GC, and COW
 
@@ -422,7 +435,7 @@ When in doubt, test with `php -r '...'` to verify behavior.
 
 ## Documentation
 
-The `docs/` directory is the project's complete documentation, organized into three sections:
+The `docs/` directory is the project's complete documentation, organized into the following sections:
 
 ```
 docs/
@@ -430,6 +443,14 @@ docs/
 ├── getting-started/       # Installation and first program
 │   ├── installation.md
 │   └── your-first-program.md
+├── compiling/             # The compiler CLI: flags and the full compilation process
+│   ├── overview.md
+│   ├── compilation-pipeline.md
+│   ├── cli-reference.md
+│   ├── targets.md
+│   ├── optimization.md
+│   ├── output-and-diagnostics.md
+│   └── linking-and-conditional-compilation.md
 ├── php/                   # PHP syntax (standard PHP features)
 │   ├── types.md
 │   ├── operators.md
@@ -488,9 +509,10 @@ sidebar:
 1. **PHP syntax feature** (operator, built-in, statement, etc.) → update the relevant page in `docs/php/`. Add the function signature, parameters, return type, and a short example.
 2. **Compiler extension** (pointer, buffer, extern, ifdef) → update the relevant page in `docs/beyond-php/`.
 3. **Compiler internals change** (pipeline, type checker, optimizer, codegen, runtime, ABI, memory model) → update the relevant page in `docs/internals/`.
-4. If a feature was previously listed as "not supported", remove that note.
-5. If there are known incompatibilities with PHP, document them in `docs/php/types.md` (incompatibilities section).
-6. Update `docs/README.md` index if adding a new page.
+4. **Compilation flow or CLI change** (new/changed flag, env var, pipeline phase, target, output mode) → update the relevant page in `docs/compiling/`, keeping `docs/compiling/cli-reference.md` authoritative and in sync with `src/cli.rs`. Mirror user-facing flag examples in `README.md`.
+5. If a feature was previously listed as "not supported", remove that note.
+6. If there are known incompatibilities with PHP, document them in `docs/php/types.md` (incompatibilities section).
+7. Update `docs/README.md` index if adding a new page.
 
 ## Roadmap management
 
@@ -499,6 +521,29 @@ sidebar:
 - **Never remove completed items** from a version section. Mark them as `[x]` and leave them under the version they belong to. This preserves the history of what was delivered in each release.
 - New work items go under the appropriate future version.
 - When all items in a version are completed, the version is considered done — do not move items elsewhere.
+
+## Changelog management
+
+`CHANGELOG.md` records every released version, newest first, in *Keep a Changelog* style.
+
+When cutting a release:
+
+- Add a new section at the top (under the header), above the previous version:
+
+  ```
+  ## [X.Y.Z] - YYYY-MM-DD
+  - One terse, user-facing bullet per notable change.
+  ```
+
+  Keep entries concise (usually one or two bullets), describe what shipped — not the implementation — and use the absolute release date.
+- Add a matching compare link at the **bottom** of the file, also newest first, immediately above the previous version's link:
+
+  ```
+  [X.Y.Z]: https://github.com/illegalstudio/elephc/compare/v<previous>...vX.Y.Z
+  ```
+
+  The first-ever release uses the `releases/tag/v0.1.0` form instead of a compare range. Every version section must have its link; do not leave the link out.
+- The changelog version, the `[X.Y.Z]` link, and `version` in `Cargo.toml` must agree. The `Cargo.toml` bump is a separate `chore: bump version to X.Y.Z` commit.
 
 ## Conventions
 

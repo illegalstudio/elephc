@@ -360,13 +360,49 @@ fn test_error_void_parameter_type_is_rejected() {
     );
 }
 
-/// Verifies that a variadic parameter with an explicit type annotation (e.g.,
-/// `int ...$xs`) is rejected because it is not yet supported.
+/// Verifies that a variadic parameter with an explicit type annotation (e.g., `int ...$xs`)
+/// is accepted and type-checks without error.
 #[test]
-fn test_error_typed_variadic_parameter_is_not_supported_yet() {
+fn test_typed_variadic_parameter_is_accepted() {
+    assert!(check_source("<?php function foo(int ...$xs): int { return array_sum($xs); } foo(1, 2, 3);").is_ok());
+}
+
+/// Verifies that the declared element type of a typed variadic is enforced against each argument:
+/// passing a string to `int ...$xs` is rejected. Regression test — the hint was previously dropped.
+#[test]
+fn test_error_typed_variadic_rejects_wrong_argument_type() {
     expect_error(
-        "<?php function foo(int ...$xs) { }",
-        "Typed variadic parameters are not supported yet",
+        "<?php function sum(int ...$nums): int { return array_sum($nums); } sum(\"a\", \"b\");",
+        "variadic parameter $nums expects Int, got Str",
+    );
+}
+
+/// Verifies that the declared element type of a typed variadic method parameter is enforced.
+#[test]
+fn test_error_typed_variadic_method_rejects_wrong_argument_type() {
+    expect_error(
+        "<?php class C { public function add(int ...$n): int { return count($n); } } $c = new C(); $c->add(\"x\");",
+        "variadic parameter $n expects Int, got Str",
+    );
+}
+
+/// Verifies that an *untyped* variadic still accepts heterogeneous arguments (no enforcement).
+#[test]
+fn test_untyped_variadic_accepts_mixed_arguments() {
+    assert!(check_source(
+        "<?php function f(...$xs): int { return count($xs); } f(1, \"a\", 2.5);"
+    )
+    .is_ok());
+}
+
+/// Verifies that a dynamic method call with named arguments is rejected with a clear diagnostic
+/// (the target method name is a runtime value, so parameter names are unknown at compile time).
+/// The internal `call_user_func` desugaring must not leak into the message.
+#[test]
+fn test_error_dynamic_method_call_rejects_named_arguments() {
+    expect_error(
+        "<?php class C { public function op(int $a, int $b): int { return $a - $b; } } $c = new C(); $m = \"op\"; $c->$m(b: 3, a: 10);",
+        "Named arguments are not supported in dynamic calls",
     );
 }
 

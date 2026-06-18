@@ -218,6 +218,37 @@ pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, s
     }
 }
 
+/// Emits a register-to-register move, choosing the move form by the register
+/// classes of both operands. Handles same-class moves and moves between a
+/// general-purpose and a floating-point register (a raw 64-bit bit copy, used
+/// when a float value's payload must reach an integer register). Emits nothing
+/// when source and destination are identical.
+pub fn emit_reg_move(emitter: &mut Emitter, dst: &str, src: &str) {
+    if dst == src {
+        return;
+    }
+    let dst_float = is_float_register(dst);
+    let src_float = is_float_register(src);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            if dst_float || src_float {
+                emitter.instruction(&format!("fmov {}, {}", dst, src));         // move between FP and/or GP registers
+            } else {
+                emitter.instruction(&format!("mov {}, {}", dst, src));          // move integer/pointer register
+            }
+        }
+        Arch::X86_64 => {
+            if dst_float && src_float {
+                emitter.instruction(&format!("movsd {}, {}", dst, src));        // move scalar double between XMM registers
+            } else if dst_float || src_float {
+                emitter.instruction(&format!("movq {}, {}", dst, src));         // move 64-bit payload between GP and XMM
+            } else {
+                emitter.instruction(&format!("mov {}, {}", dst, src));          // move integer/pointer register
+            }
+        }
+    }
+}
+
 /// Loads a value from an arbitrary address in memory into `reg`.
 /// `addr_reg` holds the base address; `byte_offset` is added (AArch64 scaled immediate, x86_64 additive).
 /// On x86_64, float registers use movsd; integers use mov.

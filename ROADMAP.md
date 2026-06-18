@@ -693,8 +693,8 @@ imposed. See `docs/internals/the-ir.md`.
 - [x] EIR → ASM backend producing semantically equivalent output to the legacy backend (no optimizations yet)
 - [x] Default backend switch from AST to EIR, with `--ast-backend` retained as an explicit fallback
 - [x] CI default-EIR gate, frozen fallback smoke coverage, and IR-only benchmark job for parity and regression tracking
-- [ ] Linear-scan register allocator (Poletto-Sarkar) with liveness analysis, live intervals, allocation table, separate int / float pools, and callee-saved preservation across calls
-- [ ] Register-pressure mitigations: caller-saved reuse for non-call-crossing intervals; better spill heuristic
+- [x] Linear-scan register allocator (Poletto-Sarkar) with liveness analysis, live intervals, allocation table, separate int / float pools, and callee-saved preservation across calls
+- [x] Register-pressure mitigations: caller-saved reuse for non-call-crossing intervals; better spill heuristic. The linear-scan allocator now classifies each live interval as call-free (never crosses a clobber point — an instruction/terminator whose lowering emits a call or touches a caller-saved register, per the safe-by-default allowlist in `src/ir_passes/clobber.rs`) and assigns call-free intervals from caller-saved pools that need no prologue save/restore (`x12`–`x15`/`d16`–`d23` on aarch64, `rsi`/`rdi`/`r8`/`r9`/`xmm2`–`xmm7` on x86_64), falling back to callee-saved (`x21`–`x28`/`d8`–`d14`/`rbx`) for cross-call values. This notably unlocks register allocation for x86_64 floats (no callee-saved XMM) and integers (callee pool is only `rbx`). The spill heuristic is now use-weighted: under pressure the rarely-used, furthest-reaching interval is evicted first, keeping hot values in registers
 
 Expected outcome: EIR is the default and only active implementation backend in
 v0.24.x. The legacy AST backend is frozen behind `--ast-backend` for diagnostics
@@ -708,10 +708,10 @@ EIR backend is the user-facing default.
 
 - [x] Deprecation warning on `--ast-backend`; from this point the legacy AST backend is frozen as a diagnostic-only fallback, not a feature/parity target
 - [x] EIR-only backend documentation updates (`the-codegen.md`, `the-ir.md`) with `--ast-backend` documented only as frozen diagnostic fallback
-- [ ] EIR-only backend release notes with `--ast-backend` documented only as frozen diagnostic fallback
-- [ ] Fixed-point IR pass driver with validation after each pass in test builds
-- [ ] Identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, etc.)
-- [ ] Peephole patterns: redundant load/store, box/unbox cancellation, string-literal concat folding, paired acquire/release cancellation, redundant `Move` / `Borrow` cleanup
+- [x] EIR-only backend release notes with `--ast-backend` documented only as frozen diagnostic fallback (`CHANGELOG.md` v0.23.10)
+- [x] Fixed-point IR pass driver with validation after each pass in test builds — `src/ir_passes/driver.rs` runs registered `IrPass` transforms over each function to a fixed point; in debug/test builds it re-validates the function after every pass (panicking and naming the offending pass on malformed IR) and panics on non-convergence within the iteration cap, with both guards compiled out of `--release` (cap then stops and proceeds). Shared use-rewriting (RAUW) lives in `src/ir_passes/rewrite.rs`.
+- [x] Identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, etc.) — `src/ir_passes/identity_arith.rs`, the first registered pass. Fold-to-operand neutralizes the op to `nop` and redirects uses to the surviving operand (`x + 0`, `x * 1`, `x | 0`, `x << 0`, `x & x`, `x / 1`, `x * 1.0`, …); fold-to-zero rewrites the op in place to `const_i64 0` (`x ^ x`, `x - x`, `x * 0`, `x & 0`, `x % 1`). PHP-equivalence preserved: integer `x / 0` / `x % 0` still trap, and float additive-zero / `* 0.0` are excluded for signed-zero/`NaN` safety. Fold chains within a sweep resolve transitively.
+- [x] Peephole patterns: redundant load/store, box/unbox cancellation, string-literal concat folding, paired acquire/release cancellation, redundant `Move` / `Borrow` cleanup — `src/ir_passes/peephole/`, the second registered pass. Box/unbox folds scalar `unbox(box(x)) → x`; `Move`/`Borrow` fold to their operand when ownership/type are unchanged; scalar load/store value-numbering forwards `load`-after-`store` and drops self-stores on non-aliased `NonHeap` locals; single-use `acquire`/`release` pairs cancel (refcount-neutral); `str_concat(const_str, const_str)` folds to an interned `const_str` (the `IrPass` trait gained `&mut DataPool` for literal interning). All rewrites are dominance-safe, validator-clean, and PHP-equivalent; nested/chained cases converge across driver sweeps.
 - [ ] Dead instruction elimination over the IR CFG (absorbs former v0.23 "Dead code elimination v3")
 - [ ] Dead store elimination over PHP local slots
 - [ ] Branch simplification (constant-condition `CondBr`, empty-block jump threading, unreachable block removal)

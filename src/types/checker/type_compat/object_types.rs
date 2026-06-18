@@ -256,10 +256,22 @@ impl Checker {
                     ]))
                 }
             }
-            _ => Err(CompileError::new(
-                span,
-                &format!("Undefined method: {}::{}", class_name, method),
-            )),
+            _ => {
+                // User-declared static methods on the enum dispatch like class static methods.
+                let key = crate::names::php_symbol_key(method);
+                if let Some(sig) = self
+                    .classes
+                    .get(class_name)
+                    .and_then(|class_info| class_info.static_methods.get(&key))
+                    .cloned()
+                {
+                    return Ok(sig.return_type);
+                }
+                Err(CompileError::new(
+                    span,
+                    &format!("Undefined method: {}::{}", class_name, method),
+                ))
+            }
         }
     }
 

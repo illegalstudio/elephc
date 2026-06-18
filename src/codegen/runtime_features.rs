@@ -314,6 +314,11 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
 /// Returns true when an expression contains a direct regex builtin call.
 fn expr_has_regex_call(expr: &Expr) -> bool {
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         ExprKind::FunctionCall { name, args } => {
             is_regex_builtin_name(name.as_str())
                 || regex_callback_dispatch_call(name.as_str(), args)
@@ -626,6 +631,11 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         return true;
     }
     match &expr.kind {
+        // `IncludeValue` is a transient parser node fully expanded by the resolver;
+        // it can never reach this pass.
+        ExprKind::IncludeValue { .. } => unreachable!(
+            "ExprKind::IncludeValue must be expanded by the resolver"
+        ),
         // A direct dynamic call on an arbitrary callee (e.g. `$callback(...)`) lowers
         // through runtime callable dispatch when the callee resolves to a string name.
         ExprKind::ExprCall { callee, args } => {

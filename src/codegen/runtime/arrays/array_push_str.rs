@@ -18,7 +18,11 @@ use crate::codegen::platform::Arch;
 /// Algorithm:
 /// 1. Calls `__rt_array_ensure_unique` to split the array if it is shared (COW).
 /// 2. On first append to an empty array, stamps the array header with elem_size=16 and
-///    value_type=string so future growth correctly copies 16-byte string slots.
+///    value_type=string so future growth correctly copies 16-byte string slots. An empty
+///    `array<never>` literal is allocated with 8-byte slots, so the same step also rescales
+///    the capacity field (`old_capacity * old_elem_size / 16`) to count the existing backing
+///    store in 16-byte slots — otherwise the 16-byte first writes would overflow a buffer
+///    sized for 8-byte slots before the capacity check ever triggers a grow.
 /// 3. Persists the incoming string to heap via `__rt_str_persist` (safety: the caller's
 ///    string may point into the volatile concat_buf).
 /// 4. Checks capacity; if full, calls `__rt_array_grow` to double capacity and retry.
@@ -44,6 +48,11 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     // -- specialize freshly empty arrays to 16-byte string slots --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length before first-write specialization
     emitter.instruction("cbnz x9, __rt_array_push_str_shape_ready");            // existing arrays already have their element shape fixed
+    emitter.instruction("ldr x10, [x0, #16]");                                  // x10 = old elem_size (8 for empty array<never> buffers, 16 for string buffers)
+    emitter.instruction("ldr x11, [x0, #8]");                                   // x11 = old capacity counted in old-elem_size slots
+    emitter.instruction("mul x11, x11, x10");                                   // x11 = backing-store data bytes already reserved by __rt_array_new
+    emitter.instruction("lsr x11, x11, #4");                                    // reinterpret the same bytes as 16-byte string slots so capacity matches the buffer
+    emitter.instruction("str x11, [x0, #8]");                                   // publish slot-accurate capacity so an 8-byte-sized buffer grows before a 16-byte slot overflows it
     emitter.instruction("mov x10, #16");                                        // string append slots carry pointer and length
     emitter.instruction("str x10, [x0, #16]");                                  // elem_size = 16 before any future grow copies live string slots
     emitter.instruction("ldr x10, [x0, #-8]");                                  // load packed array metadata for value_type stamping
@@ -112,6 +121,11 @@ fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load length before first-write string shape specialization
     emitter.instruction("test r10, r10");                                       // is this the first append into a freshly empty indexed array?
     emitter.instruction("jnz __rt_array_push_str_shape_ready");                 // existing arrays already have their element shape fixed
+    emitter.instruction("mov r10, QWORD PTR [rax + 16]");                       // r10 = old elem_size (8 for empty array<never> buffers, 16 for string buffers)
+    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // r11 = old capacity counted in old-elem_size slots
+    emitter.instruction("imul r11, r10");                                       // r11 = backing-store data bytes already reserved by __rt_array_new
+    emitter.instruction("shr r11, 4");                                          // reinterpret the same bytes as 16-byte string slots so capacity matches the buffer
+    emitter.instruction("mov QWORD PTR [rax + 8], r11");                        // publish slot-accurate capacity so an 8-byte-sized buffer grows before a 16-byte slot overflows it
     emitter.instruction("mov QWORD PTR [rax + 16], 16");                        // elem_size = 16 before any future growth copies live string slots
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load packed indexed-array metadata for value_type stamping
     emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap marker, indexed-array kind, and persistent COW metadata

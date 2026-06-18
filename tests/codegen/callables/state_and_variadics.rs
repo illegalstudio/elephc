@@ -533,3 +533,107 @@ prefix("x");
     );
     assert_eq!(out, "0");
 }
+
+// --- Typed variadics ---
+
+/// Verifies a typed `int ...$nums` free-function variadic sums its arguments; the element type
+/// is inferred from the passed integers.
+#[test]
+fn test_typed_variadic_int_sum() {
+    let out = compile_and_run(
+        r#"<?php
+function sum(int ...$nums): int { return array_sum($nums); }
+echo sum(1, 2, 3, 4);
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Verifies a typed `string ...$parts` variadic joins its string arguments.
+#[test]
+fn test_typed_variadic_string_join() {
+    let out = compile_and_run(
+        r#"<?php
+function join_em(string ...$parts): string { return implode("-", $parts); }
+echo join_em("a", "b", "c");
+"#,
+    );
+    assert_eq!(out, "a-b-c");
+}
+
+/// Verifies a typed variadic following a regular parameter collects only the trailing arguments.
+#[test]
+fn test_typed_variadic_after_regular_param() {
+    let out = compile_and_run(
+        r#"<?php
+function tag(string $t, string ...$items): string { return $t . ":" . implode(",", $items); }
+echo tag("x", "a", "b");
+"#,
+    );
+    assert_eq!(out, "x:a,b");
+}
+
+/// Verifies a typed variadic accepts zero trailing arguments.
+#[test]
+fn test_typed_variadic_empty() {
+    let out = compile_and_run(
+        r#"<?php
+function sum(int ...$nums): int { return array_sum($nums); }
+echo sum();
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+/// Verifies a typed variadic on an instance method collects its arguments (counted to avoid the
+/// pre-existing array_sum-over-mixed-array backend gap that affects all method/closure variadics).
+#[test]
+fn test_typed_variadic_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Calc {
+    public function count_args(int ...$ns): int { return count($ns); }
+}
+echo (new Calc())->count_args(10, 20, 30);
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies a typed variadic on a closure collects its arguments.
+#[test]
+fn test_typed_variadic_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (int ...$xs): int { return count($xs); };
+echo $f(5, 6, 7);
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies that array unpacking into a typed variadic works (`sum(...$a)`).
+#[test]
+fn test_typed_variadic_spread_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function sum(int ...$n): int { return array_sum($n); }
+$a = [1, 2, 3];
+echo sum(...$a);
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+/// Verifies that a typed variadic collects correctly-typed positional arguments and runs
+/// end-to-end, confirming the declared element type does not interfere with valid calls.
+#[test]
+fn test_typed_variadic_positional_arguments_run() {
+    let out = compile_and_run(
+        r#"<?php
+function sum(int ...$n): int { return array_sum($n); }
+echo sum(4, 5, 6);
+"#,
+    );
+    assert_eq!(out, "15");
+}
