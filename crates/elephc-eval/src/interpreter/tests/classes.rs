@@ -368,3 +368,123 @@ class EvalReadonlyHookContractBox implements EvalReadonlyHookContract {
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
+
+/// Verifies concrete eval subclasses satisfy abstract property hook contracts.
+#[test]
+fn execute_program_accepts_abstract_property_hook_contracts() {
+    let program = parse_fragment(
+        br#"abstract class EvalAbstractHookBase {
+    abstract public string $value { get; set; }
+}
+class EvalAbstractHookBox extends EvalAbstractHookBase {
+    public string $value {
+        get => $this->value;
+        set { $this->value = $value . "!"; }
+    }
+}
+$box = new EvalAbstractHookBox();
+$box->value = "Ada";
+echo $box->value;
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Ada!");
+    assert_eq!(values.get(result), FakeValue::String("Ada!".to_string()));
+}
+
+/// Verifies normal mutable properties satisfy abstract get/set hook contracts.
+#[test]
+fn execute_program_accepts_plain_property_for_abstract_hook_contracts() {
+    let program = parse_fragment(
+        br#"abstract class EvalPlainAbstractHookBase {
+    abstract public string $value { get; set; }
+}
+class EvalPlainAbstractHookBox extends EvalPlainAbstractHookBase {
+    public string $value = "Ada";
+}
+$box = new EvalPlainAbstractHookBox();
+echo $box->value; echo ":";
+$box->value = "Grace";
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Ada:");
+    assert_eq!(values.get(result), FakeValue::String("Grace".to_string()));
+}
+
+/// Verifies concrete eval subclasses must declare inherited abstract properties.
+#[test]
+fn execute_program_rejects_missing_abstract_property_hook_contract() {
+    let program = parse_fragment(
+        br#"abstract class EvalMissingAbstractHookBase {
+    abstract public string $value { get; }
+}
+class EvalMissingAbstractHookBox extends EvalMissingAbstractHookBase {}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("missing abstract property should fail concrete subclass");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies readonly properties cannot satisfy abstract writable hook contracts.
+#[test]
+fn execute_program_rejects_readonly_property_for_abstract_set_contract() {
+    let program = parse_fragment(
+        br#"abstract class EvalReadonlyAbstractHookBase {
+    abstract public int $id { get; set; }
+}
+class EvalReadonlyAbstractHookBox extends EvalReadonlyAbstractHookBase {
+    public readonly int $id;
+    public function __construct($id) { $this->id = $id; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("readonly property should fail abstract writable contract");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies abstract trait property hook contracts are enforced after trait expansion.
+#[test]
+fn execute_program_enforces_trait_abstract_property_hook_contracts() {
+    let program = parse_fragment(
+        br#"trait EvalTraitNeedsName {
+    abstract protected string $name { get; }
+    public function label() { return $this->name; }
+}
+class EvalTraitNameBox {
+    use EvalTraitNeedsName;
+    protected string $name = "Ada";
+}
+$box = new EvalTraitNameBox();
+echo $box->label();
+return $box->label();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Ada");
+    assert_eq!(values.get(result), FakeValue::String("Ada".to_string()));
+}

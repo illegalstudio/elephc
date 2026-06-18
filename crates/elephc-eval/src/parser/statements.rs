@@ -413,11 +413,16 @@ impl Parser {
         }
 
         let visibility = visibility.unwrap_or(EvalVisibility::Public);
-        if is_abstract || is_final {
+        if is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let (property, mut hook_methods) =
-            self.parse_class_property_decl(visibility, is_static, is_readonly, is_readonly_class)?;
+        let (property, mut hook_methods) = self.parse_class_property_decl(
+            visibility,
+            is_static,
+            is_readonly,
+            is_readonly_class,
+            is_abstract,
+        )?;
         properties.push(property);
         methods.append(&mut hook_methods);
         Ok(())
@@ -669,6 +674,7 @@ impl Parser {
         is_static: bool,
         is_readonly: bool,
         is_readonly_class: bool,
+        is_abstract: bool,
     ) -> Result<(EvalClassProperty, Vec<EvalClassMethod>), EvalParseError> {
         if is_static && is_readonly {
             return Err(EvalParseError::UnsupportedConstruct);
@@ -681,13 +687,28 @@ impl Parser {
         let name = name.clone();
         self.advance();
         let default = if self.consume(TokenKind::Equal) {
-            if effective_readonly {
+            if is_abstract || effective_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             Some(self.parse_expr()?)
         } else {
             None
         };
+        if is_abstract {
+            if is_static || effective_readonly {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            let (requires_get_hook, requires_set_hook) = self.parse_property_hook_contracts()?;
+            let property = EvalClassProperty::with_visibility_static_and_readonly(
+                name,
+                visibility,
+                is_static,
+                effective_readonly,
+                None,
+            )
+            .with_abstract_hook_contract(requires_get_hook, requires_set_hook);
+            return Ok((property, Vec::new()));
+        }
         let default_is_some = default.is_some();
         let (has_get_hook, has_set_hook, hook_methods) =
             self.parse_property_hook_tail(&name, is_static, effective_readonly, default_is_some)?;
@@ -872,11 +893,11 @@ impl Parser {
             return Ok(());
         }
         let visibility = visibility.unwrap_or(EvalVisibility::Public);
-        if is_abstract || is_final {
+        if is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         let (property, mut hook_methods) =
-            self.parse_class_property_decl(visibility, is_static, is_readonly, false)?;
+            self.parse_class_property_decl(visibility, is_static, is_readonly, false, is_abstract)?;
         properties.push(property);
         methods.append(&mut hook_methods);
         Ok(())
@@ -1089,10 +1110,8 @@ impl Parser {
         Ok(EvalInterfaceProperty::new(name, requires_get, requires_set))
     }
 
-    /// Parses `{ get; set; }` hook contracts for an interface property.
-    pub(super) fn parse_interface_property_hook_contracts(
-        &mut self,
-    ) -> Result<(bool, bool), EvalParseError> {
+    /// Parses `{ get; set; }` hook contracts for an abstract or interface property.
+    pub(super) fn parse_property_hook_contracts(&mut self) -> Result<(bool, bool), EvalParseError> {
         self.expect(TokenKind::LBrace)?;
         let mut requires_get = false;
         let mut requires_set = false;
@@ -1135,6 +1154,13 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         Ok((requires_get, requires_set))
+    }
+
+    /// Parses `{ get; set; }` hook contracts for an interface property.
+    pub(super) fn parse_interface_property_hook_contracts(
+        &mut self,
+    ) -> Result<(bool, bool), EvalParseError> {
+        self.parse_property_hook_contracts()
     }
 
     /// Consumes a simple declared property type before the `$property` token.

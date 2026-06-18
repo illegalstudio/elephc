@@ -975,7 +975,7 @@ fn validate_eval_class_modifiers(
         return Err(EvalStatus::RuntimeFatal);
     }
     validate_eval_declared_constants(class.constants())?;
-    validate_eval_declared_properties(class.properties())?;
+    validate_eval_declared_properties(class)?;
     for method in class.methods() {
         if method.is_abstract() && method.is_final() {
             return Err(EvalStatus::RuntimeFatal);
@@ -995,10 +995,19 @@ fn validate_eval_class_modifiers(
 }
 
 /// Validates property declarations that can be checked before class registration.
-fn validate_eval_declared_properties(properties: &[EvalClassProperty]) -> Result<(), EvalStatus> {
+fn validate_eval_declared_properties(class: &EvalClass) -> Result<(), EvalStatus> {
     let mut names = std::collections::HashSet::new();
-    for property in properties {
+    for property in class.properties() {
         if !names.insert(property.name().to_string()) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if property.is_abstract()
+            && (!class.is_abstract()
+                || property.is_static()
+                || property.is_readonly()
+                || property.default().is_some()
+                || (!property.requires_get_hook() && !property.requires_set_hook()))
+        {
             return Err(EvalStatus::RuntimeFatal);
         }
         if property.is_static() && property.is_readonly() {
@@ -1076,6 +1085,9 @@ fn validate_concrete_class_requirements(
     if !pending_class_abstract_method_requirements(class, context).is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    if !pending_class_abstract_property_requirements(class, context)?.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     for interface in pending_class_interface_names(class, context) {
         if context.has_interface(&interface) {
             validate_class_implements_eval_interface(class, &interface, context)?;
@@ -1097,6 +1109,19 @@ fn pending_class_abstract_method_requirements(
     requirements.into_values().collect()
 }
 
+/// Returns inherited abstract properties that the pending class has not concretized.
+fn pending_class_abstract_property_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<Vec<EvalClassProperty>, EvalStatus> {
+    let mut requirements = std::collections::HashMap::new();
+    if let Some(parent) = class.parent() {
+        collect_class_abstract_property_requirements(parent, context, &mut requirements)?;
+    }
+    apply_class_abstract_property_requirements(class, &mut requirements)?;
+    Ok(requirements.into_values().collect())
+}
+
 /// Collects abstract method requirements from one declared eval class ancestry chain.
 fn collect_class_abstract_method_requirements(
     class_name: &str,
@@ -1112,6 +1137,21 @@ fn collect_class_abstract_method_requirements(
     apply_class_abstract_method_requirements(class, requirements);
 }
 
+/// Collects abstract property requirements from one declared eval class ancestry chain.
+fn collect_class_abstract_property_requirements(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    requirements: &mut std::collections::HashMap<String, EvalClassProperty>,
+) -> Result<(), EvalStatus> {
+    let Some(class) = context.class(class_name) else {
+        return Ok(());
+    };
+    if let Some(parent) = class.parent() {
+        collect_class_abstract_property_requirements(parent, context, requirements)?;
+    }
+    apply_class_abstract_property_requirements(class, requirements)
+}
+
 /// Applies one class's methods to the open abstract-method requirement set.
 fn apply_class_abstract_method_requirements(
     class: &EvalClass,
@@ -1124,6 +1164,78 @@ fn apply_class_abstract_method_requirements(
         } else {
             requirements.remove(&key);
         }
+    }
+}
+
+/// Applies one class's properties to the open abstract-property requirement set.
+fn apply_class_abstract_property_requirements(
+    class: &EvalClass,
+    requirements: &mut std::collections::HashMap<String, EvalClassProperty>,
+) -> Result<(), EvalStatus> {
+    for property in class.properties() {
+        let key = property.name().to_string();
+        if property.is_abstract() {
+            if let Some(existing) = requirements.get(&key) {
+                property_contract_visibility_allows(existing, property)
+                    .then_some(())
+                    .ok_or(EvalStatus::RuntimeFatal)?;
+                requirements.insert(key, merge_abstract_property_contracts(existing, property));
+            } else {
+                requirements.insert(key, property.clone());
+            }
+        } else if let Some(requirement) = requirements.get(&key) {
+            class_property_satisfies_abstract_contract(property, requirement)
+                .then_some(())
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            requirements.remove(&key);
+        }
+    }
+    Ok(())
+}
+
+/// Merges inherited and redeclared abstract property hook requirements.
+fn merge_abstract_property_contracts(
+    inherited: &EvalClassProperty,
+    redeclared: &EvalClassProperty,
+) -> EvalClassProperty {
+    redeclared.clone().with_abstract_hook_contract(
+        inherited.requires_get_hook() || redeclared.requires_get_hook(),
+        inherited.requires_set_hook() || redeclared.requires_set_hook(),
+    )
+}
+
+/// Returns whether a redeclared property keeps compatible visibility.
+fn property_contract_visibility_allows(
+    inherited: &EvalClassProperty,
+    redeclared: &EvalClassProperty,
+) -> bool {
+    property_visibility_rank(redeclared.visibility())
+        >= property_visibility_rank(inherited.visibility())
+}
+
+/// Returns whether a concrete property satisfies an abstract hook contract.
+fn class_property_satisfies_abstract_contract(
+    property: &EvalClassProperty,
+    requirement: &EvalClassProperty,
+) -> bool {
+    if property.is_abstract()
+        || property.is_static()
+        || !property_contract_visibility_allows(requirement, property)
+    {
+        return false;
+    }
+    if requirement.requires_set_hook() {
+        return property.has_set_hook() || (!property.has_get_hook() && !property.is_readonly());
+    }
+    requirement.requires_get_hook()
+}
+
+/// Returns a comparable rank where larger means less restrictive property visibility.
+fn property_visibility_rank(visibility: EvalVisibility) -> u8 {
+    match visibility {
+        EvalVisibility::Private => 1,
+        EvalVisibility::Protected => 2,
+        EvalVisibility::Public => 3,
     }
 }
 
@@ -1216,7 +1328,10 @@ fn class_has_interface_property(
     context: &ElephcEvalContext,
 ) -> bool {
     pending_class_property(class, requirement.name(), context).is_some_and(|property| {
-        if property.visibility() != EvalVisibility::Public || property.is_static() {
+        if property.is_abstract()
+            || property.visibility() != EvalVisibility::Public
+            || property.is_static()
+        {
             return false;
         }
         if requirement.requires_set() {
@@ -1779,7 +1894,7 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
         for property in class
             .properties()
             .iter()
-            .filter(|property| !property.is_static())
+            .filter(|property| !property.is_static() && !property.is_abstract())
         {
             let value = if let Some(default) = property.default() {
                 eval_expr(default, context, caller_scope, values)?

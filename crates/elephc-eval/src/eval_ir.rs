@@ -912,8 +912,11 @@ pub struct EvalClassProperty {
     visibility: EvalVisibility,
     is_static: bool,
     is_readonly: bool,
+    is_abstract: bool,
     has_get_hook: bool,
     has_set_hook: bool,
+    requires_get_hook: bool,
+    requires_set_hook: bool,
     default: Option<EvalExpr>,
 }
 
@@ -955,8 +958,11 @@ impl EvalClassProperty {
             visibility,
             is_static,
             is_readonly,
+            is_abstract: false,
             has_get_hook: false,
             has_set_hook: false,
+            requires_get_hook: false,
+            requires_set_hook: false,
             default,
         }
     }
@@ -965,6 +971,18 @@ impl EvalClassProperty {
     pub const fn with_hooks(mut self, has_get_hook: bool, has_set_hook: bool) -> Self {
         self.has_get_hook = has_get_hook;
         self.has_set_hook = has_set_hook;
+        self
+    }
+
+    /// Returns a copy of this property marked as an abstract hook contract.
+    pub const fn with_abstract_hook_contract(
+        mut self,
+        requires_get_hook: bool,
+        requires_set_hook: bool,
+    ) -> Self {
+        self.is_abstract = true;
+        self.requires_get_hook = requires_get_hook;
+        self.requires_set_hook = requires_set_hook;
         self
     }
 
@@ -988,6 +1006,11 @@ impl EvalClassProperty {
         self.is_readonly
     }
 
+    /// Returns whether this property is an abstract property hook contract.
+    pub const fn is_abstract(&self) -> bool {
+        self.is_abstract
+    }
+
     /// Returns whether this property has a concrete get hook accessor.
     pub const fn has_get_hook(&self) -> bool {
         self.has_get_hook
@@ -996,6 +1019,16 @@ impl EvalClassProperty {
     /// Returns whether this property has a concrete set hook accessor.
     pub const fn has_set_hook(&self) -> bool {
         self.has_set_hook
+    }
+
+    /// Returns whether this abstract property contract requires read access.
+    pub const fn requires_get_hook(&self) -> bool {
+        self.requires_get_hook
+    }
+
+    /// Returns whether this abstract property contract requires write access.
+    pub const fn requires_set_hook(&self) -> bool {
+        self.requires_set_hook
     }
 
     /// Returns the property initializer expression, when one was declared.

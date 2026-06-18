@@ -5041,6 +5041,50 @@ class EvalIfaceHookReadOnlyBox implements EvalIfaceHookSetContract {
     );
 }
 
+/// Verifies eval-declared abstract property hook contracts validate concrete subclasses.
+#[test]
+fn test_eval_declared_abstract_property_hook_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('abstract class EvalAbstractHookBase {
+    abstract public string $value { get; set; }
+}
+class EvalAbstractHookBox extends EvalAbstractHookBase {
+    public string $value {
+        get => $this->value;
+        set { $this->value = $value . "!"; }
+    }
+}
+class EvalPlainAbstractHookBox extends EvalAbstractHookBase {
+    public string $value = "Grace";
+}
+$box = new EvalAbstractHookBox();
+$box->value = "Ada";
+$plain = new EvalPlainAbstractHookBox();
+echo $box->value . ":" . $plain->value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Ada!:Grace");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('abstract class EvalMissingAbstractHookBase {
+    abstract public string $value { get; }
+}
+class EvalMissingAbstractHookBox extends EvalMissingAbstractHookBase {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared static properties and static methods work through the bridge.
 #[test]
 fn test_eval_declared_static_members_and_late_static_binding() {

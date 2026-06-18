@@ -246,6 +246,62 @@ fn parse_fragment_accepts_concrete_class_property_hooks() {
     );
 }
 
+/// Verifies abstract property hook contracts lower without concrete accessors.
+#[test]
+fn parse_fragment_accepts_abstract_class_property_hook_contracts() {
+    let program = parse_fragment(
+        br#"abstract class DynEvalAbstractHooked {
+    abstract public int $value { get; set; }
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::with_modifiers(
+            "DynEvalAbstractHooked",
+            true,
+            false,
+            None,
+            Vec::new(),
+            vec![EvalClassProperty::with_visibility_static_and_readonly(
+                "value",
+                EvalVisibility::Public,
+                false,
+                false,
+                None
+            )
+            .with_abstract_hook_contract(true, true)],
+            Vec::new(),
+        ))]
+    );
+}
+
+/// Verifies trait abstract property hook contracts lower without concrete accessors.
+#[test]
+fn parse_fragment_accepts_trait_abstract_property_hook_contracts() {
+    let program = parse_fragment(
+        br#"trait DynEvalAbstractHookTrait {
+    abstract protected string $name { get; }
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::TraitDecl(EvalTrait::new(
+            "DynEvalAbstractHookTrait",
+            vec![EvalClassProperty::with_visibility_static_and_readonly(
+                "name",
+                EvalVisibility::Protected,
+                false,
+                false,
+                None
+            )
+            .with_abstract_hook_contract(true, false)],
+            Vec::new(),
+        ))]
+    );
+}
+
 /// Verifies eval rejects readonly property forms that PHP does not allow.
 #[test]
 fn parse_fragment_rejects_invalid_readonly_class_properties() {
@@ -264,8 +320,14 @@ fn parse_fragment_rejects_invalid_property_hooks() {
         .expect_err("hooked properties cannot have defaults in eval");
     parse_fragment(b"class DynEvalHookStatic { public static int $id { get => 1; } }")
         .expect_err("static properties cannot have hooks in eval");
-    parse_fragment(b"class DynEvalHookAbstract { public int $id { get; } }")
-        .expect_err("abstract property hooks are not supported in eval classes");
+    parse_fragment(
+        b"abstract class DynEvalHookAbstractDefault { abstract public int $id = 1 { get; } }",
+    )
+    .expect_err("abstract properties cannot have defaults in eval");
+    parse_fragment(
+        b"abstract class DynEvalHookAbstractStatic { abstract public static int $id { get; } }",
+    )
+    .expect_err("static properties cannot have abstract hooks in eval");
 }
 
 /// Verifies eval rejects concrete hook bodies in interface property contracts.
