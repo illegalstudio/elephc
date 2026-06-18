@@ -8,8 +8,9 @@
 //! Key details:
 //! - The cacheable runtime object cannot know user class ids, method symbols,
 //!   or return types, so this bridge is emitted into the user assembly.
-//! - This method-call slice supports public AOT methods with zero, one, or two
-//!   non-by-ref scalar arguments and reports unsupported calls as runtime failure.
+//! - This method-call slice supports public AOT methods with fixed non-by-ref
+//!   scalar/Mixed argument lists that fit the target ABI register bridge, and
+//!   reports unsupported calls as runtime failure.
 
 use std::collections::BTreeMap;
 
@@ -17,7 +18,7 @@ use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
-use crate::codegen::platform::Arch;
+use crate::codegen::platform::{Arch, Target};
 use crate::ir::{Function, LocalKind, Module};
 use crate::names::{method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
@@ -45,7 +46,7 @@ struct EvalStaticMethodSlot {
     return_ty: PhpType,
 }
 
-const MAX_EVAL_METHOD_ARGS: usize = 2;
+const MAX_EVAL_METHOD_ARGS: usize = 8;
 const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
@@ -121,7 +122,13 @@ fn collect_eval_method_slots(module: &Module) -> Vec<EvalMethodSlot> {
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
-        collect_class_method_slots(class_name, class_info, &emitted_methods, &mut slots);
+        collect_class_method_slots(
+            module.target,
+            class_name,
+            class_info,
+            &emitted_methods,
+            &mut slots,
+        );
     }
     slots
 }
@@ -133,7 +140,13 @@ fn collect_eval_static_method_slots(module: &Module) -> Vec<EvalStaticMethodSlot
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
-        collect_class_static_method_slots(class_name, class_info, &emitted_methods, &mut slots);
+        collect_class_static_method_slots(
+            module.target,
+            class_name,
+            class_info,
+            &emitted_methods,
+            &mut slots,
+        );
     }
     slots
 }
@@ -152,6 +165,7 @@ fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
 
 /// Adds bridge-supported public methods for one class.
 fn collect_class_method_slots(
+    target: Target,
     class_name: &str,
     class_info: &ClassInfo,
     emitted_methods: &std::collections::HashSet<(String, String, bool)>,
@@ -161,7 +175,7 @@ fn collect_class_method_slots(
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
         if !method_is_public(class_info, method)
-            || !method_signature_supported(sig)
+            || !method_signature_supported(sig, target, PhpType::Object(class_name.to_string()))
             || !method_return_supported(&sig.return_type)
         {
             continue;
@@ -187,6 +201,7 @@ fn collect_class_method_slots(
 
 /// Adds bridge-supported public static methods for one class.
 fn collect_class_static_method_slots(
+    target: Target,
     class_name: &str,
     class_info: &ClassInfo,
     emitted_methods: &std::collections::HashSet<(String, String, bool)>,
@@ -196,7 +211,7 @@ fn collect_class_static_method_slots(
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
         if !static_method_is_public(class_info, method)
-            || !method_signature_supported(sig)
+            || !method_signature_supported(sig, target, PhpType::Int)
             || !method_return_supported(&sig.return_type)
         {
             continue;
@@ -236,20 +251,39 @@ fn static_method_is_public(class_info: &ClassInfo, method: &str) -> bool {
         .is_none_or(|visibility| matches!(visibility, Visibility::Public))
 }
 
-/// Returns true for method signatures supported by this first eval bridge slice.
-fn method_signature_supported(sig: &crate::types::FunctionSig) -> bool {
+/// Returns true for method signatures supported by the eval bridge.
+fn method_signature_supported(
+    sig: &crate::types::FunctionSig,
+    target: Target,
+    hidden_arg_ty: PhpType,
+) -> bool {
     sig.params.len() <= MAX_EVAL_METHOD_ARGS
         && sig.variadic.is_none()
         && sig.ref_params.iter().all(|is_ref| !*is_ref)
         && sig.params.iter().all(|(_, ty)| method_param_supported(ty))
+        && eval_bridge_signature_fits_registers(target, hidden_arg_ty, &sig.params)
 }
 
 /// Returns true for an eval-supplied method argument type supported by this bridge.
 fn method_param_supported(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
     )
+}
+
+/// Returns true when this helper can materialize the complete call without stack args.
+fn eval_bridge_signature_fits_registers(
+    target: Target,
+    hidden_arg_ty: PhpType,
+    params: &[(String, PhpType)],
+) -> bool {
+    let mut arg_types = Vec::with_capacity(params.len() + 1);
+    arg_types.push(hidden_arg_ty.codegen_repr());
+    arg_types.extend(params.iter().map(|(_, ty)| ty.codegen_repr()));
+    abi::build_outgoing_arg_assignments_for_target(target, &arg_types, 0)
+        .iter()
+        .all(|assignment| assignment.in_register())
 }
 
 /// Returns true for return storage shapes the bridge can box for eval.
@@ -1083,6 +1117,9 @@ fn emit_aarch64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for string coercion
             emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval argument to a PHP string pair in x1/x2
         }
+        PhpType::Mixed => {
+            emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for a Mixed method parameter
+        }
         _ => {}
     }
 }
@@ -1105,6 +1142,9 @@ fn emit_x86_64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for string coercion
             emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval argument to a PHP string pair
+        }
+        PhpType::Mixed => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for a Mixed method parameter
         }
         _ => {}
     }

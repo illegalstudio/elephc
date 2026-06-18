@@ -4374,6 +4374,52 @@ $box->run();
     assert_eq!(out, "50!");
 }
 
+/// Verifies eval fragments pass more than two fixed scalar arguments to public AOT methods.
+#[test]
+fn test_eval_fragment_can_call_this_public_many_arg_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodManyArgBox {
+    public int $x = 10;
+
+    public function label(int $a, int $b, int $c, string $suffix): string {
+        return ($this->x + $a + $b + $c) . $suffix;
+    }
+
+    public function run(): void {
+        echo eval('return $this->label(1, 2, 3, "!");');
+    }
+}
+
+$box = new EvalMethodManyArgBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "16!");
+}
+
+/// Verifies eval fragments pass boxed Mixed values to public AOT methods.
+#[test]
+fn test_eval_fragment_can_call_this_public_mixed_arg_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodMixedArgBox {
+    public function identity(mixed $value): mixed {
+        return $value;
+    }
+
+    public function run(): void {
+        echo eval('return $this->identity("mixed-ok");');
+    }
+}
+
+$box = new EvalMethodMixedArgBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "mixed-ok");
+}
+
 /// Verifies eval fragments can unpack numeric arrays into public AOT method calls.
 #[test]
 fn test_eval_fragment_can_call_this_public_method_with_spread_args() {
@@ -4437,6 +4483,10 @@ class EvalAotStaticBox {
         return $left . $right;
     }
 
+    public static function sum4(int $a, int $b, int $c, int $d): int {
+        return $a + $b + $c + $d;
+    }
+
     public static function sum(int $left, int $right): int {
         return $left + $right;
     }
@@ -4447,7 +4497,8 @@ $cb = ["EvalAotStaticBox", "join"];
 echo call_user_func($cb, "C", "D"); echo ":";
 $named = "EvalAotStaticBox::join";
 echo $named("E", "F"); echo ":";
-echo call_user_func_array(["EvalAotStaticBox", "sum"], [2, 5]);');
+echo call_user_func_array(["EvalAotStaticBox", "sum"], [2, 5]); echo ":";
+echo EvalAotStaticBox::sum4(1, 2, 3, 4);');
 "#,
     );
     assert!(
@@ -4455,7 +4506,7 @@ echo call_user_func_array(["EvalAotStaticBox", "sum"], [2, 5]);');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "AB:CD:EF:7");
+    assert_eq!(out.stdout, "AB:CD:EF:7:10");
 }
 
 /// Verifies native callable probes can see functions declared by eval after the barrier.
@@ -5713,6 +5764,23 @@ echo eval('$box = new EvalDynamicNewOneArgCtor(11); return $box->x;');
 "#,
     );
     assert_eq!(out, "11");
+}
+
+/// Verifies eval object construction passes more than two arguments to an AOT constructor.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_many_args() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewManyArgCtor {
+    public string $label = "";
+    public function __construct(int $a, int $b, int $c, string $suffix) {
+        $this->label = ($a + $b + $c) . $suffix;
+    }
+}
+echo eval('$box = new EvalDynamicNewManyArgCtor(1, 2, 3, "!"); return $box->label;');
+"#,
+    );
+    assert_eq!(out, "6!");
 }
 
 /// Verifies eval follows PHP by accepting constructor arguments when no constructor exists.

@@ -9,18 +9,20 @@
 //! - The cacheable runtime object can allocate by name, but only user assembly
 //!   knows constructor symbols and parameter ABI shapes.
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
+//! - Constructors are bridged only when their fixed scalar/Mixed arguments fit
+//!   the target ABI register bridge.
 
 use std::collections::BTreeMap;
 
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::Arch;
+use crate::codegen::platform::{Arch, Target};
 use crate::ir::{Function, LocalKind, Module};
 use crate::names::{method_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, FunctionSig, PhpType};
 
-const MAX_EVAL_CONSTRUCTOR_ARGS: usize = 2;
+const MAX_EVAL_CONSTRUCTOR_ARGS: usize = 8;
 const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
@@ -83,15 +85,12 @@ fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
 
 /// Returns true when a function has hidden eval state locals.
 fn function_uses_eval(function: &Function) -> bool {
-    function
-        .locals
-        .iter()
-        .any(|local| {
-            matches!(
-                local.kind,
-                LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-            )
-        })
+    function.locals.iter().any(|local| {
+        matches!(
+            local.kind,
+            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
+        )
+    })
 }
 
 /// Collects AOT constructors backed by emitted EIR symbols in stable class-id order.
@@ -101,7 +100,13 @@ fn collect_eval_constructor_slots(module: &Module) -> Vec<EvalConstructorSlot> {
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
-        collect_class_constructor_slot(class_name, class_info, &emitted_methods, &mut slots);
+        collect_class_constructor_slot(
+            module.target,
+            class_name,
+            class_info,
+            &emitted_methods,
+            &mut slots,
+        );
     }
     slots
 }
@@ -120,6 +125,7 @@ fn collect_builtin_throwable_constructor_class_ids(module: &Module) -> Vec<u64> 
 
 /// Adds one constructor slot for a class when the constructor has emitted code.
 fn collect_class_constructor_slot(
+    target: Target,
     class_name: &str,
     class_info: &ClassInfo,
     emitted_methods: &std::collections::HashSet<(String, String, bool)>,
@@ -138,12 +144,9 @@ fn collect_class_constructor_slot(
         return;
     }
     let supported = constructor_is_public(class_info, &method_key)
-        && constructor_signature_supported(sig);
+        && constructor_signature_supported(target, class_name, sig);
     let params = if supported {
-        sig.params
-            .iter()
-            .map(|(_, ty)| ty.codegen_repr())
-            .collect()
+        sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect()
     } else {
         Vec::new()
     };
@@ -165,7 +168,7 @@ fn constructor_is_public(class_info: &ClassInfo, method_key: &str) -> bool {
 }
 
 /// Returns true for constructor signatures supported by this eval bridge slice.
-fn constructor_signature_supported(sig: &FunctionSig) -> bool {
+fn constructor_signature_supported(target: Target, class_name: &str, sig: &FunctionSig) -> bool {
     sig.params.len() <= MAX_EVAL_CONSTRUCTOR_ARGS
         && sig.variadic.is_none()
         && sig.ref_params.iter().all(|is_ref| !*is_ref)
@@ -173,6 +176,7 @@ fn constructor_signature_supported(sig: &FunctionSig) -> bool {
             .params
             .iter()
             .all(|(_, ty)| constructor_param_supported(ty))
+        && eval_bridge_constructor_signature_fits_registers(target, class_name, sig)
 }
 
 /// Returns true for one constructor argument type supported by the bridge.
@@ -181,6 +185,20 @@ fn constructor_param_supported(ty: &PhpType) -> bool {
         ty.codegen_repr(),
         PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
     )
+}
+
+/// Returns true when this helper can materialize the complete constructor call in registers.
+fn eval_bridge_constructor_signature_fits_registers(
+    target: Target,
+    class_name: &str,
+    sig: &FunctionSig,
+) -> bool {
+    let mut arg_types = Vec::with_capacity(sig.params.len() + 1);
+    arg_types.push(PhpType::Object(class_name.to_string()));
+    arg_types.extend(sig.params.iter().map(|(_, ty)| ty.codegen_repr()));
+    abi::build_outgoing_arg_assignments_for_target(target, &arg_types, 0)
+        .iter()
+        .all(|assignment| assignment.in_register())
 }
 
 /// Emits `__elephc_eval_value_construct_object(Mixed*, MixedArray*) -> bool`.
@@ -661,7 +679,10 @@ fn emit_x86_64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
 fn grouped_slots(slots: &[EvalConstructorSlot]) -> BTreeMap<u64, Vec<&EvalConstructorSlot>> {
     let mut grouped = BTreeMap::new();
     for slot in slots {
-        grouped.entry(slot.class_id).or_insert_with(Vec::new).push(slot);
+        grouped
+            .entry(slot.class_id)
+            .or_insert_with(Vec::new)
+            .push(slot);
     }
     grouped
 }
