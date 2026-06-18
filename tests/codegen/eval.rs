@@ -4825,6 +4825,73 @@ echo EvalConstChild::hidden();');
     assert_eq!(out.stdout, "2:7:9:2:5");
 }
 
+/// Verifies eval class-name literals work for class-like receivers.
+#[test]
+fn test_eval_declared_class_name_literals() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalClassNameBase {
+    public static function selfName() { return self::class; }
+    public static function staticName() { return static::class; }
+}
+class EvalClassNameChild extends EvalClassNameBase {}
+interface EvalClassNameIface {}
+trait EvalClassNameTrait {}
+echo EvalClassNameChild::class . ":";
+echo EvalClassNameIface::class . ":";
+echo EvalClassNameTrait::class . ":";
+echo EvalClassNameChild::selfName() . ":";
+echo EvalClassNameChild::staticName();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalClassNameChild:EvalClassNameIface:EvalClassNameTrait:EvalClassNameBase:EvalClassNameChild"
+    );
+}
+
+/// Verifies eval interface and trait constants work through the bridge.
+#[test]
+fn test_eval_declared_interface_and_trait_constants() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalConstParentIface {
+    public const BASE = 2;
+}
+interface EvalConstChildIface extends EvalConstParentIface {
+    public const LOCAL = 3;
+}
+trait EvalConstReusableTrait {
+    public const SEED = 6;
+    public static function readTraitSeed() {
+        return self::SEED;
+    }
+}
+class EvalConstIfaceTraitBox implements EvalConstChildIface {
+    use EvalConstReusableTrait;
+}
+echo EvalConstParentIface::BASE . ":";
+echo EvalConstChildIface::BASE . ":";
+echo EvalConstIfaceTraitBox::BASE . ":";
+echo EvalConstIfaceTraitBox::LOCAL . ":";
+echo EvalConstReusableTrait::SEED . ":";
+echo EvalConstIfaceTraitBox::SEED . ":";
+echo EvalConstIfaceTraitBox::readTraitSeed();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2:2:2:3:6:6:6");
+}
+
 /// Verifies eval rejects private member access from outside the declaring class.
 #[test]
 fn test_eval_declared_private_member_access_fails() {

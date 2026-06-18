@@ -111,11 +111,11 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::InterfaceDecl(interface) => {
-            execute_interface_decl_stmt(interface, context, values)?;
+            execute_interface_decl_stmt(interface, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::TraitDecl(trait_decl) => {
-            execute_trait_decl_stmt(trait_decl, context, values)?;
+            execute_trait_decl_stmt(trait_decl, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::Foreach {
@@ -391,24 +391,30 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         validate_concrete_class_requirements(class, context)?;
     }
     if context.define_class(class.clone()) {
-        initialize_eval_class_constants(class, context, scope, values)?;
+        initialize_eval_declared_constants(
+            class.name(),
+            class.constants(),
+            context,
+            scope,
+            values,
+        )?;
         initialize_eval_static_properties(class, context, scope, values)
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
 }
 
-/// Initializes class constant cells for a newly declared eval class.
-fn initialize_eval_class_constants(
-    class: &EvalClass,
+/// Initializes class-like constant cells for a newly declared eval class-like.
+fn initialize_eval_declared_constants(
+    owner_name: &str,
+    constants: &[EvalClassConstant],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    for constant in class.constants() {
+    for constant in constants {
         let value = eval_expr(constant.value(), context, scope, values)?;
-        if let Some(replaced) =
-            context.set_class_constant_cell(class.name(), constant.name(), value)
+        if let Some(replaced) = context.set_class_constant_cell(owner_name, constant.name(), value)
         {
             values.release(replaced)?;
         }
@@ -444,6 +450,7 @@ fn initialize_eval_static_properties(
 pub(in crate::interpreter) fn execute_interface_decl_stmt(
     interface: &EvalInterface,
     context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let name = interface.name().trim_start_matches('\\');
@@ -466,8 +473,15 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
+    validate_eval_declared_constants(interface.constants())?;
     if context.define_interface(interface.clone()) {
-        Ok(())
+        initialize_eval_declared_constants(
+            interface.name(),
+            interface.constants(),
+            context,
+            scope,
+            values,
+        )
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
@@ -477,6 +491,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
 pub(in crate::interpreter) fn execute_trait_decl_stmt(
     trait_decl: &EvalTrait,
     context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let name = trait_decl.name().trim_start_matches('\\');
@@ -489,8 +504,15 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
+    validate_eval_declared_constants(trait_decl.constants())?;
     if context.define_trait(trait_decl.clone()) {
-        Ok(())
+        initialize_eval_declared_constants(
+            trait_decl.name(),
+            trait_decl.constants(),
+            context,
+            scope,
+            values,
+        )
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
@@ -506,14 +528,23 @@ fn expand_eval_class_traits(
     }
     let class_method_names = class_method_name_set(class);
     let class_property_names = class_property_name_set(class);
+    let class_constant_names = class_constant_name_set(class);
     let mut trait_method_names = std::collections::HashSet::new();
     let mut trait_property_names = std::collections::HashSet::new();
+    let mut trait_constant_names = std::collections::HashSet::new();
+    let mut constants = Vec::new();
     let mut properties = Vec::new();
     let mut methods = Vec::new();
     for trait_name in class.traits() {
         let Some(trait_decl) = context.trait_decl(trait_name) else {
             return Err(EvalStatus::RuntimeFatal);
         };
+        append_eval_trait_constants(
+            trait_decl,
+            &class_constant_names,
+            &mut trait_constant_names,
+            &mut constants,
+        )?;
         append_eval_trait_properties(
             trait_decl,
             &class_property_names,
@@ -527,15 +558,17 @@ fn expand_eval_class_traits(
             &mut methods,
         )?;
     }
+    constants.extend(class.constants().iter().cloned());
     properties.extend(class.properties().iter().cloned());
     methods.extend(class.methods().iter().cloned());
-    Ok(EvalClass::with_modifiers_and_traits(
+    Ok(EvalClass::with_modifiers_traits_and_constants(
         class.name().to_string(),
         class.is_abstract(),
         class.is_final(),
         class.parent().map(str::to_string),
         class.interfaces().to_vec(),
         class.traits().to_vec(),
+        constants,
         properties,
         methods,
     ))
@@ -550,6 +583,15 @@ fn class_method_name_set(class: &EvalClass) -> std::collections::HashSet<String>
         .collect()
 }
 
+/// Returns constant names declared directly by a pending class.
+fn class_constant_name_set(class: &EvalClass) -> std::collections::HashSet<String> {
+    class
+        .constants()
+        .iter()
+        .map(|constant| constant.name().to_string())
+        .collect()
+}
+
 /// Returns property names declared directly by a pending class.
 fn class_property_name_set(class: &EvalClass) -> std::collections::HashSet<String> {
     class
@@ -557,6 +599,25 @@ fn class_property_name_set(class: &EvalClass) -> std::collections::HashSet<Strin
         .iter()
         .map(|property| property.name().to_string())
         .collect()
+}
+
+/// Appends trait constants unless the class provides a same-name constant.
+fn append_eval_trait_constants(
+    trait_decl: &EvalTrait,
+    class_constant_names: &std::collections::HashSet<String>,
+    trait_constant_names: &mut std::collections::HashSet<String>,
+    constants: &mut Vec<EvalClassConstant>,
+) -> Result<(), EvalStatus> {
+    for constant in trait_decl.constants() {
+        if class_constant_names.contains(constant.name()) {
+            continue;
+        }
+        if !trait_constant_names.insert(constant.name().to_string()) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        constants.push(constant.clone());
+    }
+    Ok(())
 }
 
 /// Appends trait properties unless the class provides a same-name property.
@@ -606,7 +667,7 @@ fn validate_eval_class_modifiers(
     if class.is_abstract() && class.is_final() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_class_constants(class)?;
+    validate_eval_declared_constants(class.constants())?;
     for method in class.methods() {
         if method.is_abstract() && method.is_final() {
             return Err(EvalStatus::RuntimeFatal);
@@ -626,9 +687,9 @@ fn validate_eval_class_modifiers(
 }
 
 /// Validates constant declarations that can be checked before registration.
-fn validate_eval_class_constants(class: &EvalClass) -> Result<(), EvalStatus> {
+fn validate_eval_declared_constants(constants: &[EvalClassConstant]) -> Result<(), EvalStatus> {
     let mut names = std::collections::HashSet::new();
-    for constant in class.constants() {
+    for constant in constants {
         if !names.insert(constant.name().to_string()) {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -903,7 +964,7 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     context: &mut ElephcEvalContext,
     _values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let class_name = resolve_eval_static_class_name(class_name, context)?;
+    let class_name = resolve_eval_static_class_like_name(class_name, context)?;
     let (declaring_class, constant) = context
         .class_constant(&class_name, constant_name)
         .ok_or(EvalStatus::RuntimeFatal)?;
@@ -911,6 +972,16 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     context
         .class_constant_cell(&declaring_class, constant.name())
         .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Returns the PHP class-name literal for `ClassName::class`-style eval expressions.
+pub(in crate::interpreter) fn eval_class_name_fetch_result(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let class_name = resolve_eval_class_name_literal(class_name, context)?;
+    values.string(&class_name)
 }
 
 /// Writes one eval-declared static property after resolving the class-like receiver.
@@ -1014,6 +1085,32 @@ fn resolve_eval_static_class_name(
                     .then(|| class_name.to_string())
             })
             .ok_or(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Resolves `self`, `parent`, `static`, and named class-like receivers for constant access.
+fn resolve_eval_static_class_like_name(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<String, EvalStatus> {
+    match class_name.to_ascii_lowercase().as_str() {
+        "self" | "parent" | "static" => resolve_eval_static_class_name(class_name, context),
+        _ => context
+            .resolve_class_like_name(class_name)
+            .ok_or(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Resolves class-name literal receivers without requiring named classes to exist.
+fn resolve_eval_class_name_literal(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<String, EvalStatus> {
+    match class_name.to_ascii_lowercase().as_str() {
+        "self" | "parent" | "static" => resolve_eval_static_class_name(class_name, context),
+        _ => Ok(context
+            .resolve_class_like_name(class_name)
+            .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string())),
     }
 }
 

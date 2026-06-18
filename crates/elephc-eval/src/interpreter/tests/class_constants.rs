@@ -79,3 +79,89 @@ fn execute_program_rejects_duplicate_eval_class_constant() {
     execute_program(&program, &mut scope, &mut values)
         .expect_err("duplicate class constant should fail");
 }
+
+/// Verifies class-name literals resolve class-like receiver spelling.
+#[test]
+fn execute_program_reads_eval_class_name_literals() {
+    let program = parse_fragment(
+        br#"class EvalClassNameBase {
+    public static function selfName() { return self::class; }
+    public static function staticName() { return static::class; }
+}
+class EvalClassNameChild extends EvalClassNameBase {}
+interface EvalClassNameIface {}
+trait EvalClassNameTrait {}
+echo EvalClassNameChild::class; echo ":";
+echo EvalClassNameIface::class; echo ":";
+echo EvalClassNameTrait::class; echo ":";
+echo EvalClassNameChild::selfName(); echo ":";
+return EvalClassNameChild::staticName();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EvalClassNameChild:EvalClassNameIface:EvalClassNameTrait:EvalClassNameBase:"
+    );
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("EvalClassNameChild".to_string())
+    );
+}
+
+/// Verifies interface constants are readable directly, through inheritance, and through classes.
+#[test]
+fn execute_program_reads_eval_interface_constants() {
+    let program = parse_fragment(
+        br#"interface EvalConstParentIface {
+    public const BASE = 2;
+}
+interface EvalConstChildIface extends EvalConstParentIface {
+    public const LOCAL = 3;
+}
+class EvalConstIfaceImpl implements EvalConstChildIface {}
+echo EvalConstParentIface::BASE; echo ":";
+echo EvalConstChildIface::BASE; echo ":";
+echo EvalConstChildIface::LOCAL; echo ":";
+return EvalConstIfaceImpl::BASE + EvalConstIfaceImpl::LOCAL;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "2:2:3:");
+    assert_eq!(values.get(result), FakeValue::Int(5));
+}
+
+/// Verifies trait constants are readable directly and from classes using the trait.
+#[test]
+fn execute_program_reads_eval_trait_constants() {
+    let program = parse_fragment(
+        br#"trait EvalConstReusableTrait {
+    public const SEED = 6;
+    public static function readTraitSeed() {
+        return self::SEED;
+    }
+}
+class EvalConstTraitBox {
+    use EvalConstReusableTrait;
+}
+echo EvalConstReusableTrait::SEED; echo ":";
+echo EvalConstTraitBox::SEED; echo ":";
+return EvalConstTraitBox::readTraitSeed();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "6:6:");
+    assert_eq!(values.get(result), FakeValue::Int(6));
+}

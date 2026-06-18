@@ -238,6 +238,21 @@ impl ElephcEvalContext {
         self.class_aliases.get(&key).cloned()
     }
 
+    /// Resolves a PHP class-like name to eval class, interface, trait, or alias spelling.
+    pub fn resolve_class_like_name(&self, name: &str) -> Option<String> {
+        let key = normalize_class_name(name);
+        if let Some(class) = self.classes.get(&key) {
+            return Some(class.name().to_string());
+        }
+        if let Some(interface) = self.interfaces.get(&key) {
+            return Some(interface.name().to_string());
+        }
+        if let Some(trait_decl) = self.traits.get(&key) {
+            return Some(trait_decl.name().to_string());
+        }
+        self.class_aliases.get(&key).cloned()
+    }
+
     /// Defines an alias for an eval-declared class or an already known alias.
     pub fn define_class_alias(&mut self, original: &str, alias: &str) -> bool {
         let Some(target) = self.resolve_class_name(original) else {
@@ -408,8 +423,28 @@ impl ElephcEvalContext {
             .map(|method| (class.name().to_string(), method.clone()))
     }
 
-    /// Finds a class constant in an eval-declared class or its eval-declared parents.
+    /// Finds a class-like constant on an eval class, interface, trait, or inherited relation.
     pub fn class_constant(
+        &self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Option<(String, EvalClassConstant)> {
+        if self.has_class(class_name) {
+            return self.class_or_interface_constant(class_name, constant_name);
+        }
+        if self.has_interface(class_name) {
+            return self.interface_constant(class_name, constant_name);
+        }
+        if let Some(trait_decl) = self.trait_decl(class_name) {
+            if let Some(constant) = trait_decl.constant(constant_name) {
+                return Some((trait_decl.name().to_string(), constant.clone()));
+            }
+        }
+        None
+    }
+
+    /// Finds a class constant in an eval-declared class, parents, or implemented interfaces.
+    fn class_or_interface_constant(
         &self,
         class_name: &str,
         constant_name: &str,
@@ -425,8 +460,36 @@ impl ElephcEvalContext {
             if let Some(constant) = class.constant(constant_name) {
                 return Some((class.name().to_string(), constant.clone()));
             }
-            current_name = class.parent()?.to_string();
+            if let Some(parent) = class.parent() {
+                current_name = parent.to_string();
+            } else {
+                break;
+            }
         }
+        for interface_name in self.class_interface_names(class_name) {
+            if let Some(found) = self.interface_constant(&interface_name, constant_name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Finds a constant declared on an eval interface or inherited parent interface.
+    pub fn interface_constant(
+        &self,
+        interface_name: &str,
+        constant_name: &str,
+    ) -> Option<(String, EvalClassConstant)> {
+        let interface = self.interface(interface_name)?;
+        if let Some(constant) = interface.constant(constant_name) {
+            return Some((interface.name().to_string(), constant.clone()));
+        }
+        for parent in interface.parents() {
+            if let Some(found) = self.interface_constant(parent, constant_name) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     /// Finds a class constant declared directly by one eval-declared class.

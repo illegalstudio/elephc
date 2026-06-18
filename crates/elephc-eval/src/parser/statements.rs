@@ -544,29 +544,39 @@ impl Parser {
         let name = self.qualify_name_in_current_namespace(name);
         self.advance();
         self.expect(TokenKind::LBrace)?;
+        let mut constants = Vec::new();
         let mut properties = Vec::new();
         let mut methods = Vec::new();
         while !self.consume(TokenKind::RBrace) {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
-            self.parse_trait_member(&mut properties, &mut methods)?;
+            self.parse_trait_member(&mut constants, &mut properties, &mut methods)?;
         }
         self.consume_semicolon();
-        Ok(vec![EvalStmt::TraitDecl(EvalTrait::new(
-            name, properties, methods,
+        Ok(vec![EvalStmt::TraitDecl(EvalTrait::with_constants(
+            name, constants, properties, methods,
         ))])
     }
 
     /// Parses one property or method from an eval trait body.
     pub(super) fn parse_trait_member(
         &mut self,
+        constants: &mut Vec<EvalClassConstant>,
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
     ) -> Result<(), EvalParseError> {
         let (visibility, is_static, is_abstract, is_final) = self.parse_class_member_modifiers()?;
         if is_abstract && is_final {
             return Err(EvalParseError::UnsupportedConstruct);
+        }
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
+            if is_static || is_abstract || is_final {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            constants
+                .push(self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?);
+            return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
             methods.push(self.parse_class_method_decl(
@@ -595,17 +605,22 @@ impl Parser {
         self.advance();
         let parents = self.parse_interface_parent_clause()?;
         self.expect(TokenKind::LBrace)?;
+        let mut constants = Vec::new();
         let mut methods = Vec::new();
         while !self.consume(TokenKind::RBrace) {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
-            methods.push(self.parse_interface_method_decl()?);
+            if let Some(constant) = self.parse_optional_interface_constant_decl()? {
+                constants.push(constant);
+            } else {
+                methods.push(self.parse_interface_method_decl()?);
+            }
         }
         self.consume_semicolon();
-        Ok(vec![EvalStmt::InterfaceDecl(EvalInterface::new(
-            name, parents, methods,
-        ))])
+        Ok(vec![EvalStmt::InterfaceDecl(
+            EvalInterface::with_constants(name, parents, constants, methods),
+        )])
     }
 
     /// Parses an optional `extends Parent, ...` interface declaration clause.
@@ -623,6 +638,23 @@ impl Parser {
             }
         }
         Ok(parents)
+    }
+
+    /// Parses an interface constant declaration when the current member starts with `const`.
+    pub(super) fn parse_optional_interface_constant_decl(
+        &mut self,
+    ) -> Result<Option<EvalClassConstant>, EvalParseError> {
+        let visibility = if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "public"))
+        {
+            self.advance();
+            EvalVisibility::Public
+        } else {
+            EvalVisibility::Public
+        };
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
+            return Ok(None);
+        }
+        Ok(Some(self.parse_class_const_decl(visibility)?))
     }
 
     /// Parses one eval interface method signature.
