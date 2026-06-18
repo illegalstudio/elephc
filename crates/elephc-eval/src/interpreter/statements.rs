@@ -1989,6 +1989,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             return eval_reflection_attribute_new_instance_result(&attribute, context, values);
         }
     }
+    if let Some(instance) = eval_reflection_class_new_instance_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(instance);
+    }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = runtime_object_class_name(object, values)?;
         let evaluated_args = bind_native_callable_args(
@@ -2025,6 +2034,40 @@ fn runtime_object_class_name(
     let bytes = values.string_bytes(class_name);
     values.release(class_name)?;
     String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Instantiates the class named by a materialized eval `ReflectionClass` object.
+fn eval_reflection_class_new_instance_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("newInstance") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    if let Some(class) = context.class(&reflected_name).cloned() {
+        let mut scope = ElephcEvalScope::new();
+        return eval_dynamic_class_new_object(&class, evaluated_args, context, &mut scope, values)
+            .map(Some);
+    }
+    let class_name = context
+        .resolve_class_name(&reflected_name)
+        .unwrap_or(reflected_name);
+    let args = bind_native_callable_args(
+        context.native_constructor_signature(&class_name),
+        evaluated_args,
+    )?;
+    let instance = values.new_object(&class_name)?;
+    values.construct_object(instance, args)?;
+    Ok(Some(instance))
 }
 
 /// Instantiates an eval-declared attribute class for `ReflectionAttribute::newInstance()`.

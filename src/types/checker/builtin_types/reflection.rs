@@ -7,8 +7,8 @@
 //! - `crate::types::checker::driver::init` (alongside `inject_builtin_throwables`).
 //!
 //! Key details:
-//! - Property and method bodies are dummies or simple private-slot accessors;
-//!   runtime population is handled by codegen-only reflection constructors.
+//! - Property and method bodies are dummies, private-slot accessors, or small
+//!   fallbacks; runtime population is handled by codegen-only reflection constructors.
 
 use std::collections::{HashMap, HashSet};
 
@@ -327,6 +327,46 @@ fn builtin_reflection_attribute_new_instance_method() -> ClassMethod {
     }
 }
 
+/// Returns a public variadic `ReflectionClass::newInstance()` method.
+///
+/// Direct calls are lowered specially so their source arguments become
+/// constructor arguments for the reflected class. The no-argument body keeps
+/// indirect calls and metadata emission coherent when no argument forwarding is
+/// required.
+fn builtin_reflection_class_new_instance_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "newInstance".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: Some("args".to_string()),
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::NewDynamic {
+                    name_expr: Box::new(Expr::new(
+                        ExprKind::PropertyAccess {
+                            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                            property: "__name".to_string(),
+                        },
+                        dummy_span,
+                    )),
+                    args: Vec::new(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds the `ReflectionClass` shell with a private resolved-name slot,
 /// private attribute array slot, public constructor, `getName()`, and
 /// `getAttributes()`.
@@ -488,6 +528,7 @@ fn builtin_reflection_class() -> FlattenedClass {
                 "__properties",
                 object_array_type("ReflectionProperty"),
             ),
+            builtin_reflection_class_new_instance_method(),
             builtin_reflection_owner_get_attributes_method(),
         ],
         attributes: Vec::new(),
@@ -902,6 +943,17 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("newInstance")) {
+                    sig.return_type = PhpType::Mixed;
+                    sig.variadic = Some("args".to_string());
+                    if !sig.params.iter().any(|(name, _)| name == "args") {
+                        sig.params
+                            .push(("args".to_string(), PhpType::Array(Box::new(PhpType::Mixed))));
+                        sig.defaults.push(None);
+                        sig.ref_params.push(false);
+                        sig.declared_params.push(false);
+                    }
                 }
             }
             if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") {

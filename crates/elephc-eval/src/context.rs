@@ -153,6 +153,7 @@ pub struct ElephcEvalContext {
     included_files: HashSet<String>,
     dynamic_objects: HashMap<u64, String>,
     eval_reflection_attributes: HashMap<u64, EvalAttribute>,
+    eval_reflection_classes: HashMap<u64, String>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     class_stack: Vec<String>,
@@ -196,6 +197,7 @@ impl ElephcEvalContext {
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
+            eval_reflection_classes: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -240,6 +242,7 @@ impl ElephcEvalContext {
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
+            eval_reflection_classes: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -531,6 +534,19 @@ impl ElephcEvalContext {
     /// Returns eval-declared attribute metadata attached to a synthetic ReflectionAttribute.
     pub fn eval_reflection_attribute(&self, identity: u64) -> Option<&EvalAttribute> {
         self.eval_reflection_attributes.get(&identity)
+    }
+
+    /// Records eval-declared class metadata for one synthetic ReflectionClass object.
+    pub fn register_eval_reflection_class(&mut self, identity: u64, class_name: &str) {
+        self.eval_reflection_classes
+            .insert(identity, normalize_class_name(class_name));
+    }
+
+    /// Returns the reflected eval class name attached to a synthetic ReflectionClass.
+    pub fn eval_reflection_class_name(&self, identity: u64) -> Option<&str> {
+        self.eval_reflection_classes
+            .get(&identity)
+            .map(String::as_str)
     }
 
     /// Returns eval-declared class metadata from parent to child for construction.

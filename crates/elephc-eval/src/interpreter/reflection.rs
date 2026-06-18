@@ -314,6 +314,10 @@ fn eval_reflection_owner_object(
         flags,
         modifiers,
     )?;
+    if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
+        let identity = values.object_identity(object)?;
+        context.register_eval_reflection_class(identity, reflected_name);
+    }
     values.release(attrs)?;
     values.release(interface_names_array)?;
     values.release(trait_names_array)?;

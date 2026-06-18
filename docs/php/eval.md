@@ -171,7 +171,9 @@ method lookup is case-insensitive, while property lookup is case-sensitive.
 `ReflectionClass::getMethods()` and `ReflectionClass::getProperties()` return
 materialized `ReflectionMethod` and `ReflectionProperty` objects for the same
 visible member metadata, including supported member attributes and predicate
-flags.
+flags. `ReflectionClass::newInstance()` constructs eval-declared reflected
+classes and forwards constructor arguments through eval's positional, named, and
+unpacking-aware call binding.
 `ReflectionMethod::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
 `isFinal()`, and `isAbstract()` report eval method metadata.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, and

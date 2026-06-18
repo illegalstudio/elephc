@@ -538,6 +538,36 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::newInstance constructs eval-declared classes.
+#[test]
+fn execute_program_reflection_class_new_instance_constructs_eval_class() {
+    let program = parse_fragment(
+        br#"class EvalReflectNewTarget {
+    public $label;
+    public function __construct($left, $right) {
+        $this->label = $left . $right;
+    }
+    public function label() {
+        return $this->label;
+    }
+}
+$ref = new ReflectionClass("EvalReflectNewTarget");
+$first = $ref->newInstance("I", "J");
+echo $first->label(); echo ":";
+$second = $ref->newInstance(...["K", "L"]);
+echo $second->label();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "IJ:KL");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClassConstant/EnumCase expose eval-declared attribute metadata.
 #[test]
 fn execute_program_reflects_eval_constant_and_enum_case_attributes() {

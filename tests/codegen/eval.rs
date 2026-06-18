@@ -5868,6 +5868,30 @@ foreach ($properties as $property) {
     assert_eq!(out.stdout, "2:2:F1SR:V1PTR");
 }
 
+/// Verifies eval ReflectionClass::newInstance constructs eval-declared classes.
+#[test]
+fn test_eval_reflection_class_new_instance_constructs_eval_class() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalReflectNewTarget {
+    public $label = "";
+    public function __construct($left, $right) {
+        $this->label = $left . $right;
+    }
+    public function label() {
+        return $this->label;
+    }
+}
+$ref = new ReflectionClass("EvalReflectNewTarget");
+$first = $ref->newInstance("E", "F");
+echo $first->label() . ":";
+$second = $ref->newInstance(...["G", "H"]);
+echo $second->label();');
+"#,
+    );
+    assert_eq!(out, "EF:GH");
+}
+
 /// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.
 #[test]
 fn test_eval_reflection_constant_and_enum_case_attributes() {

@@ -8272,6 +8272,9 @@ fn lower_method_call(
     if op == Op::MethodCall && value_is_nullable(ctx, object.value) {
         return lower_nullable_regular_method_call(ctx, object, method, args, expr);
     }
+    if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
+        return lower_reflection_class_new_instance(ctx, object, args, expr);
+    }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
         magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
@@ -8398,6 +8401,67 @@ fn lower_nullable_regular_method_call(
     ctx.load_local(&temp_name, Some(expr.span))
 }
 
+/// Lowers `ReflectionClass::newInstance()` by constructing the reflected class name.
+fn lower_reflection_class_new_instance(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(&args) {
+        return lower_reflection_class_new_instance_unsupported(ctx, expr);
+    }
+    let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
+    let mut operands = vec![class_name.value];
+    operands.extend(lower_args(ctx, &args));
+    ctx.emit_value(
+        Op::DynamicObjectNewMixed,
+        operands,
+        None,
+        PhpType::Mixed,
+        Op::DynamicObjectNewMixed.default_effects(),
+        Some(expr.span),
+    )
+}
+
+/// Returns the source arguments that can be forwarded to `new $class(...)`.
+fn reflection_class_new_instance_args(args: &[Expr]) -> Vec<Expr> {
+    if has_static_call_spread_args(args) {
+        return expand_static_call_spread_args(args);
+    }
+    args.to_vec()
+}
+
+/// Emits a runtime fatal for ReflectionClass newInstance argument forms not yet lowered.
+fn lower_reflection_class_new_instance_unsupported(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> LoweredValue {
+    let result = lower_boxed_null(ctx, expr);
+    let message = ctx.intern_string(
+        "Fatal error: unsupported ReflectionClass::newInstance() argument forwarding\n",
+    );
+    ctx.builder.terminate(Terminator::Fatal { message });
+    result
+}
+
+/// Returns true when a method call targets the built-in `ReflectionClass::newInstance()`.
+fn is_reflection_class_new_instance_call(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+    method: &str,
+) -> bool {
+    if php_symbol_key(method) != "newinstance" {
+        return false;
+    }
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some((class_name, false)) = singular_object_class(&object_ty) else {
+        return false;
+    };
+    php_symbol_key(class_name.trim_start_matches('\\')) == "reflectionclass"
+}
+
 /// Emits the PHP fatal terminator for an ordinary method call on null.
 fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
     let message = format!(
@@ -8495,6 +8559,9 @@ fn lower_method_call_with_receiver(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
+        return lower_reflection_class_new_instance(ctx, object, args, expr);
+    }
     let magic_args;
     let (dispatch_method, args) =
         if let Some(args) = magic_call_dispatch_args(ctx, object.value, method, args, expr.span) {

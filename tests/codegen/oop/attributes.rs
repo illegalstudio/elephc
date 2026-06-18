@@ -1416,6 +1416,31 @@ foreach ($properties as $property) {
     assert_eq!(out.stdout, "2:2:F1SR:V1PTR");
 }
 
+/// Verifies that `ReflectionClass::newInstance()` constructs reflected classes
+/// and forwards direct and statically-unpacked constructor arguments.
+#[test]
+fn test_reflection_class_new_instance_constructs_reflected_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectNewTarget {
+    public string $label = "";
+    public function __construct(string $left, string $right) {
+        $this->label = $left . $right;
+    }
+    public function label(): string {
+        return $this->label;
+    }
+}
+$ref = new ReflectionClass(ReflectNewTarget::class);
+$first = $ref->newInstance("A", "B");
+echo $first->label() . ":";
+$second = $ref->newInstance(...["C", "D"]);
+echo $second->label();
+"#,
+    );
+    assert_eq!(out, "AB:CD");
+}
+
 /// Verifies that `ReflectionClassConstant` and enum-case reflectors expose
 /// attribute name, arguments, `getName()`, and `newInstance()` data.
 #[test]
