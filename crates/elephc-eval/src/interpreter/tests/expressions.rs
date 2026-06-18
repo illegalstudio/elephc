@@ -413,6 +413,107 @@ return true;"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies concrete eval classes can implement abstract class and interface contracts.
+#[test]
+fn execute_program_constructs_concrete_child_from_abstract_eval_class() {
+    let program = parse_fragment(
+        br#"interface EvalAbstractReadable {
+    function read($n);
+}
+abstract class EvalAbstractBase implements EvalAbstractReadable {
+    abstract public function read($n);
+    public function wrap($n) { return $this->read($n) + 1; }
+}
+class EvalConcreteBox extends EvalAbstractBase {
+    public function read($n) { return $n + 3; }
+}
+$box = new EvalConcreteBox();
+echo $box->wrap(4); echo ":";
+echo is_a($box, "EvalAbstractReadable") ? "iface" : "bad"; echo ":";
+echo is_subclass_of($box, "EvalAbstractBase") ? "abstract" : "bad";
+return $box->read(2);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "8:iface:abstract");
+    assert_eq!(values.get(result), FakeValue::Int(5));
+}
+/// Verifies eval rejects instantiation of abstract eval-declared classes.
+#[test]
+fn execute_program_rejects_abstract_eval_class_instantiation() {
+    let program = parse_fragment(
+        br#"abstract class EvalAbstractOnly {
+    public function read() { return 1; }
+}
+new EvalAbstractOnly();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("abstract class instantiation should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+/// Verifies concrete eval classes must implement inherited abstract methods.
+#[test]
+fn execute_program_rejects_concrete_eval_class_with_abstract_methods() {
+    let program = parse_fragment(
+        br#"abstract class EvalNeedsRead {
+    abstract public function read();
+}
+class EvalMissingReadChild extends EvalNeedsRead {}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("concrete class missing abstract method should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+/// Verifies eval rejects extending a final eval-declared class.
+#[test]
+fn execute_program_rejects_extending_final_eval_class() {
+    let program = parse_fragment(
+        br#"final class EvalFinalBase {}
+class EvalFinalChild extends EvalFinalBase {}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("extending final class should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+/// Verifies eval rejects overriding a final eval-declared method.
+#[test]
+fn execute_program_rejects_overriding_final_eval_method() {
+    let program = parse_fragment(
+        br#"class EvalFinalMethodBase {
+    final public function read() { return 1; }
+}
+class EvalFinalMethodChild extends EvalFinalMethodBase {
+    public function read() { return 2; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("overriding final method should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
 /// Verifies eval rejects classes missing methods required by eval interfaces.
 #[test]
 fn execute_program_rejects_missing_dynamic_interface_method() {

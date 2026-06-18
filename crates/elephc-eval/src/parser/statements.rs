@@ -43,6 +43,9 @@ impl Parser {
             }
             TokenKind::Ident(name) if ident_eq(name, "for") => self.parse_for_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "foreach") => self.parse_foreach_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "abstract") || ident_eq(name, "final") => {
+                self.parse_class_decl_stmt()
+            }
             TokenKind::Ident(name) if ident_eq(name, "class") => self.parse_class_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_function_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "global") => self.parse_global_stmt(),
@@ -194,8 +197,12 @@ impl Parser {
         }])
     }
 
-    /// Parses `class Name [extends Parent] [implements Iface, ...] { ... }`.
+    /// Parses `[abstract|final] class Name [extends Parent] [implements Iface, ...] { ... }`.
     pub(super) fn parse_class_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let (is_abstract, is_final) = self.parse_class_decl_modifiers()?;
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "class")) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -214,9 +221,40 @@ impl Parser {
             self.parse_class_member(&mut properties, &mut methods)?;
         }
         self.consume_semicolon();
-        Ok(vec![EvalStmt::ClassDecl(EvalClass::with_relations(
-            name, parent, interfaces, properties, methods,
+        Ok(vec![EvalStmt::ClassDecl(EvalClass::with_modifiers(
+            name,
+            is_abstract,
+            is_final,
+            parent,
+            interfaces,
+            properties,
+            methods,
         ))])
+    }
+
+    /// Parses class-level `abstract` and `final` modifiers before `class`.
+    pub(super) fn parse_class_decl_modifiers(&mut self) -> Result<(bool, bool), EvalParseError> {
+        let mut is_abstract = false;
+        let mut is_final = false;
+        loop {
+            match self.current() {
+                TokenKind::Ident(name) if ident_eq(name, "abstract") => {
+                    if is_abstract {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    is_abstract = true;
+                    self.advance();
+                }
+                TokenKind::Ident(name) if ident_eq(name, "final") => {
+                    if is_final {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    is_final = true;
+                    self.advance();
+                }
+                _ => return Ok((is_abstract, is_final)),
+            }
+        }
     }
 
     /// Parses an optional `extends Parent` class declaration clause.
@@ -252,31 +290,68 @@ impl Parser {
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
     ) -> Result<(), EvalParseError> {
-        let public = if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "public"))
-        {
-            self.advance();
-            true
-        } else if matches!(self.current(), TokenKind::Ident(name) if is_unsupported_class_member_modifier(name))
-        {
+        let (public, is_abstract, is_final) = self.parse_class_member_modifiers()?;
+
+        if is_abstract && is_final {
             return Err(EvalParseError::UnsupportedConstruct);
-        } else {
-            false
-        };
+        }
 
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
-            methods.push(self.parse_class_method_decl()?);
+            methods.push(self.parse_class_method_decl(is_abstract, is_final)?);
             return Ok(());
         }
 
-        if !public {
+        if !public || is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         properties.push(self.parse_class_property_decl()?);
         Ok(())
     }
 
-    /// Parses `function name($param, ...) { ... }` inside a dynamic eval class.
-    pub(super) fn parse_class_method_decl(&mut self) -> Result<EvalClassMethod, EvalParseError> {
+    /// Parses method modifiers supported by eval class declarations.
+    pub(super) fn parse_class_member_modifiers(
+        &mut self,
+    ) -> Result<(bool, bool, bool), EvalParseError> {
+        let mut public = false;
+        let mut is_abstract = false;
+        let mut is_final = false;
+        loop {
+            match self.current() {
+                TokenKind::Ident(name) if ident_eq(name, "public") => {
+                    if public {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    public = true;
+                    self.advance();
+                }
+                TokenKind::Ident(name) if ident_eq(name, "abstract") => {
+                    if is_abstract {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    is_abstract = true;
+                    self.advance();
+                }
+                TokenKind::Ident(name) if ident_eq(name, "final") => {
+                    if is_final {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    is_final = true;
+                    self.advance();
+                }
+                TokenKind::Ident(name) if is_unsupported_class_member_modifier(name) => {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                _ => return Ok((public, is_abstract, is_final)),
+            }
+        }
+    }
+
+    /// Parses `function name($param, ...) { ... }` or an abstract method signature.
+    pub(super) fn parse_class_method_decl(
+        &mut self,
+        is_abstract: bool,
+        is_final: bool,
+    ) -> Result<EvalClassMethod, EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -285,8 +360,19 @@ impl Parser {
         self.advance();
         self.expect(TokenKind::LParen)?;
         let params = self.parse_function_params()?;
-        let body = self.parse_block()?;
-        Ok(EvalClassMethod::new(name, params, body))
+        let body = if is_abstract {
+            self.expect_semicolon()?;
+            Vec::new()
+        } else {
+            self.parse_block()?
+        };
+        Ok(EvalClassMethod::with_modifiers(
+            name,
+            is_abstract,
+            is_final,
+            params,
+            body,
+        ))
     }
 
     /// Parses one public property declaration with an optional initializer.

@@ -88,6 +88,46 @@ fn parse_fragment_accepts_public_class_members() {
         ))]
     );
 }
+/// Verifies abstract and final class modifiers lower into dynamic class metadata.
+#[test]
+fn parse_fragment_accepts_abstract_and_final_class_members() {
+    let program = parse_fragment(
+        br#"abstract class DynEvalAbstract {
+    abstract public function read($value);
+    final public function label() { return "base"; }
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::with_modifiers(
+            "DynEvalAbstract",
+            true,
+            false,
+            None,
+            Vec::new(),
+            Vec::new(),
+            vec![
+                EvalClassMethod::with_modifiers(
+                    "read",
+                    true,
+                    false,
+                    vec!["value".to_string()],
+                    Vec::new()
+                ),
+                EvalClassMethod::with_modifiers(
+                    "label",
+                    false,
+                    true,
+                    Vec::new(),
+                    vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::String(
+                        "base".to_string()
+                    ))))]
+                ),
+            ],
+        ))]
+    );
+}
 /// Verifies malformed object construction reports an unexpected token.
 #[test]
 fn parse_fragment_rejects_new_without_class_name() {
