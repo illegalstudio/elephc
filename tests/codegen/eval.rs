@@ -4518,6 +4518,33 @@ echo function_exists("trait_exists"); echo function_exists("enum_exists");');
     assert_eq!(out, "TTtEEeTEte11");
 }
 
+/// Verifies eval fragments can declare and use backed enums through the bridge.
+#[test]
+fn test_eval_fragment_declares_enum_cases_and_methods() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface EvalDynLabel { function label(); }
+enum EvalDynColor: string implements EvalDynLabel {
+    case Red = "r";
+    case Green = "g";
+    public const PREFIX = "color";
+    public function label() { return self::PREFIX . ":" . $this->name . ":" . $this->value; }
+    public static function fallback() { return self::Red; }
+}
+$cases = EvalDynColor::cases();
+echo enum_exists("evaldyncolor") ? "E" : "e";
+echo class_exists("EvalDynColor") ? "C" : "c";
+echo count($cases);
+echo $cases[1] === EvalDynColor::Green ? "G" : "g";
+echo EvalDynColor::Green->label();
+echo EvalDynColor::from("r") === EvalDynColor::Red ? "F" : "f";
+echo is_null(EvalDynColor::tryFrom("missing")) ? "N" : "n";
+echo is_a(EvalDynColor::Red, "EvalDynLabel") ? "I" : "i";');
+"#,
+    );
+    assert_eq!(out, "EC2Gcolor:Green:gFNI");
+}
+
 /// Verifies eval `is_a()` and `is_subclass_of()` use generated AOT relation metadata.
 #[test]
 fn test_eval_fragment_is_a_relation_probes_aot_metadata() {

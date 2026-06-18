@@ -151,6 +151,7 @@ fn eval_class_relation_name_exists(
     if context.has_class(name)
         || context.has_interface(name)
         || context.has_trait(name)
+        || context.has_enum(name)
         || values.class_exists(name)?
         || values.interface_exists(name)?
         || values.trait_exists(name)?

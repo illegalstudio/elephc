@@ -16,8 +16,8 @@ use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
-    EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalFunction, EvalInterface,
-    EvalInterfaceMethod, EvalTrait,
+    EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum, EvalFunction,
+    EvalInterface, EvalInterfaceMethod, EvalTrait,
 };
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
@@ -97,6 +97,10 @@ pub struct ElephcEvalContext {
     declared_interface_names: Vec<String>,
     traits: HashMap<String, EvalTrait>,
     declared_trait_names: Vec<String>,
+    enums: HashMap<String, EvalEnum>,
+    declared_enum_names: Vec<String>,
+    enum_cases: HashMap<(String, String), RuntimeCellHandle>,
+    enum_case_values: HashMap<(String, String), RuntimeCellHandle>,
     constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
@@ -132,6 +136,10 @@ impl ElephcEvalContext {
             declared_interface_names: Vec::new(),
             traits: HashMap::new(),
             declared_trait_names: Vec::new(),
+            enums: HashMap::new(),
+            declared_enum_names: Vec::new(),
+            enum_cases: HashMap::new(),
+            enum_case_values: HashMap::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
@@ -168,6 +176,10 @@ impl ElephcEvalContext {
             declared_interface_names: Vec::new(),
             traits: HashMap::new(),
             declared_trait_names: Vec::new(),
+            enums: HashMap::new(),
+            declared_enum_names: Vec::new(),
+            enum_cases: HashMap::new(),
+            enum_case_values: HashMap::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
@@ -204,6 +216,7 @@ impl ElephcEvalContext {
             || self.class_aliases.contains_key(&key)
             || self.interfaces.contains_key(&key)
             || self.traits.contains_key(&key)
+            || self.enums.contains_key(&key)
         {
             return false;
         }
@@ -250,6 +263,9 @@ impl ElephcEvalContext {
         if let Some(trait_decl) = self.traits.get(&key) {
             return Some(trait_decl.name().to_string());
         }
+        if let Some(enum_decl) = self.enums.get(&key) {
+            return Some(enum_decl.name().to_string());
+        }
         self.class_aliases.get(&key).cloned()
     }
 
@@ -268,6 +284,7 @@ impl ElephcEvalContext {
             || self.classes.contains_key(&alias_key)
             || self.interfaces.contains_key(&alias_key)
             || self.traits.contains_key(&alias_key)
+            || self.enums.contains_key(&alias_key)
             || self.class_aliases.contains_key(&alias_key)
         {
             return false;
@@ -290,6 +307,7 @@ impl ElephcEvalContext {
         if self.interfaces.contains_key(&key)
             || self.classes.contains_key(&key)
             || self.traits.contains_key(&key)
+            || self.enums.contains_key(&key)
             || self.class_aliases.contains_key(&key)
         {
             return false;
@@ -321,6 +339,7 @@ impl ElephcEvalContext {
         if self.traits.contains_key(&key)
             || self.classes.contains_key(&key)
             || self.interfaces.contains_key(&key)
+            || self.enums.contains_key(&key)
             || self.class_aliases.contains_key(&key)
         {
             return false;
@@ -344,6 +363,96 @@ impl ElephcEvalContext {
     /// Returns trait names declared through eval in PHP-visible order.
     pub fn declared_trait_names(&self) -> &[String] {
         &self.declared_trait_names
+    }
+
+    /// Defines an eval-declared enum plus class-shaped metadata for dispatch.
+    pub fn define_enum(&mut self, enum_decl: EvalEnum) -> bool {
+        let key = normalize_class_name(enum_decl.name());
+        if self.enums.contains_key(&key)
+            || self.classes.contains_key(&key)
+            || self.interfaces.contains_key(&key)
+            || self.traits.contains_key(&key)
+            || self.class_aliases.contains_key(&key)
+        {
+            return false;
+        }
+        self.declared_enum_names
+            .push(enum_decl.name().trim_start_matches('\\').to_string());
+        self.declared_class_names
+            .push(enum_decl.name().trim_start_matches('\\').to_string());
+        self.classes
+            .insert(key.clone(), enum_decl.as_class_metadata());
+        self.enums.insert(key, enum_decl);
+        true
+    }
+
+    /// Returns true when this eval context has a dynamic enum with the requested name.
+    pub fn has_enum(&self, name: &str) -> bool {
+        self.enums.contains_key(&normalize_class_name(name))
+    }
+
+    /// Returns a dynamic eval enum by PHP case-insensitive enum name.
+    pub fn enum_decl(&self, name: &str) -> Option<&EvalEnum> {
+        self.enums.get(&normalize_class_name(name))
+    }
+
+    /// Returns enum names declared through eval in PHP-visible order.
+    pub fn declared_enum_names(&self) -> &[String] {
+        &self.declared_enum_names
+    }
+
+    /// Returns a materialized singleton case object for one eval enum case.
+    pub fn enum_case(&self, enum_name: &str, case_name: &str) -> Option<RuntimeCellHandle> {
+        self.enum_cases
+            .get(&(
+                normalize_class_name(enum_name),
+                normalize_enum_case_name(case_name),
+            ))
+            .copied()
+    }
+
+    /// Stores a materialized singleton case object and returns any replaced distinct cell.
+    pub fn set_enum_case(
+        &mut self,
+        enum_name: &str,
+        case_name: &str,
+        cell: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let previous = self.enum_cases.insert(
+            (
+                normalize_class_name(enum_name),
+                normalize_enum_case_name(case_name),
+            ),
+            cell,
+        );
+        previous.filter(|previous| *previous != cell)
+    }
+
+    /// Returns a materialized backing value for one eval backed-enum case.
+    pub fn enum_case_value(&self, enum_name: &str, case_name: &str) -> Option<RuntimeCellHandle> {
+        self.enum_case_values
+            .get(&(
+                normalize_class_name(enum_name),
+                normalize_enum_case_name(case_name),
+            ))
+            .copied()
+    }
+
+    /// Stores a materialized backing value and returns any replaced distinct cell.
+    pub fn set_enum_case_value(
+        &mut self,
+        enum_name: &str,
+        case_name: &str,
+        cell: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let previous = self.enum_case_values.insert(
+            (
+                normalize_class_name(enum_name),
+                normalize_enum_case_name(case_name),
+            ),
+            cell,
+        );
+        previous.filter(|previous| *previous != cell)
     }
 
     /// Records that one runtime object handle was created for an eval-declared class.
@@ -987,6 +1096,11 @@ impl Default for ElephcEvalContext {
 /// Normalizes PHP class names for the eval dynamic class registry.
 fn normalize_class_name(name: &str) -> String {
     name.trim_start_matches('\\').to_ascii_lowercase()
+}
+
+/// Normalizes PHP enum case names for case-sensitive eval enum lookup.
+fn normalize_enum_case_name(name: &str) -> String {
+    name.to_string()
 }
 
 /// Pushes a PHP class-like name once, preserving the first visible spelling.

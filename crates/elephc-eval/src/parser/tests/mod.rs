@@ -16,6 +16,7 @@ mod calls;
 mod class_constants;
 mod classes_errors;
 mod control_statements;
+mod enums;
 mod exceptions_control;
 mod magic_comments;
 mod namespaces;

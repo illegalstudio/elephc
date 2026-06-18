@@ -12,9 +12,9 @@ use super::cursor::*;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalCatch, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalExpr,
-    EvalInterface, EvalInterfaceMethod, EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation,
-    EvalVisibility,
+    EvalCatch, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum,
+    EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInterface, EvalInterfaceMethod, EvalStmt,
+    EvalSwitchCase, EvalTrait, EvalTraitAdaptation, EvalVisibility,
 };
 use crate::lexer::TokenKind;
 
@@ -48,6 +48,7 @@ impl Parser {
                 self.parse_class_decl_stmt()
             }
             TokenKind::Ident(name) if ident_eq(name, "class") => self.parse_class_decl_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "enum") => self.parse_enum_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_function_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "global") => self.parse_global_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "if") => self.parse_if_stmt(),
@@ -708,6 +709,110 @@ impl Parser {
         }
         properties.push(self.parse_class_property_decl(visibility, is_static)?);
         Ok(())
+    }
+
+    /// Parses `enum Name [: int|string] [implements Iface, ...] { ... }`.
+    pub(super) fn parse_enum_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let name = self.qualify_name_in_current_namespace(name);
+        self.advance();
+        let backing_type = self.parse_enum_backing_type()?;
+        let interfaces = self.parse_class_interface_clause()?;
+        self.expect(TokenKind::LBrace)?;
+        let mut cases = Vec::new();
+        let mut constants = Vec::new();
+        let mut methods = Vec::new();
+        while !self.consume(TokenKind::RBrace) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            self.parse_enum_member(&mut cases, &mut constants, &mut methods)?;
+        }
+        self.consume_semicolon();
+        Ok(vec![EvalStmt::EnumDecl(EvalEnum::with_members(
+            name,
+            backing_type,
+            interfaces,
+            cases,
+            constants,
+            methods,
+        ))])
+    }
+
+    /// Parses an optional backed-enum scalar type after the enum name.
+    pub(super) fn parse_enum_backing_type(
+        &mut self,
+    ) -> Result<Option<EvalEnumBackingType>, EvalParseError> {
+        if !self.consume(TokenKind::Colon) {
+            return Ok(None);
+        }
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let backing_type = if ident_eq(name, "int") {
+            EvalEnumBackingType::Int
+        } else if ident_eq(name, "string") {
+            EvalEnumBackingType::String
+        } else {
+            return Err(EvalParseError::UnsupportedConstruct);
+        };
+        self.advance();
+        Ok(Some(backing_type))
+    }
+
+    /// Parses one enum case, constant, or method declaration.
+    pub(super) fn parse_enum_member(
+        &mut self,
+        cases: &mut Vec<EvalEnumCase>,
+        constants: &mut Vec<EvalClassConstant>,
+        methods: &mut Vec<EvalClassMethod>,
+    ) -> Result<(), EvalParseError> {
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "case")) {
+            cases.push(self.parse_enum_case_decl()?);
+            return Ok(());
+        }
+        let (visibility, is_static, is_abstract, is_final) = self.parse_class_member_modifiers()?;
+        if is_abstract {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
+            if is_static || is_final {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            constants
+                .push(self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?);
+            return Ok(());
+        }
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
+            methods.push(self.parse_class_method_decl(
+                visibility.unwrap_or(EvalVisibility::Public),
+                is_static,
+                false,
+                is_final,
+            )?);
+            return Ok(());
+        }
+        Err(EvalParseError::UnsupportedConstruct)
+    }
+
+    /// Parses `case Name;` or `case Name = expr;` inside an eval enum body.
+    pub(super) fn parse_enum_case_decl(&mut self) -> Result<EvalEnumCase, EvalParseError> {
+        self.advance();
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let name = name.clone();
+        self.advance();
+        let value = if self.consume(TokenKind::Equal) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        self.expect_semicolon()?;
+        Ok(EvalEnumCase::new(name, value))
     }
 
     /// Parses `interface Name [extends Parent, ...] { function name(...); }`.

@@ -126,7 +126,8 @@ pub(super) fn ident_eq(actual: &str, expected: &str) -> bool {
 
 /// Returns true for PHP statement forms that the eval subset intentionally does not parse yet.
 pub(super) fn is_unsupported_statement_keyword(name: &str) -> bool {
-    ["enum"].iter().any(|keyword| ident_eq(name, keyword))
+    let _ = name;
+    false
 }
 
 /// Returns true for class member modifiers outside the current eval class subset.

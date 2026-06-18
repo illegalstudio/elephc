@@ -279,6 +279,7 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
             | EvalStmt::ClassDecl(_)
             | EvalStmt::Continue
             | EvalStmt::Echo(_)
+            | EvalStmt::EnumDecl(_)
             | EvalStmt::Expr(_)
             | EvalStmt::Global { .. }
             | EvalStmt::InterfaceDecl(_)

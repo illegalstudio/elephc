@@ -51,6 +51,14 @@ impl FakeOps {
 
     /// Compares fake scalar values by PHP strict tag and payload equality.
     pub(super) fn strict_eq(&self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> bool {
+        if left == right
+            && matches!(
+                self.get(left),
+                FakeValue::Object(_) | FakeValue::Iterator { .. }
+            )
+        {
+            return true;
+        }
         match (self.get(left), self.get(right)) {
             (FakeValue::Null, FakeValue::Null) => true,
             (FakeValue::Bool(left), FakeValue::Bool(right)) => left == right,

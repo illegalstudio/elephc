@@ -69,6 +69,7 @@ pub enum EvalStmt {
         body: Vec<EvalStmt>,
     },
     ClassDecl(EvalClass),
+    EnumDecl(EvalEnum),
     InterfaceDecl(EvalInterface),
     TraitDecl(EvalTrait),
     Foreach {
@@ -172,6 +173,138 @@ impl EvalFunction {
     /// Returns the dynamic EvalIR statements that form the function body.
     pub fn body(&self) -> &[EvalStmt] {
         &self.body
+    }
+}
+
+/// Runtime enum declared by an eval fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalEnum {
+    name: String,
+    backing_type: Option<EvalEnumBackingType>,
+    interfaces: Vec<String>,
+    cases: Vec<EvalEnumCase>,
+    constants: Vec<EvalClassConstant>,
+    methods: Vec<EvalClassMethod>,
+}
+
+impl EvalEnum {
+    /// Creates a dynamic eval enum with cases and optional backing type.
+    pub fn new(
+        name: impl Into<String>,
+        backing_type: Option<EvalEnumBackingType>,
+        cases: Vec<EvalEnumCase>,
+    ) -> Self {
+        Self::with_members(
+            name,
+            backing_type,
+            Vec::new(),
+            cases,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    /// Creates a dynamic eval enum with interfaces, cases, constants, and methods.
+    pub fn with_members(
+        name: impl Into<String>,
+        backing_type: Option<EvalEnumBackingType>,
+        interfaces: Vec<String>,
+        cases: Vec<EvalEnumCase>,
+        constants: Vec<EvalClassConstant>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            backing_type,
+            interfaces,
+            cases,
+            constants,
+            methods,
+        }
+    }
+
+    /// Returns the original source spelling of this eval-declared enum name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the optional scalar backing type for this enum.
+    pub const fn backing_type(&self) -> Option<EvalEnumBackingType> {
+        self.backing_type
+    }
+
+    /// Returns interface names implemented directly by this eval enum.
+    pub fn interfaces(&self) -> &[String] {
+        &self.interfaces
+    }
+
+    /// Returns cases declared directly by this eval enum.
+    pub fn cases(&self) -> &[EvalEnumCase] {
+        &self.cases
+    }
+
+    /// Returns one enum case by PHP case-sensitive case name.
+    pub fn case(&self, name: &str) -> Option<&EvalEnumCase> {
+        self.cases().iter().find(|case| case.name() == name)
+    }
+
+    /// Returns constants declared directly by this eval enum.
+    pub fn constants(&self) -> &[EvalClassConstant] {
+        &self.constants
+    }
+
+    /// Returns methods declared directly by this eval enum.
+    pub fn methods(&self) -> &[EvalClassMethod] {
+        &self.methods
+    }
+
+    /// Builds class-shaped metadata used for enum method and relation dispatch.
+    pub fn as_class_metadata(&self) -> EvalClass {
+        EvalClass::with_modifiers_traits_and_constants(
+            self.name.clone(),
+            false,
+            true,
+            None,
+            self.interfaces.clone(),
+            Vec::new(),
+            self.constants.clone(),
+            Vec::new(),
+            self.methods.clone(),
+        )
+    }
+}
+
+/// Scalar backing type for a runtime eval enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalEnumBackingType {
+    Int,
+    String,
+}
+
+/// One case declared by a runtime eval enum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalEnumCase {
+    name: String,
+    value: Option<EvalExpr>,
+}
+
+impl EvalEnumCase {
+    /// Creates an eval enum case with an optional backing value expression.
+    pub fn new(name: impl Into<String>, value: Option<EvalExpr>) -> Self {
+        Self {
+            name: name.into(),
+            value,
+        }
+    }
+
+    /// Returns the PHP-visible enum case name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the optional backing value expression.
+    pub fn value(&self) -> Option<&EvalExpr> {
+        self.value.as_ref()
     }
 }
 

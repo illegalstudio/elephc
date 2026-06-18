@@ -377,7 +377,7 @@ pub(in crate::interpreter) fn eval_class_like_exists_name(
     let symbol = symbol.trim_start_matches('\\');
     match name {
         "trait_exists" => Ok(context.has_trait(symbol) || values.trait_exists(symbol)?),
-        "enum_exists" => values.enum_exists(symbol),
+        "enum_exists" => Ok(context.has_enum(symbol) || values.enum_exists(symbol)?),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
 }

@@ -110,6 +110,10 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_class_decl_stmt(class, context, scope, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::EnumDecl(enum_decl) => {
+            execute_enum_decl_stmt(enum_decl, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::InterfaceDecl(interface) => {
             execute_interface_decl_stmt(interface, context, scope, values)?;
             Ok(EvalControl::None)
@@ -365,9 +369,11 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     if context.has_class(name)
         || context.has_interface(name)
         || context.has_trait(name)
+        || context.has_enum(name)
         || values.class_exists(name)?
         || values.interface_exists(name)?
         || values.trait_exists(name)?
+        || values.enum_exists(name)?
     {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -402,6 +408,166 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Registers an eval-declared enum and materializes its singleton cases.
+pub(in crate::interpreter) fn execute_enum_decl_stmt(
+    enum_decl: &EvalEnum,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let name = enum_decl.name().trim_start_matches('\\');
+    if context.has_enum(name)
+        || context.has_class(name)
+        || context.has_interface(name)
+        || context.has_trait(name)
+        || values.enum_exists(name)?
+        || values.class_exists(name)?
+        || values.interface_exists(name)?
+        || values.trait_exists(name)?
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    validate_eval_enum_decl(enum_decl, context, values)?;
+    if context.define_enum(enum_decl.clone()) {
+        initialize_eval_declared_constants(
+            enum_decl.name(),
+            enum_decl.constants(),
+            context,
+            scope,
+            values,
+        )?;
+        initialize_eval_enum_cases(enum_decl, context, scope, values)
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Validates enum metadata before it is inserted into the dynamic context.
+fn validate_eval_enum_decl(
+    enum_decl: &EvalEnum,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    validate_eval_declared_constants(enum_decl.constants())?;
+    validate_eval_enum_case_declarations(enum_decl)?;
+    validate_eval_enum_method_declarations(enum_decl)?;
+    let enum_class = enum_decl.as_class_metadata();
+    validate_eval_class_modifiers(&enum_class, context)?;
+    for interface in enum_decl.interfaces() {
+        if !context.has_interface(interface) && !values.interface_exists(interface)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    validate_concrete_class_requirements(&enum_class, context)
+}
+
+/// Validates enum case names and pure/backed declaration shape.
+fn validate_eval_enum_case_declarations(enum_decl: &EvalEnum) -> Result<(), EvalStatus> {
+    let mut case_names = std::collections::HashSet::new();
+    let constant_names = enum_decl
+        .constants()
+        .iter()
+        .map(|constant| constant.name().to_string())
+        .collect::<std::collections::HashSet<_>>();
+    for case in enum_decl.cases() {
+        if !case_names.insert(case.name().to_string()) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if constant_names.contains(case.name()) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        match (enum_decl.backing_type(), case.value()) {
+            (None, None) | (Some(_), Some(_)) => {}
+            (None, Some(_)) | (Some(_), None) => return Err(EvalStatus::RuntimeFatal),
+        }
+    }
+    Ok(())
+}
+
+/// Validates enum method declarations that PHP reserves or forbids on enums.
+fn validate_eval_enum_method_declarations(enum_decl: &EvalEnum) -> Result<(), EvalStatus> {
+    for method in enum_decl.methods() {
+        if method.name().eq_ignore_ascii_case("__construct")
+            || method.name().eq_ignore_ascii_case("cases")
+            || method.name().eq_ignore_ascii_case("from")
+            || method.name().eq_ignore_ascii_case("tryFrom")
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
+/// Initializes enum singleton case objects for a newly declared eval enum.
+fn initialize_eval_enum_cases(
+    enum_decl: &EvalEnum,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut backing_values = Vec::new();
+    for case in enum_decl.cases() {
+        let backing_value = if let Some(value_expr) = case.value() {
+            let value = eval_expr(value_expr, context, scope, values)?;
+            validate_eval_enum_backing_value(enum_decl.backing_type(), value, values)?;
+            for existing in &backing_values {
+                let equal = values.compare(EvalBinOp::StrictEq, value, *existing)?;
+                if values.truthy(equal)? {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+            }
+            backing_values.push(value);
+            Some(value)
+        } else {
+            None
+        };
+        initialize_eval_enum_case(enum_decl, case, backing_value, context, values)?;
+    }
+    Ok(())
+}
+
+/// Validates that one evaluated enum backing value matches the declared backing type.
+fn validate_eval_enum_backing_value(
+    backing_type: Option<EvalEnumBackingType>,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(backing_type) = backing_type else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let tag = values.type_tag(value)?;
+    match backing_type {
+        EvalEnumBackingType::Int if tag == EVAL_TAG_INT => Ok(()),
+        EvalEnumBackingType::String if tag == EVAL_TAG_STRING => Ok(()),
+        EvalEnumBackingType::Int | EvalEnumBackingType::String => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Creates and stores one enum case singleton object.
+fn initialize_eval_enum_case(
+    enum_decl: &EvalEnum,
+    case: &EvalEnumCase,
+    backing_value: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let object = values.new_object("stdClass")?;
+    let identity = values.object_identity(object)?;
+    context.register_dynamic_object(identity, enum_decl.name());
+    let name = values.string(case.name())?;
+    values.property_set(object, "name", name)?;
+    if let Some(value) = backing_value {
+        values.property_set(object, "value", value)?;
+        if let Some(replaced) = context.set_enum_case_value(enum_decl.name(), case.name(), value) {
+            values.release(replaced)?;
+        }
+    }
+    if let Some(replaced) = context.set_enum_case(enum_decl.name(), case.name(), object) {
+        values.release(replaced)?;
+    }
+    Ok(())
 }
 
 /// Initializes class-like constant cells for a newly declared eval class-like.
@@ -456,8 +622,10 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     let name = interface.name().trim_start_matches('\\');
     if context.has_interface(name)
         || context.has_class(name)
+        || context.has_enum(name)
         || values.interface_exists(name)?
         || values.class_exists(name)?
+        || values.enum_exists(name)?
     {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -498,9 +666,11 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
     if context.has_trait(name)
         || context.has_class(name)
         || context.has_interface(name)
+        || context.has_enum(name)
         || values.trait_exists(name)?
         || values.class_exists(name)?
         || values.interface_exists(name)?
+        || values.enum_exists(name)?
     {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -1040,6 +1210,9 @@ pub(in crate::interpreter) fn eval_property_set_result(
     let Some(class) = context.dynamic_object_class(identity) else {
         return values.property_set(object, property_name, value);
     };
+    if context.has_enum(class.name()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     if let Some((declaring_class, property)) =
         eval_dynamic_property_for_access(class.name(), property_name, context)
     {
@@ -1096,6 +1269,9 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     _values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let class_name = resolve_eval_static_class_like_name(class_name, context)?;
+    if let Some(case) = context.enum_case(&class_name, constant_name) {
+        return Ok(case);
+    }
     let (declaring_class, constant) = context
         .class_constant(&class_name, constant_name)
         .ok_or(EvalStatus::RuntimeFatal)?;
@@ -1146,6 +1322,15 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let class_name = resolve_eval_static_class_name(class_name, context)?;
+    if context.has_enum(&class_name) && eval_enum_static_builtin_name(method_name).is_some() {
+        return eval_enum_builtin_static_method_result(
+            &class_name,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        );
+    }
     let (declaring_class, method) =
         eval_dynamic_static_method_for_call(&class_name, method_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
@@ -1161,6 +1346,103 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
         context,
         values,
     )
+}
+
+/// Returns a recognized enum-provided static method name.
+fn eval_enum_static_builtin_name(method_name: &str) -> Option<&'static str> {
+    if method_name.eq_ignore_ascii_case("cases") {
+        Some("cases")
+    } else if method_name.eq_ignore_ascii_case("from") {
+        Some("from")
+    } else if method_name.eq_ignore_ascii_case("tryFrom") {
+        Some("tryFrom")
+    } else {
+        None
+    }
+}
+
+/// Dispatches enum-provided static methods for eval-declared enums.
+fn eval_enum_builtin_static_method_result(
+    enum_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match eval_enum_static_builtin_name(method_name).ok_or(EvalStatus::RuntimeFatal)? {
+        "cases" => eval_enum_cases_result(enum_name, evaluated_args, context, values),
+        "from" => eval_enum_from_result(enum_name, evaluated_args, false, context, values),
+        "tryFrom" => eval_enum_from_result(enum_name, evaluated_args, true, context, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Builds the indexed array returned by `EnumName::cases()`.
+fn eval_enum_cases_result(
+    enum_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let enum_decl = context
+        .enum_decl(enum_name)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let case_names = enum_decl
+        .cases()
+        .iter()
+        .map(|case| case.name().to_string())
+        .collect::<Vec<_>>();
+    let mut array = values.array_new(case_names.len())?;
+    for (index, case_name) in case_names.iter().enumerate() {
+        let key = values.int(index as i64)?;
+        let case = context
+            .enum_case(enum_name, case_name)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        array = values.array_set(array, key, case)?;
+    }
+    Ok(array)
+}
+
+/// Evaluates `EnumName::from()` or `EnumName::tryFrom()` for eval-backed enums.
+fn eval_enum_from_result(
+    enum_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    nullable_miss: bool,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let enum_decl = context
+        .enum_decl(enum_name)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    if enum_decl.backing_type().is_none() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let case_names = enum_decl
+        .cases()
+        .iter()
+        .map(|case| case.name().to_string())
+        .collect::<Vec<_>>();
+    let mut args = bind_evaluated_function_args(&[String::from("value")], evaluated_args)?;
+    let value = args.pop().ok_or(EvalStatus::RuntimeFatal)?;
+    for case_name in case_names {
+        let case_value = context
+            .enum_case_value(enum_name, &case_name)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        let equal = values.compare(EvalBinOp::StrictEq, value, case_value)?;
+        if values.truthy(equal)? {
+            return context
+                .enum_case(enum_name, &case_name)
+                .ok_or(EvalStatus::RuntimeFatal);
+        }
+    }
+    if nullable_miss {
+        values.null()
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
 }
 
 /// Resolves a static method using private-method scope rules.
@@ -1253,7 +1535,7 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if class.is_abstract() {
+    if class.is_abstract() || context.has_enum(class.name()) {
         return Err(EvalStatus::RuntimeFatal);
     }
     let object = values.new_object("stdClass")?;
