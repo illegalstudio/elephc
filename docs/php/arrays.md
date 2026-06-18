@@ -2,7 +2,7 @@
 title: "Arrays"
 description: "Indexed arrays, associative arrays, copy-on-write, and built-in array functions."
 sidebar:
-  order: 7
+  order: 8
 ---
 
 ## Indexed arrays
