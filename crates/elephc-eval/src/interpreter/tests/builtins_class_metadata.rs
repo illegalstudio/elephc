@@ -5,8 +5,8 @@
 //! - `cargo test -p elephc-eval` through Rust's test harness.
 //!
 //! Key details:
-//! - Eval class declarations expose parent/interface metadata while trait and
-//!   attribute metadata remains empty.
+//! - Eval class declarations expose parent/interface metadata plus class-level
+//!   attribute names and supported literal positional args.
 //! - Tests verify direct calls, dynamic calls, named arguments, and builtin probes.
 
 use super::super::*;
@@ -74,24 +74,31 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies class attribute helpers expose empty metadata arrays in eval.
+/// Verifies class attribute helpers expose eval class-level metadata.
 #[test]
 fn execute_program_dispatches_class_attribute_metadata_builtins() {
     let program = parse_fragment(
-        br#"class EvalAttrMeta {}
+        br#"#[Route("/home", -1, true, null)]
+#[Tag("first"), Tag("second")]
+class EvalAttrMeta {}
 $names = class_attribute_names("EvalAttrMeta");
-echo is_array($names) && count($names) === 0 ? "names" : "bad"; echo ":";
+echo count($names); echo ":"; echo $names[0]; echo ":"; echo $names[1]; echo ":"; echo $names[2]; echo ":";
+$args = class_attribute_args("EvalAttrMeta", "route");
+echo count($args); echo ":"; echo $args[0]; echo ":"; echo $args[1]; echo ":";
+echo $args[2] ? "T" : "F"; echo ":"; echo is_null($args[3]) ? "N" : "bad"; echo ":";
+$tag = class_attribute_args("evalattrmeta", "Tag");
+echo $tag[0]; echo ":";
+$missing = class_attribute_args("EvalAttrMeta", "Missing");
+echo count($missing); echo ":";
 $attrs = class_get_attributes("EvalAttrMeta");
-echo is_array($attrs) && count($attrs) === 0 ? "attrs" : "bad"; echo ":";
-$args = class_attribute_args("EvalAttrMeta", "DemoAttr");
-echo is_array($args) && count($args) === 0 ? "args" : "bad"; echo ":";
+echo count($attrs); echo ":";
 $call_names = call_user_func("class_attribute_names", "EvalAttrMeta");
-echo is_array($call_names) && count($call_names) === 0 ? "callnames" : "bad"; echo ":";
+echo $call_names[0]; echo ":";
 $call_args = call_user_func_array(
     "class_attribute_args",
-    ["class_name" => "EvalAttrMeta", "attribute_name" => "DemoAttr"]
+    ["class_name" => "EvalAttrMeta", "attribute_name" => "Route"]
 );
-echo is_array($call_args) && count($call_args) === 0 ? "callargs" : "bad"; echo ":";
+echo $call_args[0]; echo ":";
 echo function_exists("class_attribute_names"); echo function_exists("class_get_attributes");
 echo function_exists("class_attribute_args");
 return true;"#,
@@ -102,6 +109,30 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "names:attrs:args:callnames:callargs:111");
+    assert_eq!(
+        values.output,
+        "3:Route:Tag:Tag:4:/home:-1:T:N:first:0:0:Route:/home:111"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies unsupported attribute argument metadata remains name-visible but not materializable.
+#[test]
+fn execute_program_rejects_unsupported_class_attribute_args_metadata() {
+    let program = parse_fragment(
+        br#"#[Tag($dynamic)]
+class EvalUnsupportedAttr {}
+$names = class_attribute_names("EvalUnsupportedAttr");
+echo count($names); echo ":"; echo $names[0]; echo ":";
+class_attribute_args("EvalUnsupportedAttr", "Tag");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("unsupported attribute metadata should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(values.output, "1:Tag:");
 }

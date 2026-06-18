@@ -77,5 +77,6 @@ pub(crate) enum TokenKind {
     Colon,
     DoubleColon,
     Backslash,
+    AttributeStart,
     Eof,
 }

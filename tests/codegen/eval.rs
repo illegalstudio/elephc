@@ -5249,6 +5249,33 @@ echo EvalClassNameChild::staticName();');
     );
 }
 
+/// Verifies eval-declared class attributes expose names and supported literal args.
+#[test]
+fn test_eval_declared_class_attribute_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('#[Route("/home", -1, true, null)]
+#[Tag("first"), Tag("second")]
+class EvalAttrMeta {}
+$names = class_attribute_names("EvalAttrMeta");
+echo count($names) . ":" . $names[0] . ":" . $names[1] . ":" . $names[2] . ":";
+$args = class_attribute_args("EvalAttrMeta", "route");
+echo count($args) . ":" . $args[0] . ":" . $args[1] . ":";
+echo ($args[2] ? "T" : "F") . ":" . (is_null($args[3]) ? "N" : "bad") . ":";
+$tag = class_attribute_args("evalattrmeta", "Tag");
+echo $tag[0] . ":";
+$attrs = class_get_attributes("EvalAttrMeta");
+echo count($attrs);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "3:Route:Tag:Tag:4:/home:-1:T:N:first:0");
+}
+
 /// Verifies eval interface and trait constants work through the bridge.
 #[test]
 fn test_eval_declared_interface_and_trait_constants() {

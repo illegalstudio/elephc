@@ -12,16 +12,19 @@ use super::cursor::*;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalCatch, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum,
-    EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInterface, EvalInterfaceMethod,
-    EvalInterfaceProperty, EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation,
-    EvalVisibility,
+    EvalAttribute, EvalAttributeArg, EvalCatch, EvalClass, EvalClassConstant, EvalClassMethod,
+    EvalClassProperty, EvalConst, EvalEnum, EvalEnumBackingType, EvalEnumCase, EvalExpr,
+    EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalStmt, EvalSwitchCase, EvalTrait,
+    EvalTraitAdaptation, EvalUnaryOp, EvalVisibility,
 };
 use crate::lexer::TokenKind;
 
 impl Parser {
     /// Parses one source statement, expanding `unset($a, $b)` to one statement per variable.
     pub(super) fn parse_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        if matches!(self.current(), TokenKind::AttributeStart) {
+            return self.parse_attributed_stmt();
+        }
         match self.current() {
             TokenKind::Ident(name) if ident_eq(name, "break") => {
                 self.advance();
@@ -123,6 +126,78 @@ impl Parser {
                 Ok(vec![EvalStmt::Expr(expr)])
             }
         }
+    }
+
+    /// Parses one declaration preceded by PHP attribute groups.
+    pub(super) fn parse_attributed_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let attributes = self.parse_attribute_groups()?;
+        match self.current() {
+            TokenKind::Ident(name)
+                if ident_eq(name, "abstract")
+                    || ident_eq(name, "final")
+                    || ident_eq(name, "readonly")
+                    || ident_eq(name, "class") =>
+            {
+                self.parse_class_decl_stmt_with_attributes(attributes)
+            }
+            TokenKind::Ident(name) if ident_eq(name, "enum") => {
+                self.parse_enum_decl_stmt_with_attributes(attributes)
+            }
+            TokenKind::Ident(name) if ident_eq(name, "interface") => {
+                self.parse_interface_decl_stmt_with_attributes(attributes)
+            }
+            TokenKind::Ident(name) if ident_eq(name, "trait") => {
+                self.parse_trait_decl_stmt_with_attributes(attributes)
+            }
+            _ => Err(EvalParseError::UnsupportedConstruct),
+        }
+    }
+
+    /// Parses one or more PHP `#[...]` attribute groups.
+    pub(super) fn parse_attribute_groups(&mut self) -> Result<Vec<EvalAttribute>, EvalParseError> {
+        let mut attributes = Vec::new();
+        while self.consume(TokenKind::AttributeStart) {
+            loop {
+                attributes.push(self.parse_attribute()?);
+                if !self.consume(TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(TokenKind::RBracket)?;
+        }
+        Ok(attributes)
+    }
+
+    /// Parses one attribute name and optional literal positional arguments.
+    pub(super) fn parse_attribute(&mut self) -> Result<EvalAttribute, EvalParseError> {
+        let name = self.parse_qualified_name()?;
+        let name = self.resolve_class_name(name);
+        let args = if self.consume(TokenKind::LParen) {
+            let mut args = Vec::new();
+            let mut supported = true;
+            if !self.consume(TokenKind::RParen) {
+                loop {
+                    let arg = self.parse_call_arg()?;
+                    if supported {
+                        if arg.name().is_some() || arg.is_spread() {
+                            supported = false;
+                        } else if let Some(arg) = eval_attribute_arg_from_expr(arg.value()) {
+                            args.push(arg);
+                        } else {
+                            supported = false;
+                        }
+                    }
+                    if self.consume(TokenKind::RParen) {
+                        break;
+                    }
+                    self.expect(TokenKind::Comma)?;
+                }
+            }
+            supported.then_some(args)
+        } else {
+            Some(Vec::new())
+        };
+        Ok(EvalAttribute::new(name, args))
     }
 
     /// Returns true when the current tokens form `Class::$property <assign-op>`.
@@ -251,6 +326,14 @@ impl Parser {
 
     /// Parses `[abstract|final|readonly] class Name [extends Parent] [implements Iface, ...] { ... }`.
     pub(super) fn parse_class_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_class_decl_stmt_with_attributes(Vec::new())
+    }
+
+    /// Parses a class declaration and attaches already parsed class attributes.
+    pub(super) fn parse_class_decl_stmt_with_attributes(
+        &mut self,
+        attributes: Vec<EvalAttribute>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let (is_abstract, is_final, is_readonly_class) = self.parse_class_decl_modifiers()?;
         if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "class")) {
             return Err(EvalParseError::UnsupportedConstruct);
@@ -296,7 +379,8 @@ impl Parser {
                 constants,
                 properties,
                 methods,
-            ),
+            )
+            .with_attributes(attributes),
         )])
     }
 
@@ -838,6 +922,14 @@ impl Parser {
 
     /// Parses `trait Name { ... }` declarations into dynamic trait metadata.
     pub(super) fn parse_trait_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_trait_decl_stmt_with_attributes(Vec::new())
+    }
+
+    /// Parses a trait declaration and attaches already parsed class-like attributes.
+    pub(super) fn parse_trait_decl_stmt_with_attributes(
+        &mut self,
+        attributes: Vec<EvalAttribute>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -855,9 +947,10 @@ impl Parser {
             self.parse_trait_member(&mut constants, &mut properties, &mut methods)?;
         }
         self.consume_semicolon();
-        Ok(vec![EvalStmt::TraitDecl(EvalTrait::with_constants(
-            name, constants, properties, methods,
-        ))])
+        Ok(vec![EvalStmt::TraitDecl(
+            EvalTrait::with_constants(name, constants, properties, methods)
+                .with_attributes(attributes),
+        )])
     }
 
     /// Parses one property or method from an eval trait body.
@@ -905,6 +998,14 @@ impl Parser {
 
     /// Parses `enum Name [: int|string] [implements Iface, ...] { ... }`.
     pub(super) fn parse_enum_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_enum_decl_stmt_with_attributes(Vec::new())
+    }
+
+    /// Parses an enum declaration and attaches already parsed class-like attributes.
+    pub(super) fn parse_enum_decl_stmt_with_attributes(
+        &mut self,
+        attributes: Vec<EvalAttribute>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -924,14 +1025,10 @@ impl Parser {
             self.parse_enum_member(&mut cases, &mut constants, &mut methods)?;
         }
         self.consume_semicolon();
-        Ok(vec![EvalStmt::EnumDecl(EvalEnum::with_members(
-            name,
-            backing_type,
-            interfaces,
-            cases,
-            constants,
-            methods,
-        ))])
+        Ok(vec![EvalStmt::EnumDecl(
+            EvalEnum::with_members(name, backing_type, interfaces, cases, constants, methods)
+                .with_attributes(attributes),
+        )])
     }
 
     /// Parses an optional backed-enum scalar type after the enum name.
@@ -1010,6 +1107,14 @@ impl Parser {
 
     /// Parses `interface Name [extends Parent, ...] { function name(...); }`.
     pub(super) fn parse_interface_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_interface_decl_stmt_with_attributes(Vec::new())
+    }
+
+    /// Parses an interface declaration and attaches already parsed class-like attributes.
+    pub(super) fn parse_interface_decl_stmt_with_attributes(
+        &mut self,
+        attributes: Vec<EvalAttribute>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -1031,7 +1136,8 @@ impl Parser {
         Ok(vec![EvalStmt::InterfaceDecl(
             EvalInterface::with_constants_and_properties(
                 name, parents, constants, properties, methods,
-            ),
+            )
+            .with_attributes(attributes),
         )])
     }
 
@@ -1854,6 +1960,26 @@ impl Parser {
         }
         self.expect(TokenKind::RBrace)?;
         Ok(statements)
+    }
+}
+
+/// Converts a parsed attribute argument expression into retained literal metadata.
+fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttributeArg> {
+    match expr {
+        EvalExpr::Const(EvalConst::String(value)) => Some(EvalAttributeArg::String(value.clone())),
+        EvalExpr::Const(EvalConst::Int(value)) => Some(EvalAttributeArg::Int(*value)),
+        EvalExpr::Const(EvalConst::Bool(value)) => Some(EvalAttributeArg::Bool(*value)),
+        EvalExpr::Const(EvalConst::Null) => Some(EvalAttributeArg::Null),
+        EvalExpr::Unary {
+            op: EvalUnaryOp::Negate,
+            expr,
+        } => match expr.as_ref() {
+            EvalExpr::Const(EvalConst::Int(value)) => {
+                Some(EvalAttributeArg::Int(value.wrapping_neg()))
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 

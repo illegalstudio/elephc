@@ -297,6 +297,11 @@ impl<'a> Lexer<'a> {
                 self.bump_char();
                 Ok(TokenKind::Backslash)
             }
+            '#' if self.peek_next_char() == Some('[') => {
+                self.bump_char();
+                self.bump_char();
+                Ok(TokenKind::AttributeStart)
+            }
             _ if is_ident_start(ch) => {
                 let ident = self.lex_ident();
                 Ok(magic_const_token(&ident, line).unwrap_or(TokenKind::Ident(ident)))
@@ -409,6 +414,7 @@ impl<'a> Lexer<'a> {
             }
             match (self.peek_char(), self.peek_next_char()) {
                 (Some('/'), Some('/')) => self.skip_line_comment(),
+                (Some('#'), Some('[')) => return Ok(()),
                 (Some('#'), _) => self.skip_line_comment(),
                 (Some('/'), Some('*')) => self.skip_block_comment()?,
                 _ => return Ok(()),

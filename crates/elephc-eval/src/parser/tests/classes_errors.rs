@@ -40,6 +40,67 @@ fn parse_fragment_accepts_class_extends_and_implements_source() {
         ))]
     );
 }
+
+/// Verifies class attributes lower to eval class metadata with supported literal args.
+#[test]
+fn parse_fragment_accepts_class_attribute_metadata() {
+    let program = parse_fragment(
+        br#"#[Route("/home", -1, true, null)]
+#[Tag(name: "named")]
+class DynEvalAttributed {}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(
+            EvalClass::new("DynEvalAttributed", Vec::new(), Vec::new()).with_attributes(vec![
+                EvalAttribute::new(
+                    "Route",
+                    Some(vec![
+                        EvalAttributeArg::String("/home".to_string()),
+                        EvalAttributeArg::Int(-1),
+                        EvalAttributeArg::Bool(true),
+                        EvalAttributeArg::Null,
+                    ]),
+                ),
+                EvalAttribute::new("Tag", None),
+            ])
+        )]
+    );
+}
+
+/// Verifies class-like declaration attributes attach to interfaces, traits, and enums.
+#[test]
+fn parse_fragment_accepts_class_like_attribute_metadata() {
+    let program = parse_fragment(
+        br#"#[IfaceMark] interface DynEvalAttrIface {}
+#[TraitMark] trait DynEvalAttrTrait {}
+#[EnumMark] enum DynEvalAttrEnum { case Ready; }"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::InterfaceDecl(
+                EvalInterface::new("DynEvalAttrIface", Vec::new(), Vec::new())
+                    .with_attributes(vec![EvalAttribute::new("IfaceMark", Some(Vec::new()))])
+            ),
+            EvalStmt::TraitDecl(
+                EvalTrait::new("DynEvalAttrTrait", Vec::new(), Vec::new())
+                    .with_attributes(vec![EvalAttribute::new("TraitMark", Some(Vec::new()))])
+            ),
+            EvalStmt::EnumDecl(
+                EvalEnum::new(
+                    "DynEvalAttrEnum",
+                    None,
+                    vec![EvalEnumCase::new("Ready", None)]
+                )
+                .with_attributes(vec![EvalAttribute::new("EnumMark", Some(Vec::new()))])
+            ),
+        ]
+    );
+}
+
 /// Verifies eval interface declarations lower to dynamic interface metadata.
 #[test]
 fn parse_fragment_accepts_interface_declaration_source() {

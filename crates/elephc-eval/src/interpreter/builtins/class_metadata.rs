@@ -6,8 +6,8 @@
 //! - Dynamic callable dispatch under `builtins::registry::dispatch`.
 //!
 //! Key details:
-//! - Eval-declared classes carry parent, interface, and direct trait-use metadata;
-//!   attribute metadata remains empty.
+//! - Eval-declared class-like symbols carry parent, interface, direct trait-use,
+//!   and class-level attribute metadata for literal positional args.
 //! - Missing class-like relation targets return `false`, matching the main
 //!   backend's unknown-target fallback.
 
@@ -104,27 +104,112 @@ pub(in crate::interpreter) fn eval_builtin_class_attribute_metadata(
         ],
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    eval_class_attribute_metadata_result(name, &evaluated_args, values)
+    eval_class_attribute_metadata_result(name, &evaluated_args, context, values)
 }
 
 /// Evaluates materialized class attribute metadata arguments.
 pub(in crate::interpreter) fn eval_class_attribute_metadata_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match (name, evaluated_args) {
-        ("class_attribute_names" | "class_get_attributes", [class_name]) => {
+        ("class_attribute_names", [class_name]) => {
+            let class_name = eval_class_metadata_name(*class_name, values)?;
+            let Some(attributes) = eval_class_like_attributes(context, &class_name) else {
+                return values.array_new(0);
+            };
+            eval_class_attribute_names_result(attributes, values)
+        }
+        ("class_get_attributes", [class_name]) => {
             let _ = eval_class_metadata_name(*class_name, values)?;
             values.array_new(0)
         }
         ("class_attribute_args", [class_name, attribute_name]) => {
-            let _ = eval_class_metadata_name(*class_name, values)?;
-            let _ = eval_class_metadata_name(*attribute_name, values)?;
-            values.array_new(0)
+            let class_name = eval_class_metadata_name(*class_name, values)?;
+            let attribute_name = eval_class_metadata_name(*attribute_name, values)?;
+            let Some(attributes) = eval_class_like_attributes(context, &class_name) else {
+                return values.array_new(0);
+            };
+            let Some(attribute) = attributes
+                .iter()
+                .find(|attribute| eval_attribute_name_matches(attribute.name(), &attribute_name))
+            else {
+                return values.array_new(0);
+            };
+            let Some(args) = attribute.args() else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_class_attribute_args_result(args, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
+}
+
+/// Returns class-like attributes for a dynamic eval class, interface, trait, or enum.
+fn eval_class_like_attributes<'a>(
+    context: &'a ElephcEvalContext,
+    name: &str,
+) -> Option<&'a [EvalAttribute]> {
+    if let Some(class) = context.class(name) {
+        return Some(class.attributes());
+    }
+    if let Some(interface) = context.interface(name) {
+        return Some(interface.attributes());
+    }
+    if let Some(trait_decl) = context.trait_decl(name) {
+        return Some(trait_decl.attributes());
+    }
+    context.enum_decl(name).map(EvalEnum::attributes)
+}
+
+/// Builds the indexed string array returned by `class_attribute_names()`.
+fn eval_class_attribute_names_result(
+    attributes: &[EvalAttribute],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(attributes.len())?;
+    for (index, attribute) in attributes.iter().enumerate() {
+        let key = values.int(index as i64)?;
+        let value = values.string(attribute.name())?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Builds the indexed mixed array returned by `class_attribute_args()`.
+fn eval_class_attribute_args_result(
+    args: &[EvalAttributeArg],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(args.len())?;
+    for (index, arg) in args.iter().enumerate() {
+        let key = values.int(index as i64)?;
+        let value = eval_class_attribute_arg_value(arg, values)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Materializes one retained eval attribute argument as a runtime cell.
+fn eval_class_attribute_arg_value(
+    arg: &EvalAttributeArg,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match arg {
+        EvalAttributeArg::String(value) => values.string(value),
+        EvalAttributeArg::Int(value) => values.int(*value),
+        EvalAttributeArg::Bool(value) => values.bool_value(*value),
+        EvalAttributeArg::Null => values.null(),
+    }
+}
+
+/// Returns whether a query names the same PHP attribute class case-insensitively.
+fn eval_attribute_name_matches(attribute_name: &str, query: &str) -> bool {
+    attribute_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case(query.trim_start_matches('\\'))
 }
 
 /// Returns whether a class-relation target refers to a known class-like symbol.

@@ -49,7 +49,7 @@ such a local alias removes the alias without unsetting the global value.
 | Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, and `continue` are supported. |
 | Exceptions | `throw`, `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
 | Functions | Eval fragments can declare functions. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
-| Classes | Eval fragments can declare classes with properties, concrete property get/set hooks, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations, interface implementations, static members, and class constants. Duplicate eval class-like names are rejected. |
+| Classes | Eval fragments can declare classes with properties, concrete property get/set hooks, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations, interface implementations, static members, class constants, and class-level attributes. Duplicate eval class-like names are rejected. |
 | Enums | Eval fragments can declare pure and `int` / `string` backed enums with cases, constants, methods, interface implementations, `::cases()`, `::from()`, `::tryFrom()`, `->name`, and backed `->value`. |
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
@@ -136,8 +136,14 @@ contract checks, abstract property hook contracts, property-level `readonly`,
 and methods, trait composition with `insteadof` conflict resolution and `as`
 aliases/visibility adaptations, interface implementation checks, static
 properties, static methods, class constants, interface constants, trait
-constants, and `ClassName::class` literals. Member visibility is checked at
-runtime for eval-declared objects and static/class-constant accesses.
+constants, class-level attributes, and `ClassName::class` literals. Member
+visibility is checked at runtime for eval-declared objects and
+static/class-constant accesses. Class-level attributes declared on eval classes,
+interfaces, traits, and enums are visible through `class_attribute_names()` and
+`class_attribute_args()` when their arguments are supported literal positional
+values (`string`, `int`, `bool`, `null`, or negated integer literals).
+Attribute names remain visible when an attribute uses unsupported argument
+syntax, but requesting those arguments is a runtime fatal.
 Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the
@@ -219,7 +225,7 @@ where listed below unless a note says otherwise.
 | Arrays and sorting | `array_sum()`, `array_product()`, `array_chunk()`, `array_column()`, `array_combine()`, `array_fill()`, `array_fill_keys()`, `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `array_flip()`, `array_keys()`, `array_values()`, `array_diff()`, `array_intersect()`, `array_diff_key()`, `array_intersect_key()`, `range()`, `array_merge()`, `array_pad()`, `array_reverse()`, `array_slice()`, `array_splice()`, `array_unique()`, `array_key_exists()`, `array_rand()`, `in_array()`, `array_search()`, `array_pop()`, `array_shift()`, `array_push()`, `array_unshift()`, `arsort()`, `asort()`, `krsort()`, `ksort()`, `natcasesort()`, `natsort()`, `rsort()`, `shuffle()`, `sort()`, `uasort()`, `uksort()`, `usort()`, `count()` |
 | Iterators and SPL | `iterator_count()`, `iterator_to_array()`, `iterator_apply()`, `spl_classes()`, `spl_object_id()`, `spl_object_hash()` |
 | Math and random | `abs()`, `sqrt()`, `floor()`, `ceil()`, `round()`, `pow()`, `clamp()`, `min()`, `max()`, `pi()`, `sin()`, `cos()`, `tan()`, `asin()`, `acos()`, `atan()`, `atan2()`, `sinh()`, `cosh()`, `tanh()`, `log()`, `log2()`, `log10()`, `exp()`, `deg2rad()`, `rad2deg()`, `hypot()`, `intdiv()`, `fdiv()`, `fmod()`, `rand()`, `mt_rand()`, `random_int()` |
-| Types, metadata, and dynamic calls | `intval()`, `floatval()`, `strval()`, `boolval()`, `settype()`, `gettype()`, `get_class()`, `get_parent_class()`, `get_resource_type()`, `get_resource_id()`, `function_exists()`, `is_callable()`, `class_exists()`, `interface_exists()`, `trait_exists()`, `enum_exists()`, `is_a()`, `is_subclass_of()`, `call_user_func()`, `call_user_func_array()`, `is_int()`, `is_integer()`, `is_long()`, `is_float()`, `is_double()`, `is_real()`, `is_nan()`, `is_finite()`, `is_infinite()`, `is_string()`, `is_bool()`, `is_null()`, `is_array()`, `is_object()`, `is_iterable()`, `is_numeric()`, `is_resource()` |
+| Types, metadata, and dynamic calls | `intval()`, `floatval()`, `strval()`, `boolval()`, `settype()`, `gettype()`, `get_class()`, `get_parent_class()`, `get_resource_type()`, `get_resource_id()`, `function_exists()`, `is_callable()`, `class_exists()`, `interface_exists()`, `trait_exists()`, `enum_exists()`, `is_a()`, `is_subclass_of()`, `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, `call_user_func()`, `call_user_func_array()`, `is_int()`, `is_integer()`, `is_long()`, `is_float()`, `is_double()`, `is_real()`, `is_nan()`, `is_finite()`, `is_infinite()`, `is_string()`, `is_bool()`, `is_null()`, `is_array()`, `is_object()`, `is_iterable()`, `is_numeric()`, `is_resource()` |
 | Debug output | `print_r()`, `var_dump()` |
 | Constants | `define()`, `defined()` |
 
@@ -292,9 +298,10 @@ arguments are supported for eval-declared methods but not for every generated
 native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
-remaining class-system gaps are enum trait-use declarations,
-attributes/reflection metadata, and generated/AOT dynamic static-method call
-forms.
+remaining class-system gaps are ReflectionAttribute object materialization,
+member-level attribute metadata, and generated/AOT dynamic static-method call
+forms. `class_get_attributes()` is recognized in eval but does not yet
+materialize `ReflectionAttribute` objects for eval-declared attributes.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

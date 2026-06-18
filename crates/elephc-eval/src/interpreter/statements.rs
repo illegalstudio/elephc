@@ -748,7 +748,8 @@ fn expand_eval_class_traits(
             constants,
             properties,
             methods,
-        ),
+        )
+        .with_attributes(class.attributes().to_vec()),
     )
 }
 

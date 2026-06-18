@@ -176,12 +176,49 @@ impl EvalFunction {
     }
 }
 
+/// Literal attribute argument metadata retained by eval declarations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalAttributeArg {
+    String(String),
+    Int(i64),
+    Bool(bool),
+    Null,
+}
+
+/// Attribute metadata retained for eval class-like declarations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalAttribute {
+    name: String,
+    args: Option<Vec<EvalAttributeArg>>,
+}
+
+impl EvalAttribute {
+    /// Creates one eval attribute metadata entry.
+    pub fn new(name: impl Into<String>, args: Option<Vec<EvalAttributeArg>>) -> Self {
+        Self {
+            name: name.into(),
+            args,
+        }
+    }
+
+    /// Returns the resolved PHP-visible attribute class name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns supported literal positional args, or `None` for unsupported metadata.
+    pub fn args(&self) -> Option<&[EvalAttributeArg]> {
+        self.args.as_deref()
+    }
+}
+
 /// Runtime enum declared by an eval fragment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalEnum {
     name: String,
     backing_type: Option<EvalEnumBackingType>,
     interfaces: Vec<String>,
+    attributes: Vec<EvalAttribute>,
     cases: Vec<EvalEnumCase>,
     constants: Vec<EvalClassConstant>,
     methods: Vec<EvalClassMethod>,
@@ -217,10 +254,17 @@ impl EvalEnum {
             name: name.into(),
             backing_type,
             interfaces,
+            attributes: Vec::new(),
             cases,
             constants,
             methods,
         }
+    }
+
+    /// Returns a copy of this enum with class-like attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
     }
 
     /// Returns the original source spelling of this eval-declared enum name.
@@ -236,6 +280,11 @@ impl EvalEnum {
     /// Returns interface names implemented directly by this eval enum.
     pub fn interfaces(&self) -> &[String] {
         &self.interfaces
+    }
+
+    /// Returns attributes declared directly on this eval enum.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
     }
 
     /// Returns cases declared directly by this eval enum.
@@ -271,6 +320,7 @@ impl EvalEnum {
             Vec::new(),
             self.methods.clone(),
         )
+        .with_attributes(self.attributes.clone())
     }
 }
 
@@ -313,6 +363,7 @@ impl EvalEnumCase {
 pub struct EvalInterface {
     name: String,
     parents: Vec<String>,
+    attributes: Vec<EvalAttribute>,
     constants: Vec<EvalClassConstant>,
     properties: Vec<EvalInterfaceProperty>,
     methods: Vec<EvalInterfaceMethod>,
@@ -349,10 +400,17 @@ impl EvalInterface {
         Self {
             name: name.into(),
             parents,
+            attributes: Vec::new(),
             constants,
             properties,
             methods,
         }
+    }
+
+    /// Returns a copy of this interface with class-like attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
     }
 
     /// Returns the original source spelling of this eval-declared interface name.
@@ -363,6 +421,11 @@ impl EvalInterface {
     /// Returns interface names extended directly by this eval interface.
     pub fn parents(&self) -> &[String] {
         &self.parents
+    }
+
+    /// Returns attributes declared directly on this eval interface.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
     }
 
     /// Returns constants declared directly by this eval interface.
@@ -467,6 +530,7 @@ pub struct EvalClass {
     is_readonly_class: bool,
     parent: Option<String>,
     interfaces: Vec<String>,
+    attributes: Vec<EvalAttribute>,
     traits: Vec<String>,
     trait_adaptations: Vec<EvalTraitAdaptation>,
     constants: Vec<EvalClassConstant>,
@@ -694,12 +758,19 @@ impl EvalClass {
             is_readonly_class,
             parent,
             interfaces,
+            attributes: Vec::new(),
             traits,
             trait_adaptations,
             constants,
             properties,
             methods,
         }
+    }
+
+    /// Returns a copy of this class with class-like attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
     }
 
     /// Marks all instance properties readonly when this metadata represents a `readonly class`.
@@ -742,6 +813,11 @@ impl EvalClass {
     /// Returns interface names implemented directly by this eval class.
     pub fn interfaces(&self) -> &[String] {
         &self.interfaces
+    }
+
+    /// Returns attributes declared directly on this eval class.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
     }
 
     /// Returns trait names used directly by this eval class.
@@ -847,6 +923,7 @@ impl EvalClassConstant {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalTrait {
     name: String,
+    attributes: Vec<EvalAttribute>,
     constants: Vec<EvalClassConstant>,
     properties: Vec<EvalClassProperty>,
     methods: Vec<EvalClassMethod>,
@@ -871,15 +948,27 @@ impl EvalTrait {
     ) -> Self {
         Self {
             name: name.into(),
+            attributes: Vec::new(),
             constants,
             properties,
             methods,
         }
     }
 
+    /// Returns a copy of this trait with class-like attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
     /// Returns the original source spelling of this eval-declared trait name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns attributes declared directly on this eval trait.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
     }
 
     /// Returns constants declared directly by this eval trait.

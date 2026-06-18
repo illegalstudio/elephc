@@ -56,7 +56,7 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
         "class_alias" => eval_class_alias_result(evaluated_args, context, values)?,
         "class_attribute_args" | "class_attribute_names" | "class_get_attributes" => {
-            eval_class_attribute_metadata_result(name, evaluated_args, values)?
+            eval_class_attribute_metadata_result(name, evaluated_args, context, values)?
         }
         "class_implements" | "class_parents" | "class_uses" => {
             eval_class_relation_result(name, evaluated_args, context, values)?
