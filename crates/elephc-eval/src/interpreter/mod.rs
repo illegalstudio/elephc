@@ -31,8 +31,8 @@ use crate::context::{ElephcEvalContext, NativeFunction};
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalCallArg, EvalCatch, EvalClass, EvalClassMethod, EvalConst,
-    EvalExpr, EvalFunction, EvalMagicConst, EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase,
-    EvalUnaryOp,
+    EvalExpr, EvalFunction, EvalInterface, EvalInterfaceMethod, EvalMagicConst, EvalMatchArm,
+    EvalProgram, EvalStmt, EvalSwitchCase, EvalUnaryOp,
 };
 use crate::json_validate::{self, JsonParseError, JsonParseErrorKind, JsonValue};
 use crate::parser::parse_fragment;

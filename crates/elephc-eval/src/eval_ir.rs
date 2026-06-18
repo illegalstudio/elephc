@@ -69,6 +69,7 @@ pub enum EvalStmt {
         body: Vec<EvalStmt>,
     },
     ClassDecl(EvalClass),
+    InterfaceDecl(EvalInterface),
     Foreach {
         array: EvalExpr,
         key_name: Option<String>,
@@ -165,6 +166,71 @@ impl EvalFunction {
     /// Returns the dynamic EvalIR statements that form the function body.
     pub fn body(&self) -> &[EvalStmt] {
         &self.body
+    }
+}
+
+/// Runtime interface declared by an eval fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalInterface {
+    name: String,
+    parents: Vec<String>,
+    methods: Vec<EvalInterfaceMethod>,
+}
+
+impl EvalInterface {
+    /// Creates a dynamic eval interface with optional parent interfaces and methods.
+    pub fn new(
+        name: impl Into<String>,
+        parents: Vec<String>,
+        methods: Vec<EvalInterfaceMethod>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            parents,
+            methods,
+        }
+    }
+
+    /// Returns the original source spelling of this eval-declared interface name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns interface names extended directly by this eval interface.
+    pub fn parents(&self) -> &[String] {
+        &self.parents
+    }
+
+    /// Returns method signatures declared directly by this eval interface.
+    pub fn methods(&self) -> &[EvalInterfaceMethod] {
+        &self.methods
+    }
+}
+
+/// Method signature metadata for a runtime eval interface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalInterfaceMethod {
+    name: String,
+    params: Vec<String>,
+}
+
+impl EvalInterfaceMethod {
+    /// Creates one dynamic eval interface method signature.
+    pub fn new(name: impl Into<String>, params: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            params,
+        }
+    }
+
+    /// Returns the PHP-visible method name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns source-order parameter names without leading `$`.
+    pub fn params(&self) -> &[String] {
+        &self.params
     }
 }
 

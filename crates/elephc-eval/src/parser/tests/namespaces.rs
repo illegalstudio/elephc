@@ -126,6 +126,29 @@ class Child extends BaseAlias implements Iface, \Shared\Root {}"#,
         ))]
     );
 }
+/// Verifies namespace imports apply to eval interface parent clauses.
+#[test]
+fn parse_fragment_accepts_imported_interface_parents() {
+    let program = parse_fragment(
+        br#"namespace Eval\UseNs;
+use Lib\Contracts\BaseIface;
+interface LocalIface extends BaseIface, \Shared\RootIface {
+    function read();
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::InterfaceDecl(EvalInterface::new(
+            "Eval\\UseNs\\LocalIface",
+            vec![
+                "Lib\\Contracts\\BaseIface".to_string(),
+                "Shared\\RootIface".to_string()
+            ],
+            vec![EvalInterfaceMethod::new("read", Vec::new())],
+        ))]
+    );
+}
 /// Verifies grouped namespace imports resolve functions, constants, and class aliases.
 #[test]
 fn parse_fragment_accepts_grouped_namespace_use_imports() {

@@ -149,6 +149,27 @@ echo interface_exists(interface: "MissingInterface", autoload: false) ? "Y" : "N
 
     assert_eq!(values.output, "YYNYYN");
 }
+/// Verifies eval-declared interfaces are visible to interface symbol probes.
+#[test]
+fn execute_program_interface_exists_uses_dynamic_interface_table() {
+    let program = parse_fragment(
+        br#"interface DynEvalIface {}
+echo interface_exists("DynEvalIface") ? "Y" : "N";
+echo interface_exists("dynevaliface") ? "Y" : "N";
+echo class_exists("DynEvalIface") ? "C" : "c";
+echo call_user_func("interface_exists", "DynEvalIface") ? "Y" : "N";
+echo call_user_func_array("interface_exists", ["interface" => "\DynEvalIface"]) ? "Y" : "N";
+$interfaces = get_declared_interfaces();
+echo count($interfaces); echo ":"; echo $interfaces[0];"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "YYcYY1:DynEvalIface");
+}
 /// Verifies eval `trait_exists()` and `enum_exists()` probe generated metadata.
 #[test]
 fn execute_program_class_like_exists_uses_runtime_probe() {

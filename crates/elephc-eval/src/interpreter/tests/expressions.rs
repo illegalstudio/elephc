@@ -375,3 +375,59 @@ return $box->base;"#,
     );
     assert_eq!(values.get(result), FakeValue::Int(3));
 }
+/// Verifies eval-declared classes can implement eval-declared interfaces.
+#[test]
+fn execute_program_constructs_eval_declared_class_with_dynamic_interface() {
+    let program = parse_fragment(
+        br#"interface EvalReader {
+    function read($n);
+}
+interface EvalNamedReader extends EvalReader {
+    function label();
+}
+class EvalReaderBox implements EvalNamedReader {
+    public function read($n) { return $n + 1; }
+    public function label() { return "box"; }
+}
+$box = new EvalReaderBox();
+echo $box->read(4); echo ":";
+echo $box->label(); echo ":";
+echo is_a($box, "EvalNamedReader") ? "isa" : "bad"; echo ":";
+echo is_subclass_of($box, "EvalReader") ? "sub" : "bad"; echo ":";
+echo is_subclass_of("EvalReaderBox", "EvalReader") ? "str" : "bad"; echo ":";
+$implements = class_implements($box);
+echo count($implements); echo ":";
+echo $implements["EvalNamedReader"]; echo ":";
+echo $implements["EvalReader"];
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "5:box:isa:sub:str:2:EvalNamedReader:EvalReader"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+/// Verifies eval rejects classes missing methods required by eval interfaces.
+#[test]
+fn execute_program_rejects_missing_dynamic_interface_method() {
+    let program = parse_fragment(
+        br#"interface EvalNeedsRead {
+    function read($n);
+}
+class EvalMissingRead implements EvalNeedsRead {}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("missing interface method should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
