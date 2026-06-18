@@ -428,6 +428,9 @@ optimization, so it lives outside `src/optimize/`.
 
 IR-level transformations also no longer live here. The EIR backend runs a
 fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting with
-identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …). These are rewrites
-the AST optimizer cannot express well because they need value identity, basic
-blocks, or dominance; see [Optimization Passes](the-ir.md#optimization-passes).
+identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole
+patterns (box/unbox cancellation, scalar load/store forwarding, paired
+acquire/release cancellation, string-literal concat folding, redundant
+`move`/`borrow` cleanup). These are rewrites the AST optimizer cannot express
+well because they need value identity, basic blocks, or dominance; see
+[Optimization Passes](the-ir.md#optimization-passes).

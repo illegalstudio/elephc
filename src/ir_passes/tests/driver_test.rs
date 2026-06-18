@@ -11,9 +11,16 @@
 //!   isolation. The cap-panic and validation-panic tests are debug-only because
 //!   those guards compile out of `--release`.
 
-use crate::ir::{Builder, Function, IrType, Terminator};
+use crate::ir::{Builder, DataPool, Function, IrType, Terminator};
 use crate::ir_passes::driver::{run_function_passes, IrPass};
 use crate::types::PhpType;
+
+/// Runs the driver over `function` with a throwaway literal pool, mirroring the
+/// real `optimize_module` call but for synthetic-pass tests that intern nothing.
+fn drive(function: &mut Function, passes: &[Box<dyn IrPass>]) {
+    let mut data = DataPool::default();
+    run_function_passes(function, passes, &mut data);
+}
 
 /// Builds a minimal valid function: an entry block returning a constant.
 fn sample_function() -> Function {
@@ -35,7 +42,7 @@ impl IrPass for NoopPass {
     fn name(&self) -> &'static str {
         "noop"
     }
-    fn run(&self, _function: &mut Function) -> bool {
+    fn run(&self, _function: &mut Function, _data: &mut DataPool) -> bool {
         false
     }
 }
@@ -46,7 +53,7 @@ impl IrPass for AppendBangPass {
     fn name(&self) -> &'static str {
         "append-bang"
     }
-    fn run(&self, function: &mut Function) -> bool {
+    fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
         if function.name.ends_with('!') {
             false
         } else {
@@ -62,7 +69,7 @@ impl IrPass for AlwaysChangePass {
     fn name(&self) -> &'static str {
         "always-change"
     }
-    fn run(&self, _function: &mut Function) -> bool {
+    fn run(&self, _function: &mut Function, _data: &mut DataPool) -> bool {
         true
     }
 }
@@ -73,7 +80,7 @@ impl IrPass for DropTerminatorPass {
     fn name(&self) -> &'static str {
         "drop-terminator"
     }
-    fn run(&self, function: &mut Function) -> bool {
+    fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
         let entry = function.entry;
         if let Some(block) = function.block_mut(entry) {
             block.terminator = None;
@@ -87,7 +94,7 @@ impl IrPass for DropTerminatorPass {
 fn noop_pass_converges_without_change() {
     let mut function = sample_function();
     let passes: Vec<Box<dyn IrPass>> = vec![Box::new(NoopPass)];
-    run_function_passes(&mut function, &passes);
+    drive(&mut function, &passes);
     assert_eq!(function.name, "sample");
 }
 
@@ -96,7 +103,7 @@ fn noop_pass_converges_without_change() {
 fn change_once_pass_converges() {
     let mut function = sample_function();
     let passes: Vec<Box<dyn IrPass>> = vec![Box::new(AppendBangPass)];
-    run_function_passes(&mut function, &passes);
+    drive(&mut function, &passes);
     assert_eq!(function.name, "sample!", "applied exactly once and converged");
 }
 
@@ -105,7 +112,7 @@ fn change_once_pass_converges() {
 fn multiple_passes_converge_together() {
     let mut function = sample_function();
     let passes: Vec<Box<dyn IrPass>> = vec![Box::new(AppendBangPass), Box::new(NoopPass)];
-    run_function_passes(&mut function, &passes);
+    drive(&mut function, &passes);
     assert_eq!(function.name, "sample!");
 }
 
@@ -116,7 +123,7 @@ fn multiple_passes_converge_together() {
 fn non_convergent_pass_panics_in_debug() {
     let mut function = sample_function();
     let passes: Vec<Box<dyn IrPass>> = vec![Box::new(AlwaysChangePass)];
-    run_function_passes(&mut function, &passes);
+    drive(&mut function, &passes);
 }
 
 /// A pass that produces malformed IR trips the post-pass validation gate in
@@ -127,5 +134,5 @@ fn non_convergent_pass_panics_in_debug() {
 fn malformed_ir_pass_trips_validation_in_debug() {
     let mut function = sample_function();
     let passes: Vec<Box<dyn IrPass>> = vec![Box::new(DropTerminatorPass)];
-    run_function_passes(&mut function, &passes);
+    drive(&mut function, &passes);
 }

@@ -11,7 +11,8 @@
 //!   indexed by their definition order (one value per emitted instruction here).
 
 use crate::ir::{
-    validate_function, Builder, Function, Immediate, IrType, Op, Ownership, Terminator, ValueId,
+    validate_function, Builder, DataPool, Function, Immediate, IrType, Op, Ownership, Terminator,
+    ValueId,
 };
 use crate::ir_passes::driver::IrPass;
 use crate::ir_passes::identity_arith::IdentityArith;
@@ -64,7 +65,7 @@ fn return_value(function: &Function) -> Option<ValueId> {
 #[test]
 fn add_zero_folds_to_operand() {
     let mut function = int_binop_function(Op::IAdd, 5, 0);
-    let changed = IdentityArith.run(&mut function);
+    let changed = IdentityArith.run(&mut function, &mut DataPool::default());
     assert!(changed, "x + 0 must fold");
     assert_eq!(function.instructions[2].op, Op::Nop, "the add is neutralized");
     assert_eq!(return_value(&function), Some(ValueId::from_raw(0)), "returns x");
@@ -75,7 +76,7 @@ fn add_zero_folds_to_operand() {
 #[test]
 fn mul_one_folds_to_operand() {
     let mut function = int_binop_function(Op::IMul, 9, 1);
-    assert!(IdentityArith.run(&mut function));
+    assert!(IdentityArith.run(&mut function, &mut DataPool::default()));
     assert_eq!(function.instructions[2].op, Op::Nop);
     assert_eq!(return_value(&function), Some(ValueId::from_raw(0)));
     assert!(validate_function(&function).is_ok());
@@ -85,7 +86,7 @@ fn mul_one_folds_to_operand() {
 #[test]
 fn shift_zero_folds_to_operand() {
     let mut function = int_binop_function(Op::IShl, 12, 0);
-    assert!(IdentityArith.run(&mut function));
+    assert!(IdentityArith.run(&mut function, &mut DataPool::default()));
     assert_eq!(function.instructions[2].op, Op::Nop);
     assert_eq!(return_value(&function), Some(ValueId::from_raw(0)));
     assert!(validate_function(&function).is_ok());
@@ -95,7 +96,7 @@ fn shift_zero_folds_to_operand() {
 #[test]
 fn or_self_folds_to_operand() {
     let mut function = int_self_binop_function(Op::IBitOr, 6);
-    assert!(IdentityArith.run(&mut function));
+    assert!(IdentityArith.run(&mut function, &mut DataPool::default()));
     assert_eq!(function.instructions[1].op, Op::Nop);
     assert_eq!(return_value(&function), Some(ValueId::from_raw(0)));
     assert!(validate_function(&function).is_ok());
@@ -105,7 +106,7 @@ fn or_self_folds_to_operand() {
 #[test]
 fn xor_self_folds_to_zero_constant() {
     let mut function = int_self_binop_function(Op::IBitXor, 7);
-    assert!(IdentityArith.run(&mut function));
+    assert!(IdentityArith.run(&mut function, &mut DataPool::default()));
     let folded = &function.instructions[1];
     assert_eq!(folded.op, Op::ConstI64, "xor becomes a constant");
     assert_eq!(folded.immediate, Some(Immediate::I64(0)), "the constant is zero");
@@ -117,7 +118,7 @@ fn xor_self_folds_to_zero_constant() {
 #[test]
 fn mul_zero_folds_to_zero_constant() {
     let mut function = int_binop_function(Op::IMul, 5, 0);
-    assert!(IdentityArith.run(&mut function));
+    assert!(IdentityArith.run(&mut function, &mut DataPool::default()));
     let folded = &function.instructions[2];
     assert_eq!(folded.op, Op::ConstI64);
     assert_eq!(folded.immediate, Some(Immediate::I64(0)));
@@ -128,7 +129,7 @@ fn mul_zero_folds_to_zero_constant() {
 #[test]
 fn mod_one_folds_to_zero_constant() {
     let mut function = int_binop_function(Op::ISMod, 13, 1);
-    assert!(IdentityArith.run(&mut function));
+    assert!(IdentityArith.run(&mut function, &mut DataPool::default()));
     assert_eq!(function.instructions[2].op, Op::ConstI64);
     assert_eq!(function.instructions[2].immediate, Some(Immediate::I64(0)));
     assert!(validate_function(&function).is_ok());
@@ -150,7 +151,7 @@ fn float_mul_one_folds_to_operand() {
             .expect("fmul result");
         builder.terminate(Terminator::Return { value: Some(result) });
     }
-    assert!(IdentityArith.run(&mut function));
+    assert!(IdentityArith.run(&mut function, &mut DataPool::default()));
     assert_eq!(function.instructions[2].op, Op::Nop);
     assert_eq!(return_value(&function), Some(ValueId::from_raw(0)));
     assert!(validate_function(&function).is_ok());
@@ -177,7 +178,7 @@ fn chained_folds_resolve_to_terminal_operand() {
             .expect("mul result");
         builder.terminate(Terminator::Return { value: Some(b) });
     }
-    assert!(IdentityArith.run(&mut function));
+    assert!(IdentityArith.run(&mut function, &mut DataPool::default()));
     assert_eq!(return_value(&function), Some(ValueId::from_raw(0)), "returns x, not a dead value");
     assert_eq!(function.instructions[2].op, Op::Nop, "add neutralized");
     assert_eq!(function.instructions[4].op, Op::Nop, "mul neutralized");
@@ -188,7 +189,7 @@ fn chained_folds_resolve_to_terminal_operand() {
 #[test]
 fn non_identity_is_left_unchanged() {
     let mut function = int_binop_function(Op::IAdd, 3, 5);
-    let changed = IdentityArith.run(&mut function);
+    let changed = IdentityArith.run(&mut function, &mut DataPool::default());
     assert!(!changed, "x + 5 is not an identity");
     assert_eq!(function.instructions[2].op, Op::IAdd, "add is preserved");
     assert!(validate_function(&function).is_ok());
@@ -198,7 +199,7 @@ fn non_identity_is_left_unchanged() {
 #[test]
 fn divide_by_zero_is_not_folded() {
     let mut function = int_binop_function(Op::IDiv, 8, 0);
-    let changed = IdentityArith.run(&mut function);
+    let changed = IdentityArith.run(&mut function, &mut DataPool::default());
     assert!(!changed, "x / 0 must be preserved to trap");
     assert_eq!(function.instructions[2].op, Op::IDiv);
 }
