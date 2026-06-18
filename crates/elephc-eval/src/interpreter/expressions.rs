@@ -486,6 +486,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "getenv" => eval_builtin_getenv(args, context, scope, values),
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "glob" => eval_builtin_glob(args, context, scope, values),
+        "grapheme_strrev" => eval_builtin_grapheme_strrev(args, context, scope, values),
         "hash" | "hash_file" | "hash_hmac" | "md5" | "sha1" => {
             eval_builtin_hash_one_shot(name, args, context, scope, values)
         }

@@ -129,10 +129,9 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         | "rad2deg" | "sin" | "sinh" | "tan" | "tanh" => Some(&["num"]),
         "atan2" => Some(&["y", "x"]),
         "basename" => Some(&["path", "suffix"]),
-        "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "hex2bin"
-        | "rawurldecode" | "rawurlencode" | "stripslashes" | "urldecode" | "urlencode" => {
-            Some(&["string"])
-        }
+        "addslashes" | "base64_decode" | "base64_encode" | "bin2hex" | "grapheme_strrev"
+        | "hex2bin" | "rawurldecode" | "rawurlencode" | "stripslashes" | "urldecode"
+        | "urlencode" => Some(&["string"]),
         "boolval" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool" | "is_double"
         | "is_finite" | "is_float" | "is_infinite" | "is_int" | "is_integer" | "is_iterable"
         | "is_long" | "is_nan" | "is_null" | "is_numeric" | "is_object" | "is_real"

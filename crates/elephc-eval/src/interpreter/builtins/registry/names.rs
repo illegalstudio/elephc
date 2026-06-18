@@ -129,6 +129,7 @@ pub(in crate::interpreter) fn eval_php_visible_builtin_exists(name: &str) -> boo
             | "getenv"
             | "gettype"
             | "glob"
+            | "grapheme_strrev"
             | "hash"
             | "hash_algos"
             | "hash_equals"

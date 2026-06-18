@@ -49,6 +49,12 @@ pub(in crate::interpreter) fn eval_strings_builtin_with_values(
             };
             eval_chr_result(*value, values)?
         }
+        "grapheme_strrev" => {
+            let [value] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_grapheme_strrev_result(*value, values)?
+        }
         "rawurldecode" | "urldecode" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);

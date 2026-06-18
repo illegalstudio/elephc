@@ -27,6 +27,30 @@ return function_exists("strrev");"#,
     assert_eq!(values.output, "olleH:321:CBA:fed:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval `grapheme_strrev()` reverses UTF-8 grapheme clusters.
+#[test]
+fn execute_program_dispatches_grapheme_strrev_builtin() {
+    let program = parse_fragment(
+        br#"echo grapheme_strrev("ABCDE"); echo ":";
+echo bin2hex(grapheme_strrev(hex2bin("4165cc8142"))); echo ":";
+echo bin2hex(grapheme_strrev(hex2bin("41f09f91a9f09f8fbde2808df09f92bb42"))); echo ":";
+echo grapheme_strrev(chr(255)) === false ? "false" : "bad"; echo ":";
+echo call_user_func("grapheme_strrev", "xy"); echo ":";
+echo call_user_func_array("grapheme_strrev", ["string" => "pq"]); echo ":";
+return function_exists("grapheme_strrev") && is_callable("grapheme_strrev");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EDCBA:4265cc8141:42f09f91a9f09f8fbde2808df09f92bb41:false:yx:qp:"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval `chr()` dispatches through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_chr_builtin() {

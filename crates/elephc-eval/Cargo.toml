@@ -13,3 +13,4 @@ crate-type = ["staticlib", "rlib"]
 elephc-crypto = { path = "../elephc-crypto" }
 libc = "0.2"
 regex = "1"
+unicode-segmentation = "1"
