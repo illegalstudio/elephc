@@ -65,6 +65,11 @@ pub(in crate::interpreter) fn eval_expr(
         } => eval_namespaced_const_fetch(name, fallback_name, context, values),
         EvalExpr::NewObject { class_name, args } => {
             let args = eval_method_call_arg_values(args, context, scope, values)?;
+            if let Some(object) =
+                eval_reflection_owner_new_object(class_name, args.clone(), context, values)?
+            {
+                return Ok(object);
+            }
             if let Some(class) = context.class(class_name).cloned() {
                 eval_dynamic_class_new_object(&class, args, context, scope, values)
             } else {

@@ -178,6 +178,23 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         })
     }
 
+    /// Materializes a populated synthetic Reflection owner object for eval metadata.
+    fn reflection_owner_new(
+        &mut self,
+        owner_kind: u64,
+        reflected_name: &str,
+        attrs: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_reflection_owner_new(
+                owner_kind,
+                reflected_name.as_ptr(),
+                reflected_name.len() as u64,
+                attrs.as_ptr(),
+            )
+        })
+    }
+
     /// Creates a boxed Mixed object through the generated dynamic class-name wrapper.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         let object = Self::handle(unsafe {

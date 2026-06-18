@@ -128,7 +128,7 @@ pub(in crate::interpreter) fn eval_class_attribute_metadata_result(
                 return values.array_new(0);
             };
             let attributes = attributes.to_vec();
-            eval_class_get_attributes_result(&attributes, context, values)
+            eval_reflection_attribute_array_result(&attributes, context, values)
         }
         ("class_attribute_args", [class_name, attribute_name]) => {
             let class_name = eval_class_metadata_name(*class_name, values)?;
@@ -182,8 +182,8 @@ fn eval_class_attribute_names_result(
     Ok(result)
 }
 
-/// Builds the indexed `ReflectionAttribute` array returned by `class_get_attributes()`.
-fn eval_class_get_attributes_result(
+/// Builds an indexed `ReflectionAttribute` array from eval-retained attribute metadata.
+pub(in crate::interpreter) fn eval_reflection_attribute_array_result(
     attributes: &[EvalAttribute],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

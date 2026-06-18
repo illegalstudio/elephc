@@ -107,6 +107,10 @@ impl FakeOps {
                     .map_or_else(|| self.runtime_array_new(0), Ok)
             }
             (FakeValue::Object(_), "newinstance") if args.is_empty() => self.null(),
+            (FakeValue::Object(properties), "getattributes") if args.is_empty() => {
+                Self::object_property(&properties, "__attrs")
+                    .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
             (FakeValue::Object(properties), "getmessage") if args.is_empty() => {
                 Self::object_property(&properties, "message").map_or_else(|| self.string(""), Ok)
             }
@@ -205,6 +209,28 @@ impl FakeOps {
         ]));
         self.object_classes
             .insert(object.as_ptr() as usize, "ReflectionAttribute".to_string());
+        Ok(object)
+    }
+    /// Materializes one fake populated Reflection owner object.
+    pub(super) fn runtime_reflection_owner_new(
+        &mut self,
+        owner_kind: u64,
+        reflected_name: &str,
+        attrs: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let class_name = match owner_kind {
+            EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
+            EVAL_REFLECTION_OWNER_METHOD => "ReflectionMethod",
+            EVAL_REFLECTION_OWNER_PROPERTY => "ReflectionProperty",
+            _ => return Err(EvalStatus::RuntimeFatal),
+        };
+        let name = self.string(reflected_name)?;
+        let object = self.alloc(FakeValue::Object(vec![
+            ("__name".to_string(), name),
+            ("__attrs".to_string(), attrs),
+        ]));
+        self.object_classes
+            .insert(object.as_ptr() as usize, class_name.to_string());
         Ok(object)
     }
     /// Creates one fake object for eval `new` unit tests.

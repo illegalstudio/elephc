@@ -102,6 +102,14 @@ pub trait RuntimeValueOps {
         args: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Materializes a synthetic ReflectionClass/Method/Property object through generated private-layout code.
+    fn reflection_owner_new(
+        &mut self,
+        owner_kind: u64,
+        reflected_name: &str,
+        attrs: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Creates a named runtime object without constructor arguments.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -331,3 +339,7 @@ pub(super) const EVAL_TAG_ASSOC: u64 = 5;
 pub(super) const EVAL_TAG_OBJECT: u64 = 6;
 pub(super) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
+
+pub(super) const EVAL_REFLECTION_OWNER_CLASS: u64 = 0;
+pub(super) const EVAL_REFLECTION_OWNER_METHOD: u64 = 1;
+pub(super) const EVAL_REFLECTION_OWNER_PROPERTY: u64 = 2;

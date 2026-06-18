@@ -156,6 +156,50 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass/Method/Property expose eval-declared attribute metadata.
+#[test]
+fn execute_program_reflects_eval_member_attributes() {
+    let program = parse_fragment(
+        br#"class EvalMarker {
+    public $name;
+    public function __construct($name) {
+        $this->name = $name;
+    }
+    public function label() {
+        return $this->name;
+    }
+}
+#[EvalMarker("class")]
+class EvalReflectTarget {
+    #[EvalMarker("method")]
+    public function handle() {}
+    #[EvalMarker("property")]
+    public $id;
+}
+$class_attrs = (new ReflectionClass("EvalReflectTarget"))->getAttributes();
+echo count($class_attrs); echo ":"; echo (new ReflectionClass("EvalReflectTarget"))->getName(); echo ":";
+echo $class_attrs[0]->getName(); echo ":"; echo $class_attrs[0]->newInstance()->label(); echo ":";
+$method_attrs = (new ReflectionMethod("EvalReflectTarget", "handle"))->getAttributes();
+echo count($method_attrs); echo ":"; echo $method_attrs[0]->getName(); echo ":";
+echo $method_attrs[0]->getArguments()[0]; echo ":"; echo $method_attrs[0]->newInstance()->label(); echo ":";
+$property_attrs = (new ReflectionProperty("EvalReflectTarget", "id"))->getAttributes();
+echo count($property_attrs); echo ":"; echo $property_attrs[0]->getName(); echo ":";
+echo $property_attrs[0]->getArguments()[0]; echo ":"; echo $property_attrs[0]->newInstance()->label();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "1:EvalReflectTarget:EvalMarker:class:1:EvalMarker:method:method:1:EvalMarker:property:property"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies unsupported attribute argument metadata remains name-visible but not materializable.
 #[test]
 fn execute_program_rejects_unsupported_class_attribute_args_metadata() {

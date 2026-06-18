@@ -5349,6 +5349,49 @@ echo get_class($instance) . ":" . $instance->summary();');
     assert_eq!(out.stdout, "EvalRoute:/home:-7:T");
 }
 
+/// Verifies eval ReflectionClass/Method/Property expose eval-declared attributes.
+#[test]
+fn test_eval_reflection_member_attributes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalMarker {
+    public $name;
+    public function __construct($name) {
+        $this->name = $name;
+    }
+    public function label() {
+        return $this->name;
+    }
+}
+#[EvalMarker("class")]
+class EvalReflectTarget {
+    #[EvalMarker("method")]
+    public function handle() {}
+    #[EvalMarker("property")]
+    public $id;
+}
+$classAttrs = (new ReflectionClass("EvalReflectTarget"))->getAttributes();
+echo count($classAttrs) . ":" . (new ReflectionClass("EvalReflectTarget"))->getName() . ":";
+echo $classAttrs[0]->getName() . ":" . $classAttrs[0]->newInstance()->label() . ":";
+$methodAttrs = (new ReflectionMethod("EvalReflectTarget", "handle"))->getAttributes();
+echo count($methodAttrs) . ":" . $methodAttrs[0]->getName() . ":";
+echo $methodAttrs[0]->getArguments()[0] . ":" . $methodAttrs[0]->newInstance()->label() . ":";
+$propertyAttrs = (new ReflectionProperty("EvalReflectTarget", "id"))->getAttributes();
+echo count($propertyAttrs) . ":" . $propertyAttrs[0]->getName() . ":";
+echo $propertyAttrs[0]->getArguments()[0] . ":" . $propertyAttrs[0]->newInstance()->label();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "1:EvalReflectTarget:EvalMarker:class:1:EvalMarker:method:method:1:EvalMarker:property:property"
+    );
+}
+
 /// Verifies eval interface and trait constants work through the bridge.
 #[test]
 fn test_eval_declared_interface_and_trait_constants() {

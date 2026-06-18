@@ -109,6 +109,15 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_reflection_attribute_new(name, args)
     }
+    /// Materializes one fake Reflection owner object for eval metadata tests.
+    fn reflection_owner_new(
+        &mut self,
+        owner_kind: u64,
+        reflected_name: &str,
+        attrs: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_reflection_owner_new(owner_kind, reflected_name, attrs)
+    }
     /// Creates one fake object for eval `new` unit tests.
     fn new_object(&mut self, _class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_new_object(_class_name)

@@ -1,0 +1,363 @@
+//! Purpose:
+//! Emits user-assembly helpers that let libelephc-eval materialize
+//! ReflectionClass, ReflectionMethod, and ReflectionProperty objects with
+//! private metadata slots populated from runtime eval declarations.
+//!
+//! Called from:
+//! - `crate::codegen_ir::finalize_user_asm()` when an EIR module uses eval.
+//!
+//! Key details:
+//! - Reflection owner objects store `__attrs`, and ReflectionClass also stores
+//!   `__name`; both slots are private implementation details.
+//! - The helper retains the supplied attribute array payload for object ownership.
+
+use crate::codegen::abi;
+use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+use crate::ir::{Function, LocalKind, Module};
+use crate::types::ClassInfo;
+
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+
+/// Fixed object layout for one synthetic Reflection owner class.
+struct ReflectionOwnerLayout {
+    class_id: u64,
+    property_count: usize,
+    name_lo: Option<usize>,
+    name_hi: Option<usize>,
+    attrs_lo: usize,
+    attrs_hi: usize,
+}
+
+/// Layouts for the three Reflection owner classes eval can materialize.
+struct ReflectionOwnerLayouts {
+    class: ReflectionOwnerLayout,
+    method: ReflectionOwnerLayout,
+    property: ReflectionOwnerLayout,
+}
+
+/// Emits eval Reflection owner helpers when any lowered function owns an eval context.
+pub(super) fn emit_eval_reflection_owner_helpers(module: &Module, emitter: &mut Emitter) {
+    if !module_uses_eval(module) {
+        return;
+    }
+    emitter.blank();
+    emitter.comment("--- eval bridge: reflection owner helpers ---");
+    label_c_global(module, emitter, "__elephc_eval_reflection_owner_new");
+    let Some(layouts) = reflection_owner_layouts(module) else {
+        emit_reflection_owner_new_stub(emitter);
+        return;
+    };
+    match module.target.arch {
+        Arch::AArch64 => emit_reflection_owner_new_aarch64(emitter, &layouts),
+        Arch::X86_64 => emit_reflection_owner_new_x86_64(emitter, &layouts),
+    }
+}
+
+/// Returns true when the EIR module contains a function that can call eval.
+fn module_uses_eval(module: &Module) -> bool {
+    all_module_functions(module).any(function_uses_eval)
+}
+
+/// Iterates every EIR function body emitted or inspected by the backend.
+fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+}
+
+/// Returns true when a function has hidden eval state locals.
+fn function_uses_eval(function: &Function) -> bool {
+    function.locals.iter().any(|local| {
+        matches!(
+            local.kind,
+            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
+        )
+    })
+}
+
+/// Returns the Reflection owner object layouts from class metadata.
+fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
+    Some(ReflectionOwnerLayouts {
+        class: reflection_owner_layout(module.class_infos.get("ReflectionClass")?, true)?,
+        method: reflection_owner_layout(module.class_infos.get("ReflectionMethod")?, false)?,
+        property: reflection_owner_layout(module.class_infos.get("ReflectionProperty")?, false)?,
+    })
+}
+
+/// Returns one Reflection owner layout from class metadata.
+fn reflection_owner_layout(
+    info: &ClassInfo,
+    has_name: bool,
+) -> Option<ReflectionOwnerLayout> {
+    let attrs_lo = reflection_property_offset(info, "__attrs")?;
+    let name_lo = has_name.then(|| reflection_property_offset(info, "__name")).flatten();
+    Some(ReflectionOwnerLayout {
+        class_id: info.class_id,
+        property_count: info.properties.len(),
+        name_lo,
+        name_hi: name_lo.map(|offset| offset + 8),
+        attrs_lo,
+        attrs_hi: attrs_lo + 8,
+    })
+}
+
+/// Returns one declared property offset from the synthetic reflection class layout.
+fn reflection_property_offset(info: &ClassInfo, property: &str) -> Option<usize> {
+    info.property_offsets.get(property).copied()
+}
+
+/// Emits a fail-closed helper when Reflection owner metadata is unavailable.
+fn emit_reflection_owner_new_stub(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, xzr");                                 // report helper failure when Reflection owner metadata is missing
+            emitter.instruction("ret");                                         // return the null pointer to Rust
+        }
+        Arch::X86_64 => {
+            emitter.instruction("xor eax, eax");                                // report helper failure when Reflection owner metadata is missing
+            emitter.instruction("ret");                                         // return the null pointer to Rust
+        }
+    }
+}
+
+/// Emits the ARM64 Reflection owner materializer helper body.
+fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &ReflectionOwnerLayouts) {
+    let fail_label = "__elephc_eval_reflection_owner_new_fail";
+    let done_label = "__elephc_eval_reflection_owner_new_done";
+    let box_label = "__elephc_eval_reflection_owner_new_box";
+    let class_label = "__elephc_eval_reflection_owner_new_class";
+    let method_label = "__elephc_eval_reflection_owner_new_method";
+    let property_label = "__elephc_eval_reflection_owner_new_property";
+    emitter.instruction("sub sp, sp, #96");                                     // reserve helper frame for inputs, object, scratch, and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #80");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the Reflection owner kind
+    emitter.instruction("str x1, [sp, #8]");                                    // save the reflected-name pointer
+    emitter.instruction("str x2, [sp, #16]");                                   // save the reflected-name length
+    emitter.instruction("str x3, [sp, #24]");                                   // save the boxed ReflectionAttribute array
+    emitter.instruction("cmp x0, #0");                                          // owner kind 0 means ReflectionClass
+    emitter.instruction(&format!("b.eq {}", class_label));                      // allocate a ReflectionClass owner
+    emitter.instruction("cmp x0, #1");                                          // owner kind 1 means ReflectionMethod
+    emitter.instruction(&format!("b.eq {}", method_label));                     // allocate a ReflectionMethod owner
+    emitter.instruction("cmp x0, #2");                                          // owner kind 2 means ReflectionProperty
+    emitter.instruction(&format!("b.eq {}", property_label));                   // allocate a ReflectionProperty owner
+    emitter.instruction(&format!("b {}", fail_label));                          // reject unknown owner kinds
+    emit_aarch64_owner_kind_body(emitter, class_label, &layouts.class, true, fail_label, box_label);
+    emit_aarch64_owner_kind_body(emitter, method_label, &layouts.method, false, fail_label, box_label);
+    emit_aarch64_owner_kind_body(emitter, property_label, &layouts.property, false, fail_label, box_label);
+    emitter.label(box_label);
+    emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
+    emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
+    emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the Reflection owner object for eval
+    emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
+    emitter.label(fail_label);
+    emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
+    emitter.label(done_label);
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #96");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the boxed reflection owner to Rust
+}
+
+/// Emits the x86_64 Reflection owner materializer helper body.
+fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionOwnerLayouts) {
+    let fail_label = "__elephc_eval_reflection_owner_new_fail_x";
+    let done_label = "__elephc_eval_reflection_owner_new_done_x";
+    let box_label = "__elephc_eval_reflection_owner_new_box_x";
+    let class_label = "__elephc_eval_reflection_owner_new_class_x";
+    let method_label = "__elephc_eval_reflection_owner_new_method_x";
+    let property_label = "__elephc_eval_reflection_owner_new_property_x";
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 64");                                         // reserve slots for inputs, object, and unboxed attrs
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the Reflection owner kind
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the reflected-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the reflected-name length
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed ReflectionAttribute array
+    emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
+    emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
+    emitter.instruction("cmp rdi, 1");                                          // owner kind 1 means ReflectionMethod
+    emitter.instruction(&format!("je {}", method_label));                       // allocate a ReflectionMethod owner
+    emitter.instruction("cmp rdi, 2");                                          // owner kind 2 means ReflectionProperty
+    emitter.instruction(&format!("je {}", property_label));                     // allocate a ReflectionProperty owner
+    emitter.instruction(&format!("jmp {}", fail_label));                        // reject unknown owner kinds
+    emit_x86_64_owner_kind_body(emitter, class_label, &layouts.class, true, fail_label, box_label);
+    emit_x86_64_owner_kind_body(emitter, method_label, &layouts.method, false, fail_label, box_label);
+    emit_x86_64_owner_kind_body(emitter, property_label, &layouts.property, false, fail_label, box_label);
+    emitter.label(box_label);
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // move the Reflection owner object pointer into the Mixed payload
+    emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
+    emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
+    emitter.instruction("call __rt_mixed_from_value");                          // box the Reflection owner object for eval
+    emitter.instruction(&format!("jmp {}", done_label));                        // skip the fail-closed return path after boxing
+    emitter.label(fail_label);
+    emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
+    emitter.label(done_label);
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed reflection owner to Rust
+}
+
+/// Emits one ARM64 owner-kind allocation and slot-population body.
+fn emit_aarch64_owner_kind_body(
+    emitter: &mut Emitter,
+    label: &str,
+    layout: &ReflectionOwnerLayout,
+    set_name: bool,
+    fail_label: &str,
+    box_label: &str,
+) {
+    emitter.label(label);
+    emit_alloc_reflection_owner_object_aarch64(emitter, layout);
+    emitter.instruction("str x0, [sp, #32]");                                   // save the unboxed Reflection owner object pointer
+    if set_name {
+        emit_set_owner_name_property_aarch64(emitter, layout);
+    }
+    emit_set_owner_attrs_property_aarch64(emitter, layout, fail_label);
+    emitter.instruction(&format!("b {}", box_label));                           // box this populated Reflection owner object
+}
+
+/// Emits one x86_64 owner-kind allocation and slot-population body.
+fn emit_x86_64_owner_kind_body(
+    emitter: &mut Emitter,
+    label: &str,
+    layout: &ReflectionOwnerLayout,
+    set_name: bool,
+    fail_label: &str,
+    box_label: &str,
+) {
+    emitter.label(label);
+    emit_alloc_reflection_owner_object_x86_64(emitter, layout);
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the unboxed Reflection owner object pointer
+    if set_name {
+        emit_set_owner_name_property_x86_64(emitter, layout);
+    }
+    emit_set_owner_attrs_property_x86_64(emitter, layout, fail_label);
+    emitter.instruction(&format!("jmp {}", box_label));                         // box this populated Reflection owner object
+}
+
+/// Allocates a zero-initialized ARM64 Reflection owner object payload.
+fn emit_alloc_reflection_owner_object_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let payload_size = 8 + layout.property_count * 16;
+    emitter.instruction(&format!("mov x0, #{}", payload_size));                 // request Reflection owner object payload storage
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    emitter.instruction("mov x9, #4");                                          // heap kind 4 marks the payload as an object
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the object heap header before the payload
+    emitter.instruction(&format!("mov x10, #{}", layout.class_id));             // materialize the Reflection owner class id
+    emitter.instruction("str x10, [x0]");                                       // store the class id at object payload offset zero
+    for index in 0..layout.property_count {
+        let offset = 8 + index * 16;
+        abi::emit_store_zero_to_address(emitter, "x0", offset);
+        abi::emit_store_zero_to_address(emitter, "x0", offset + 8);
+    }
+}
+
+/// Allocates a zero-initialized x86_64 Reflection owner object payload.
+fn emit_alloc_reflection_owner_object_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let payload_size = 8 + layout.property_count * 16;
+    emitter.instruction(&format!("mov rax, {}", payload_size));                 // request Reflection owner object payload storage
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object heap header before the payload
+    emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the Reflection owner class id
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at object payload offset zero
+    for index in 0..layout.property_count {
+        let offset = 8 + index * 16;
+        abi::emit_store_zero_to_address(emitter, "rax", offset);
+        abi::emit_store_zero_to_address(emitter, "rax", offset + 8);
+    }
+}
+
+/// Stores the incoming ARM64 reflected class name into ReflectionClass.
+fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &ReflectionOwnerLayout) {
+    let Some(name_lo) = layout.name_lo else {
+        return;
+    };
+    let Some(name_hi) = layout.name_hi else {
+        return;
+    };
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the reflected-name pointer for persistence
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the reflected-name length for persistence
+    emitter.instruction("bl __rt_str_persist");                                 // copy the eval-owned name bytes for object ownership
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", name_lo);
+    abi::emit_store_to_address(emitter, "x2", "x9", name_hi);
+}
+
+/// Stores the incoming x86_64 reflected class name into ReflectionClass.
+fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &ReflectionOwnerLayout) {
+    let Some(name_lo) = layout.name_lo else {
+        return;
+    };
+    let Some(name_hi) = layout.name_hi else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the reflected-name pointer for persistence
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the reflected-name length for persistence
+    emitter.instruction("call __rt_str_persist");                               // copy the eval-owned name bytes for object ownership
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "rax", "r10", name_lo);
+    abi::emit_store_to_address(emitter, "rdx", "r10", name_hi);
+}
+
+/// Stores a retained ARM64 attribute-array payload into the owner private slot.
+fn emit_set_owner_attrs_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed ReflectionAttribute array
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null attribute arrays
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the attribute array tag and payload pointer
+    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array attribute metadata
+    emitter.instruction("str x1, [sp, #40]");                                   // save the unboxed attribute array across incref
+    emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
+    emitter.instruction("bl __rt_incref");                                      // retain the attribute array for Reflection owner storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained attribute array payload
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", layout.attrs_lo);
+    abi::emit_load_int_immediate(emitter, "x10", 4);
+    abi::emit_store_to_address(emitter, "x10", "x9", layout.attrs_hi);
+}
+
+/// Stores a retained x86_64 attribute-array payload into the owner private slot.
+fn emit_set_owner_attrs_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed ReflectionAttribute array
+    emitter.instruction("test rax, rax");                                       // check whether the boxed attribute array is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null attribute arrays
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the attribute array tag and payload pointer
+    emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array attribute metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the unboxed attribute array across incref
+    emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
+    emitter.instruction("call __rt_incref");                                    // retain the attribute array for Reflection owner storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained attribute array payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "rdi", "r10", layout.attrs_lo);
+    abi::emit_load_int_immediate(emitter, "r11", 4);
+    abi::emit_store_to_address(emitter, "r11", "r10", layout.attrs_hi);
+}
+
+/// Emits a C-visible global label with target-specific symbol mangling.
+fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
+    let symbol = module.target.extern_symbol(name);
+    emitter.label_global(&symbol);
+}
