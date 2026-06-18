@@ -26,6 +26,7 @@ mod builtins_process_pipes;
 mod builtins_scalars;
 mod builtins_spl_autoload;
 mod builtins_stream_contexts;
+mod builtins_stream_extensions;
 mod builtins_stream_settings;
 mod builtins_strings_binary;
 mod builtins_strings_encoding;

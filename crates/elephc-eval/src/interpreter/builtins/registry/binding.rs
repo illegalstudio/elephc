@@ -283,6 +283,9 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "sscanf" => Some(&["string", "format", "vars"]),
         "sprintf" | "printf" => Some(&["format", "values"]),
         "stream_is_local" | "stream_isatty" | "stream_supports_lock" => Some(&["stream"]),
+        "stream_bucket_make_writeable" => Some(&["brigade"]),
+        "stream_bucket_new" => Some(&["stream", "buffer"]),
+        "stream_bucket_append" | "stream_bucket_prepend" => Some(&["brigade", "bucket"]),
         "stream_copy_to_stream" => Some(&["from", "to", "length", "offset"]),
         "stream_context_create" => Some(&["options", "params"]),
         "stream_context_get_default" => Some(&["options"]),
@@ -292,6 +295,11 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
             Some(&["context", "wrapper_or_options", "option_name", "value"])
         }
         "stream_context_set_params" => Some(&["context", "params"]),
+        "stream_filter_register" => Some(&["filter_name", "class"]),
+        "stream_filter_append" | "stream_filter_prepend" => {
+            Some(&["stream", "filtername", "read_write", "params"])
+        }
+        "stream_filter_remove" => Some(&["stream_filter"]),
         "stream_get_contents" => Some(&["stream", "length", "offset"]),
         "stream_get_line" => Some(&["stream", "length", "ending"]),
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
@@ -300,6 +308,8 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
             Some(&["stream", "size"])
         }
         "stream_set_timeout" => Some(&["stream", "seconds", "microseconds"]),
+        "stream_wrapper_register" => Some(&["protocol", "class", "flags"]),
+        "stream_wrapper_unregister" | "stream_wrapper_restore" => Some(&["protocol"]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
         "strtotime" => Some(&["datetime"]),

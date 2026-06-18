@@ -11,7 +11,7 @@
 //! - Resource ids are zero-based runtime payloads; PHP display ids are payload + 1.
 //! - Resource handles are process-local to eval and are not visible across the C ABI.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -28,6 +28,7 @@ pub(crate) struct EvalStreamResources {
     default_stream_context: Option<i64>,
     next_id: i64,
     directories: HashMap<i64, EvalDirectoryStream>,
+    filter_resources: HashSet<i64>,
     hash_contexts: HashMap<i64, EvalHashContext>,
     process_children: HashMap<i64, Child>,
     stream_contexts: HashMap<i64, EvalStreamContext>,
@@ -141,11 +142,29 @@ impl EvalStreamResources {
 
     /// Removes a stream resource from the table, closing its file handle.
     pub(crate) fn close(&mut self, id: i64) -> bool {
-        let closed = self.streams.remove(&id).is_some();
+        let closed = self.streams.remove(&id).is_some() || self.filter_resources.remove(&id);
         if let Some(mut child) = self.process_children.remove(&id) {
             let _ = child.wait();
         }
         closed
+    }
+
+    /// Returns whether a file-like stream resource exists.
+    pub(crate) fn has_stream(&self, id: i64) -> bool {
+        self.streams.contains_key(&id)
+    }
+
+    /// Allocates an eval-local stream filter resource handle.
+    pub(crate) fn open_filter_resource(&mut self) -> i64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.filter_resources.insert(id);
+        id
+    }
+
+    /// Removes an eval-local stream filter resource handle.
+    pub(crate) fn close_filter_resource(&mut self, id: i64) -> bool {
+        self.filter_resources.remove(&id)
     }
 
     /// Closes a process pipe stream and returns the child exit status.

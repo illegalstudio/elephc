@@ -656,6 +656,25 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "stream_context_set_params" => {
             eval_builtin_stream_context_set_params(args, context, scope, values)
         }
+        "stream_wrapper_register" | "stream_wrapper_unregister" | "stream_wrapper_restore" => {
+            eval_builtin_stream_wrapper_registry(name, args, context, scope, values)
+        }
+        "stream_filter_register" => {
+            eval_builtin_stream_filter_register(args, context, scope, values)
+        }
+        "stream_filter_append" | "stream_filter_prepend" => {
+            eval_builtin_stream_filter_attach(name, args, context, scope, values)
+        }
+        "stream_filter_remove" => {
+            eval_builtin_stream_filter_remove(args, context, scope, values)
+        }
+        "stream_bucket_new" => eval_builtin_stream_bucket_new(args, context, scope, values),
+        "stream_bucket_make_writeable" => {
+            eval_builtin_stream_bucket_make_writeable(args, context, scope, values)
+        }
+        "stream_bucket_append" | "stream_bucket_prepend" => {
+            eval_builtin_stream_bucket_push(name, args, context, scope, values)
+        }
         "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
         "stream_get_line" => eval_builtin_stream_get_line(args, context, scope, values),
         "stream_isatty" => eval_builtin_stream_isatty(args, context, scope, values),
