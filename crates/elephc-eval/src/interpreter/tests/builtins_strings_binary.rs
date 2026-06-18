@@ -70,6 +70,37 @@ return function_exists("chr");"#,
     assert_eq!(values.output, "A:00:01:A:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval gzip/zlib builtins round-trip strings and return false on invalid data.
+#[test]
+fn execute_program_dispatches_gzip_builtins() {
+    let program = parse_fragment(
+        br#"$data = "hello\0world";
+$zlib = gzcompress($data);
+echo gzuncompress($zlib) === $data ? "zc" : "bad"; echo ":";
+$raw = gzdeflate($data);
+echo gzinflate($raw) === $data ? "df" : "bad"; echo ":";
+echo gzuncompress("not zlib") === false ? "bad-zlib" : "bad"; echo ":";
+echo gzinflate("not raw deflate") === false ? "bad-raw" : "bad"; echo ":";
+echo gzuncompress(gzcompress(data: "abc", level: 1)); echo ":";
+echo call_user_func("gzuncompress", call_user_func("gzcompress", "call")); echo ":";
+echo call_user_func_array("gzinflate", ["data" => call_user_func_array("gzdeflate", ["data" => "spread", "level" => 1])]); echo ":";
+echo function_exists("gzcompress");
+echo function_exists("gzdeflate");
+echo function_exists("gzinflate");
+return is_callable("gzuncompress");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "zc:df:bad-zlib:bad-raw:abc:call:spread:111"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval `str_repeat()` dispatches through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_str_repeat_builtin() {

@@ -189,6 +189,8 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "hash_equals" => Some(&["known_string", "user_string"]),
         "hash_file" => Some(&["algo", "filename", "binary"]),
         "hash_hmac" => Some(&["algo", "data", "key", "binary"]),
+        "gzcompress" | "gzdeflate" => Some(&["data", "level"]),
+        "gzinflate" | "gzuncompress" => Some(&["data", "max_length"]),
         "hypot" => Some(&["x", "y"]),
         "html_entity_decode" | "htmlentities" | "htmlspecialchars" => Some(&["string"]),
         "implode" => Some(&["separator", "array"]),
