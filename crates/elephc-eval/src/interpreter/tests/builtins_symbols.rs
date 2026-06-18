@@ -276,6 +276,43 @@ echo class_exists(class: "MissingClass", autoload: false) ? "Y" : "N";"#,
 
     assert_eq!(values.output, "YYYYN");
 }
+/// Verifies eval `class_alias()` registers dynamic and runtime-visible aliases.
+#[test]
+fn execute_program_class_alias_registers_aliases() {
+    let program = parse_fragment(
+        br#"class DynAliasBox {
+    public int $x = 1;
+    public function __construct($x) { $this->x = $x; }
+    public function bump($n) { $this->x = $this->x + $n; return $this->x; }
+}
+echo class_alias("DynAliasBox", "DynAliasCopy") ? "alias" : "bad"; echo ":";
+echo class_exists("DynAliasCopy") ? "exists" : "bad"; echo ":";
+$box = new DynAliasCopy(5);
+echo get_class($box); echo ":";
+echo $box->bump(2); echo ":";
+echo is_a($box, "DynAliasCopy") ? "isa" : "bad"; echo ":";
+echo class_alias("DynAliasBox", "DynAliasCopy") ? "bad" : "duplicate"; echo ":";
+echo class_alias("MissingAliasSource", "MissingAliasTarget") ? "bad" : "missing"; echo ":";
+echo call_user_func("class_alias", "DynAliasBox", "DynAliasCall") ? "call" : "bad"; echo ":";
+echo class_exists("DynAliasCall") ? "call-exists" : "bad"; echo ":";
+echo call_user_func_array("class_alias", ["class" => "KnownClass", "alias" => "KnownAlias"]) ? "aot" : "bad"; echo ":";
+$known = new KnownAlias();
+echo is_a($known, "KnownAlias") ? "known" : "bad"; echo ":";
+echo function_exists("class_alias");
+return is_callable("class_alias");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "alias:exists:DynAliasBox:7:isa:duplicate:missing:call:call-exists:aot:known:1"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies duplicate eval-declared class names fail through runtime status.
 #[test]
 fn execute_program_duplicate_class_declaration_fails() {

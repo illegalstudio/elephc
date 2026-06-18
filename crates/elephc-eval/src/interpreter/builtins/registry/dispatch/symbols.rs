@@ -41,6 +41,7 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
             values.bool_value(eval_function_probe_exists(context, &name))?
         }
         "class_exists" => eval_class_exists_result(evaluated_args, context, values)?,
+        "class_alias" => eval_class_alias_result(evaluated_args, context, values)?,
         "enum_exists" | "trait_exists" => {
             eval_class_like_exists_result(name, evaluated_args, values)?
         }

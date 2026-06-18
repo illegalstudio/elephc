@@ -68,8 +68,11 @@ pub(in crate::interpreter) fn eval_expr(
             if let Some(class) = context.class(class_name).cloned() {
                 eval_dynamic_class_new_object(&class, args, context, scope, values)
             } else {
+                let class_name = context
+                    .resolve_class_name(class_name)
+                    .unwrap_or_else(|| class_name.clone());
                 values
-                    .new_object(class_name)
+                    .new_object(&class_name)
                     .and_then(|object| values.construct_object(object, args).map(|()| object))
             }
         }
@@ -417,6 +420,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "clearstatcache" => eval_builtin_clearstatcache(args, context, scope, values),
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
+        "class_alias" => eval_builtin_class_alias(args, context, scope, values),
         "class_exists" => eval_builtin_class_exists(args, context, scope, values),
         "interface_exists" => eval_builtin_interface_exists(args, context, scope, values),
         "trait_exists" | "enum_exists" => {

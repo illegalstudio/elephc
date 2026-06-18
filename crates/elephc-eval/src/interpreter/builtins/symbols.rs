@@ -176,6 +176,65 @@ pub(in crate::interpreter) fn eval_class_exists_name(
     values.class_exists(name)
 }
 
+/// Evaluates `class_alias(class, alias, autoload?)` against eval and generated class tables.
+pub(in crate::interpreter) fn eval_builtin_class_alias(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (class, alias) = match args {
+        [class, alias] => (
+            eval_expr(class, context, scope, values)?,
+            eval_expr(alias, context, scope, values)?,
+        ),
+        [class, alias, autoload] => {
+            let class = eval_expr(class, context, scope, values)?;
+            let alias = eval_expr(alias, context, scope, values)?;
+            let _ = eval_expr(autoload, context, scope, values)?;
+            (class, alias)
+        }
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    eval_class_alias_result(&[class, alias], context, values)
+}
+
+/// Evaluates `class_alias(...)` from already materialized call arguments.
+pub(in crate::interpreter) fn eval_class_alias_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (class, alias) = match evaluated_args {
+        [class, alias] => (*class, *alias),
+        [class, alias, _autoload] => (*class, *alias),
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    let class = eval_class_alias_name(class, values)?;
+    let alias = eval_class_alias_name(alias, values)?;
+    if alias.is_empty() || context.has_class(&alias) || values.class_exists(&alias)? {
+        return values.bool_value(false);
+    }
+    let aliased = if context.has_class(&class) {
+        context.define_class_alias(&class, &alias)
+    } else if values.class_exists(&class)? {
+        context.define_external_class_alias(&class, &alias)
+    } else {
+        false
+    };
+    values.bool_value(aliased)
+}
+
+/// Reads and normalizes one `class_alias()` class-name argument.
+fn eval_class_alias_name(
+    name: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let name = values.string_bytes(name)?;
+    let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok(name.trim_start_matches('\\').to_string())
+}
+
 /// Evaluates `interface_exists(...)` against generated interface-name metadata.
 pub(in crate::interpreter) fn eval_builtin_interface_exists(
     args: &[EvalExpr],
@@ -306,12 +365,21 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
     let target_class = values.string_bytes(target_class)?;
     let target_class = String::from_utf8(target_class).map_err(|_| EvalStatus::RuntimeFatal)?;
     let target_class = target_class.trim_start_matches('\\');
+    let resolved_target_class = context
+        .resolve_class_name(target_class)
+        .unwrap_or_else(|| target_class.to_string());
     let is_object = values.type_tag(object_or_class)? == 6;
     let result =
-        if is_object && dynamic_object_is_a(object_or_class, target_class, context, values)? {
+        if is_object
+            && dynamic_object_is_a(object_or_class, &resolved_target_class, context, values)?
+        {
             !matches!(name, "is_subclass_of")
         } else if is_object || allow_string {
-            values.object_is_a(object_or_class, target_class, name == "is_subclass_of")?
+            values.object_is_a(
+                object_or_class,
+                &resolved_target_class,
+                name == "is_subclass_of",
+            )?
         } else {
             false
         };

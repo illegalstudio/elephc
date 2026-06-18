@@ -60,6 +60,7 @@ pub(in crate::interpreter) fn eval_php_visible_builtin_exists(name: &str) -> boo
             | "chdir"
             | "chmod"
             | "chown"
+            | "class_alias"
             | "call_user_func"
             | "call_user_func_array"
             | "class_exists"

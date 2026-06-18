@@ -87,6 +87,7 @@ impl NativeFunction {
 pub struct ElephcEvalContext {
     abi_version: u32,
     classes: HashMap<String, EvalClass>,
+    class_aliases: HashMap<String, String>,
     constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
@@ -110,6 +111,7 @@ impl ElephcEvalContext {
         Self {
             abi_version: ABI_VERSION,
             classes: HashMap::new(),
+            class_aliases: HashMap::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
@@ -134,6 +136,7 @@ impl ElephcEvalContext {
         Self {
             abi_version,
             classes: HashMap::new(),
+            class_aliases: HashMap::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
@@ -160,27 +163,68 @@ impl ElephcEvalContext {
     /// Defines an eval-declared class, failing if this context already has it.
     pub fn define_class(&mut self, class: EvalClass) -> bool {
         let key = normalize_class_name(class.name());
-        if self.classes.contains_key(&key) {
+        if self.classes.contains_key(&key) || self.class_aliases.contains_key(&key) {
             return false;
         }
         self.classes.insert(key, class);
         true
     }
 
-    /// Returns true when this eval context has a dynamic class with the requested name.
+    /// Returns true when this eval context has a dynamic class or alias with the requested name.
     pub fn has_class(&self, name: &str) -> bool {
-        self.classes.contains_key(&normalize_class_name(name))
+        let key = normalize_class_name(name);
+        self.classes.contains_key(&key) || self.class_aliases.contains_key(&key)
     }
 
-    /// Returns a dynamic eval class by PHP case-insensitive class name.
+    /// Returns a dynamic eval class by PHP case-insensitive class name or alias.
     pub fn class(&self, name: &str) -> Option<&EvalClass> {
-        self.classes.get(&normalize_class_name(name))
+        let key = normalize_class_name(name);
+        if let Some(class) = self.classes.get(&key) {
+            return Some(class);
+        }
+        self.class_aliases
+            .get(&key)
+            .and_then(|target| self.classes.get(&normalize_class_name(target)))
+    }
+
+    /// Resolves a PHP class name or alias to the canonical target spelling stored by eval.
+    pub fn resolve_class_name(&self, name: &str) -> Option<String> {
+        let key = normalize_class_name(name);
+        if let Some(class) = self.classes.get(&key) {
+            return Some(class.name().to_string());
+        }
+        self.class_aliases.get(&key).cloned()
+    }
+
+    /// Defines an alias for an eval-declared class or an already known alias.
+    pub fn define_class_alias(&mut self, original: &str, alias: &str) -> bool {
+        let Some(target) = self.resolve_class_name(original) else {
+            return false;
+        };
+        self.define_external_class_alias(&target, alias)
+    }
+
+    /// Defines an alias for a runtime-visible class whose metadata lives outside eval.
+    pub fn define_external_class_alias(&mut self, original: &str, alias: &str) -> bool {
+        let alias_key = normalize_class_name(alias);
+        if alias_key.is_empty()
+            || self.classes.contains_key(&alias_key)
+            || self.class_aliases.contains_key(&alias_key)
+        {
+            return false;
+        }
+        self.class_aliases
+            .insert(alias_key, original.trim_start_matches('\\').to_string());
+        true
     }
 
     /// Records that one runtime object handle was created for an eval-declared class.
     pub fn register_dynamic_object(&mut self, identity: u64, class_name: &str) {
+        let class_name = self
+            .resolve_class_name(class_name)
+            .unwrap_or_else(|| class_name.to_string());
         self.dynamic_objects
-            .insert(identity, normalize_class_name(class_name));
+            .insert(identity, normalize_class_name(&class_name));
     }
 
     /// Returns the dynamic eval class metadata associated with one object identity.
