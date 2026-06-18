@@ -21,6 +21,7 @@ use std::path::PathBuf;
 #[derive(Default)]
 pub(crate) struct EvalStreamResources {
     next_id: i64,
+    directories: HashMap<i64, EvalDirectoryStream>,
     streams: HashMap<i64, EvalFileStream>,
 }
 
@@ -49,9 +50,20 @@ impl EvalStreamResources {
         )))
     }
 
+    /// Opens a local directory and returns its resource id.
+    pub(crate) fn open_directory(&mut self, path: &str) -> Option<i64> {
+        let directory = EvalDirectoryStream::open(path)?;
+        Some(self.insert_directory(directory))
+    }
+
     /// Removes a stream resource from the table, closing its file handle.
     pub(crate) fn close(&mut self, id: i64) -> bool {
         self.streams.remove(&id).is_some()
+    }
+
+    /// Removes a directory resource from the table.
+    pub(crate) fn close_directory(&mut self, id: i64) -> bool {
+        self.directories.remove(&id).is_some()
     }
 
     /// Reads up to `length` bytes from a stream resource.
@@ -62,6 +74,11 @@ impl EvalStreamResources {
         buffer.truncate(read);
         stream.eof = read == 0 || read < length;
         Some(buffer)
+    }
+
+    /// Reads the next entry name from a directory resource.
+    pub(crate) fn read_directory(&mut self, id: i64) -> Option<String> {
+        self.directories.get_mut(&id)?.read()
     }
 
     /// Reads one stream line up to a limit, newline, or custom delimiter.
@@ -171,6 +188,13 @@ impl EvalStreamResources {
         self.seek(id, 0, 0)
     }
 
+    /// Rewinds a directory resource to its first entry.
+    pub(crate) fn rewind_directory(&mut self, id: i64) -> bool {
+        self.directories
+            .get_mut(&id)
+            .is_some_and(EvalDirectoryStream::rewind)
+    }
+
     /// Truncates a stream to the requested byte length.
     pub(crate) fn truncate(&mut self, id: i64, size: u64) -> bool {
         self.streams
@@ -238,6 +262,14 @@ impl EvalStreamResources {
         self.streams.insert(id, stream);
         id
     }
+
+    /// Inserts a directory stream and returns the assigned zero-based resource payload.
+    fn insert_directory(&mut self, directory: EvalDirectoryStream) -> i64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.directories.insert(id, directory);
+        id
+    }
 }
 
 /// PHP-visible metadata for one eval stream resource.
@@ -282,6 +314,41 @@ impl EvalFileStream {
             mode,
             eof: false,
         }
+    }
+}
+
+/// Directory stream stored behind one eval resource id.
+struct EvalDirectoryStream {
+    entries: Vec<String>,
+    index: usize,
+}
+
+impl EvalDirectoryStream {
+    /// Opens a local directory and snapshots its entry names.
+    fn open(path: &str) -> Option<Self> {
+        let entries = std::fs::read_dir(path).ok()?;
+        let mut names = vec![".".to_string(), "..".to_string()];
+        for entry in entries {
+            let entry = entry.ok()?;
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        Some(Self {
+            entries: names,
+            index: 0,
+        })
+    }
+
+    /// Returns the next directory entry name.
+    fn read(&mut self) -> Option<String> {
+        let name = self.entries.get(self.index)?.clone();
+        self.index += 1;
+        Some(name)
+    }
+
+    /// Moves the directory cursor back to its first entry.
+    fn rewind(&mut self) -> bool {
+        self.index = 0;
+        true
     }
 }
 

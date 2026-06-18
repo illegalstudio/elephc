@@ -37,6 +37,12 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_chown_like_result(name, *filename, *principal, values)?
         }
+        "closedir" | "readdir" | "rewinddir" => {
+            let [dir_handle] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_unary_directory_result(name, *dir_handle, context, values)?
+        }
         "clearstatcache" => {
             if evaluated_args.len() > 2 {
                 return Err(EvalStatus::RuntimeFatal);
@@ -251,6 +257,12 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_glob_result(*pattern, values)?
+        }
+        "opendir" => {
+            let [directory] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_opendir_result(*directory, context, values)?
         }
         "pathinfo" => match evaluated_args {
             [path] => eval_pathinfo_result(*path, None, values)?,
