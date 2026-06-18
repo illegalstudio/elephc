@@ -275,6 +275,9 @@ pub(in crate::interpreter) fn eval_call(
         let args = positional_call_arg_exprs(args)?;
         return eval_positional_expr_call(name, &args, context, scope, values);
     }
+    if name == "flock" {
+        return eval_builtin_flock(args, context, scope, values);
+    }
     if matches!(
         name,
         "array_pop"

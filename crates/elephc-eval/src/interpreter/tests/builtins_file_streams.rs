@@ -87,6 +87,44 @@ return true;"#
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `flock()` applies advisory locks to local file stream resources.
+#[test]
+fn execute_program_dispatches_file_stream_flock_builtin() {
+    let pid = std::process::id();
+    let file = format!("elephc_eval_stream_lock_{pid}.txt");
+    let source = format!(
+        r#"file_put_contents("{file}", "x");
+$h = fopen("{file}", "r+");
+$would = true;
+echo flock($h, LOCK_EX, $would) ? "lock" : "bad"; echo ":";
+echo $would === false ? "would0" : "bad"; echo ":";
+echo flock(stream: $h, operation: LOCK_UN, would_block: $would) ? "unlock" : "bad"; echo ":";
+echo $would === false ? "would1" : "bad"; echo ":";
+echo call_user_func("flock", $h, LOCK_SH) ? "calllock" : "bad"; echo ":";
+flock($h, LOCK_UN);
+echo flock($h, 99) === false ? "invalid" : "bad"; echo ":";
+fclose($h);
+echo unlink("{file}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("flock");
+echo defined("LOCK_SH"); echo defined("LOCK_EX"); echo defined("LOCK_UN"); echo defined("LOCK_NB");
+echo ":locks=" . LOCK_SH . LOCK_EX . LOCK_UN . LOCK_NB;
+return true;"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let _ = std::fs::remove_file(&file);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    let _ = std::fs::remove_file(&file);
+    assert_eq!(
+        values.output,
+        "lock:would0:unlock:would1:calllock:invalid:cleanup:11111:locks=1234"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval line, character, and passthrough stream builtins.
 #[test]
 fn execute_program_dispatches_file_stream_line_builtins() {
