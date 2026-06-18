@@ -56,6 +56,13 @@ unsafe extern "C" {
         name_len: u64,
         args: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_static_method_call(
+        class_ptr: *const u8,
+        class_len: u64,
+        name_ptr: *const u8,
+        name_len: u64,
+        args: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_new_object(
         name_ptr: *const u8,
         name_len: u64,

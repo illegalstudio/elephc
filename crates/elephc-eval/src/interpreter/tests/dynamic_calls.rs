@@ -201,6 +201,43 @@ return $named(right: "H", left: "G");"#,
     assert_eq!(values.get(result), FakeValue::String("GH".to_string()));
 }
 
+/// Verifies static calls fall back to runtime AOT hooks when no eval class matches.
+#[test]
+fn execute_program_static_call_dispatches_runtime_method_hook() {
+    let program = parse_fragment(
+        br#"echo KnownClass::join("A", "B"); echo ":";
+$cb = ["KnownClass", "join"];
+echo call_user_func($cb, "C", "D"); echo ":";
+$named = "KnownClass::join";
+echo $named("E", "F"); echo ":";
+return call_user_func_array(["KnownClass", "sum"], [2, 5]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "AB:CD:EF:");
+    assert_eq!(values.get(result), FakeValue::Int(7));
+}
+
+/// Verifies runtime AOT static method fallback rejects named arguments.
+#[test]
+fn execute_program_static_runtime_method_hook_rejects_named_args() {
+    let program = parse_fragment(
+        br#"return call_user_func_array(["KnownClass", "join"], ["right" => "B", "left" => "A"]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let error =
+        execute_program(&program, &mut scope, &mut values).expect_err("named AOT call should fail");
+
+    assert_eq!(error, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies `call_user_func_array` inside eval can dispatch an eval-declared function.
 #[test]
 fn execute_program_call_user_func_array_dispatches_declared_function() {

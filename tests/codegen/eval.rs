@@ -4427,6 +4427,37 @@ $box->run();
     assert_eq!(out, "41a:42b:43c");
 }
 
+/// Verifies eval static calls and static callables dispatch public AOT static methods.
+#[test]
+fn test_eval_fragment_dispatches_aot_static_methods() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotStaticBox {
+    public static function join(string $left, string $right): string {
+        return $left . $right;
+    }
+
+    public static function sum(int $left, int $right): int {
+        return $left + $right;
+    }
+}
+
+eval('echo EvalAotStaticBox::join("A", "B"); echo ":";
+$cb = ["EvalAotStaticBox", "join"];
+echo call_user_func($cb, "C", "D"); echo ":";
+$named = "EvalAotStaticBox::join";
+echo $named("E", "F"); echo ":";
+echo call_user_func_array(["EvalAotStaticBox", "sum"], [2, 5]);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "AB:CD:EF:7");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {

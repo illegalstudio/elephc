@@ -74,7 +74,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, and string-key reads/writes. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
 | Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; `stdClass` and emitted AOT classes visible through runtime metadata use positional constructor arguments. |
-| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking. Runtime/AOT object-method fallback remains positional. |
+| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking. Runtime/AOT object-method and static-method fallback remains positional. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, and eval-declared-function `__FUNCTION__` / `__METHOD__`. |
 | Constants | Predefined eval-visible constants, dynamic constants from `define()`, namespaced constant fallback, and bare constant fetches are supported. |
@@ -117,10 +117,11 @@ eval-declared functions, and registered AOT functions.
 Inside eval fragments, two-element object-method callable arrays such as
 `[$this, "method"]` can be invoked through `$cb(...)`, `call_user_func($cb,
 ...)`, `call_user_func_array($cb, [...])`, and `iterator_apply()` with
-positional arguments. Static method callables for eval-declared static methods
-can use `["ClassName", "method"]` or `"ClassName::method"` through `$cb(...)`,
-`call_user_func()`, and `call_user_func_array()`; `call_user_func_array()` can
-also bind string-keyed named arguments for these eval-declared static methods.
+positional arguments. Static method callables can use `["ClassName", "method"]`
+or `"ClassName::method"` through `$cb(...)`, `call_user_func()`, and
+`call_user_func_array()`. Eval-declared static methods also support string-keyed
+named arguments through `call_user_func_array()`; generated/AOT static method
+fallback remains positional.
 
 Post-barrier native direct calls and string-literal `call_user_func()` callbacks
 currently accept simple positional arguments. Post-barrier
@@ -294,18 +295,17 @@ Unsupported constructs and missing class names during eval object construction
 fail at runtime with an eval fatal diagnostic.
 
 The fragment subset is broad but not the full elephc language surface. In
-particular, advanced native callable descriptors, closure callback values, and
-generated/AOT static-method callable arrays are still outside eval fragments.
-Runtime/AOT object-method fallback from eval remains positional, so named method
-arguments are supported for eval-declared methods but not for every generated
-native method bridge.
+particular, advanced native callable descriptors and closure callback values are
+still outside eval fragments. Runtime/AOT object-method and static-method
+fallback from eval remains positional, so named method arguments are supported
+for eval-declared methods but not for every generated native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are ReflectionAttribute object materialization,
-Reflection exposure for member-level attributes, and generated/AOT dynamic
-static-method call forms. `class_get_attributes()` is recognized in eval but
-does not yet materialize `ReflectionAttribute` objects for eval-declared
-attributes.
+Reflection exposure for member-level attributes, and broader generated/AOT
+method bridge signatures beyond the current public scalar zero-to-two-argument
+slice. `class_get_attributes()` is recognized in eval but does not yet
+materialize `ReflectionAttribute` objects for eval-declared attributes.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`
