@@ -118,6 +118,7 @@ impl RuntimeValueOps for FakeOps {
         interface_names: RuntimeCellHandle,
         trait_names: RuntimeCellHandle,
         flags: u64,
+        modifiers: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_reflection_owner_new(
             owner_kind,
@@ -126,6 +127,7 @@ impl RuntimeValueOps for FakeOps {
             interface_names,
             trait_names,
             flags,
+            modifiers,
         )
     }
     /// Creates one fake object for eval `new` unit tests.

@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
+    ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
@@ -585,6 +585,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 false_bool(),
             ),
             builtin_property(
+                "__modifiers",
+                Visibility::Private,
+                Some(TypeExpr::Int),
+                int_lit(0),
+            ),
+            builtin_property(
                 "__short_name",
                 Visibility::Private,
                 Some(TypeExpr::Str),
@@ -633,11 +639,34 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_bool_method("isInterface", "__is_interface"),
             builtin_reflection_class_bool_method("isTrait", "__is_trait"),
             builtin_reflection_class_bool_method("isEnum", "__is_enum"),
+            builtin_reflection_class_int_method("getModifiers", "__modifiers"),
             builtin_reflection_owner_get_attributes_method(),
         ],
         attributes: Vec::new(),
-        constants: Vec::new(),
+        constants: reflection_class_constants(),
         used_traits: Vec::new(),
+    }
+}
+
+/// Returns the public modifier constants exposed by PHP's `ReflectionClass`.
+fn reflection_class_constants() -> Vec<ClassConst> {
+    vec![
+        builtin_class_const("IS_IMPLICIT_ABSTRACT", 16),
+        builtin_class_const("IS_FINAL", 32),
+        builtin_class_const("IS_EXPLICIT_ABSTRACT", 64),
+        builtin_class_const("IS_READONLY", 65_536),
+    ]
+}
+
+/// Builds a public integer class constant for a synthetic reflection type.
+fn builtin_class_const(name: &str, value: i64) -> ClassConst {
+    ClassConst {
+        name: name.to_string(),
+        visibility: Visibility::Public,
+        is_final: false,
+        value: Expr::new(ExprKind::IntLiteral(value), crate::span::Span::dummy()),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
     }
 }
 
@@ -656,6 +685,35 @@ fn builtin_reflection_class_string_method(method_name: &str, property: &str) -> 
         variadic_type: None,
         return_type: Some(TypeExpr::Str),
         by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass` integer method backed by one private slot.
+fn builtin_reflection_class_int_method(method_name: &str, property: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Int),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -892,6 +950,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Array(Box::new(PhpType::Str));
                     }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
+                    sig.return_type = PhpType::Int;
                 }
             }
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getAttributes")) {

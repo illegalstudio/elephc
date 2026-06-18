@@ -304,6 +304,36 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass exposes PHP modifier bitmasks for eval class-like metadata.
+#[test]
+fn execute_program_reflects_eval_class_modifier_bitmask() {
+    let program = parse_fragment(
+        br#"abstract class EvalModifierAbstract {}
+final class EvalModifierFinal {}
+readonly class EvalModifierReadonly {}
+final readonly class EvalModifierFinalReadonly {}
+enum EvalModifierEnum { case Ready; }
+interface EvalModifierIface {}
+trait EvalModifierTrait {}
+echo (new ReflectionClass("EvalModifierAbstract"))->getModifiers(); echo ":";
+echo (new ReflectionClass("EvalModifierFinal"))->getModifiers(); echo ":";
+echo (new ReflectionClass("EvalModifierReadonly"))->getModifiers(); echo ":";
+echo (new ReflectionClass("EvalModifierFinalReadonly"))->getModifiers(); echo ":";
+echo (new ReflectionClass("EvalModifierEnum"))->getModifiers(); echo ":";
+echo (new ReflectionClass("EvalModifierIface"))->getModifiers(); echo ":";
+echo (new ReflectionClass("EvalModifierTrait"))->getModifiers();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "64:32:65536:65568:32:0:0");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClassConstant/EnumCase expose eval-declared attribute metadata.
 #[test]
 fn execute_program_reflects_eval_constant_and_enum_case_attributes() {

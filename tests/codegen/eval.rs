@@ -5639,6 +5639,35 @@ echo (new ReflectionClass("EvalTraitReflect"))->isEnum() ? "E" : "e";');
     assert_eq!(out.stdout, "Afite:aFite:aFitE:afIte:afiTe");
 }
 
+/// Verifies eval ReflectionClass reports PHP modifier bitmasks through the bridge.
+#[test]
+fn test_eval_reflection_class_modifier_bitmask() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('abstract class EvalModifierAbstract {}
+final class EvalModifierFinal {}
+readonly class EvalModifierReadonly {}
+final readonly class EvalModifierFinalReadonly {}
+enum EvalModifierEnum { case Ready; }
+interface EvalModifierIface {}
+trait EvalModifierTrait {}
+echo (new ReflectionClass("EvalModifierAbstract"))->getModifiers() . ":";
+echo (new ReflectionClass("EvalModifierFinal"))->getModifiers() . ":";
+echo (new ReflectionClass("EvalModifierReadonly"))->getModifiers() . ":";
+echo (new ReflectionClass("EvalModifierFinalReadonly"))->getModifiers() . ":";
+echo (new ReflectionClass("EvalModifierEnum"))->getModifiers() . ":";
+echo (new ReflectionClass("EvalModifierIface"))->getModifiers() . ":";
+echo (new ReflectionClass("EvalModifierTrait"))->getModifiers();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "64:32:65536:65568:32:0:0");
+}
+
 /// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.
 #[test]
 fn test_eval_reflection_constant_and_enum_case_attributes() {
