@@ -117,12 +117,37 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "fgetcsv" => match evaluated_args {
+            [stream] => eval_fgetcsv_result(*stream, None, None, context, values)?,
+            [stream, length] => {
+                eval_fgetcsv_result(*stream, Some(*length), None, context, values)?
+            }
+            [stream, length, separator] => {
+                eval_fgetcsv_result(*stream, Some(*length), Some(*separator), context, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "fopen" => {
             if !(2..=4).contains(&evaluated_args.len()) {
                 return Err(EvalStatus::RuntimeFatal);
             }
             eval_fopen_result(evaluated_args[0], evaluated_args[1], context, values)?
         }
+        "fputcsv" => match evaluated_args {
+            [stream, fields] => eval_fputcsv_result(*stream, *fields, None, None, context, values)?,
+            [stream, fields, separator] => {
+                eval_fputcsv_result(*stream, *fields, Some(*separator), None, context, values)?
+            }
+            [stream, fields, separator, enclosure] => eval_fputcsv_result(
+                *stream,
+                *fields,
+                Some(*separator),
+                Some(*enclosure),
+                context,
+                values,
+            )?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "fprintf" => {
             let Some((stream, rest)) = evaluated_args.split_first() else {
                 return Err(EvalStatus::RuntimeFatal);

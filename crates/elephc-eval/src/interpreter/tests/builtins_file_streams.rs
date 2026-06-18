@@ -147,3 +147,53 @@ return true;"#
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval CSV stream builtins format and parse local stream records.
+#[test]
+fn execute_program_dispatches_file_stream_csv_builtins() {
+    let pid = std::process::id();
+    let file = format!("elephc_eval_stream_csv_{pid}.txt");
+    let semi = format!("elephc_eval_stream_csv_semi_{pid}.txt");
+    let call = format!("elephc_eval_stream_csv_call_{pid}.txt");
+    let source = format!(
+        r#"$h = fopen("{file}", "w+");
+echo fputcsv($h, ["a", "b,c", "d\"e"]) > 0 ? "put" : "bad"; echo ":";
+rewind($h);
+$row = fgetcsv($h);
+echo $row[0] === "a" && $row[1] === "b,c" && $row[2] === "d\"e" ? "get" : "bad"; echo ":";
+echo fgetcsv($h) === false ? "eof" : "bad"; echo ":";
+fclose($h);
+$semi = fopen("{semi}", "w+");
+echo fputcsv($semi, ["x;y", "z"], ";") > 0 ? "putsemi" : "bad"; echo ":";
+rewind($semi);
+$semi_row = fgetcsv($semi, null, ";");
+echo $semi_row[0] === "x;y" && $semi_row[1] === "z" ? "getsemi" : "bad"; echo ":";
+fclose($semi);
+$call = fopen("{call}", "w+");
+echo call_user_func_array("fputcsv", ["stream" => $call, "fields" => ["m", "n"]]) > 0 ? "callput" : "bad"; echo ":";
+rewind($call);
+$call_row = call_user_func("fgetcsv", $call);
+echo $call_row[0] === "m" && $call_row[1] === "n" ? "callget" : "bad"; echo ":";
+fclose($call);
+echo unlink("{file}") && unlink("{semi}") && unlink("{call}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("fgetcsv"); echo function_exists("fputcsv");
+return true;"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    for path in [&file, &semi, &call] {
+        let _ = std::fs::remove_file(path);
+    }
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    for path in [&file, &semi, &call] {
+        let _ = std::fs::remove_file(path);
+    }
+    assert_eq!(
+        values.output,
+        "put:get:eof:putsemi:getsemi:callput:callget:cleanup:11"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
