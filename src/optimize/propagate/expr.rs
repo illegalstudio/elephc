@@ -262,6 +262,19 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 args: propagate_args(args, None),
             }
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            let object = propagate_expr(*object, env);
+            let method = propagate_expr(*method, env);
+            ExprKind::NullsafeDynamicMethodCall {
+                object: Box::new(object),
+                method: Box::new(method),
+                args: propagate_args(args, None),
+            }
+        }
         ExprKind::StaticMethodCall {
             receiver,
             method,

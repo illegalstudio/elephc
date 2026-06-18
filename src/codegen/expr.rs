@@ -294,6 +294,9 @@ pub fn emit_expr(
             method,
             args,
         } => objects::emit_nullsafe_method_call(object, method, args, emitter, ctx, data),
+        ExprKind::NullsafeDynamicMethodCall { .. } => {
+            unreachable!("nullsafe dynamic method calls are supported by the EIR backend")
+        }
         ExprKind::StaticMethodCall {
             receiver,
             method,

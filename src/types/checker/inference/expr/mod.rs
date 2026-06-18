@@ -536,6 +536,11 @@ impl Checker {
                 method,
                 args,
             } => self.infer_nullsafe_method_call_type(object, method, args, expr, env),
+            ExprKind::NullsafeDynamicMethodCall {
+                object,
+                method,
+                args,
+            } => self.infer_nullsafe_dynamic_method_call_type(object, method, args, expr, env),
             ExprKind::StaticMethodCall {
                 receiver,
                 method,

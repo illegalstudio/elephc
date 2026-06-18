@@ -371,6 +371,29 @@ pub(super) fn resolve_expr(
             method,
             args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeDynamicMethodCall {
+            object: Box::new(resolve_expr(
+                *object,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?),
+            method: Box::new(resolve_expr(
+                *method,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?),
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
         ExprKind::StaticMethodCall {
             receiver,
             method,

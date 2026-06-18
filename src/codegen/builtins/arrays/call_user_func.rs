@@ -321,6 +321,7 @@ fn descriptor_invoker_sig(callback: &Expr, ctx: &Context) -> Option<Option<Funct
         | ExprKind::FirstClassCallable(_)
         | ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::ExprCall { .. }
         | ExprKind::Assignment { .. }

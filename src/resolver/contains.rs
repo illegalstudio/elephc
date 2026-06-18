@@ -224,6 +224,15 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_has_includes(object) || args.iter().any(expr_has_includes)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_has_includes(object)
+                || expr_has_includes(method)
+                || args.iter().any(expr_has_includes)
+        }
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             expr_has_includes(object)
         }

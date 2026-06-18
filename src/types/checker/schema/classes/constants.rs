@@ -264,6 +264,15 @@ fn rewrite_expr(
             method: method.clone(),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeDynamicMethodCall {
+            object: Box::new(rewrite_expr(object, class_name, parent_name)?),
+            method: Box::new(rewrite_expr(method, class_name, parent_name)?),
+            args: rewrite_expr_list(args, class_name, parent_name)?,
+        },
         ExprKind::StaticMethodCall {
             receiver,
             method,

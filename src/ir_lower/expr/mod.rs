@@ -156,6 +156,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
             method,
             args,
         } => lower_nullsafe_method_call(ctx, object, method, args, expr),
+        ExprKind::NullsafeDynamicMethodCall { .. } => {
+            unreachable!("nullsafe dynamic method calls are lowered as a nullsafe postfix chain")
+        }
         ExprKind::StaticMethodCall {
             receiver,
             method,
@@ -712,6 +715,7 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::ExprCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::NewObject { .. }
         | ExprKind::NewDynamic { .. }
@@ -7199,6 +7203,15 @@ fn expr_contains_eval_call(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_contains_eval_call(object) || args.iter().any(expr_contains_eval_call)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_contains_eval_call(object)
+                || expr_contains_eval_call(method)
+                || args.iter().any(expr_contains_eval_call)
+        }
         ExprKind::FirstClassCallable(target) => callable_target_contains_eval_call(target),
         ExprKind::Yield { key, value } => {
             key.as_ref().is_some_and(|key| expr_contains_eval_call(key))
@@ -8586,6 +8599,39 @@ fn lower_method_call_with_receiver(
     );
     release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
     call
+}
+
+/// Lowers a nullsafe dynamic instance method call after the receiver was evaluated and guarded.
+///
+/// The non-null receiver is stored in a hidden temp so the existing
+/// `call_user_func([$obj, $method], ...)` lowering can be reused without
+/// evaluating the original receiver expression again.
+pub(super) fn lower_dynamic_method_call_with_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &Expr,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let receiver_type = strip_void_from_union(ctx.builder.value_php_type(object.value));
+    let receiver_name = ctx.declare_hidden_temp(receiver_type.clone());
+    ctx.store_local(&receiver_name, object, receiver_type, Some(expr.span));
+    let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);
+    let callback = Expr::new(
+        ExprKind::ArrayLiteral(vec![receiver, method.clone()]),
+        expr.span,
+    );
+    let mut call_args = Vec::with_capacity(args.len() + 1);
+    call_args.push(callback);
+    call_args.extend(args.iter().cloned());
+    let call = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("call_user_func"),
+            args: call_args,
+        },
+        expr.span,
+    );
+    lower_expr(ctx, &call)
 }
 
 /// Releases normalized call arguments that cannot be returned by this call.

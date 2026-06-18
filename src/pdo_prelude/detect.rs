@@ -271,6 +271,11 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_refs_pdo(object) || args.iter().any(expr_refs_pdo)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => expr_refs_pdo(object) || expr_refs_pdo(method) || args.iter().any(expr_refs_pdo),
         ExprKind::StaticMethodCall { receiver, args, .. } => {
             receiver_refs_pdo(receiver) || args.iter().any(expr_refs_pdo)
         }

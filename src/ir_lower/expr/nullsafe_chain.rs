@@ -54,6 +54,12 @@ enum PostfixSegment<'a> {
         args: &'a [Expr],
         nullsafe: bool,
     },
+    DynamicMethod {
+        expr: &'a Expr,
+        method: &'a Expr,
+        args: &'a [Expr],
+        nullsafe: bool,
+    },
     Array {
         expr: &'a Expr,
         index: &'a Expr,
@@ -76,6 +82,9 @@ impl PostfixSegment<'_> {
                 nullsafe: true,
                 ..
             } | PostfixSegment::Method {
+                nullsafe: true,
+                ..
+            } | PostfixSegment::DynamicMethod {
                 nullsafe: true,
                 ..
             }
@@ -141,6 +150,19 @@ fn flatten_nullsafe_postfix_chain(expr: &Expr) -> Option<PostfixChain<'_>> {
                 args,
             } => {
                 segments.push(PostfixSegment::Method {
+                    expr: base,
+                    method,
+                    args,
+                    nullsafe: true,
+                });
+                base = object;
+            }
+            ExprKind::NullsafeDynamicMethodCall {
+                object,
+                method,
+                args,
+            } => {
+                segments.push(PostfixSegment::DynamicMethod {
                     expr: base,
                     method,
                     args,
@@ -260,6 +282,19 @@ fn lower_nullsafe_postfix_segment(
                 args,
                 Op::MethodCall,
                 expr,
+            ))
+        }
+        PostfixSegment::DynamicMethod {
+            expr,
+            method,
+            args,
+            nullsafe,
+        } => {
+            if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
+                return None;
+            }
+            Some(super::lower_dynamic_method_call_with_receiver(
+                ctx, current, method, args, expr,
             ))
         }
         PostfixSegment::Array { expr, index } => {

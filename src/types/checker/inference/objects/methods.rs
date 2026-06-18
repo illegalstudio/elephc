@@ -101,6 +101,33 @@ impl Checker {
         }
     }
 
+    /// Infers `$obj?->$method(...)` when the method name is known only at runtime.
+    ///
+    /// The receiver must still be an object-or-null like other nullsafe member
+    /// accesses. The dynamic target prevents method signature validation, so the
+    /// return type is `Mixed`; method-name and argument expressions are inferred
+    /// only when the receiver is not statically null.
+    pub(crate) fn infer_nullsafe_dynamic_method_call_type(
+        &mut self,
+        object: &Expr,
+        method: &Expr,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let obj_ty = self.infer_type(object, env)?;
+        let Some((_class_name, _nullable)) =
+            self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
+        else {
+            return Ok(PhpType::Void);
+        };
+        self.infer_type(method, env)?;
+        for arg in args {
+            self.infer_type(arg, env)?;
+        }
+        Ok(PhpType::Mixed)
+    }
+
     /// Infers the type of a method call on an interface type.
     ///
     /// Looks up the method in the interface schema, validates arguments via

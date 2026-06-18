@@ -241,6 +241,15 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_has_dynamic_instanceof(object) || args.iter().any(expr_has_dynamic_instanceof)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_has_dynamic_instanceof(object)
+                || expr_has_dynamic_instanceof(method)
+                || args.iter().any(expr_has_dynamic_instanceof)
+        }
         ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Method {
             object,
             ..

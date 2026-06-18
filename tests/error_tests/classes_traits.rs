@@ -621,11 +621,11 @@ fn test_error_anonymous_class_missing_body() {
     );
 }
 
-/// Verifies that a nullsafe dynamic method call (`$obj?->$m()`) is rejected (not yet supported).
+/// Verifies that nullsafe dynamic method calls still reject named arguments.
 #[test]
-fn test_error_nullsafe_dynamic_method_call() {
+fn test_error_nullsafe_dynamic_method_call_named_arguments() {
     expect_error(
-        "<?php $obj?->$m();",
-        "Nullsafe dynamic method calls are not supported yet",
+        "<?php $obj?->$m(value: 1);",
+        "Named arguments are not supported in dynamic calls",
     );
 }

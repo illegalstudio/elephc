@@ -332,6 +332,17 @@ fn visit_expr(expr: &Expr, st: &mut State) {
                 visit_expr(a, st);
             }
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            visit_expr(object, st);
+            visit_expr(method, st);
+            for a in args {
+                visit_expr(a, st);
+            }
+        }
         ExprKind::ArrayLiteral(items) => {
             for it in items {
                 visit_expr(it, st);

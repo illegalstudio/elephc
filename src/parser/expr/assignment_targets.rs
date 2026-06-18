@@ -316,6 +316,17 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::NullsafeMethodCall { object, .. } => {
             collect_assignment_target_dependencies(object, dependencies);
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_assignment_target_dependencies(object, dependencies);
+            collect_assignment_target_dependencies(method, dependencies);
+            for arg in args {
+                collect_assignment_target_dependencies(arg, dependencies);
+            }
+        }
         ExprKind::DynamicPropertyAccess { object, property }
         | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             collect_assignment_target_dependencies(object, dependencies);
@@ -527,6 +538,18 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_may_write_dependency(object, dependencies)
+                || args.iter().any(|arg| {
+                    expr_contains_dependency(arg, dependencies)
+                        || expr_may_write_dependency(arg, dependencies)
+                })
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_may_write_dependency(object, dependencies)
+                || expr_may_write_dependency(method, dependencies)
                 || args.iter().any(|arg| {
                     expr_contains_dependency(arg, dependencies)
                         || expr_may_write_dependency(arg, dependencies)
@@ -754,6 +777,15 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_contains_equivalent(object, needle)
+                || args.iter().any(|arg| expr_contains_equivalent(arg, needle))
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_contains_equivalent(object, needle)
+                || expr_contains_equivalent(method, needle)
                 || args.iter().any(|arg| expr_contains_equivalent(arg, needle))
         }
         ExprKind::BufferNew { len, .. } => expr_contains_equivalent(len, needle),

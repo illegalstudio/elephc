@@ -392,6 +392,7 @@ pub(super) fn infer_local_type(
         ExprKind::NullsafeMethodCall { object, method, .. } => {
             infer_nullsafe_method_call_type(object, method, sig, ctx)
         }
+        ExprKind::NullsafeDynamicMethodCall { .. } => PhpType::Mixed,
         ExprKind::StaticMethodCall {
             receiver, method, ..
         } => {

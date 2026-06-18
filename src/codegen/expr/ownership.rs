@@ -68,6 +68,7 @@ pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
         | ExprKind::ExprCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::NewObject { .. } => HeapOwnership::Owned,
         ExprKind::BinaryOp { op, .. } => {
@@ -120,6 +121,7 @@ pub(crate) fn string_result_is_owned_call_temp(value: &Expr, ctx: &Context) -> b
         }
         ExprKind::MethodCall { .. }
         | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. } => true,

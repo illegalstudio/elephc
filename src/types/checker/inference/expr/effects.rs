@@ -257,6 +257,19 @@ impl Checker {
                 }
                 self.infer_type(expr, env)
             }
+            ExprKind::NullsafeDynamicMethodCall {
+                object,
+                method,
+                args,
+            } => {
+                self.infer_type_with_assignment_effects(object, env)?;
+                self.infer_type_with_assignment_effects(method, env)?;
+                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                for arg in &expanded_args {
+                    self.infer_type_with_assignment_effects(arg, env)?;
+                }
+                self.infer_type(expr, env)
+            }
             ExprKind::BufferNew { len, .. } => {
                 self.infer_type_with_assignment_effects(len, env)?;
                 self.infer_type(expr, env)

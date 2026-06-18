@@ -1118,7 +1118,8 @@ fn expr_contains_nullsafe_member(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::NullsafePropertyAccess { .. }
         | ExprKind::NullsafeDynamicPropertyAccess { .. }
-        | ExprKind::NullsafeMethodCall { .. } => true,
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. } => true,
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::DynamicPropertyAccess { object, .. }
         | ExprKind::MethodCall { object, .. } => expr_contains_nullsafe_member(object),

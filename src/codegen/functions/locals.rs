@@ -702,6 +702,17 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
                 collect_assignment_expr_vars(arg, ctx, sig);
             }
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_assignment_expr_vars(object, ctx, sig);
+            collect_assignment_expr_vars(method, ctx, sig);
+            for arg in args {
+                collect_assignment_expr_vars(arg, ctx, sig);
+            }
+        }
         ExprKind::BufferNew { len, .. } => collect_assignment_expr_vars(len, ctx, sig),
         ExprKind::Closure {
             params,

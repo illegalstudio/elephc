@@ -421,6 +421,15 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_has_regex_call(object) || args.iter().any(expr_has_regex_call)
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_has_regex_call(object)
+                || expr_has_regex_call(method)
+                || args.iter().any(expr_has_regex_call)
+        }
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             expr_has_regex_call(object)
         }
@@ -724,6 +733,15 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_needs_descriptor_invoker(object) || args.iter().any(expr_needs_descriptor_invoker)
+        }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_needs_descriptor_invoker(object)
+                || expr_needs_descriptor_invoker(method)
+                || args.iter().any(expr_needs_descriptor_invoker)
         }
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             expr_needs_descriptor_invoker(object)

@@ -213,6 +213,18 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
                 .map(|arg| rewrite_expr(arg, defines))
                 .collect(),
         },
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeDynamicMethodCall {
+            object: Box::new(rewrite_expr(*object, defines)),
+            method: Box::new(rewrite_expr(*method, defines)),
+            args: args
+                .into_iter()
+                .map(|arg| rewrite_expr(arg, defines))
+                .collect(),
+        },
         ExprKind::StaticMethodCall {
             receiver,
             method,

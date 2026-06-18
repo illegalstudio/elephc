@@ -451,6 +451,7 @@ fn unknown_callable_value_needs_descriptor_invoker(
         | ExprKind::NullCoalesce { .. }
         | ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::ExprCall { .. } => true,
         _ => false,

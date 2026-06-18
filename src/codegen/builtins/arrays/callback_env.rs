@@ -514,6 +514,7 @@ fn runtime_callable_expr_result_needs_descriptor_callback_env(
         | ExprKind::NullCoalesce { .. }
         | ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::ExprCall { .. } => true,
         _ => false,

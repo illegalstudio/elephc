@@ -57,6 +57,48 @@ fn test_dynamic_instance_method_brace_form() {
     assert_eq!(out, "r");
 }
 
+/// Verifies that `$obj?->$method()` dispatches dynamically when non-null and returns null when
+/// the receiver is null without evaluating arguments.
+#[test]
+fn test_nullsafe_dynamic_instance_method_call() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            public function run(string $value): string { return \"run:\" . $value; }
+        }
+        function skipped_arg(): string { echo \"arg:\"; return \"skip\"; }
+        $c = null;
+        $method = \"run\";
+        echo $c?->$method(skipped_arg()) ?? \"none\";
+        echo \"|\";
+        $c = new C();
+        echo $c?->$method(\"ok\");
+        ",
+    );
+    assert_eq!(out, "none|run:ok");
+}
+
+/// Verifies that the brace form `$obj?->{$expr}()` skips the method-name expression and
+/// arguments on the null branch, then dispatches dynamically on the non-null branch.
+#[test]
+fn test_nullsafe_dynamic_instance_method_brace_form_is_lazy() {
+    let out = compile_and_run(
+        "<?php
+        class Greeter {
+            public function hello(string $value): string { echo \"method:\"; return $value; }
+        }
+        function method_name(): string { echo \"name:\"; return \"hello\"; }
+        function skipped_arg(): string { echo \"arg:\"; return \"skip\"; }
+        $g = null;
+        echo $g?->{method_name()}(skipped_arg()) ?? \"none\";
+        echo \"|\";
+        $g = new Greeter();
+        echo $g?->{method_name()}(\"ok\");
+        ",
+    );
+    assert_eq!(out, "none|name:method:ok");
+}
+
 /// Verifies that `$cls::method()` dispatches to a static method on the named class.
 #[test]
 fn test_dynamic_static_call_literal_method() {

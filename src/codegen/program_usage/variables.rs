@@ -302,6 +302,15 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
             expr_uses_variable(object, needle)
                 || args.iter().any(|arg| expr_uses_variable(arg, needle))
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            expr_uses_variable(object, needle)
+                || expr_uses_variable(method, needle)
+                || args.iter().any(|arg| expr_uses_variable(arg, needle))
+        }
         ExprKind::FirstClassCallable(callable) => match callable {
             crate::parser::ast::CallableTarget::Function(_)
             | crate::parser::ast::CallableTarget::StaticMethod { .. } => false,

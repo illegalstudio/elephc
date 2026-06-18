@@ -960,6 +960,17 @@ fn collect_dynamic_object_factory_classes_in_expr(
                 collect_dynamic_object_factory_classes_in_expr(arg, classes, names);
             }
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_dynamic_object_factory_classes_in_expr(object, classes, names);
+            collect_dynamic_object_factory_classes_in_expr(method, classes, names);
+            for arg in args {
+                collect_dynamic_object_factory_classes_in_expr(arg, classes, names);
+            }
+        }
         ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Method {
             object,
             ..

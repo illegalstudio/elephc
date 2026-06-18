@@ -440,6 +440,17 @@ fn collect_arrow_expr_captures(
                 collect_arrow_expr_captures(arg, bound, seen, captures);
             }
         }
+        ExprKind::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            collect_arrow_expr_captures(object, bound, seen, captures);
+            collect_arrow_expr_captures(method, bound, seen, captures);
+            for arg in args {
+                collect_arrow_expr_captures(arg, bound, seen, captures);
+            }
+        }
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             collect_arrow_expr_captures(object, bound, seen, captures);
         }
