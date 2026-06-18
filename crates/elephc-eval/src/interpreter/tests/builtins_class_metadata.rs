@@ -488,6 +488,56 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass getMethods/getProperties return eval member objects.
+#[test]
+fn execute_program_reflection_class_lists_eval_member_objects() {
+    let program = parse_fragment(
+        br#"#[Attribute]
+class EvalListMarker {}
+class EvalReflectListTarget {
+    #[EvalListMarker]
+    public function first() {}
+    private static function helper() {}
+    #[EvalListMarker]
+    protected $visible;
+    private static $token;
+}
+$ref = new ReflectionClass("EvalReflectListTarget");
+$methods = $ref->getMethods();
+$properties = $ref->getProperties();
+echo count($methods); echo ":"; echo count($properties); echo ":";
+foreach ($methods as $method) {
+    if ($method->getName() === "first") {
+        echo "F"; echo count($method->getAttributes());
+    }
+    if ($method->getName() === "helper") {
+        echo $method->isStatic() ? "S" : "s";
+        echo $method->isPrivate() ? "R" : "r";
+    }
+}
+echo ":";
+foreach ($properties as $property) {
+    if ($property->getName() === "visible") {
+        echo "V"; echo count($property->getAttributes());
+        echo $property->isProtected() ? "P" : "p";
+    }
+    if ($property->getName() === "token") {
+        echo $property->isStatic() ? "T" : "t";
+        echo $property->isPrivate() ? "R" : "r";
+    }
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "2:2:F1SR:V1PTR");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClassConstant/EnumCase expose eval-declared attribute metadata.
 #[test]
 fn execute_program_reflects_eval_constant_and_enum_case_attributes() {

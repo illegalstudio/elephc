@@ -208,6 +208,8 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         trait_names: RuntimeCellHandle,
         method_names: RuntimeCellHandle,
         property_names: RuntimeCellHandle,
+        method_objects: RuntimeCellHandle,
+        property_objects: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -221,6 +223,8 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 trait_names.as_ptr(),
                 method_names.as_ptr(),
                 property_names.as_ptr(),
+                method_objects.as_ptr(),
+                property_objects.as_ptr(),
                 flags,
                 modifiers,
             )

@@ -1366,6 +1366,56 @@ echo $visibleProp->isPublic() ? "U" : "u";
     assert_eq!(out, "SPurfa:APs:FUs:SRp:sPu");
 }
 
+/// Verifies that `ReflectionClass::getMethods()` and `getProperties()` return
+/// populated ReflectionMethod/ReflectionProperty objects with member metadata.
+#[test]
+fn test_reflection_class_get_methods_and_properties_return_member_objects() {
+    let out = compile_and_run_capture(
+        r#"<?php
+#[Attribute]
+class ListMarker {}
+class ReflectListTarget {
+    #[ListMarker]
+    public function first() {}
+    private static function helper() {}
+    #[ListMarker]
+    protected int $visible = 1;
+    private static string $token = "x";
+}
+$ref = new ReflectionClass(ReflectListTarget::class);
+$methods = $ref->getMethods();
+$properties = $ref->getProperties();
+echo count($methods) . ":" . count($properties) . ":";
+foreach ($methods as $method) {
+    if ($method->getName() === "first") {
+        echo "F" . count($method->getAttributes());
+    }
+    if ($method->getName() === "helper") {
+        echo $method->isStatic() ? "S" : "s";
+        echo $method->isPrivate() ? "R" : "r";
+    }
+}
+echo ":";
+foreach ($properties as $property) {
+    if ($property->getName() === "visible") {
+        echo "V" . count($property->getAttributes());
+        echo $property->isProtected() ? "P" : "p";
+    }
+    if ($property->getName() === "token") {
+        echo $property->isStatic() ? "T" : "t";
+        echo $property->isPrivate() ? "R" : "r";
+    }
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2:2:F1SR:V1PTR");
+}
+
 /// Verifies that `ReflectionClassConstant` and enum-case reflectors expose
 /// attribute name, arguments, `getName()`, and `newInstance()` data.
 #[test]

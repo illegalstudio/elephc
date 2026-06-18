@@ -168,6 +168,10 @@ classes and parent interfaces for eval interfaces, while
 `ReflectionClass::hasMethod()` and `ReflectionClass::hasProperty()` report
 method and property membership for eval classes, interfaces, traits, and enums;
 method lookup is case-insensitive, while property lookup is case-sensitive.
+`ReflectionClass::getMethods()` and `ReflectionClass::getProperties()` return
+materialized `ReflectionMethod` and `ReflectionProperty` objects for the same
+visible member metadata, including supported member attributes and predicate
+flags.
 `ReflectionMethod::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
 `isFinal()`, and `isAbstract()` report eval method metadata.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, and

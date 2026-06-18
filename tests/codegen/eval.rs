@@ -5819,6 +5819,55 @@ echo $visibleProp->isPublic() ? "U" : "u";');
     assert_eq!(out.stdout, "SPurfa:APs:FUs:SRp:sPu");
 }
 
+/// Verifies eval ReflectionClass getMethods/getProperties return member objects through the bridge.
+#[test]
+fn test_eval_reflection_class_lists_member_objects() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('#[Attribute]
+class EvalListMarker {}
+class EvalReflectListTarget {
+    #[EvalListMarker]
+    public function first() {}
+    private static function helper() {}
+    #[EvalListMarker]
+    protected $visible;
+    private static $token;
+}
+$ref = new ReflectionClass("EvalReflectListTarget");
+$methods = $ref->getMethods();
+$properties = $ref->getProperties();
+echo count($methods) . ":" . count($properties) . ":";
+foreach ($methods as $method) {
+    if ($method->getName() === "first") {
+        echo "F" . count($method->getAttributes());
+    }
+    if ($method->getName() === "helper") {
+        echo $method->isStatic() ? "S" : "s";
+        echo $method->isPrivate() ? "R" : "r";
+    }
+}
+echo ":";
+foreach ($properties as $property) {
+    if ($property->getName() === "visible") {
+        echo "V" . count($property->getAttributes());
+        echo $property->isProtected() ? "P" : "p";
+    }
+    if ($property->getName() === "token") {
+        echo $property->isStatic() ? "T" : "t";
+        echo $property->isPrivate() ? "R" : "r";
+    }
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2:2:F1SR:V1PTR");
+}
+
 /// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.
 #[test]
 fn test_eval_reflection_constant_and_enum_case_attributes() {

@@ -275,26 +275,52 @@ fn eval_reflection_owner_object(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let attrs = eval_reflection_attribute_array_result(attributes, context, values)?;
-    let interface_names = eval_reflection_string_array_result(interface_names, values)?;
-    let trait_names = eval_reflection_string_array_result(trait_names, values)?;
-    let method_names = eval_reflection_string_array_result(method_names, values)?;
-    let property_names = eval_reflection_string_array_result(property_names, values)?;
+    let interface_names_array = eval_reflection_string_array_result(interface_names, values)?;
+    let trait_names_array = eval_reflection_string_array_result(trait_names, values)?;
+    let method_names_array = eval_reflection_string_array_result(method_names, values)?;
+    let property_names_array = eval_reflection_string_array_result(property_names, values)?;
+    let method_objects = if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
+        eval_reflection_member_object_array_result(
+            EVAL_REFLECTION_OWNER_METHOD,
+            reflected_name,
+            &method_names,
+            context,
+            values,
+        )?
+    } else {
+        values.array_new(0)?
+    };
+    let property_objects = if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
+        eval_reflection_member_object_array_result(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            reflected_name,
+            &property_names,
+            context,
+            values,
+        )?
+    } else {
+        values.array_new(0)?
+    };
     let object = values.reflection_owner_new(
         owner_kind,
         reflected_name,
         attrs,
-        interface_names,
-        trait_names,
-        method_names,
-        property_names,
+        interface_names_array,
+        trait_names_array,
+        method_names_array,
+        property_names_array,
+        method_objects,
+        property_objects,
         flags,
         modifiers,
     )?;
     values.release(attrs)?;
-    values.release(interface_names)?;
-    values.release(trait_names)?;
-    values.release(method_names)?;
-    values.release(property_names)?;
+    values.release(interface_names_array)?;
+    values.release(trait_names_array)?;
+    values.release(method_names_array)?;
+    values.release(property_names_array)?;
+    values.release(method_objects)?;
+    values.release(property_objects)?;
     Ok(object)
 }
 
@@ -308,6 +334,63 @@ fn eval_reflection_string_array_result(
         result = values.string_array_push(result, name)?;
     }
     Ok(result)
+}
+
+/// Builds an indexed array of ReflectionMethod or ReflectionProperty objects for a ReflectionClass.
+fn eval_reflection_member_object_array_result(
+    owner_kind: u64,
+    class_name: &str,
+    names: &[String],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(names.len())?;
+    let mut index = 0;
+    for name in names {
+        let Some(member) = eval_reflection_member_metadata(owner_kind, class_name, name, context)
+        else {
+            continue;
+        };
+        let flags = eval_reflection_member_flags(
+            member.visibility,
+            member.is_static,
+            member.is_final,
+            member.is_abstract,
+        );
+        let member_object = eval_reflection_owner_object(
+            owner_kind,
+            name,
+            &member.attributes,
+            &[],
+            &[],
+            &[],
+            &[],
+            flags,
+            0,
+            context,
+            values,
+        )?;
+        let key = values.int(index)?;
+        result = values.array_set(result, key, member_object)?;
+        index += 1;
+    }
+    Ok(result)
+}
+
+/// Returns member metadata for one ReflectionClass member-array entry.
+fn eval_reflection_member_metadata(
+    owner_kind: u64,
+    class_name: &str,
+    name: &str,
+    context: &ElephcEvalContext,
+) -> Option<EvalReflectionMemberMetadata> {
+    match owner_kind {
+        EVAL_REFLECTION_OWNER_METHOD => eval_reflection_method_metadata(class_name, name, context),
+        EVAL_REFLECTION_OWNER_PROPERTY => {
+            eval_reflection_property_metadata(class_name, name, context)
+        }
+        _ => None,
+    }
 }
 
 /// Returns the eval-retained class-like attributes plus canonical reflected name.

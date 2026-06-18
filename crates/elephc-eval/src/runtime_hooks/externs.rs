@@ -83,6 +83,8 @@ unsafe extern "C" {
         trait_names: *mut RuntimeCell,
         method_names: *mut RuntimeCell,
         property_names: *mut RuntimeCell,
+        method_objects: *mut RuntimeCell,
+        property_objects: *mut RuntimeCell,
         flags: u64,
         modifiers: u64,
     ) -> *mut RuntimeCell;

@@ -178,6 +178,14 @@ impl FakeOps {
                 Self::object_property(&properties, "__trait_names")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
             }
+            (FakeValue::Object(properties), "getmethods") if args.is_empty() => {
+                Self::object_property(&properties, "__methods")
+                    .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
+            (FakeValue::Object(properties), "getproperties") if args.is_empty() => {
+                Self::object_property(&properties, "__properties")
+                    .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
             (FakeValue::Object(properties), "getarguments") if args.is_empty() => {
                 Self::object_property(&properties, "__args")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
@@ -297,6 +305,8 @@ impl FakeOps {
         trait_names: RuntimeCellHandle,
         method_names: RuntimeCellHandle,
         property_names: RuntimeCellHandle,
+        method_objects: RuntimeCellHandle,
+        property_objects: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -338,6 +348,8 @@ impl FakeOps {
             properties.push(("__trait_names".to_string(), trait_names));
             properties.push(("__method_names".to_string(), method_names));
             properties.push(("__property_names".to_string(), property_names));
+            properties.push(("__methods".to_string(), method_objects));
+            properties.push(("__properties".to_string(), property_objects));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_METHOD
             || owner_kind == EVAL_REFLECTION_OWNER_PROPERTY

@@ -38,6 +38,10 @@ struct ReflectionOwnerLayout {
     method_names_hi: Option<usize>,
     property_names_lo: Option<usize>,
     property_names_hi: Option<usize>,
+    method_objects_lo: Option<usize>,
+    method_objects_hi: Option<usize>,
+    property_objects_lo: Option<usize>,
+    property_objects_hi: Option<usize>,
     attrs_lo: usize,
     attrs_hi: usize,
     is_final_lo: Option<usize>,
@@ -155,6 +159,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let trait_names_lo = reflection_property_offset(info, "__trait_names");
     let method_names_lo = reflection_property_offset(info, "__method_names");
     let property_names_lo = reflection_property_offset(info, "__property_names");
+    let method_objects_lo = reflection_property_offset(info, "__methods");
+    let property_objects_lo = reflection_property_offset(info, "__properties");
     let is_final_lo = reflection_property_offset(info, "__is_final");
     let is_abstract_lo = reflection_property_offset(info, "__is_abstract");
     let is_interface_lo = reflection_property_offset(info, "__is_interface");
@@ -184,6 +190,10 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         method_names_hi: method_names_lo.map(|offset| offset + 8),
         property_names_lo,
         property_names_hi: property_names_lo.map(|offset| offset + 8),
+        method_objects_lo,
+        method_objects_hi: method_objects_lo.map(|offset| offset + 8),
+        property_objects_lo,
+        property_objects_hi: property_objects_lo.map(|offset| offset + 8),
         attrs_lo,
         attrs_hi: attrs_lo + 8,
         is_final_lo,
@@ -254,9 +264,13 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("str x5, [sp, #88]"); // save the boxed ReflectionClass trait-name array
     emitter.instruction("str x6, [sp, #104]"); // save the boxed ReflectionClass method-name array
     emitter.instruction("str x7, [sp, #112]"); // save the boxed ReflectionClass property-name array
-    emitter.instruction("ldr x8, [sp, #160]"); // load ReflectionClass modifier flags from the first stack argument
+    emitter.instruction("ldr x8, [sp, #160]"); // load the boxed ReflectionClass method objects array from the first stack argument
+    emitter.instruction("str x8, [sp, #120]"); // save the boxed ReflectionClass method objects array
+    emitter.instruction("ldr x8, [sp, #168]"); // load the boxed ReflectionClass property objects array from the second stack argument
+    emitter.instruction("str x8, [sp, #128]"); // save the boxed ReflectionClass property objects array
+    emitter.instruction("ldr x8, [sp, #176]"); // load ReflectionClass modifier flags from the third stack argument
     emitter.instruction("str x8, [sp, #48]"); // save ReflectionClass modifier flags
-    emitter.instruction("ldr x8, [sp, #168]"); // load ReflectionClass getModifiers bitmask from the second stack argument
+    emitter.instruction("ldr x8, [sp, #184]"); // load ReflectionClass getModifiers bitmask from the fourth stack argument
     emitter.instruction("str x8, [sp, #96]"); // save ReflectionClass getModifiers bitmask
     emitter.instruction("cmp x0, #0"); // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("b.eq {}", class_label)); // allocate a ReflectionClass owner
@@ -346,7 +360,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let enum_backed_case_label = "__elephc_eval_reflection_owner_new_enum_backed_case_x";
     emitter.instruction("push rbp"); // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp"); // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 128"); // reserve slots for inputs, object, metadata arrays, and name parts
+    emitter.instruction("sub rsp, 144"); // reserve slots for inputs, object, metadata arrays, and name parts
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi"); // save the Reflection owner kind
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi"); // save the reflected-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx"); // save the reflected-name length
@@ -357,9 +371,13 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("mov QWORD PTR [rbp - 112], rax"); // save the boxed ReflectionClass method-name array
     emitter.instruction("mov rax, QWORD PTR [rbp + 24]"); // load the boxed ReflectionClass property-name array from the second stack argument
     emitter.instruction("mov QWORD PTR [rbp - 120], rax"); // save the boxed ReflectionClass property-name array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 32]"); // load ReflectionClass modifier flags from the third stack argument
+    emitter.instruction("mov rax, QWORD PTR [rbp + 32]"); // load the boxed ReflectionClass method objects array from the third stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 128], rax"); // save the boxed ReflectionClass method objects array
+    emitter.instruction("mov rax, QWORD PTR [rbp + 40]"); // load the boxed ReflectionClass property objects array from the fourth stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 136], rax"); // save the boxed ReflectionClass property objects array
+    emitter.instruction("mov rax, QWORD PTR [rbp + 48]"); // load ReflectionClass modifier flags from the fifth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 56], rax"); // save ReflectionClass modifier flags
-    emitter.instruction("mov rax, QWORD PTR [rbp + 40]"); // load ReflectionClass getModifiers bitmask from the fourth stack argument
+    emitter.instruction("mov rax, QWORD PTR [rbp + 56]"); // load ReflectionClass getModifiers bitmask from the sixth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 104], rax"); // save ReflectionClass getModifiers bitmask
     emitter.instruction("cmp rdi, 0"); // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("je {}", class_label)); // allocate a ReflectionClass owner
@@ -968,6 +986,10 @@ fn emit_set_owner_metadata_arrays_property_aarch64(
         Some(method_names_hi),
         Some(property_names_lo),
         Some(property_names_hi),
+        Some(method_objects_lo),
+        Some(method_objects_hi),
+        Some(property_objects_lo),
+        Some(property_objects_hi),
     ) = (
         layout.interface_names_lo,
         layout.interface_names_hi,
@@ -977,6 +999,10 @@ fn emit_set_owner_metadata_arrays_property_aarch64(
         layout.method_names_hi,
         layout.property_names_lo,
         layout.property_names_hi,
+        layout.method_objects_lo,
+        layout.method_objects_hi,
+        layout.property_objects_lo,
+        layout.property_objects_hi,
     )
     else {
         return;
@@ -1007,6 +1033,20 @@ fn emit_set_owner_metadata_arrays_property_aarch64(
         112,
         property_names_lo,
         property_names_hi,
+        fail_label,
+    );
+    emit_set_owner_metadata_array_slot_aarch64(
+        emitter,
+        120,
+        method_objects_lo,
+        method_objects_hi,
+        fail_label,
+    );
+    emit_set_owner_metadata_array_slot_aarch64(
+        emitter,
+        128,
+        property_objects_lo,
+        property_objects_hi,
         fail_label,
     );
 }
@@ -1049,6 +1089,10 @@ fn emit_set_owner_metadata_arrays_property_x86_64(
         Some(method_names_hi),
         Some(property_names_lo),
         Some(property_names_hi),
+        Some(method_objects_lo),
+        Some(method_objects_hi),
+        Some(property_objects_lo),
+        Some(property_objects_hi),
     ) = (
         layout.interface_names_lo,
         layout.interface_names_hi,
@@ -1058,6 +1102,10 @@ fn emit_set_owner_metadata_arrays_property_x86_64(
         layout.method_names_hi,
         layout.property_names_lo,
         layout.property_names_hi,
+        layout.method_objects_lo,
+        layout.method_objects_hi,
+        layout.property_objects_lo,
+        layout.property_objects_hi,
     )
     else {
         return;
@@ -1088,6 +1136,20 @@ fn emit_set_owner_metadata_arrays_property_x86_64(
         -120,
         property_names_lo,
         property_names_hi,
+        fail_label,
+    );
+    emit_set_owner_metadata_array_slot_x86_64(
+        emitter,
+        -128,
+        method_objects_lo,
+        method_objects_hi,
+        fail_label,
+    );
+    emit_set_owner_metadata_array_slot_x86_64(
+        emitter,
+        -136,
+        property_objects_lo,
+        property_objects_hi,
         fail_label,
     );
 }

@@ -131,6 +131,8 @@ impl RuntimeValueOps for FakeOps {
         trait_names: RuntimeCellHandle,
         method_names: RuntimeCellHandle,
         property_names: RuntimeCellHandle,
+        method_objects: RuntimeCellHandle,
+        property_objects: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -142,6 +144,8 @@ impl RuntimeValueOps for FakeOps {
             trait_names,
             method_names,
             property_names,
+            method_objects,
+            property_objects,
             flags,
             modifiers,
         )

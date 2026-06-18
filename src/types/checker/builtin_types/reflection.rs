@@ -208,6 +208,11 @@ fn string_array_type() -> TypeExpr {
     TypeExpr::Array(Box::new(TypeExpr::Str))
 }
 
+/// Returns a `TypeExpr` for an indexed array of objects with the given class name.
+fn object_array_type(class_name: &str) -> TypeExpr {
+    TypeExpr::Array(Box::new(TypeExpr::Named(Name::unqualified(class_name))))
+}
+
 /// Returns a `TypeExpr` for the unqualified name `mixed`.
 fn mixed_type() -> TypeExpr {
     TypeExpr::Named(crate::names::Name::unqualified("mixed"))
@@ -430,6 +435,18 @@ fn builtin_reflection_class() -> FlattenedClass {
                 Some(string_array_type()),
                 empty_array(),
             ),
+            builtin_property(
+                "__methods",
+                Visibility::Private,
+                Some(object_array_type("ReflectionMethod")),
+                empty_array(),
+            ),
+            builtin_property(
+                "__properties",
+                Visibility::Private,
+                Some(object_array_type("ReflectionProperty")),
+                empty_array(),
+            ),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
@@ -442,8 +459,16 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_string_method("getShortName", "__short_name"),
             builtin_reflection_class_string_method("getNamespaceName", "__namespace_name"),
             builtin_reflection_class_bool_method("inNamespace", "__in_namespace"),
-            builtin_reflection_class_array_method("getInterfaceNames", "__interface_names"),
-            builtin_reflection_class_array_method("getTraitNames", "__trait_names"),
+            builtin_reflection_class_array_method(
+                "getInterfaceNames",
+                "__interface_names",
+                string_array_type(),
+            ),
+            builtin_reflection_class_array_method(
+                "getTraitNames",
+                "__trait_names",
+                string_array_type(),
+            ),
             builtin_reflection_class_bool_method("isFinal", "__is_final"),
             builtin_reflection_class_bool_method("isAbstract", "__is_abstract"),
             builtin_reflection_class_bool_method("isInterface", "__is_interface"),
@@ -453,6 +478,16 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_int_method("getModifiers", "__modifiers"),
             builtin_reflection_class_has_name_method("hasMethod", "__method_names", true),
             builtin_reflection_class_has_name_method("hasProperty", "__property_names", false),
+            builtin_reflection_class_array_method(
+                "getMethods",
+                "__methods",
+                object_array_type("ReflectionMethod"),
+            ),
+            builtin_reflection_class_array_method(
+                "getProperties",
+                "__properties",
+                object_array_type("ReflectionProperty"),
+            ),
             builtin_reflection_owner_get_attributes_method(),
         ],
         attributes: Vec::new(),
@@ -592,7 +627,11 @@ fn builtin_reflection_class_has_name_method(
 }
 
 /// Returns a public `ReflectionClass` array method backed by one private slot.
-fn builtin_reflection_class_array_method(method_name: &str, property: &str) -> ClassMethod {
+fn builtin_reflection_class_array_method(
+    method_name: &str,
+    property: &str,
+    return_type: TypeExpr,
+) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
         name: method_name.to_string(),
@@ -604,7 +643,7 @@ fn builtin_reflection_class_array_method(method_name: &str, property: &str) -> C
         params: Vec::new(),
         variadic: None,
         variadic_type: None,
-        return_type: Some(string_array_type()),
+        return_type: Some(return_type),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -851,6 +890,15 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Array(Box::new(PhpType::Str));
                     }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getMethods")) {
+                    sig.return_type =
+                        PhpType::Array(Box::new(PhpType::Object("ReflectionMethod".to_string())));
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getProperties")) {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionProperty".to_string(),
+                    )));
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;
