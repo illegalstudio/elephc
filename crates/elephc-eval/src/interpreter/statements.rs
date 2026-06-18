@@ -1629,7 +1629,7 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let class_name = resolve_eval_static_class_name(class_name, context)?;
+    let class_name = resolve_eval_static_method_class_name(class_name, context)?;
     if context.has_enum(&class_name) && eval_enum_static_builtin_name(method_name).is_some() {
         return eval_enum_builtin_static_method_result(
             &class_name,
@@ -1639,21 +1639,34 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
             values,
         );
     }
-    let (declaring_class, method) =
+    if let Some((declaring_class, method)) =
         eval_dynamic_static_method_for_call(&class_name, method_name, context)
-            .ok_or(EvalStatus::RuntimeFatal)?;
-    if !method.is_static() || method.is_abstract() {
+    {
+        if !method.is_static() || method.is_abstract() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        validate_eval_member_access(&declaring_class, method.visibility(), context)?;
+        return eval_dynamic_static_method_with_values(
+            &declaring_class,
+            &class_name,
+            &method,
+            evaluated_args,
+            context,
+            values,
+        );
+    }
+    if context.has_class(&class_name)
+        || context.has_interface(&class_name)
+        || context.has_trait(&class_name)
+        || context.has_enum(&class_name)
+    {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
-    eval_dynamic_static_method_with_values(
-        &declaring_class,
-        &class_name,
-        &method,
-        evaluated_args,
-        context,
-        values,
-    )
+    if evaluated_args.iter().any(|arg| arg.name.is_some()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let args = evaluated_args.into_iter().map(|arg| arg.value).collect();
+    values.static_method_call(&class_name, method_name, args)
 }
 
 /// Returns a recognized enum-provided static method name.
@@ -1844,6 +1857,19 @@ fn resolve_eval_static_class_name(
                     .then(|| class_name.to_string())
             })
             .ok_or(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Resolves static method receivers while allowing non-eval class names to reach AOT lookup.
+fn resolve_eval_static_method_class_name(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<String, EvalStatus> {
+    match class_name.to_ascii_lowercase().as_str() {
+        "self" | "parent" | "static" => resolve_eval_static_class_name(class_name, context),
+        _ => Ok(context
+            .resolve_class_name(class_name)
+            .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string())),
     }
 }
 

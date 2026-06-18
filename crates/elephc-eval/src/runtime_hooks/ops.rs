@@ -144,6 +144,29 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         result
     }
 
+    /// Calls a public AOT static method through the generated user helper.
+    fn static_method_call(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: Vec<RuntimeCellHandle>,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let arg_array = Self::arg_array(args)?;
+        let result = Self::handle(unsafe {
+            __elephc_eval_value_static_method_call(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                method.as_ptr(),
+                method.len() as u64,
+                arg_array.as_ptr(),
+            )
+        });
+        unsafe {
+            __elephc_eval_value_release(arg_array.as_ptr());
+        }
+        result
+    }
+
     /// Creates a boxed Mixed object through the generated dynamic class-name wrapper.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         let object = Self::handle(unsafe {

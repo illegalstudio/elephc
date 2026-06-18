@@ -92,6 +92,15 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_method_call(object, method, args)
     }
+    /// Calls one fake static runtime method by class and method name.
+    fn static_method_call(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: Vec<RuntimeCellHandle>,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_static_method_call(class_name, method, args)
+    }
     /// Creates one fake object for eval `new` unit tests.
     fn new_object(&mut self, _class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_new_object(_class_name)
