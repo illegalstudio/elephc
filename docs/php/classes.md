@@ -985,15 +985,25 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionClass::getAttributes()` | `new ReflectionClass($class_name)` | Return `ReflectionAttribute` objects for class attributes |
 | `ReflectionMethod::getName()` | `new ReflectionMethod($class_name, $method_name)` | Return the reflected method name |
 | `ReflectionMethod::getAttributes()` | `new ReflectionMethod($class_name, $method_name)` | Return `ReflectionAttribute` objects for method attributes |
+| `ReflectionMethod::isStatic()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is static |
+| `ReflectionMethod::isPublic()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is public |
+| `ReflectionMethod::isProtected()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is protected |
+| `ReflectionMethod::isPrivate()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is private |
+| `ReflectionMethod::isFinal()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is final |
+| `ReflectionMethod::isAbstract()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is abstract |
 | `ReflectionProperty::getName()` | `new ReflectionProperty($class_name, $property_name)` | Return the reflected property name |
 | `ReflectionProperty::getAttributes()` | `new ReflectionProperty($class_name, $property_name)` | Return `ReflectionAttribute` objects for property attributes |
+| `ReflectionProperty::isStatic()` | `new ReflectionProperty($class_name, $property_name)` | Return whether the reflected property is static |
+| `ReflectionProperty::isPublic()` | `new ReflectionProperty($class_name, $property_name)` | Return whether the reflected property is public |
+| `ReflectionProperty::isProtected()` | `new ReflectionProperty($class_name, $property_name)` | Return whether the reflected property is protected |
+| `ReflectionProperty::isPrivate()` | `new ReflectionProperty($class_name, $property_name)` | Return whether the reflected property is private |
 | `ReflectionAttribute::newInstance()` | Internal only | Instantiate the attribute class from captured literal args |
 
 Limitations today:
 - All arguments to `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and `new ReflectionClass/Method/Property(...)` must be compile-time class/member strings. `ClassName::class` is accepted for the class-name argument of `new ReflectionClass/Method/Property(...)`, and normal named-argument / static associative-spread normalization runs before the literal-string check. `ReflectionClass` can resolve statically known classes, enums, interfaces, and traits; class-attribute materialization is currently backed by class/enum metadata. Dynamic class, method, property, or attribute names require a runtime name→id lookup table that is not yet implemented.
 - Only **literal** positional arguments are materialized by reflection helpers today (string, int, bool, null, plus `-N` for negative ints). Other legal PHP attribute arguments can still be parsed and compiled, and `class_attribute_names()` can still list the attribute name, but `class_attribute_args()`, `class_get_attributes()`, and Reflection `getAttributes()` report an error if they would need unsupported argument metadata.
 - When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
-- `ReflectionClass` supports `getName()`, `getShortName()`, `getNamespaceName()`, `inNamespace()`, `getAttributes()`, `isFinal()`, `isAbstract()`, `isInterface()`, `isTrait()`, `isEnum()`, `getModifiers()`, `hasMethod()`, `hasProperty()`, `getInterfaceNames()`, and `getTraitNames()`. It also exposes PHP-compatible `ReflectionClass::IS_IMPLICIT_ABSTRACT`, `ReflectionClass::IS_FINAL`, `ReflectionClass::IS_EXPLICIT_ABSTRACT`, and `ReflectionClass::IS_READONLY` constants. `ReflectionMethod` and `ReflectionProperty` currently support `getName()` and `getAttributes()` only; broader APIs such as `getProperties()`, `getMethods()`, and object construction through `ReflectionClass::newInstance()` are not yet available.
+- `ReflectionClass` supports `getName()`, `getShortName()`, `getNamespaceName()`, `inNamespace()`, `getAttributes()`, `isFinal()`, `isAbstract()`, `isInterface()`, `isTrait()`, `isEnum()`, `getModifiers()`, `hasMethod()`, `hasProperty()`, `getInterfaceNames()`, and `getTraitNames()`. It also exposes PHP-compatible `ReflectionClass::IS_IMPLICIT_ABSTRACT`, `ReflectionClass::IS_FINAL`, `ReflectionClass::IS_EXPLICIT_ABSTRACT`, and `ReflectionClass::IS_READONLY` constants. `ReflectionMethod` supports `getName()`, `getAttributes()`, `isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`, `isFinal()`, and `isAbstract()`. `ReflectionProperty` supports `getName()`, `getAttributes()`, `isStatic()`, `isPublic()`, `isProtected()`, and `isPrivate()`. Broader APIs such as `getProperties()`, `getMethods()`, and object construction through `ReflectionClass::newInstance()` are not yet available.
 
 ### Class constants
 

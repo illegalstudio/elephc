@@ -167,6 +167,10 @@ classes and parent interfaces for eval interfaces, while
 `ReflectionClass::hasMethod()` and `ReflectionClass::hasProperty()` report
 method and property membership for eval classes, interfaces, traits, and enums;
 method lookup is case-insensitive, while property lookup is case-sensitive.
+`ReflectionMethod::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
+`isFinal()`, and `isAbstract()` report eval method metadata.
+`ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, and
+`isPrivate()` report eval property metadata.
 `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant
@@ -328,8 +332,9 @@ broader parameter/return ABI shapes are still outside that bridge.
 
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
-ReflectionClass/attribute slice and broader generated/AOT method bridge
-signatures beyond the current public non-by-reference fixed scalar/Mixed slice.
+ReflectionClass/Method/Property/attribute slice and broader generated/AOT method
+bridge signatures beyond the current public non-by-reference fixed scalar/Mixed
+slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

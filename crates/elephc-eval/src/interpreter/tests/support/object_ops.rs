@@ -9,6 +9,13 @@
 
 use super::*;
 
+const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
+const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
+const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
+const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE: u64 = 8;
+const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
+const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
+
 impl FakeOps {
     /// Reads one fake object property by name.
     pub(super) fn runtime_property_get(
@@ -136,6 +143,22 @@ impl FakeOps {
             }
             (FakeValue::Object(properties), "getmodifiers") if args.is_empty() => {
                 Self::object_property(&properties, "__modifiers").map_or_else(|| self.int(0), Ok)
+            }
+            (FakeValue::Object(properties), "isstatic") if args.is_empty() => {
+                Self::object_property(&properties, "__is_static")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "ispublic") if args.is_empty() => {
+                Self::object_property(&properties, "__is_public")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "isprotected") if args.is_empty() => {
+                Self::object_property(&properties, "__is_protected")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "isprivate") if args.is_empty() => {
+                Self::object_property(&properties, "__is_private")
+                    .map_or_else(|| self.bool_value(false), Ok)
             }
             (FakeValue::Object(properties), "hasmethod") if args.len() == 1 => {
                 self.object_string_array_contains(&properties, "__method_names", args[0], true)
@@ -309,6 +332,26 @@ impl FakeOps {
             properties.push(("__trait_names".to_string(), trait_names));
             properties.push(("__method_names".to_string(), method_names));
             properties.push(("__property_names".to_string(), property_names));
+        }
+        if owner_kind == EVAL_REFLECTION_OWNER_METHOD
+            || owner_kind == EVAL_REFLECTION_OWNER_PROPERTY
+        {
+            let is_static = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC) != 0)?;
+            let is_public = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PUBLIC) != 0)?;
+            let is_protected =
+                self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED) != 0)?;
+            let is_private = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE) != 0)?;
+            properties.push(("__is_static".to_string(), is_static));
+            properties.push(("__is_public".to_string(), is_public));
+            properties.push(("__is_protected".to_string(), is_protected));
+            properties.push(("__is_private".to_string(), is_private));
+        }
+        if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+            let is_final = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL) != 0)?;
+            let is_abstract =
+                self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT) != 0)?;
+            properties.push(("__is_final".to_string(), is_final));
+            properties.push(("__is_abstract".to_string(), is_abstract));
         }
         let object = self.alloc(FakeValue::Object(properties));
         self.object_classes

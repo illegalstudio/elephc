@@ -664,6 +664,7 @@ fn builtin_reflection_owner_class(
         ));
         methods.push(builtin_reflection_class_string_method("getName", "__name"));
     }
+    add_reflection_member_flag_methods(name, &mut properties, &mut methods);
     properties.push(builtin_property(
         "__attrs",
         Visibility::Private,
@@ -683,6 +684,42 @@ fn builtin_reflection_owner_class(
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+    }
+}
+
+/// Adds member visibility/staticity predicates for method and property reflection owners.
+fn add_reflection_member_flag_methods(
+    class_name: &str,
+    properties: &mut Vec<ClassProperty>,
+    methods: &mut Vec<ClassMethod>,
+) {
+    let common_flags = [
+        ("__is_static", "isStatic"),
+        ("__is_public", "isPublic"),
+        ("__is_protected", "isProtected"),
+        ("__is_private", "isPrivate"),
+    ];
+    if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") {
+        for (property, method) in common_flags {
+            properties.push(builtin_property(
+                property,
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ));
+            methods.push(builtin_reflection_class_bool_method(method, property));
+        }
+    }
+    if class_name == "ReflectionMethod" {
+        for (property, method) in [("__is_final", "isFinal"), ("__is_abstract", "isAbstract")] {
+            properties.push(builtin_property(
+                property,
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ));
+            methods.push(builtin_reflection_class_bool_method(method, property));
+        }
     }
 }
 
@@ -809,6 +846,20 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;
+                }
+            }
+            if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") {
+                for method_name in ["isstatic", "ispublic", "isprotected", "isprivate"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+            }
+            if class_name == "ReflectionMethod" {
+                for method_name in ["isfinal", "isabstract"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
                 }
             }
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getAttributes")) {

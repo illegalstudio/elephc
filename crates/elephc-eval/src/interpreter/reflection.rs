@@ -17,6 +17,12 @@ const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
 const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
 const EVAL_REFLECTION_CLASS_FLAG_TRAIT: u64 = 8;
 const EVAL_REFLECTION_CLASS_FLAG_ENUM: u64 = 16;
+const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
+const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
+const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
+const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE: u64 = 8;
+const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
+const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
 
 /// Eval metadata needed to materialize one `ReflectionClass` owner object.
 struct EvalReflectionClassMetadata {
@@ -28,6 +34,15 @@ struct EvalReflectionClassMetadata {
     trait_names: Vec<String>,
     method_names: Vec<String>,
     property_names: Vec<String>,
+}
+
+/// Eval metadata needed to materialize one `ReflectionMethod` or `ReflectionProperty` owner object.
+struct EvalReflectionMemberMetadata {
+    attributes: Vec<EvalAttribute>,
+    visibility: EvalVisibility,
+    is_static: bool,
+    is_final: bool,
+    is_abstract: bool,
 }
 
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.
@@ -109,17 +124,23 @@ fn eval_reflection_method_new(
         return Ok(None);
     }
     let method_name = eval_reflection_string_arg(args[1], values)?;
-    let attributes = eval_reflection_method_attributes(&class_name, &method_name, context)
+    let method = eval_reflection_method_metadata(&class_name, &method_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
+    let flags = eval_reflection_member_flags(
+        method.visibility,
+        method.is_static,
+        method.is_final,
+        method.is_abstract,
+    );
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_METHOD,
         &method_name,
-        &attributes,
+        &method.attributes,
         &[],
         &[],
         &[],
         &[],
-        0,
+        flags,
         0,
         context,
         values,
@@ -142,17 +163,18 @@ fn eval_reflection_property_new(
         return Ok(None);
     }
     let property_name = eval_reflection_string_arg(args[1], values)?;
-    let attributes = eval_reflection_property_attributes(&class_name, &property_name, context)
+    let property = eval_reflection_property_metadata(&class_name, &property_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
+    let flags = eval_reflection_member_flags(property.visibility, property.is_static, false, false);
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_PROPERTY,
         &property_name,
-        &attributes,
+        &property.attributes,
         &[],
         &[],
         &[],
         &[],
-        0,
+        flags,
         0,
         context,
         values,
@@ -403,58 +425,119 @@ fn eval_reflection_class_like_exists(name: &str, context: &ElephcEvalContext) ->
         || context.has_enum(name)
 }
 
-/// Returns attributes attached to a method-like member on an eval class-like symbol.
-fn eval_reflection_method_attributes(
+/// Returns method metadata for a method-like member on an eval class-like symbol.
+fn eval_reflection_method_metadata(
     class_name: &str,
     method_name: &str,
     context: &ElephcEvalContext,
-) -> Option<Vec<EvalAttribute>> {
+) -> Option<EvalReflectionMemberMetadata> {
     if context.has_class(class_name) || context.has_enum(class_name) {
         return context
             .class_method(class_name, method_name)
-            .map(|(_, method)| method.attributes().to_vec());
+            .map(|(_, method)| EvalReflectionMemberMetadata {
+                attributes: method.attributes().to_vec(),
+                visibility: method.visibility(),
+                is_static: method.is_static(),
+                is_final: method.is_final(),
+                is_abstract: method.is_abstract(),
+            });
     }
     if context.has_interface(class_name) {
         return context
             .interface_method_requirements(class_name)
             .into_iter()
             .find(|method| method.name().eq_ignore_ascii_case(method_name))
-            .map(|method| method.attributes().to_vec());
+            .map(|method| EvalReflectionMemberMetadata {
+                attributes: method.attributes().to_vec(),
+                visibility: EvalVisibility::Public,
+                is_static: false,
+                is_final: false,
+                is_abstract: true,
+            });
     }
     context.trait_decl(class_name).and_then(|trait_decl| {
         trait_decl
             .methods()
             .iter()
             .find(|method| method.name().eq_ignore_ascii_case(method_name))
-            .map(|method| method.attributes().to_vec())
+            .map(|method| EvalReflectionMemberMetadata {
+                attributes: method.attributes().to_vec(),
+                visibility: method.visibility(),
+                is_static: method.is_static(),
+                is_final: method.is_final(),
+                is_abstract: method.is_abstract(),
+            })
     })
 }
 
-/// Returns attributes attached to a property-like member on an eval class-like symbol.
-fn eval_reflection_property_attributes(
+/// Returns property metadata for a property-like member on an eval class-like symbol.
+fn eval_reflection_property_metadata(
     class_name: &str,
     property_name: &str,
     context: &ElephcEvalContext,
-) -> Option<Vec<EvalAttribute>> {
+) -> Option<EvalReflectionMemberMetadata> {
     if context.has_class(class_name) || context.has_enum(class_name) {
         return context
             .class_property(class_name, property_name)
-            .map(|(_, property)| property.attributes().to_vec());
+            .map(|(_, property)| EvalReflectionMemberMetadata {
+                attributes: property.attributes().to_vec(),
+                visibility: property.visibility(),
+                is_static: property.is_static(),
+                is_final: false,
+                is_abstract: property.is_abstract(),
+            });
     }
     if context.has_interface(class_name) {
         return context
             .interface_property_requirements(class_name)
             .into_iter()
             .find(|property| property.name() == property_name)
-            .map(|property| property.attributes().to_vec());
+            .map(|property| EvalReflectionMemberMetadata {
+                attributes: property.attributes().to_vec(),
+                visibility: EvalVisibility::Public,
+                is_static: false,
+                is_final: false,
+                is_abstract: true,
+            });
     }
     context.trait_decl(class_name).and_then(|trait_decl| {
         trait_decl
             .properties()
             .iter()
             .find(|property| property.name() == property_name)
-            .map(|property| property.attributes().to_vec())
+            .map(|property| EvalReflectionMemberMetadata {
+                attributes: property.attributes().to_vec(),
+                visibility: property.visibility(),
+                is_static: property.is_static(),
+                is_final: false,
+                is_abstract: property.is_abstract(),
+            })
     })
+}
+
+/// Packs ReflectionMethod/ReflectionProperty predicate flags for the runtime owner factory.
+fn eval_reflection_member_flags(
+    visibility: EvalVisibility,
+    is_static: bool,
+    is_final: bool,
+    is_abstract: bool,
+) -> u64 {
+    let mut flags = 0;
+    if is_static {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_STATIC;
+    }
+    match visibility {
+        EvalVisibility::Public => flags |= EVAL_REFLECTION_MEMBER_FLAG_PUBLIC,
+        EvalVisibility::Protected => flags |= EVAL_REFLECTION_MEMBER_FLAG_PROTECTED,
+        EvalVisibility::Private => flags |= EVAL_REFLECTION_MEMBER_FLAG_PRIVATE,
+    }
+    if is_final {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_FINAL;
+    }
+    if is_abstract {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT;
+    }
+    flags
 }
 
 /// Converts one reflection constructor argument to a Rust UTF-8 string.

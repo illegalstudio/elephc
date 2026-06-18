@@ -1296,6 +1296,54 @@ echo $attrs[0]->getArguments()[0];
     assert_eq!(out, "id/1/Column/id");
 }
 
+/// Verifies that `ReflectionMethod` and `ReflectionProperty` expose member
+/// visibility, staticity, finality, and abstractness predicates.
+#[test]
+fn test_reflection_member_predicates_report_method_and_property_flags() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class ReflectMemberBase {
+    protected static function baseStatic() {}
+    abstract protected function mustImplement();
+    final public function locked() {}
+}
+class ReflectMemberChild extends ReflectMemberBase {
+    public function mustImplement() {}
+    private static string $token = "x";
+    protected int $visible = 2;
+}
+$baseStatic = new ReflectionMethod(ReflectMemberChild::class, "baseStatic");
+echo $baseStatic->isStatic() ? "S" : "s";
+echo $baseStatic->isProtected() ? "P" : "p";
+echo $baseStatic->isPublic() ? "U" : "u";
+echo $baseStatic->isPrivate() ? "R" : "r";
+echo $baseStatic->isFinal() ? "F" : "f";
+echo $baseStatic->isAbstract() ? "A" : "a";
+echo ":";
+$abstractMethod = new ReflectionMethod(ReflectMemberBase::class, "mustImplement");
+echo $abstractMethod->isAbstract() ? "A" : "a";
+echo $abstractMethod->isProtected() ? "P" : "p";
+echo $abstractMethod->isStatic() ? "S" : "s";
+echo ":";
+$finalMethod = new ReflectionMethod(ReflectMemberChild::class, "locked");
+echo $finalMethod->isFinal() ? "F" : "f";
+echo $finalMethod->isPublic() ? "U" : "u";
+echo $finalMethod->isStatic() ? "S" : "s";
+echo ":";
+$staticProp = new ReflectionProperty(ReflectMemberChild::class, "token");
+echo $staticProp->isStatic() ? "S" : "s";
+echo $staticProp->isPrivate() ? "R" : "r";
+echo $staticProp->isProtected() ? "P" : "p";
+echo ":";
+$visibleProp = new ReflectionProperty(ReflectMemberChild::class, "visible");
+echo $visibleProp->isStatic() ? "S" : "s";
+echo $visibleProp->isProtected() ? "P" : "p";
+echo $visibleProp->isPublic() ? "U" : "u";
+"#,
+    );
+    assert_eq!(out, "SPurfa:APs:FUs:SRp:sPu");
+}
+
 /// Verifies that `ReflectionClassConstant` and enum-case reflectors expose
 /// attribute name, arguments, `getName()`, and `newInstance()` data.
 #[test]

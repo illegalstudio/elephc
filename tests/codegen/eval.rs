@@ -5740,6 +5740,58 @@ echo $backed->hasProperty("value") ? "Y" : "y";');
     assert_eq!(out.stdout, "MPSx:ChTw:IJK:RU:ELNv:BY");
 }
 
+/// Verifies eval ReflectionMethod and ReflectionProperty expose member predicates through the bridge.
+#[test]
+fn test_eval_reflection_member_predicates() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('abstract class EvalReflectMemberBase {
+    protected static function baseStatic() {}
+    abstract protected function mustImplement();
+    final public function locked() {}
+}
+class EvalReflectMemberChild extends EvalReflectMemberBase {
+    public function mustImplement() {}
+    private static $token;
+    protected $visible;
+}
+$baseStatic = new ReflectionMethod("EvalReflectMemberChild", "baseStatic");
+echo $baseStatic->isStatic() ? "S" : "s";
+echo $baseStatic->isProtected() ? "P" : "p";
+echo $baseStatic->isPublic() ? "U" : "u";
+echo $baseStatic->isPrivate() ? "R" : "r";
+echo $baseStatic->isFinal() ? "F" : "f";
+echo $baseStatic->isAbstract() ? "A" : "a";
+echo ":";
+$abstractMethod = new ReflectionMethod("EvalReflectMemberBase", "mustImplement");
+echo $abstractMethod->isAbstract() ? "A" : "a";
+echo $abstractMethod->isProtected() ? "P" : "p";
+echo $abstractMethod->isStatic() ? "S" : "s";
+echo ":";
+$finalMethod = new ReflectionMethod("EvalReflectMemberChild", "locked");
+echo $finalMethod->isFinal() ? "F" : "f";
+echo $finalMethod->isPublic() ? "U" : "u";
+echo $finalMethod->isStatic() ? "S" : "s";
+echo ":";
+$staticProp = new ReflectionProperty("EvalReflectMemberChild", "token");
+echo $staticProp->isStatic() ? "S" : "s";
+echo $staticProp->isPrivate() ? "R" : "r";
+echo $staticProp->isProtected() ? "P" : "p";
+echo ":";
+$visibleProp = new ReflectionProperty("EvalReflectMemberChild", "visible");
+echo $visibleProp->isStatic() ? "S" : "s";
+echo $visibleProp->isProtected() ? "P" : "p";
+echo $visibleProp->isPublic() ? "U" : "u";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "SPurfa:APs:FUs:SRp:sPu");
+}
+
 /// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.
 #[test]
 fn test_eval_reflection_constant_and_enum_case_attributes() {

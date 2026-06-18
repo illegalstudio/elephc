@@ -407,6 +407,59 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod and ReflectionProperty expose eval member predicate metadata.
+#[test]
+fn execute_program_reflects_eval_member_predicates() {
+    let program = parse_fragment(
+        br#"abstract class EvalReflectMemberBase {
+    protected static function baseStatic() {}
+    abstract protected function mustImplement();
+    final public function locked() {}
+}
+class EvalReflectMemberChild extends EvalReflectMemberBase {
+    public function mustImplement() {}
+    private static $token;
+    protected $visible;
+}
+$baseStatic = new ReflectionMethod("EvalReflectMemberChild", "baseStatic");
+echo $baseStatic->isStatic() ? "S" : "s";
+echo $baseStatic->isProtected() ? "P" : "p";
+echo $baseStatic->isPublic() ? "U" : "u";
+echo $baseStatic->isPrivate() ? "R" : "r";
+echo $baseStatic->isFinal() ? "F" : "f";
+echo $baseStatic->isAbstract() ? "A" : "a";
+echo ":";
+$abstractMethod = new ReflectionMethod("EvalReflectMemberBase", "mustImplement");
+echo $abstractMethod->isAbstract() ? "A" : "a";
+echo $abstractMethod->isProtected() ? "P" : "p";
+echo $abstractMethod->isStatic() ? "S" : "s";
+echo ":";
+$finalMethod = new ReflectionMethod("EvalReflectMemberChild", "locked");
+echo $finalMethod->isFinal() ? "F" : "f";
+echo $finalMethod->isPublic() ? "U" : "u";
+echo $finalMethod->isStatic() ? "S" : "s";
+echo ":";
+$staticProp = new ReflectionProperty("EvalReflectMemberChild", "token");
+echo $staticProp->isStatic() ? "S" : "s";
+echo $staticProp->isPrivate() ? "R" : "r";
+echo $staticProp->isProtected() ? "P" : "p";
+echo ":";
+$visibleProp = new ReflectionProperty("EvalReflectMemberChild", "visible");
+echo $visibleProp->isStatic() ? "S" : "s";
+echo $visibleProp->isProtected() ? "P" : "p";
+echo $visibleProp->isPublic() ? "U" : "u";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "SPurfa:APs:FUs:SRp:sPu");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClassConstant/EnumCase expose eval-declared attribute metadata.
 #[test]
 fn execute_program_reflects_eval_constant_and_enum_case_attributes() {
