@@ -377,14 +377,17 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let class = expand_eval_class_traits(class, context)?;
+    let class = expand_eval_class_traits(class, context)?.with_readonly_instance_properties();
     let class = &class;
     validate_eval_class_modifiers(class, context)?;
     if let Some(parent) = class.parent() {
         let Some(parent_class) = context.class(parent) else {
             return Err(EvalStatus::RuntimeFatal);
         };
-        if parent_class.is_final() || context.class_is_a(parent, name, false) {
+        if parent_class.is_final()
+            || parent_class.is_readonly_class() != class.is_readonly_class()
+            || context.class_is_a(parent, name, false)
+        {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -732,18 +735,21 @@ fn expand_eval_class_traits(
     constants.extend(class.constants().iter().cloned());
     properties.extend(class.properties().iter().cloned());
     methods.extend(class.methods().iter().cloned());
-    Ok(EvalClass::with_modifiers_traits_adaptations_and_constants(
-        class.name().to_string(),
-        class.is_abstract(),
-        class.is_final(),
-        class.parent().map(str::to_string),
-        class.interfaces().to_vec(),
-        class.traits().to_vec(),
-        class.trait_adaptations().to_vec(),
-        constants,
-        properties,
-        methods,
-    ))
+    Ok(
+        EvalClass::with_class_modifiers_traits_adaptations_and_constants(
+            class.name().to_string(),
+            class.is_abstract(),
+            class.is_final(),
+            class.is_readonly_class(),
+            class.parent().map(str::to_string),
+            class.interfaces().to_vec(),
+            class.traits().to_vec(),
+            class.trait_adaptations().to_vec(),
+            constants,
+            properties,
+            methods,
+        ),
+    )
 }
 
 /// Returns case-insensitive method names declared directly by a pending class.
@@ -969,6 +975,7 @@ fn validate_eval_class_modifiers(
         return Err(EvalStatus::RuntimeFatal);
     }
     validate_eval_declared_constants(class.constants())?;
+    validate_eval_declared_properties(class.properties())?;
     for method in class.methods() {
         if method.is_abstract() && method.is_final() {
             return Err(EvalStatus::RuntimeFatal);
@@ -983,6 +990,23 @@ fn validate_eval_class_modifiers(
             return Err(EvalStatus::RuntimeFatal);
         }
         validate_method_parent_override(class, method, context)?;
+    }
+    Ok(())
+}
+
+/// Validates property declarations that can be checked before class registration.
+fn validate_eval_declared_properties(properties: &[EvalClassProperty]) -> Result<(), EvalStatus> {
+    let mut names = std::collections::HashSet::new();
+    for property in properties {
+        if !names.insert(property.name().to_string()) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if property.is_static() && property.is_readonly() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if property.is_readonly() && property.default().is_some() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
     }
     Ok(())
 }

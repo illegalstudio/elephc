@@ -4893,6 +4893,59 @@ $box->replace(8);');
     );
 }
 
+/// Verifies eval-declared readonly classes mirror instance/static property rules.
+#[test]
+fn test_eval_declared_readonly_class_rules() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('readonly class EvalReadonlyClassBox {
+    public int $id;
+    public static int $count = 1;
+    public function __construct($id) { $this->id = $id; }
+    public function id() { return $this->id; }
+}
+readonly class EvalReadonlyClassChild extends EvalReadonlyClassBox {}
+$box = new EvalReadonlyClassBox(7);
+$child = new EvalReadonlyClassChild(9);
+EvalReadonlyClassBox::$count = 5;
+echo $box->id() . ":" . EvalReadonlyClassBox::$count . ":" . $child->id();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7:5:9");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('readonly class EvalReadonlyClassFailBox {
+    public int $id;
+    public function __construct($id) { $this->id = $id; }
+    public function replace($id) { $this->id = $id; }
+}
+$box = new EvalReadonlyClassFailBox(7);
+$box->replace(8);');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let parent_err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReadonlyClassBase {}
+readonly class EvalReadonlyClassChild extends EvalReadonlyClassBase {}');
+"#,
+    );
+    assert!(
+        parent_err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {parent_err}"
+    );
+}
+
 /// Verifies eval-declared static properties and static methods work through the bridge.
 #[test]
 fn test_eval_declared_static_members_and_late_static_binding() {

@@ -403,6 +403,7 @@ pub struct EvalClass {
     name: String,
     is_abstract: bool,
     is_final: bool,
+    is_readonly_class: bool,
     parent: Option<String>,
     interfaces: Vec<String>,
     traits: Vec<String>,
@@ -443,10 +444,34 @@ impl EvalClass {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
-        Self::with_modifiers_and_traits(
+        Self::with_class_modifiers(
             name,
             is_abstract,
             is_final,
+            false,
+            parent,
+            interfaces,
+            properties,
+            methods,
+        )
+    }
+
+    /// Creates a dynamic eval class with class modifiers, optional parent, and interfaces.
+    pub fn with_class_modifiers(
+        name: impl Into<String>,
+        is_abstract: bool,
+        is_final: bool,
+        is_readonly_class: bool,
+        parent: Option<String>,
+        interfaces: Vec<String>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
+        Self::with_class_modifiers_and_traits(
+            name,
+            is_abstract,
+            is_final,
+            is_readonly_class,
             parent,
             interfaces,
             Vec::new(),
@@ -466,10 +491,36 @@ impl EvalClass {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
-        Self::with_modifiers_traits_and_constants(
+        Self::with_class_modifiers_and_traits(
             name,
             is_abstract,
             is_final,
+            false,
+            parent,
+            interfaces,
+            traits,
+            properties,
+            methods,
+        )
+    }
+
+    /// Creates a dynamic eval class with class modifiers, relations, and trait uses.
+    pub fn with_class_modifiers_and_traits(
+        name: impl Into<String>,
+        is_abstract: bool,
+        is_final: bool,
+        is_readonly_class: bool,
+        parent: Option<String>,
+        interfaces: Vec<String>,
+        traits: Vec<String>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
+        Self::with_class_modifiers_traits_and_constants(
+            name,
+            is_abstract,
+            is_final,
+            is_readonly_class,
             parent,
             interfaces,
             traits,
@@ -491,10 +542,38 @@ impl EvalClass {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
-        Self::with_modifiers_traits_adaptations_and_constants(
+        Self::with_class_modifiers_traits_and_constants(
             name,
             is_abstract,
             is_final,
+            false,
+            parent,
+            interfaces,
+            traits,
+            constants,
+            properties,
+            methods,
+        )
+    }
+
+    /// Creates a dynamic eval class with class modifiers, relations, trait uses, constants, and members.
+    pub fn with_class_modifiers_traits_and_constants(
+        name: impl Into<String>,
+        is_abstract: bool,
+        is_final: bool,
+        is_readonly_class: bool,
+        parent: Option<String>,
+        interfaces: Vec<String>,
+        traits: Vec<String>,
+        constants: Vec<EvalClassConstant>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
+        Self::with_class_modifiers_traits_adaptations_and_constants(
+            name,
+            is_abstract,
+            is_final,
+            is_readonly_class,
             parent,
             interfaces,
             traits,
@@ -518,10 +597,40 @@ impl EvalClass {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
+        Self::with_class_modifiers_traits_adaptations_and_constants(
+            name,
+            is_abstract,
+            is_final,
+            false,
+            parent,
+            interfaces,
+            traits,
+            trait_adaptations,
+            constants,
+            properties,
+            methods,
+        )
+    }
+
+    /// Creates a dynamic eval class with all class modifiers, relations, adaptations, constants, and members.
+    pub fn with_class_modifiers_traits_adaptations_and_constants(
+        name: impl Into<String>,
+        is_abstract: bool,
+        is_final: bool,
+        is_readonly_class: bool,
+        parent: Option<String>,
+        interfaces: Vec<String>,
+        traits: Vec<String>,
+        trait_adaptations: Vec<EvalTraitAdaptation>,
+        constants: Vec<EvalClassConstant>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
         Self {
             name: name.into(),
             is_abstract,
             is_final,
+            is_readonly_class,
             parent,
             interfaces,
             traits,
@@ -530,6 +639,18 @@ impl EvalClass {
             properties,
             methods,
         }
+    }
+
+    /// Marks all instance properties readonly when this metadata represents a `readonly class`.
+    pub fn with_readonly_instance_properties(mut self) -> Self {
+        if self.is_readonly_class {
+            for property in &mut self.properties {
+                if !property.is_static {
+                    property.is_readonly = true;
+                }
+            }
+        }
+        self
     }
 
     /// Returns the original source spelling of this eval-declared class name.
@@ -545,6 +666,11 @@ impl EvalClass {
     /// Returns whether this eval-declared class was declared `final`.
     pub const fn is_final(&self) -> bool {
         self.is_final
+    }
+
+    /// Returns whether this eval-declared class was declared `readonly`.
+    pub const fn is_readonly_class(&self) -> bool {
+        self.is_readonly_class
     }
 
     /// Returns the parent class name declared by this eval class, when present.
