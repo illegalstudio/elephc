@@ -1,14 +1,15 @@
 //! Purpose:
 //! Emits user-assembly helpers that let libelephc-eval materialize
-//! ReflectionClass, ReflectionMethod, and ReflectionProperty objects with
-//! private metadata slots populated from runtime eval declarations.
+//! ReflectionClass, ReflectionMethod, ReflectionProperty, ReflectionClassConstant,
+//! and ReflectionEnum* objects with private metadata slots populated from
+//! runtime eval declarations.
 //!
 //! Called from:
 //! - `crate::codegen::finalize_user_asm()` when an EIR module uses eval.
 //!
 //! Key details:
-//! - Reflection owner objects store `__attrs`, and ReflectionClass also stores
-//!   `__name`; both slots are private implementation details.
+//! - Reflection owner objects store `__attrs`; owners with public `getName()`
+//!   also store `__name`; both slots are private implementation details.
 //! - The helper retains the supplied attribute array payload for object ownership.
 
 use crate::codegen::abi;
@@ -29,11 +30,14 @@ struct ReflectionOwnerLayout {
     attrs_hi: usize,
 }
 
-/// Layouts for the three Reflection owner classes eval can materialize.
+/// Layouts for the Reflection owner classes eval can materialize.
 struct ReflectionOwnerLayouts {
     class: ReflectionOwnerLayout,
     method: ReflectionOwnerLayout,
     property: ReflectionOwnerLayout,
+    class_constant: ReflectionOwnerLayout,
+    enum_unit_case: ReflectionOwnerLayout,
+    enum_backed_case: ReflectionOwnerLayout,
 }
 
 /// Emits eval Reflection owner helpers when any lowered function owns an eval context.
@@ -88,6 +92,18 @@ fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
         class: reflection_owner_layout(module.class_infos.get("ReflectionClass")?, true)?,
         method: reflection_owner_layout(module.class_infos.get("ReflectionMethod")?, false)?,
         property: reflection_owner_layout(module.class_infos.get("ReflectionProperty")?, false)?,
+        class_constant: reflection_owner_layout(
+            module.class_infos.get("ReflectionClassConstant")?,
+            true,
+        )?,
+        enum_unit_case: reflection_owner_layout(
+            module.class_infos.get("ReflectionEnumUnitCase")?,
+            true,
+        )?,
+        enum_backed_case: reflection_owner_layout(
+            module.class_infos.get("ReflectionEnumBackedCase")?,
+            true,
+        )?,
     })
 }
 
@@ -135,6 +151,9 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     let class_label = "__elephc_eval_reflection_owner_new_class";
     let method_label = "__elephc_eval_reflection_owner_new_method";
     let property_label = "__elephc_eval_reflection_owner_new_property";
+    let class_constant_label = "__elephc_eval_reflection_owner_new_class_constant";
+    let enum_unit_case_label = "__elephc_eval_reflection_owner_new_enum_unit_case";
+    let enum_backed_case_label = "__elephc_eval_reflection_owner_new_enum_backed_case";
     emitter.instruction("sub sp, sp, #96");                                     // reserve helper frame for inputs, object, scratch, and fp/lr
     emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #80");                                    // establish a stable helper frame pointer
@@ -148,10 +167,19 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction(&format!("b.eq {}", method_label));                     // allocate a ReflectionMethod owner
     emitter.instruction("cmp x0, #2");                                          // owner kind 2 means ReflectionProperty
     emitter.instruction(&format!("b.eq {}", property_label));                   // allocate a ReflectionProperty owner
+    emitter.instruction("cmp x0, #3");                                          // owner kind 3 means ReflectionClassConstant
+    emitter.instruction(&format!("b.eq {}", class_constant_label));             // allocate a ReflectionClassConstant owner
+    emitter.instruction("cmp x0, #4");                                          // owner kind 4 means ReflectionEnumUnitCase
+    emitter.instruction(&format!("b.eq {}", enum_unit_case_label));             // allocate a ReflectionEnumUnitCase owner
+    emitter.instruction("cmp x0, #5");                                          // owner kind 5 means ReflectionEnumBackedCase
+    emitter.instruction(&format!("b.eq {}", enum_backed_case_label));           // allocate a ReflectionEnumBackedCase owner
     emitter.instruction(&format!("b {}", fail_label));                          // reject unknown owner kinds
     emit_aarch64_owner_kind_body(emitter, class_label, &layouts.class, true, fail_label, box_label);
     emit_aarch64_owner_kind_body(emitter, method_label, &layouts.method, false, fail_label, box_label);
     emit_aarch64_owner_kind_body(emitter, property_label, &layouts.property, false, fail_label, box_label);
+    emit_aarch64_owner_kind_body(emitter, class_constant_label, &layouts.class_constant, true, fail_label, box_label);
+    emit_aarch64_owner_kind_body(emitter, enum_unit_case_label, &layouts.enum_unit_case, true, fail_label, box_label);
+    emit_aarch64_owner_kind_body(emitter, enum_backed_case_label, &layouts.enum_backed_case, true, fail_label, box_label);
     emitter.label(box_label);
     emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
     emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
@@ -174,6 +202,9 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let class_label = "__elephc_eval_reflection_owner_new_class_x";
     let method_label = "__elephc_eval_reflection_owner_new_method_x";
     let property_label = "__elephc_eval_reflection_owner_new_property_x";
+    let class_constant_label = "__elephc_eval_reflection_owner_new_class_constant_x";
+    let enum_unit_case_label = "__elephc_eval_reflection_owner_new_enum_unit_case_x";
+    let enum_backed_case_label = "__elephc_eval_reflection_owner_new_enum_backed_case_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction("sub rsp, 64");                                         // reserve slots for inputs, object, and unboxed attrs
@@ -187,10 +218,19 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction(&format!("je {}", method_label));                       // allocate a ReflectionMethod owner
     emitter.instruction("cmp rdi, 2");                                          // owner kind 2 means ReflectionProperty
     emitter.instruction(&format!("je {}", property_label));                     // allocate a ReflectionProperty owner
+    emitter.instruction("cmp rdi, 3");                                          // owner kind 3 means ReflectionClassConstant
+    emitter.instruction(&format!("je {}", class_constant_label));               // allocate a ReflectionClassConstant owner
+    emitter.instruction("cmp rdi, 4");                                          // owner kind 4 means ReflectionEnumUnitCase
+    emitter.instruction(&format!("je {}", enum_unit_case_label));               // allocate a ReflectionEnumUnitCase owner
+    emitter.instruction("cmp rdi, 5");                                          // owner kind 5 means ReflectionEnumBackedCase
+    emitter.instruction(&format!("je {}", enum_backed_case_label));             // allocate a ReflectionEnumBackedCase owner
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject unknown owner kinds
     emit_x86_64_owner_kind_body(emitter, class_label, &layouts.class, true, fail_label, box_label);
     emit_x86_64_owner_kind_body(emitter, method_label, &layouts.method, false, fail_label, box_label);
     emit_x86_64_owner_kind_body(emitter, property_label, &layouts.property, false, fail_label, box_label);
+    emit_x86_64_owner_kind_body(emitter, class_constant_label, &layouts.class_constant, true, fail_label, box_label);
+    emit_x86_64_owner_kind_body(emitter, enum_unit_case_label, &layouts.enum_unit_case, true, fail_label, box_label);
+    emit_x86_64_owner_kind_body(emitter, enum_backed_case_label, &layouts.enum_backed_case, true, fail_label, box_label);
     emitter.label(box_label);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // move the Reflection owner object pointer into the Mixed payload
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word

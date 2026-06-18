@@ -222,6 +222,9 @@ impl FakeOps {
             EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
             EVAL_REFLECTION_OWNER_METHOD => "ReflectionMethod",
             EVAL_REFLECTION_OWNER_PROPERTY => "ReflectionProperty",
+            EVAL_REFLECTION_OWNER_CLASS_CONSTANT => "ReflectionClassConstant",
+            EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE => "ReflectionEnumUnitCase",
+            EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE => "ReflectionEnumBackedCase",
             _ => return Err(EvalStatus::RuntimeFatal),
         };
         let name = self.string(reflected_name)?;

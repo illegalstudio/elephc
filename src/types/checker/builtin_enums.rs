@@ -35,10 +35,14 @@ pub(crate) fn inject_builtin_enums(
             EnumCaseInfo {
                 name: "Ascending".to_string(),
                 value: None,
+                attribute_names: Vec::new(),
+                attribute_args: Vec::new(),
             },
             EnumCaseInfo {
                 name: "Descending".to_string(),
                 value: None,
+                attribute_names: Vec::new(),
+                attribute_args: Vec::new(),
             },
         ],
         &[],

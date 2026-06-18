@@ -100,6 +100,26 @@ impl ClassBuildState {
         constructor_param_to_prop: Vec<Option<String>>,
     ) -> Result<ClassInfo, CompileError> {
         let attribute_args = collect_attribute_args(&class.attributes);
+        let constant_attribute_names = class
+            .constants
+            .iter()
+            .map(|constant| {
+                (
+                    constant.name.clone(),
+                    collect_attribute_names(&constant.attributes),
+                )
+            })
+            .collect();
+        let constant_attribute_args = class
+            .constants
+            .iter()
+            .map(|constant| {
+                (
+                    constant.name.clone(),
+                    collect_attribute_args(&constant.attributes),
+                )
+            })
+            .collect();
         Ok(ClassInfo {
             class_id,
             parent: class.extends.clone(),
@@ -124,6 +144,8 @@ impl ClassBuildState {
             method_attribute_args: self.method_attribute_args,
             property_attribute_names: self.property_attribute_names,
             property_attribute_args: self.property_attribute_args,
+            constant_attribute_names,
+            constant_attribute_args,
             used_traits: class.used_traits.clone(),
             properties: self.prop_types,
             property_offsets: self.property_offsets,
@@ -165,14 +187,13 @@ impl ClassBuildState {
             constructor_param_to_prop,
         })
     }
-
 }
 
 /// Collect attribute names from a class's attribute groups, preserving source
 /// order. Name resolution has already canonicalised fully-qualified names by
 /// the time this runs, so names are emitted in ReflectionAttribute::getName()
 /// shape without a synthetic leading backslash.
-pub(super) fn collect_attribute_names(
+pub(in crate::types::checker::schema) fn collect_attribute_names(
     groups: &[crate::parser::ast::AttributeGroup],
 ) -> Vec<String> {
     let mut out = Vec::new();
@@ -195,7 +216,7 @@ pub(super) fn collect_attribute_names(
 /// `#[Status(-1)]` survives parsing. Unsupported metadata is marked as
 /// `None` so legal PHP attribute syntax can still compile until a runtime
 /// reflection helper needs the missing argument payload.
-pub(super) fn collect_attribute_args(
+pub(in crate::types::checker::schema) fn collect_attribute_args(
     groups: &[crate::parser::ast::AttributeGroup],
 ) -> Vec<Option<Vec<crate::types::AttrArgEntry>>> {
     use crate::parser::ast::ExprKind;

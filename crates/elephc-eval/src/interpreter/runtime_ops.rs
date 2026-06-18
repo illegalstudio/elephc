@@ -343,3 +343,6 @@ pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
 pub(super) const EVAL_REFLECTION_OWNER_CLASS: u64 = 0;
 pub(super) const EVAL_REFLECTION_OWNER_METHOD: u64 = 1;
 pub(super) const EVAL_REFLECTION_OWNER_PROPERTY: u64 = 2;
+pub(super) const EVAL_REFLECTION_OWNER_CLASS_CONSTANT: u64 = 3;
+pub(super) const EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE: u64 = 4;
+pub(super) const EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE: u64 = 5;

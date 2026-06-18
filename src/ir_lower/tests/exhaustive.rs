@@ -167,6 +167,8 @@ fn class_info(_class_name: &str) -> ClassInfo {
         method_attribute_args: HashMap::new(),
         property_attribute_names: HashMap::new(),
         property_attribute_args: HashMap::new(),
+        constant_attribute_names: HashMap::new(),
+        constant_attribute_args: HashMap::new(),
         used_traits: Vec::new(),
         properties: Vec::new(),
         property_offsets: HashMap::new(),

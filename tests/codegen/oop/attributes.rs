@@ -719,10 +719,7 @@ foreach ($attrs as $attr) {
 }
 "#,
     );
-    assert_eq!(
-        out,
-        "count=2\nAuthor:[Ada][1815]\nVersion:[1.0][1]\n"
-    );
+    assert_eq!(out, "count=2\nAuthor:[Ada][1815]\nVersion:[1.0][1]\n");
 }
 
 /// Verifies that `class_get_attributes()` returns an empty array for a
@@ -1126,10 +1123,7 @@ echo $ref->getName();
 fn test_reflection_class_get_name_for_autoloaded_class() {
     let out = compile_and_run_files(
         &[
-            (
-                "DemoThing.php",
-                "<?php\nnamespace Demo;\nclass Thing {}\n",
-            ),
+            ("DemoThing.php", "<?php\nnamespace Demo;\nclass Thing {}\n"),
             (
                 "main.php",
                 r#"<?php
@@ -1286,6 +1280,54 @@ echo $attrs[0]->getArguments()[0];
 "#,
     );
     assert_eq!(out, "1/Column/id");
+}
+
+/// Verifies that `ReflectionClassConstant` and enum-case reflectors expose
+/// attribute name, arguments, `getName()`, and `newInstance()` data.
+#[test]
+fn test_reflection_constant_and_enum_case_get_attributes() {
+    let out = compile_and_run(
+        r#"<?php
+class Marker {
+    public function __construct(public string $label) {}
+    public function label(): string { return $this->label; }
+}
+class ConstTarget {
+    #[Marker("const")]
+    public const ANSWER = 42;
+}
+enum CaseTarget: string {
+    #[Marker("case")]
+    case Ready = "ready";
+}
+$const = new ReflectionClassConstant(ConstTarget::class, "ANSWER");
+$constAttrs = $const->getAttributes();
+echo $const->getName() . "/";
+echo count($constAttrs) . "/";
+echo $constAttrs[0]->getName() . "/";
+echo $constAttrs[0]->getArguments()[0] . "/";
+echo $constAttrs[0]->newInstance()->label() . "\n";
+$case = new ReflectionClassConstant(CaseTarget::class, "Ready");
+$caseAttrs = $case->getAttributes();
+echo $case->getName() . "/";
+echo count($caseAttrs) . "/";
+echo $caseAttrs[0]->getName() . "/";
+echo $caseAttrs[0]->getArguments()[0] . "/";
+echo $caseAttrs[0]->newInstance()->label() . "\n";
+$unit = new ReflectionEnumUnitCase(CaseTarget::class, "Ready");
+$unitAttrs = $unit->getAttributes();
+echo $unit->getName() . "/";
+echo $unitAttrs[0]->newInstance()->label() . "\n";
+$backed = new ReflectionEnumBackedCase(CaseTarget::class, "Ready");
+$backedAttrs = $backed->getAttributes();
+echo $backed->getName() . "/";
+echo $backedAttrs[0]->newInstance()->label();
+"#,
+    );
+    assert_eq!(
+        out,
+        "ANSWER/1/Marker/const/const\nReady/1/Marker/case/case\nReady/case\nReady/case"
+    );
 }
 
 /// Verifies that `ReflectionClass` accepts `user::class` (lowercase class

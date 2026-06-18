@@ -22,7 +22,7 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
-/// Injects the four built-in reflection types into `class_map` after verifying
+/// Injects the built-in reflection types into `class_map` after verifying
 /// none are already declared. Each type is a dummy shell; runtime population
 /// happens in codegen. Returns an error if any reflection name is already in use.
 pub(crate) fn inject_builtin_reflection(
@@ -38,6 +38,9 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionFunction",
         "ReflectionParameter",
         "ReflectionNamedType",
+        "ReflectionClassConstant",
+        "ReflectionEnumUnitCase",
+        "ReflectionEnumBackedCase",
     ] {
         let builtin_key = php_symbol_key(builtin_name);
         if interface_map
@@ -48,7 +51,10 @@ pub(crate) fn inject_builtin_reflection(
         {
             return Err(CompileError::new(
                 crate::span::Span::dummy(),
-                &format!("Cannot redeclare built-in reflection type: {}", builtin_name),
+                &format!(
+                    "Cannot redeclare built-in reflection type: {}",
+                    builtin_name
+                ),
             ));
         }
     }
@@ -63,9 +69,24 @@ pub(crate) fn inject_builtin_reflection(
             is_final: true,
             is_readonly_class: false,
             properties: vec![
-                builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
-                builtin_property("__args", Visibility::Private, Some(array_type()), empty_array()),
-                builtin_property("__factory", Visibility::Private, Some(TypeExpr::Int), int_lit(0)),
+                builtin_property(
+                    "__name",
+                    Visibility::Private,
+                    Some(TypeExpr::Str),
+                    empty_string(),
+                ),
+                builtin_property(
+                    "__args",
+                    Visibility::Private,
+                    Some(array_type()),
+                    empty_array(),
+                ),
+                builtin_property(
+                    "__factory",
+                    Visibility::Private,
+                    Some(TypeExpr::Int),
+                    int_lit(0),
+                ),
             ],
             methods: vec![
                 builtin_reflection_attribute_constructor_method(),
@@ -78,14 +99,12 @@ pub(crate) fn inject_builtin_reflection(
             used_traits: Vec::new(),
         },
     );
-    class_map.insert(
-        "ReflectionClass".to_string(),
-        builtin_reflection_class(),
-    );
+    class_map.insert("ReflectionClass".to_string(), builtin_reflection_class());
     class_map.insert(
         "ReflectionMethod".to_string(),
         builtin_reflection_owner_class(
             "ReflectionMethod",
+            false,
             vec![
                 ("class_name", Some(TypeExpr::Str), None, false),
                 ("method_name", Some(TypeExpr::Str), None, false),
@@ -96,6 +115,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionProperty".to_string(),
         builtin_reflection_owner_class(
             "ReflectionProperty",
+            false,
             vec![
                 ("class_name", Some(TypeExpr::Str), None, false),
                 ("property_name", Some(TypeExpr::Str), None, false),
@@ -111,6 +131,23 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionNamedType".to_string(),
         builtin_reflection_named_type(),
     );
+    for class_name in [
+        "ReflectionClassConstant",
+        "ReflectionEnumUnitCase",
+        "ReflectionEnumBackedCase",
+    ] {
+        class_map.insert(
+            class_name.to_string(),
+            builtin_reflection_owner_class(
+                class_name,
+                true,
+                vec![
+                    ("class_name", Some(TypeExpr::Str), None, false),
+                    ("constant_name", Some(TypeExpr::Str), None, false),
+                ],
+            ),
+        );
+    }
 
     Ok(())
 }
@@ -487,7 +524,12 @@ fn builtin_reflection_class() -> FlattenedClass {
         is_final: true,
         is_readonly_class: false,
         properties: vec![
-            builtin_property("__name", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property(
+                "__name",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
             builtin_property(
                 "__attrs",
                 Visibility::Private,
@@ -548,8 +590,29 @@ fn builtin_reflection_class_get_name_method() -> ClassMethod {
 /// returning the `__attrs` array).
 fn builtin_reflection_owner_class(
     name: &str,
+    has_name: bool,
     constructor_params: Vec<(&str, Option<TypeExpr>, Option<Expr>, bool)>,
 ) -> FlattenedClass {
+    let mut properties = Vec::new();
+    let mut methods = vec![builtin_reflection_owner_constructor_method(
+        constructor_params,
+    )];
+    if has_name {
+        properties.push(builtin_property(
+            "__name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        methods.push(builtin_reflection_class_get_name_method());
+    }
+    properties.push(builtin_property(
+        "__attrs",
+        Visibility::Private,
+        Some(array_type()),
+        empty_array(),
+    ));
+    methods.push(builtin_reflection_owner_get_attributes_method());
     FlattenedClass {
         name: name.to_string(),
         extends: None,
@@ -557,16 +620,8 @@ fn builtin_reflection_owner_class(
         is_abstract: false,
         is_final: true,
         is_readonly_class: false,
-        properties: vec![builtin_property(
-            "__attrs",
-            Visibility::Private,
-            Some(array_type()),
-            empty_array(),
-        )],
-        methods: vec![
-            builtin_reflection_owner_constructor_method(constructor_params),
-            builtin_reflection_owner_get_attributes_method(),
-        ],
+        properties,
+        methods,
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
@@ -657,20 +712,32 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             sig.return_type = PhpType::Mixed;
         }
     }
-    for class_name in ["ReflectionClass", "ReflectionMethod", "ReflectionProperty"] {
+    for class_name in [
+        "ReflectionClass",
+        "ReflectionMethod",
+        "ReflectionProperty",
+        "ReflectionClassConstant",
+        "ReflectionEnumUnitCase",
+        "ReflectionEnumBackedCase",
+    ] {
         if let Some(class_info) = checker.classes.get_mut(class_name) {
             if let Some(sig) = class_info.methods.get_mut("__construct") {
                 sig.return_type = PhpType::Void;
             }
-            if class_name == "ReflectionClass" {
+            if matches!(
+                class_name,
+                "ReflectionClass"
+                    | "ReflectionClassConstant"
+                    | "ReflectionEnumUnitCase"
+                    | "ReflectionEnumBackedCase"
+            ) {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getName")) {
                     sig.return_type = PhpType::Str;
                 }
             }
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getAttributes")) {
-                sig.return_type = PhpType::Array(Box::new(PhpType::Object(
-                    "ReflectionAttribute".to_string(),
-                )));
+                sig.return_type =
+                    PhpType::Array(Box::new(PhpType::Object("ReflectionAttribute".to_string())));
             }
         }
     }

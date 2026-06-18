@@ -16,6 +16,7 @@ use crate::parser::ast::{ClassMethod, ExprKind, Visibility};
 use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, FunctionSig, PhpType};
 
 use super::super::Checker;
+use super::classes::{collect_attribute_args, collect_attribute_names};
 use super::validation::build_method_sig;
 
 /// Propagates concrete return types from overrides to their abstract parent declarations.
@@ -224,6 +225,8 @@ pub(crate) fn build_enum_info(
         enum_cases.push(EnumCaseInfo {
             name: case.name.clone(),
             value,
+            attribute_names: collect_attribute_names(&case.attributes),
+            attribute_args: collect_attribute_args(&case.attributes),
         });
     }
 
@@ -374,8 +377,22 @@ pub(crate) fn insert_enum_metadata(
     // User-declared enum constants. Values are kept as their parsed expressions, matching the
     // class-constant representation.
     let mut constants = HashMap::new();
+    let mut constant_attribute_names = HashMap::new();
+    let mut constant_attribute_args = HashMap::new();
     for constant in user_constants {
         constants.insert(constant.name.clone(), constant.value.clone());
+        constant_attribute_names.insert(
+            constant.name.clone(),
+            collect_attribute_names(&constant.attributes),
+        );
+        constant_attribute_args.insert(
+            constant.name.clone(),
+            collect_attribute_args(&constant.attributes),
+        );
+    }
+    for case in &enum_cases {
+        constant_attribute_names.insert(case.name.clone(), case.attribute_names.clone());
+        constant_attribute_args.insert(case.name.clone(), case.attribute_args.clone());
     }
 
     let interfaces: Vec<String> = implements
@@ -399,6 +416,8 @@ pub(crate) fn insert_enum_metadata(
             method_attribute_args: HashMap::new(),
             property_attribute_names: HashMap::new(),
             property_attribute_args: HashMap::new(),
+            constant_attribute_names,
+            constant_attribute_args,
             used_traits: Vec::new(),
             properties,
             property_offsets,

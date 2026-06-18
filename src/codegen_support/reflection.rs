@@ -46,8 +46,9 @@ pub(crate) fn resolve_class_name<'a>(
 }
 
 /// Scans every class in `classes` and collects all distinct class-level,
-/// method-level, and property-level attribute name/argument pairs into a
-/// sorted vector of `ReflectionAttributeFactory` records with sequential ids.
+/// method-level, property-level, and constant-level attribute name/argument
+/// pairs into a sorted vector of `ReflectionAttributeFactory` records with
+/// sequential ids.
 pub(crate) fn collect_attribute_factories(
     classes: &HashMap<String, ClassInfo>,
 ) -> Vec<ReflectionAttributeFactory> {
@@ -66,6 +67,11 @@ pub(crate) fn collect_attribute_factories(
         }
         for (member, names) in &class_info.property_attribute_names {
             if let Some(args) = class_info.property_attribute_args.get(member) {
+                collect_from_attribute_lists(classes, names, args, &mut unique);
+            }
+        }
+        for (member, names) in &class_info.constant_attribute_names {
+            if let Some(args) = class_info.constant_attribute_args.get(member) {
                 collect_from_attribute_lists(classes, names, args, &mut unique);
             }
         }
