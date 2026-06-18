@@ -223,6 +223,11 @@ fn bool_lit(value: bool) -> Option<Expr> {
     ))
 }
 
+/// Returns a `null` expression for nullable synthetic property defaults.
+fn null_expr() -> Option<Expr> {
+    Some(Expr::new(ExprKind::Null, crate::span::Span::dummy()))
+}
+
 /// Returns a `TypeExpr` for the unqualified name `array`.
 fn array_type() -> TypeExpr {
     TypeExpr::Named(crate::names::Name::unqualified("array"))
@@ -236,6 +241,11 @@ fn string_array_type() -> TypeExpr {
 /// Returns a `TypeExpr` for an indexed array of objects with the given class name.
 fn object_array_type(class_name: &str) -> TypeExpr {
     TypeExpr::Array(Box::new(TypeExpr::Named(Name::unqualified(class_name))))
+}
+
+/// Returns a nullable object type expression for one synthetic reflection class.
+fn nullable_object_type(class_name: &str) -> TypeExpr {
+    TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(class_name))))
 }
 
 /// Returns a `TypeExpr` for the unqualified name `mixed`.
@@ -692,6 +702,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__constructor",
+                Visibility::Private,
+                Some(nullable_object_type("ReflectionMethod")),
+                null_expr(),
+            ),
+            builtin_property(
                 "__properties",
                 Visibility::Private,
                 Some(object_array_type("ReflectionProperty")),
@@ -732,6 +748,11 @@ fn builtin_reflection_class() -> FlattenedClass {
                 "getMethods",
                 "__methods",
                 object_array_type("ReflectionMethod"),
+            ),
+            builtin_reflection_class_nullable_object_method(
+                "getConstructor",
+                "__constructor",
+                "ReflectionMethod",
             ),
             builtin_reflection_class_array_method(
                 "getProperties",
@@ -896,6 +917,39 @@ fn builtin_reflection_class_array_method(
         variadic: None,
         variadic_type: None,
         return_type: Some(return_type),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public nullable object `ReflectionClass` method backed by one private slot.
+fn builtin_reflection_class_nullable_object_method(
+    method_name: &str,
+    property: &str,
+    class_name: &str,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(nullable_object_type(class_name)),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -1158,6 +1212,12 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     sig.return_type = PhpType::Array(Box::new(PhpType::Object(
                         "ReflectionProperty".to_string(),
                     )));
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getConstructor")) {
+                    sig.return_type = PhpType::Union(vec![
+                        PhpType::Object("ReflectionMethod".to_string()),
+                        PhpType::Void,
+                    ]);
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;

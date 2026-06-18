@@ -11,7 +11,7 @@
 //!   constructors are compile-time metadata lookups that populate private
 //!   `__name`/`__attrs` slots instead of running their public empty bodies.
 
-use crate::codegen::abi;
+use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
@@ -32,6 +32,7 @@ struct ReflectionOwnerMetadata {
     property_names: Vec<String>,
     method_members: Vec<ReflectionListedMember>,
     property_members: Vec<ReflectionListedMember>,
+    constructor_member: Option<ReflectionListedMember>,
     is_final: bool,
     is_abstract: bool,
     is_interface: bool,
@@ -43,6 +44,7 @@ struct ReflectionOwnerMetadata {
 }
 
 /// Metadata for one member object returned by `ReflectionClass::getMethods()` or `getProperties()`.
+#[derive(Clone)]
 struct ReflectionListedMember {
     name: String,
     attr_names: Vec<String>,
@@ -131,6 +133,7 @@ pub(super) fn lower_reflection_owner_new(
                 "ReflectionMethod",
                 &metadata.method_members,
             )?;
+            emit_reflection_constructor_property(ctx, metadata.constructor_member.as_ref())?;
             emit_reflection_member_array_property_by_name(
                 ctx,
                 "__properties",
@@ -582,6 +585,7 @@ fn reflection_class_metadata(
         let method_members = reflection_class_method_members(info, &method_names);
         let property_members =
             reflection_class_property_members(ctx, class_name, info, &property_names);
+        let constructor_member = reflection_constructor_member(&method_members);
         return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
@@ -592,6 +596,7 @@ fn reflection_class_metadata(
             property_names,
             method_members,
             property_members,
+            constructor_member,
             is_final: info.is_final,
             is_abstract: info.is_abstract,
             is_interface: false,
@@ -666,6 +671,7 @@ fn reflection_method_metadata(
                 property_names: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
+                constructor_member: None,
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -704,6 +710,7 @@ fn reflection_property_metadata(
                 property_names: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
+                constructor_member: None,
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -743,6 +750,7 @@ fn reflection_class_constant_metadata(
             property_names: Vec::new(),
             method_members: Vec::new(),
             property_members: Vec::new(),
+            constructor_member: None,
             is_final: false,
             is_abstract: false,
             is_interface: false,
@@ -776,6 +784,7 @@ fn reflection_class_constant_metadata(
                     property_names: Vec::new(),
                     method_members: Vec::new(),
                     property_members: Vec::new(),
+                    constructor_member: None,
                     is_final: false,
                     is_abstract: false,
                     is_interface: false,
@@ -816,6 +825,7 @@ fn reflection_enum_case_metadata(
                 property_names: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
+                constructor_member: None,
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -1155,6 +1165,16 @@ fn default_property_members(
         .collect()
 }
 
+/// Returns the `__construct` member object metadata when the reflected class-like symbol has one.
+fn reflection_constructor_member(
+    method_members: &[ReflectionListedMember],
+) -> Option<ReflectionListedMember> {
+    method_members
+        .iter()
+        .find(|member| php_symbol_key(&member.name) == "__construct")
+        .cloned()
+}
+
 /// Builds common ReflectionMethod/ReflectionProperty predicate flags.
 fn reflection_member_flags(
     is_static: bool,
@@ -1264,6 +1284,7 @@ fn class_like_reflection_metadata(
 ) -> ReflectionOwnerMetadata {
     let method_members = default_method_members(method_names.as_slice(), is_interface, is_trait);
     let property_members = default_property_members(property_names.as_slice(), is_interface);
+    let constructor_member = reflection_constructor_member(&method_members);
     ReflectionOwnerMetadata {
         reflected_name: Some(class_like_name.to_string()),
         attr_names: Vec::new(),
@@ -1274,6 +1295,7 @@ fn class_like_reflection_metadata(
         property_names,
         method_members,
         property_members,
+        constructor_member,
         is_final: false,
         is_abstract: false,
         is_interface,
@@ -1325,6 +1347,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         property_names: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
+        constructor_member: None,
         is_final: false,
         is_abstract: false,
         is_interface: false,
@@ -1555,6 +1578,37 @@ fn emit_reflection_member_array_property_by_name(
     );
     abi::emit_push_reg(ctx.emitter, object_reg);
     abi::emit_pop_reg(ctx.emitter, result_reg);
+    Ok(())
+}
+
+/// Replaces the ReflectionClass private constructor slot with `ReflectionMethod|null`.
+fn emit_reflection_constructor_property(
+    ctx: &mut FunctionContext<'_>,
+    member: Option<&ReflectionListedMember>,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, "__constructor")?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if let Some(member) = member {
+        emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
+        emit_box_current_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Object("ReflectionMethod".to_string()),
+        );
+    } else {
+        super::emit_boxed_null(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
     Ok(())
 }
 
