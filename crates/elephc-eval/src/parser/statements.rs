@@ -456,6 +456,7 @@ impl Parser {
         traits: &mut Vec<String>,
         trait_adaptations: &mut Vec<EvalTraitAdaptation>,
     ) -> Result<(), EvalParseError> {
+        let attributes = self.parse_optional_member_attributes()?;
         let (visibility, is_static, is_abstract, is_final, is_readonly) =
             self.parse_class_member_modifiers()?;
 
@@ -470,6 +471,9 @@ impl Parser {
             && !is_readonly
             && matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "use"))
         {
+            if !attributes.is_empty() {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             self.parse_class_trait_use(traits, trait_adaptations)?;
             return Ok(());
         }
@@ -478,8 +482,10 @@ impl Parser {
             if is_static || is_abstract || is_final || is_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            constants
-                .push(self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?);
+            constants.push(
+                self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?
+                    .with_attributes(attributes),
+            );
             return Ok(());
         }
 
@@ -487,12 +493,15 @@ impl Parser {
             if is_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            methods.push(self.parse_class_method_decl(
-                visibility.unwrap_or(EvalVisibility::Public),
-                is_static,
-                is_abstract,
-                is_final,
-            )?);
+            methods.push(
+                self.parse_class_method_decl(
+                    visibility.unwrap_or(EvalVisibility::Public),
+                    is_static,
+                    is_abstract,
+                    is_final,
+                )?
+                .with_attributes(attributes),
+            );
             return Ok(());
         }
 
@@ -507,9 +516,20 @@ impl Parser {
             is_readonly_class,
             is_abstract,
         )?;
-        properties.push(property);
+        properties.push(property.with_attributes(attributes));
         methods.append(&mut hook_methods);
         Ok(())
+    }
+
+    /// Parses optional attributes that decorate one class-like member.
+    pub(super) fn parse_optional_member_attributes(
+        &mut self,
+    ) -> Result<Vec<EvalAttribute>, EvalParseError> {
+        if matches!(self.current(), TokenKind::AttributeStart) {
+            self.parse_attribute_groups()
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// Parses one eval class constant declaration.
@@ -960,6 +980,7 @@ impl Parser {
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
     ) -> Result<(), EvalParseError> {
+        let attributes = self.parse_optional_member_attributes()?;
         let (visibility, is_static, is_abstract, is_final, is_readonly) =
             self.parse_class_member_modifiers()?;
         if is_abstract && is_final {
@@ -969,20 +990,25 @@ impl Parser {
             if is_static || is_abstract || is_final || is_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            constants
-                .push(self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?);
+            constants.push(
+                self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?
+                    .with_attributes(attributes),
+            );
             return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
             if is_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            methods.push(self.parse_class_method_decl(
-                visibility.unwrap_or(EvalVisibility::Public),
-                is_static,
-                is_abstract,
-                is_final,
-            )?);
+            methods.push(
+                self.parse_class_method_decl(
+                    visibility.unwrap_or(EvalVisibility::Public),
+                    is_static,
+                    is_abstract,
+                    is_final,
+                )?
+                .with_attributes(attributes),
+            );
             return Ok(());
         }
         let visibility = visibility.unwrap_or(EvalVisibility::Public);
@@ -991,7 +1017,7 @@ impl Parser {
         }
         let (property, mut hook_methods) =
             self.parse_class_property_decl(visibility, is_static, is_readonly, false, is_abstract)?;
-        properties.push(property);
+        properties.push(property.with_attributes(attributes));
         methods.append(&mut hook_methods);
         Ok(())
     }
@@ -1059,8 +1085,9 @@ impl Parser {
         constants: &mut Vec<EvalClassConstant>,
         methods: &mut Vec<EvalClassMethod>,
     ) -> Result<(), EvalParseError> {
+        let attributes = self.parse_optional_member_attributes()?;
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "case")) {
-            cases.push(self.parse_enum_case_decl()?);
+            cases.push(self.parse_enum_case_decl()?.with_attributes(attributes));
             return Ok(());
         }
         let (visibility, is_static, is_abstract, is_final, is_readonly) =
@@ -1072,17 +1099,22 @@ impl Parser {
             if is_static || is_final {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            constants
-                .push(self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?);
+            constants.push(
+                self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?
+                    .with_attributes(attributes),
+            );
             return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
-            methods.push(self.parse_class_method_decl(
-                visibility.unwrap_or(EvalVisibility::Public),
-                is_static,
-                false,
-                is_final,
-            )?);
+            methods.push(
+                self.parse_class_method_decl(
+                    visibility.unwrap_or(EvalVisibility::Public),
+                    is_static,
+                    false,
+                    is_final,
+                )?
+                .with_attributes(attributes),
+            );
             return Ok(());
         }
         Err(EvalParseError::UnsupportedConstruct)
@@ -1165,6 +1197,7 @@ impl Parser {
         properties: &mut Vec<EvalInterfaceProperty>,
         methods: &mut Vec<EvalInterfaceMethod>,
     ) -> Result<(), EvalParseError> {
+        let attributes = self.parse_optional_member_attributes()?;
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "public")) {
             self.advance();
         } else if matches!(self.current(), TokenKind::Ident(name) if is_unsupported_class_member_modifier(name))
@@ -1172,14 +1205,23 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
-            constants.push(self.parse_class_const_decl(EvalVisibility::Public)?);
+            constants.push(
+                self.parse_class_const_decl(EvalVisibility::Public)?
+                    .with_attributes(attributes),
+            );
             return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
-            methods.push(self.parse_interface_method_decl_after_function_keyword()?);
+            methods.push(
+                self.parse_interface_method_decl_after_function_keyword()?
+                    .with_attributes(attributes),
+            );
             return Ok(());
         }
-        properties.push(self.parse_interface_property_decl()?);
+        properties.push(
+            self.parse_interface_property_decl()?
+                .with_attributes(attributes),
+        );
         Ok(())
     }
 

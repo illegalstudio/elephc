@@ -143,7 +143,10 @@ interfaces, traits, and enums are visible through `class_attribute_names()` and
 `class_attribute_args()` when their arguments are supported literal positional
 values (`string`, `int`, `bool`, `null`, or negated integer literals).
 Attribute names remain visible when an attribute uses unsupported argument
-syntax, but requesting those arguments is a runtime fatal.
+syntax, but requesting those arguments is a runtime fatal. Attributes on
+methods, properties, constants, interface members, trait members, and enum cases
+are parsed and retained for future reflection support, but eval does not expose
+them through Reflection APIs yet.
 Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the
@@ -299,9 +302,10 @@ native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are ReflectionAttribute object materialization,
-member-level attribute metadata, and generated/AOT dynamic static-method call
-forms. `class_get_attributes()` is recognized in eval but does not yet
-materialize `ReflectionAttribute` objects for eval-declared attributes.
+Reflection exposure for member-level attributes, and generated/AOT dynamic
+static-method call forms. `class_get_attributes()` is recognized in eval but
+does not yet materialize `ReflectionAttribute` objects for eval-declared
+attributes.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

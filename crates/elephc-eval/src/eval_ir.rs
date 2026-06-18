@@ -335,6 +335,7 @@ pub enum EvalEnumBackingType {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalEnumCase {
     name: String,
+    attributes: Vec<EvalAttribute>,
     value: Option<EvalExpr>,
 }
 
@@ -343,13 +344,25 @@ impl EvalEnumCase {
     pub fn new(name: impl Into<String>, value: Option<EvalExpr>) -> Self {
         Self {
             name: name.into(),
+            attributes: Vec::new(),
             value,
         }
+    }
+
+    /// Returns a copy of this enum case with declaration attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
     }
 
     /// Returns the PHP-visible enum case name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns attributes declared directly on this enum case.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
     }
 
     /// Returns the optional backing value expression.
@@ -455,6 +468,7 @@ impl EvalInterface {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalInterfaceProperty {
     name: String,
+    attributes: Vec<EvalAttribute>,
     requires_get: bool,
     requires_set: bool,
 }
@@ -464,14 +478,26 @@ impl EvalInterfaceProperty {
     pub fn new(name: impl Into<String>, requires_get: bool, requires_set: bool) -> Self {
         Self {
             name: name.into(),
+            attributes: Vec::new(),
             requires_get,
             requires_set,
         }
     }
 
+    /// Returns a copy of this interface property with declaration attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
     /// Returns the PHP-visible property name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns attributes declared directly on this interface property.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
     }
 
     /// Returns whether the interface requires the property to be readable.
@@ -488,6 +514,7 @@ impl EvalInterfaceProperty {
     pub fn merged_with(&self, other: &Self) -> Self {
         Self {
             name: self.name.clone(),
+            attributes: self.attributes.clone(),
             requires_get: self.requires_get || other.requires_get,
             requires_set: self.requires_set || other.requires_set,
         }
@@ -498,6 +525,7 @@ impl EvalInterfaceProperty {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalInterfaceMethod {
     name: String,
+    attributes: Vec<EvalAttribute>,
     params: Vec<String>,
 }
 
@@ -506,13 +534,25 @@ impl EvalInterfaceMethod {
     pub fn new(name: impl Into<String>, params: Vec<String>) -> Self {
         Self {
             name: name.into(),
+            attributes: Vec::new(),
             params,
         }
+    }
+
+    /// Returns a copy of this interface method with declaration attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
     }
 
     /// Returns the PHP-visible method name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns attributes declared directly on this interface method.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
     }
 
     /// Returns source-order parameter names without leading `$`.
@@ -880,6 +920,7 @@ pub enum EvalTraitAdaptation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalClassConstant {
     name: String,
+    attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
     value: EvalExpr,
 }
@@ -898,14 +939,26 @@ impl EvalClassConstant {
     ) -> Self {
         Self {
             name: name.into(),
+            attributes: Vec::new(),
             visibility,
             value,
         }
     }
 
+    /// Returns a copy of this class constant with declaration attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
     /// Returns the PHP-visible class constant name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns attributes declared directly on this class constant.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
     }
 
     /// Returns the PHP visibility declared for this constant.
@@ -998,6 +1051,7 @@ impl EvalTrait {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalClassProperty {
     name: String,
+    attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
     is_static: bool,
     is_readonly: bool,
@@ -1044,6 +1098,7 @@ impl EvalClassProperty {
     ) -> Self {
         Self {
             name: name.into(),
+            attributes: Vec::new(),
             visibility,
             is_static,
             is_readonly,
@@ -1075,9 +1130,20 @@ impl EvalClassProperty {
         self
     }
 
+    /// Returns a copy of this property with declaration attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
     /// Returns the PHP-visible property name without `$`.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns attributes declared directly on this class property.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
     }
 
     /// Returns the PHP visibility declared for this property.
@@ -1138,6 +1204,7 @@ pub enum EvalVisibility {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalClassMethod {
     name: String,
+    attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
     is_static: bool,
     is_abstract: bool,
@@ -1183,6 +1250,7 @@ impl EvalClassMethod {
     ) -> Self {
         Self {
             name: name.into(),
+            attributes: Vec::new(),
             visibility,
             is_static,
             is_abstract,
@@ -1195,6 +1263,17 @@ impl EvalClassMethod {
     /// Returns the PHP-visible method name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns a copy of this method with declaration attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
+    /// Returns attributes declared directly on this class method.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
     }
 
     /// Returns a copy of this method with a different PHP-visible name.

@@ -101,6 +101,121 @@ fn parse_fragment_accepts_class_like_attribute_metadata() {
     );
 }
 
+/// Verifies attributes on class constants, properties, and methods are retained.
+#[test]
+fn parse_fragment_accepts_class_member_attribute_metadata() {
+    let program = parse_fragment(
+        br#"class DynEvalMemberAttrs {
+    #[ConstMark]
+    public const SEED = 1;
+    #[PropMark("p")]
+    public int $value;
+    #[MethodMark(true)]
+    public function read() { return 1; }
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(
+            EvalClass::with_modifiers_traits_and_constants(
+                "DynEvalMemberAttrs",
+                false,
+                false,
+                None,
+                Vec::new(),
+                Vec::new(),
+                vec![
+                    EvalClassConstant::new("SEED", EvalExpr::Const(EvalConst::Int(1)))
+                        .with_attributes(vec![EvalAttribute::new("ConstMark", Some(Vec::new()))])
+                ],
+                vec![EvalClassProperty::new("value", None).with_attributes(vec![
+                    EvalAttribute::new(
+                        "PropMark",
+                        Some(vec![EvalAttributeArg::String("p".to_string())])
+                    )
+                ])],
+                vec![EvalClassMethod::new(
+                    "read",
+                    Vec::new(),
+                    vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(1))))]
+                )
+                .with_attributes(vec![EvalAttribute::new(
+                    "MethodMark",
+                    Some(vec![EvalAttributeArg::Bool(true)])
+                )])],
+            )
+        )]
+    );
+}
+
+/// Verifies interface, trait, and enum member attributes are retained.
+#[test]
+fn parse_fragment_accepts_class_like_member_attribute_metadata() {
+    let program = parse_fragment(
+        br#"interface DynEvalMemberIface {
+    #[IfaceProp]
+    public string $value { get; }
+    #[IfaceMethod]
+    function read();
+}
+trait DynEvalMemberTrait {
+    #[TraitProp]
+    public int $seed;
+    #[TraitMethod]
+    public function add() { return 2; }
+}
+enum DynEvalMemberEnum {
+    #[CaseMark]
+    case Ready;
+    #[EnumMethod]
+    public function label() { return "ready"; }
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::InterfaceDecl(EvalInterface::with_constants_and_properties(
+                "DynEvalMemberIface",
+                Vec::new(),
+                Vec::new(),
+                vec![EvalInterfaceProperty::new("value", true, false)
+                    .with_attributes(vec![EvalAttribute::new("IfaceProp", Some(Vec::new()))])],
+                vec![EvalInterfaceMethod::new("read", Vec::new())
+                    .with_attributes(vec![EvalAttribute::new("IfaceMethod", Some(Vec::new()))])],
+            )),
+            EvalStmt::TraitDecl(EvalTrait::new(
+                "DynEvalMemberTrait",
+                vec![EvalClassProperty::new("seed", None)
+                    .with_attributes(vec![EvalAttribute::new("TraitProp", Some(Vec::new()))])],
+                vec![EvalClassMethod::new(
+                    "add",
+                    Vec::new(),
+                    vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(2))))]
+                )
+                .with_attributes(vec![EvalAttribute::new("TraitMethod", Some(Vec::new()))])],
+            )),
+            EvalStmt::EnumDecl(EvalEnum::with_members(
+                "DynEvalMemberEnum",
+                None,
+                Vec::new(),
+                vec![EvalEnumCase::new("Ready", None)
+                    .with_attributes(vec![EvalAttribute::new("CaseMark", Some(Vec::new()))])],
+                Vec::new(),
+                vec![EvalClassMethod::new(
+                    "label",
+                    Vec::new(),
+                    vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::String(
+                        "ready".to_string()
+                    ))))]
+                )
+                .with_attributes(vec![EvalAttribute::new("EnumMethod", Some(Vec::new()))])],
+            )),
+        ]
+    );
+}
+
 /// Verifies eval interface declarations lower to dynamic interface metadata.
 #[test]
 fn parse_fragment_accepts_interface_declaration_source() {
