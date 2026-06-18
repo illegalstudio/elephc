@@ -44,3 +44,4 @@ mod functions_namespaces;
 mod native_scope;
 mod static_members;
 mod support;
+mod trait_adaptations;

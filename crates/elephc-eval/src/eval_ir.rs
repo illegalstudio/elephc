@@ -273,6 +273,7 @@ pub struct EvalClass {
     parent: Option<String>,
     interfaces: Vec<String>,
     traits: Vec<String>,
+    trait_adaptations: Vec<EvalTraitAdaptation>,
     constants: Vec<EvalClassConstant>,
     properties: Vec<EvalClassProperty>,
     methods: Vec<EvalClassMethod>,
@@ -357,6 +358,33 @@ impl EvalClass {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
+        Self::with_modifiers_traits_adaptations_and_constants(
+            name,
+            is_abstract,
+            is_final,
+            parent,
+            interfaces,
+            traits,
+            Vec::new(),
+            constants,
+            properties,
+            methods,
+        )
+    }
+
+    /// Creates a dynamic eval class with modifiers, relations, trait adaptations, constants, and members.
+    pub fn with_modifiers_traits_adaptations_and_constants(
+        name: impl Into<String>,
+        is_abstract: bool,
+        is_final: bool,
+        parent: Option<String>,
+        interfaces: Vec<String>,
+        traits: Vec<String>,
+        trait_adaptations: Vec<EvalTraitAdaptation>,
+        constants: Vec<EvalClassConstant>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
         Self {
             name: name.into(),
             is_abstract,
@@ -364,6 +392,7 @@ impl EvalClass {
             parent,
             interfaces,
             traits,
+            trait_adaptations,
             constants,
             properties,
             methods,
@@ -400,6 +429,11 @@ impl EvalClass {
         &self.traits
     }
 
+    /// Returns trait adaptations declared on this eval class.
+    pub fn trait_adaptations(&self) -> &[EvalTraitAdaptation] {
+        &self.trait_adaptations
+    }
+
     /// Returns class constants declared directly by this eval class.
     pub fn constants(&self) -> &[EvalClassConstant] {
         &self.constants
@@ -428,6 +462,22 @@ impl EvalClass {
             .iter()
             .find(|constant| constant.name() == name)
     }
+}
+
+/// Adaptation rule declared in a runtime eval class `use Trait { ... }` block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalTraitAdaptation {
+    Alias {
+        trait_name: Option<String>,
+        method: String,
+        alias: Option<String>,
+        visibility: Option<EvalVisibility>,
+    },
+    InsteadOf {
+        trait_name: Option<String>,
+        method: String,
+        instead_of: Vec<String>,
+    },
 }
 
 /// Constant metadata for a runtime eval class.
@@ -664,6 +714,20 @@ impl EvalClassMethod {
     /// Returns the PHP-visible method name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns a copy of this method with a different PHP-visible name.
+    pub fn renamed(&self, name: impl Into<String>) -> Self {
+        let mut method = self.clone();
+        method.name = name.into();
+        method
+    }
+
+    /// Returns a copy of this method with a different PHP visibility.
+    pub fn with_visibility_override(&self, visibility: EvalVisibility) -> Self {
+        let mut method = self.clone();
+        method.visibility = visibility;
+        method
     }
 
     /// Returns the PHP visibility declared for this method.

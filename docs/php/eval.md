@@ -49,7 +49,7 @@ such a local alias removes the alias without unsetting the global value.
 | Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, and `continue` are supported. |
 | Exceptions | `throw`, `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
 | Functions | Eval fragments can declare functions. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
-| Classes | Eval fragments can declare classes with properties, methods, `__construct()`, inheritance, visibility, abstract/final modifiers, simple trait uses, interface implementations, static members, and class constants. Duplicate eval class-like names are rejected. |
+| Classes | Eval fragments can declare classes with properties, methods, `__construct()`, inheritance, visibility, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations, interface implementations, static members, and class constants. Duplicate eval class-like names are rejected. |
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
 
@@ -127,8 +127,9 @@ containers to eval-declared functions.
 
 Eval-declared classes support inheritance, public/protected/private properties
 and methods, `__construct()`, abstract classes and methods, final classes and
-methods, simple `use Trait;` composition, interface implementation checks,
-static properties, static methods, class constants, interface constants, trait
+methods, trait composition with `insteadof` conflict resolution and `as`
+aliases/visibility adaptations, interface implementation checks, static
+properties, static methods, class constants, interface constants, trait
 constants, and `ClassName::class` literals. Member visibility is checked at
 runtime for eval-declared objects and static/class-constant accesses. `self::`,
 `parent::`, and late-bound `static::` work for supported static members, class
@@ -267,10 +268,9 @@ calls through eval support positional arguments and numeric array unpacking;
 named method arguments remain unsupported.
 
 Eval class support is still smaller than the full static class system. The main
-remaining class-system gaps are eval-declared enums, trait conflict adaptations
-(`insteadof` / `as`), property hooks, attributes/reflection metadata, readonly
-semantics, dynamic static callables, and advanced method-call forms such as
-named method arguments.
+remaining class-system gaps are eval-declared enums, property hooks,
+attributes/reflection metadata, readonly semantics, dynamic static callables,
+and advanced method-call forms such as named method arguments.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

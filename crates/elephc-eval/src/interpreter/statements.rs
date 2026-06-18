@@ -553,6 +553,7 @@ fn expand_eval_class_traits(
         )?;
         append_eval_trait_methods(
             trait_decl,
+            class.trait_adaptations(),
             &class_method_names,
             &mut trait_method_names,
             &mut methods,
@@ -561,13 +562,14 @@ fn expand_eval_class_traits(
     constants.extend(class.constants().iter().cloned());
     properties.extend(class.properties().iter().cloned());
     methods.extend(class.methods().iter().cloned());
-    Ok(EvalClass::with_modifiers_traits_and_constants(
+    Ok(EvalClass::with_modifiers_traits_adaptations_and_constants(
         class.name().to_string(),
         class.is_abstract(),
         class.is_final(),
         class.parent().map(str::to_string),
         class.interfaces().to_vec(),
         class.traits().to_vec(),
+        class.trait_adaptations().to_vec(),
         constants,
         properties,
         methods,
@@ -642,21 +644,150 @@ fn append_eval_trait_properties(
 /// Appends trait methods unless the class provides a same-name method.
 fn append_eval_trait_methods(
     trait_decl: &EvalTrait,
+    trait_adaptations: &[EvalTraitAdaptation],
     class_method_names: &std::collections::HashSet<String>,
     trait_method_names: &mut std::collections::HashSet<String>,
     methods: &mut Vec<EvalClassMethod>,
 ) -> Result<(), EvalStatus> {
     for method in trait_decl.methods() {
+        if trait_method_suppressed_by_insteadof(trait_decl.name(), method.name(), trait_adaptations)
+        {
+            continue;
+        }
         let key = method.name().to_ascii_lowercase();
         if class_method_names.contains(&key) {
             continue;
         }
+        let method =
+            apply_trait_visibility_adaptations(trait_decl.name(), method, trait_adaptations);
         if !trait_method_names.insert(key) {
             return Err(EvalStatus::RuntimeFatal);
         }
-        methods.push(method.clone());
+        methods.push(method);
+    }
+    append_eval_trait_method_aliases(
+        trait_decl,
+        trait_adaptations,
+        class_method_names,
+        trait_method_names,
+        methods,
+    )
+}
+
+/// Appends trait method aliases declared with `as`.
+fn append_eval_trait_method_aliases(
+    trait_decl: &EvalTrait,
+    trait_adaptations: &[EvalTraitAdaptation],
+    class_method_names: &std::collections::HashSet<String>,
+    trait_method_names: &mut std::collections::HashSet<String>,
+    methods: &mut Vec<EvalClassMethod>,
+) -> Result<(), EvalStatus> {
+    for adaptation in trait_adaptations {
+        let EvalTraitAdaptation::Alias {
+            trait_name,
+            method,
+            alias: Some(alias),
+            visibility,
+        } = adaptation
+        else {
+            continue;
+        };
+        if !trait_adaptation_target_matches(
+            trait_name.as_deref(),
+            method,
+            trait_decl.name(),
+            method,
+        ) {
+            continue;
+        }
+        let Some(source_method) = trait_decl
+            .methods()
+            .iter()
+            .find(|trait_method| trait_method.name().eq_ignore_ascii_case(method))
+        else {
+            if trait_name.is_some() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            continue;
+        };
+        let mut alias_method = source_method.renamed(alias.clone());
+        if let Some(visibility) = visibility {
+            alias_method = alias_method.with_visibility_override(*visibility);
+        }
+        let key = alias_method.name().to_ascii_lowercase();
+        if class_method_names.contains(&key) || !trait_method_names.insert(key) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        methods.push(alias_method);
     }
     Ok(())
+}
+
+/// Returns whether an `insteadof` adaptation suppresses this trait method import.
+fn trait_method_suppressed_by_insteadof(
+    trait_name: &str,
+    method_name: &str,
+    trait_adaptations: &[EvalTraitAdaptation],
+) -> bool {
+    trait_adaptations.iter().any(|adaptation| {
+        let EvalTraitAdaptation::InsteadOf {
+            trait_name: selected_trait,
+            method,
+            instead_of,
+        } = adaptation
+        else {
+            return false;
+        };
+        method.eq_ignore_ascii_case(method_name)
+            && instead_of
+                .iter()
+                .any(|suppressed| same_eval_class_name(suppressed, trait_name))
+            && !selected_trait
+                .as_deref()
+                .is_some_and(|selected| same_eval_class_name(selected, trait_name))
+    })
+}
+
+/// Applies visibility-only `as` adaptations to an imported trait method.
+fn apply_trait_visibility_adaptations(
+    trait_name: &str,
+    method: &EvalClassMethod,
+    trait_adaptations: &[EvalTraitAdaptation],
+) -> EvalClassMethod {
+    let mut method = method.clone();
+    for adaptation in trait_adaptations {
+        let EvalTraitAdaptation::Alias {
+            trait_name: target_trait,
+            method: target_method,
+            alias: None,
+            visibility: Some(visibility),
+        } = adaptation
+        else {
+            continue;
+        };
+        if trait_adaptation_target_matches(
+            target_trait.as_deref(),
+            target_method,
+            trait_name,
+            method.name(),
+        ) {
+            method = method.with_visibility_override(*visibility);
+        }
+    }
+    method
+}
+
+/// Returns whether an adaptation target selects one trait method.
+fn trait_adaptation_target_matches(
+    target_trait: Option<&str>,
+    target_method: &str,
+    trait_name: &str,
+    method_name: &str,
+) -> bool {
+    target_method.eq_ignore_ascii_case(method_name)
+        && target_trait.map_or(true, |target_trait| {
+            same_eval_class_name(target_trait, trait_name)
+        })
 }
 
 /// Validates abstract/final modifiers on an eval-declared class and its methods.

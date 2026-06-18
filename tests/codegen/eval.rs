@@ -4701,6 +4701,64 @@ echo $box->seed;');
     );
 }
 
+/// Verifies eval-declared trait adaptations resolve conflicts, aliases, and visibility.
+#[test]
+fn test_eval_declared_trait_adaptations() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('trait EvalAdaptA {
+    public function talk() { return "A"; }
+    public function hidden() { return "secret"; }
+}
+trait EvalAdaptB {
+    public function talk() { return "B"; }
+}
+class EvalAdaptBox {
+    use EvalAdaptA, EvalAdaptB {
+        EvalAdaptA::talk insteadof EvalAdaptB;
+        EvalAdaptB::talk as talkB;
+        EvalAdaptA::hidden as private;
+    }
+    public function read() {
+        return $this->talk() . ":" . $this->talkB() . ":" . $this->hidden();
+    }
+}
+$box = new EvalAdaptBox();
+echo $box->read() . ":";
+echo $box->talk();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "A:B:secret:A");
+}
+
+/// Verifies eval-declared trait visibility adaptations affect bridge access checks.
+#[test]
+fn test_eval_declared_trait_visibility_adaptation_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('trait EvalAdaptHidden {
+    public function hidden() { return "secret"; }
+}
+class EvalAdaptHiddenBox {
+    use EvalAdaptHidden {
+        EvalAdaptHidden::hidden as private;
+    }
+}
+$box = new EvalAdaptHiddenBox();
+echo $box->hidden();');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared trait abstract methods must be implemented by concrete classes.
 #[test]
 fn test_eval_declared_trait_abstract_method_requirement_fails() {

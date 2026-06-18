@@ -22,3 +22,4 @@ mod namespaces;
 mod operators;
 mod static_members;
 mod support;
+mod trait_adaptations;

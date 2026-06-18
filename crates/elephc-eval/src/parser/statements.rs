@@ -13,7 +13,8 @@ use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalCatch, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalExpr,
-    EvalInterface, EvalInterfaceMethod, EvalStmt, EvalSwitchCase, EvalTrait, EvalVisibility,
+    EvalInterface, EvalInterfaceMethod, EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation,
+    EvalVisibility,
 };
 use crate::lexer::TokenKind;
 
@@ -261,21 +262,29 @@ impl Parser {
         let mut properties = Vec::new();
         let mut methods = Vec::new();
         let mut traits = Vec::new();
+        let mut trait_adaptations = Vec::new();
         while !self.consume(TokenKind::RBrace) {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
-            self.parse_class_member(&mut constants, &mut properties, &mut methods, &mut traits)?;
+            self.parse_class_member(
+                &mut constants,
+                &mut properties,
+                &mut methods,
+                &mut traits,
+                &mut trait_adaptations,
+            )?;
         }
         self.consume_semicolon();
         Ok(vec![EvalStmt::ClassDecl(
-            EvalClass::with_modifiers_traits_and_constants(
+            EvalClass::with_modifiers_traits_adaptations_and_constants(
                 name,
                 is_abstract,
                 is_final,
                 parent,
                 interfaces,
                 traits,
+                trait_adaptations,
                 constants,
                 properties,
                 methods,
@@ -342,6 +351,7 @@ impl Parser {
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
         traits: &mut Vec<String>,
+        trait_adaptations: &mut Vec<EvalTraitAdaptation>,
     ) -> Result<(), EvalParseError> {
         let (visibility, is_static, is_abstract, is_final) = self.parse_class_member_modifiers()?;
 
@@ -355,7 +365,7 @@ impl Parser {
             && !is_final
             && matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "use"))
         {
-            self.parse_class_trait_use(traits)?;
+            self.parse_class_trait_use(traits, trait_adaptations)?;
             return Ok(());
         }
 
@@ -403,10 +413,11 @@ impl Parser {
         Ok(EvalClassConstant::with_visibility(name, visibility, value))
     }
 
-    /// Parses `use TraitName, OtherTrait;` inside an eval class body.
+    /// Parses `use TraitName, OtherTrait;` or an adaptation block inside an eval class body.
     pub(super) fn parse_class_trait_use(
         &mut self,
         traits: &mut Vec<String>,
+        trait_adaptations: &mut Vec<EvalTraitAdaptation>,
     ) -> Result<(), EvalParseError> {
         self.advance();
         loop {
@@ -416,7 +427,111 @@ impl Parser {
                 break;
             }
         }
-        self.expect_semicolon()
+        if self.consume(TokenKind::LBrace) {
+            while !self.consume(TokenKind::RBrace) {
+                if matches!(self.current(), TokenKind::Eof) {
+                    return Err(EvalParseError::UnexpectedEof);
+                }
+                trait_adaptations.push(self.parse_trait_adaptation()?);
+                self.expect_semicolon()?;
+            }
+            self.consume_semicolon();
+            Ok(())
+        } else {
+            self.expect_semicolon()
+        }
+    }
+
+    /// Parses one `as` or `insteadof` trait adaptation clause.
+    pub(super) fn parse_trait_adaptation(&mut self) -> Result<EvalTraitAdaptation, EvalParseError> {
+        let (trait_name, method) = self.parse_trait_adaptation_target()?;
+        match self.current() {
+            TokenKind::Ident(name) if ident_eq(name, "as") => {
+                self.advance();
+                let visibility = self.parse_optional_trait_adaptation_visibility()?;
+                let alias = if let TokenKind::Ident(alias) = self.current() {
+                    let alias = alias.clone();
+                    self.advance();
+                    Some(alias)
+                } else {
+                    None
+                };
+                if visibility.is_none() && alias.is_none() {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                Ok(EvalTraitAdaptation::Alias {
+                    trait_name,
+                    method,
+                    alias,
+                    visibility,
+                })
+            }
+            TokenKind::Ident(name) if ident_eq(name, "insteadof") => {
+                self.advance();
+                let mut instead_of = Vec::new();
+                loop {
+                    let trait_name = self.parse_qualified_name()?;
+                    instead_of.push(self.resolve_class_name(trait_name));
+                    if !self.consume(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                if instead_of.is_empty() {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                Ok(EvalTraitAdaptation::InsteadOf {
+                    trait_name,
+                    method,
+                    instead_of,
+                })
+            }
+            _ => Err(EvalParseError::UnsupportedConstruct),
+        }
+    }
+
+    /// Parses the target before `as` or `insteadof`.
+    pub(super) fn parse_trait_adaptation_target(
+        &mut self,
+    ) -> Result<(Option<String>, String), EvalParseError> {
+        let first = self.parse_qualified_name()?;
+        if self.consume(TokenKind::DoubleColon) {
+            let TokenKind::Ident(method) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            let method = method.clone();
+            self.advance();
+            Ok((Some(self.resolve_class_name(first)), method))
+        } else {
+            let method = first
+                .name
+                .rsplit('\\')
+                .next()
+                .filter(|segment| !segment.is_empty())
+                .ok_or(EvalParseError::UnexpectedToken)?
+                .to_string();
+            Ok((None, method))
+        }
+    }
+
+    /// Parses an optional visibility modifier inside a trait `as` adaptation.
+    pub(super) fn parse_optional_trait_adaptation_visibility(
+        &mut self,
+    ) -> Result<Option<EvalVisibility>, EvalParseError> {
+        match self.current() {
+            TokenKind::Ident(name) if ident_eq(name, "public") => {
+                self.advance();
+                Ok(Some(EvalVisibility::Public))
+            }
+            TokenKind::Ident(name) if ident_eq(name, "protected") => {
+                self.advance();
+                Ok(Some(EvalVisibility::Protected))
+            }
+            TokenKind::Ident(name) if ident_eq(name, "private") => {
+                self.advance();
+                Ok(Some(EvalVisibility::Private))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Parses method modifiers supported by eval class declarations.
