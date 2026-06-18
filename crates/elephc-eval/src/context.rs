@@ -16,8 +16,8 @@ use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
-    EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum, EvalFunction,
-    EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalTrait,
+    EvalAttribute, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum,
+    EvalFunction, EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalTrait,
 };
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
@@ -109,6 +109,7 @@ pub struct ElephcEvalContext {
     class_constants: HashMap<(String, String), RuntimeCellHandle>,
     included_files: HashSet<String>,
     dynamic_objects: HashMap<u64, String>,
+    eval_reflection_attributes: HashMap<u64, EvalAttribute>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     class_stack: Vec<String>,
@@ -148,6 +149,7 @@ impl ElephcEvalContext {
             class_constants: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
+            eval_reflection_attributes: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -188,6 +190,7 @@ impl ElephcEvalContext {
             class_constants: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
+            eval_reflection_attributes: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -469,6 +472,16 @@ impl ElephcEvalContext {
         self.dynamic_objects
             .get(&identity)
             .and_then(|class_key| self.classes.get(class_key))
+    }
+
+    /// Records eval-declared attribute metadata for one synthetic ReflectionAttribute object.
+    pub fn register_eval_reflection_attribute(&mut self, identity: u64, attribute: EvalAttribute) {
+        self.eval_reflection_attributes.insert(identity, attribute);
+    }
+
+    /// Returns eval-declared attribute metadata attached to a synthetic ReflectionAttribute.
+    pub fn eval_reflection_attribute(&self, identity: u64) -> Option<&EvalAttribute> {
+        self.eval_reflection_attributes.get(&identity)
     }
 
     /// Returns eval-declared class metadata from parent to child for construction.

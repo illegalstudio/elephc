@@ -5316,6 +5316,39 @@ echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
     );
 }
 
+/// Verifies eval ReflectionAttribute::newInstance builds eval-declared attribute objects.
+#[test]
+fn test_eval_reflection_attribute_new_instance_for_eval_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalRoute {
+    public $path;
+    public $code;
+    public $enabled;
+    public function __construct($path, $code, $enabled) {
+        $this->path = $path;
+        $this->code = $code;
+        $this->enabled = $enabled;
+    }
+    public function summary() {
+        return $this->path . ":" . $this->code . ":" . ($this->enabled ? "T" : "F");
+    }
+}
+#[EvalRoute("/home", -7, true)]
+class EvalRouteTarget {}
+$attrs = class_get_attributes("EvalRouteTarget");
+$instance = $attrs[0]->newInstance();
+echo get_class($instance) . ":" . $instance->summary();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "EvalRoute:/home:-7:T");
+}
+
 /// Verifies eval interface and trait constants work through the bridge.
 #[test]
 fn test_eval_declared_interface_and_trait_constants() {

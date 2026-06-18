@@ -111,7 +111,7 @@ pub(in crate::interpreter) fn eval_builtin_class_attribute_metadata(
 pub(in crate::interpreter) fn eval_class_attribute_metadata_result(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match (name, evaluated_args) {
@@ -127,7 +127,8 @@ pub(in crate::interpreter) fn eval_class_attribute_metadata_result(
             let Some(attributes) = eval_class_like_attributes(context, &class_name) else {
                 return values.array_new(0);
             };
-            eval_class_get_attributes_result(attributes, values)
+            let attributes = attributes.to_vec();
+            eval_class_get_attributes_result(&attributes, context, values)
         }
         ("class_attribute_args", [class_name, attribute_name]) => {
             let class_name = eval_class_metadata_name(*class_name, values)?;
@@ -184,6 +185,7 @@ fn eval_class_attribute_names_result(
 /// Builds the indexed `ReflectionAttribute` array returned by `class_get_attributes()`.
 fn eval_class_get_attributes_result(
     attributes: &[EvalAttribute],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut result = values.array_new(attributes.len())?;
@@ -193,9 +195,11 @@ fn eval_class_get_attributes_result(
         };
         let key = values.int(index as i64)?;
         let args = eval_class_attribute_args_result(args, values)?;
-        let attribute = values.reflection_attribute_new(attribute.name(), args)?;
+        let reflection_attribute = values.reflection_attribute_new(attribute.name(), args)?;
+        let identity = values.object_identity(reflection_attribute)?;
+        context.register_eval_reflection_attribute(identity, attribute.clone());
         values.release(args)?;
-        result = values.array_set(result, key, attribute)?;
+        result = values.array_set(result, key, reflection_attribute)?;
     }
     Ok(result)
 }
