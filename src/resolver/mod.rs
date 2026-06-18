@@ -19,6 +19,7 @@ mod engine_includes;
 mod exprs;
 mod files;
 mod function_variants;
+mod hoist_includes;
 mod include_once;
 mod include_path;
 pub(crate) mod path_eval;

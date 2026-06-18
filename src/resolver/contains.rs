@@ -19,7 +19,7 @@ pub(super) fn has_includes(stmts: &[Stmt]) -> bool {
 
 /// Returns true if the statement contains an `Include` or `IncludeOnce` node,
 /// recursing into nested statements, functions, methods, closures, and bodies.
-fn stmt_has_includes(stmt: &Stmt) -> bool {
+pub(super) fn stmt_has_includes(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::Include { .. } => true,
         StmtKind::Synthetic(stmts) | StmtKind::IncludeOnceGuard { body: stmts, .. } => {
@@ -130,7 +130,7 @@ fn methods_have_includes(methods: &[ClassMethod]) -> bool {
 /// Returns true if the expression recursively contains an `Include`, checking
 /// binary operands, function arguments, array literals, closures, match arms,
 /// and all other expression variants.
-fn expr_has_includes(expr: &Expr) -> bool {
+pub(super) fn expr_has_includes(expr: &Expr) -> bool {
     match &expr.kind {
         // A value-position include is itself an include.
         ExprKind::IncludeValue { .. } => true,

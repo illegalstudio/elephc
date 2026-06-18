@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::names::Name;
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
 
 use super::declarations::strip_discoverable_declarations;
@@ -150,28 +151,26 @@ pub(super) fn resolve_include_stmt(
     ]))
 }
 
-/// Expands an expression-position `include`/`require` (`$x = require X;` or `return require X;`)
-/// into a sequence of statements that run the included file *in the caller's scope* and deliver
-/// its value to `capture`.
+/// Core of [`expand_value_include`]: inlines the included file into the caller's scope and returns
+/// the hoisted statements plus the hidden temporary name holding the include's value, *without*
+/// appending the final capture statement (`$name = tmp` or `return tmp`).
 ///
-/// The included file's statements are inlined directly (sharing the caller's variables), and its
-/// first top-level `return E` is rewritten to assign a hidden temporary. A successful include with
-/// no top-level `return` yields `1`; a missing non-required include yields `false`, matching PHP.
-///
-/// Nested top-level returns inside control flow within the included file are not rewritten and keep
-/// the same semantics as a statement-position include (they return from the enclosing function).
-pub(super) fn expand_value_include(
+/// Returns `(out, tmp)` where `out` is the inlined include body (already resolved, run in the
+/// caller's scope) preceded by a pre-seed of the temporary, and `tmp` is the unique hidden
+/// variable name carrying the include's value. Direct-RHS callers (`$x = require X;`,
+/// `return require X;`) wrap this via [`expand_value_include`]; deep expression-position callers
+/// (e.g. `if (true === (require_once X) || false)`) use `tmp` directly as a `Variable(tmp)` node.
+pub(super) fn expand_value_include_core(
     span: Span,
     path: &Expr,
     once: bool,
     required: bool,
-    capture: IncludeValueCapture,
     base_dir: &Path,
     declared_once: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &mut ResolveState,
     function_variants: &FunctionVariantRegistry,
-) -> Result<Vec<Stmt>, CompileError> {
+) -> Result<(Vec<Stmt>, String), CompileError> {
     let tmp = format!(
         "__elephc_inc_{}",
         VALUE_INCLUDE_COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -213,15 +212,62 @@ pub(super) fn expand_value_include(
             // temporary itself: either it has no top-level `return`, or it is an `_once` include
             // whose guarded body may be skipped on a repeat include.
             if !captured_return || once {
-                out.push(assign_temp(
-                    &tmp,
-                    Expr::new(ExprKind::IntLiteral(1), span),
-                    span,
-                ));
+                // For a `_once` include that ALSO has a top-level `return`, the pre-seed `1`
+                // (int) and the returned value (e.g. string/object) have incompatible types. PHP
+                // itself yields `true` (1) on a repeat load and the file's return value on the
+                // first load, so the temporary is genuinely `mixed`; declare it as such so the
+                // return reassigns cleanly. The no-`return` case is never overwritten, so a plain
+                // `int` pre-seed keeps the existing typed behavior (and tests).
+                let pre_seed = if captured_return && once {
+                    declare_mixed_temp(&tmp, Expr::new(ExprKind::IntLiteral(1), span), span)
+                } else {
+                    assign_temp(&tmp, Expr::new(ExprKind::IntLiteral(1), span), span)
+                };
+                out.push(pre_seed);
             }
             out.extend(wrapped);
         }
     }
+
+    Ok((out, tmp))
+}
+
+/// Expands an expression-position `include`/`require` (`$x = require X;` or `return require X;`)
+/// into a sequence of statements that run the included file *in the caller's scope* and deliver
+/// its value to `capture`.
+///
+/// Delegates to [`expand_value_include_core`] for the inlining and temporary, then appends the
+/// final capture statement (`$name = tmp` for [`IncludeValueCapture::Assign`], `return tmp` for
+/// [`IncludeValueCapture::Return`]). The included file's statements are inlined directly (sharing
+/// the caller's variables), and its first top-level `return E` is rewritten to assign the hidden
+/// temporary. A successful include with no top-level `return` yields `1`; a missing non-required
+/// include yields `false`, matching PHP.
+///
+/// Nested top-level returns inside control flow within the included file are not rewritten and keep
+/// the same semantics as a statement-position include (they return from the enclosing function).
+pub(super) fn expand_value_include(
+    span: Span,
+    path: &Expr,
+    once: bool,
+    required: bool,
+    capture: IncludeValueCapture,
+    base_dir: &Path,
+    declared_once: &mut HashSet<PathBuf>,
+    include_chain: &mut Vec<PathBuf>,
+    state: &mut ResolveState,
+    function_variants: &FunctionVariantRegistry,
+) -> Result<Vec<Stmt>, CompileError> {
+    let (mut out, tmp) = expand_value_include_core(
+        span,
+        path,
+        once,
+        required,
+        base_dir,
+        declared_once,
+        include_chain,
+        state,
+        function_variants,
+    )?;
 
     let value = Expr::new(ExprKind::Variable(tmp), span);
     match capture {
@@ -239,6 +285,22 @@ pub(super) fn expand_value_include(
 fn assign_temp(temp: &str, value: Expr, span: Span) -> Stmt {
     Stmt::new(
         StmtKind::Assign {
+            name: temp.to_string(),
+            value,
+        },
+        span,
+    )
+}
+
+/// Builds a `mixed <temp> = <value>;` declaration for the hidden include temporary.
+///
+/// Used when the temporary may be reassigned a value of a different type (a `_once` include whose
+/// first load returns a non-`int` value while a repeat load yields `1`), so the type checker
+/// accepts the reassignment as PHP does rather than rejecting an `int`-to-`string`/`object` change.
+fn declare_mixed_temp(temp: &str, value: Expr, span: Span) -> Stmt {
+    Stmt::new(
+        StmtKind::TypedAssign {
+            type_expr: TypeExpr::Named(Name::unqualified("mixed")),
             name: temp.to_string(),
             value,
         },

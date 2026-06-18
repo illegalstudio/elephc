@@ -147,5 +147,49 @@ fn test_error_include_property_path_is_explicitly_rejected() {
     );
 }
 
+// --- Conditional / loop-context value includes ---
+
+/// Verifies that a `require` placed in a conditionally evaluated operand (the right side of `&&`)
+/// is rejected by the resolver rather than eagerly hoisted, since PHP may short-circuit it away.
+///
+/// Uses a runtime-unknown left operand (`$argc`) so the `&&` is not constant-folded away, and
+/// provides the included file so the pre-resolver discovery phase does not reject it first; the
+/// conditional-context check is what must surface.
+#[test]
+fn test_error_include_in_short_circuit_operand() {
+    let err = resolve_files_error(
+        &[
+            ("main.php", "<?php if ($argc && require 'inc.php') { } echo 1;"),
+            ("inc.php", "<?php return 1;"),
+        ],
+        "main.php",
+    );
+    assert!(
+        err.message
+            .contains("conditionally evaluated context"),
+        "expected a conditional-context include error, got: {}",
+        err.message
+    );
+}
+
+/// Verifies that a `require` placed in a `while` condition is rejected, because the condition is
+/// re-evaluated each iteration and an include cannot be eagerly hoisted once while preserving
+/// PHP's per-iteration semantics.
+#[test]
+fn test_error_include_in_while_condition() {
+    let err = resolve_files_error(
+        &[
+            ("main.php", "<?php while (require 'inc.php') { echo 1; }"),
+            ("inc.php", "<?php return 1;"),
+        ],
+        "main.php",
+    );
+    assert!(
+        err.message.contains("condition is not supported"),
+        "expected a loop-condition include error, got: {}",
+        err.message
+    );
+}
+
 // --- INF/NAN function errors ---
 

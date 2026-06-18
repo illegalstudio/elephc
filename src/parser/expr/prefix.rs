@@ -236,6 +236,19 @@ pub(super) fn parse_prefix(
         Token::New => parse_new_object(tokens, pos, span),
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
         Token::Yield => parse_yield(tokens, pos, span),
+        // `require`/`include` (optionally `_once`) in expression position, e.g.
+        // `if (true === (require_once X) || ...)`, `f(require X)`, `echo require X;`. Statement-
+        // position includes are routed to `parse_include` before the expression parser runs, so
+        // this arm only fires in true expression context. Produces the transient `IncludeValue`
+        // marker that the resolver expands (inlining the included file into caller scope).
+        Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
+            match super::parse_include_value_expr(tokens, pos)? {
+                Some(expr) => Ok(expr),
+                // Unreachable: the arm matched an include/require keyword, so the helper always
+                // returns `Some`. Kept as a safe fallback rather than a panicking expect.
+                None => Err(CompileError::new(span, "Expected include/require expression")),
+            }
+        }
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),

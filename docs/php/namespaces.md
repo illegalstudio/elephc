@@ -105,10 +105,36 @@ $v = require 'double.php';   // double.php: `<?php return $base * 2;`
 echo $v;                     // 20 — the included file read the caller's $base
 ```
 
-Expression-position includes are supported as the direct value of a `return` or a
-simple `=` assignment; nesting one deeper inside a larger expression is not. The
-included file's top-level code runs in its own scope, so top-level variables it
-defines are not shared back into the including scope.
+Expression-position includes may appear as the operand of any expression, not
+just the direct value of a `return` or `=` assignment. The include is hoisted to
+run once in the caller's scope before the enclosing statement, and the
+expression yields the hidden temporary holding its value. This covers the
+Composer/Symfony autoloader bootstrap pattern, single-argument `echo`, and call
+arguments:
+
+```php
+<?php
+// The strict `true ===` guard decides whether a fallback runs. The autoloader
+// returns an object, so `true === <object>` is false.
+if (true === (require_once __DIR__ . '/autoload.php') || false) {
+    echo "fallback\n";
+}
+
+echo require 'value.php';          // echoes the included file's return value
+echo add10(require 'value.php');   // include evaluated and passed as an argument
+```
+
+Because the include must be hoisted to run exactly once before the statement,
+elephc rejects an include placed where PHP would evaluate it conditionally or
+repeatedly, instead of miscompiling it:
+
+- a short-circuit operand (`false && require X`, `$a || require X`, `$x ?? require X`),
+  a ternary branch (`$c ? require X : 0`), a `match` arm, or a nullsafe chain
+  (`$o?->prop` where the include is the property) is rejected — hoist it to a
+  statement that always runs before the expression;
+- an include in a `while`/`do-while` condition or a `for` init/condition/update
+  is rejected — the condition is re-evaluated each iteration, so hoist it
+  before the loop.
 
 `include_once` and `require_once` use a runtime guard per resolved file. The
 guard is shared across top-level code, functions, closures, methods, loops, and

@@ -448,3 +448,132 @@ fn test_require_value_without_return_yields_one() {
     );
     assert_eq!(out, "1:H");
 }
+
+/// Verifies `require_once` as a parenthesized comparison operand inside `||` (the Symfony Runtime
+/// `public/index.php` pattern: `if (true === (require_once X) || false)`). The autoloader returns
+/// a non-`int` value, so `true === <value>` is false and the block is skipped, matching PHP.
+#[test]
+fn test_require_once_as_comparison_operand_string_return() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php if (true === (require_once 'cfg.php') || false) { echo \"reached \"; } echo \"done\";",
+            ),
+            ("cfg.php", "<?php return 'prod';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "done");
+}
+
+/// Verifies the `require_once` comparison-operand pattern enters the block when the include
+/// returns `true` (`true === true`), so the deep-hoisted temporary flows into the condition.
+#[test]
+fn test_require_once_as_comparison_operand_true_return() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php if (true === (require_once 'flag.php') || false) { echo \"reached \"; } echo \"done\";",
+            ),
+            ("flag.php", "<?php return true;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "reached done");
+}
+
+/// Verifies a non-`_once` `require` as a comparison operand: no pre-seed is emitted, so the
+/// temporary carries the returned value directly and the strict comparison succeeds.
+#[test]
+fn test_require_as_comparison_operand_int_return() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php if ((require 'num.php') === 5) { echo 'yes'; } else { echo 'no'; }",
+            ),
+            ("num.php", "<?php return 5;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "yes");
+}
+
+/// Verifies `$x = require_once X;` captures a non-`int` (string) return value. This was a
+/// pre-existing pre-seed type conflict (`int 1` then `string`) that the `mixed`-typed temporary
+/// now resolves, so the assignment yields the file's returned string.
+#[test]
+fn test_require_once_assignment_captures_string_return() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php $x = require_once 'cfg.php'; echo $x;"),
+            ("cfg.php", "<?php return 'prod';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "prod");
+}
+
+/// Verifies `$x = require_once X;` captures an object return (the Composer autoloader case:
+/// `return $loader;`), and the object is usable after the assignment.
+#[test]
+fn test_require_once_assignment_captures_object_return() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php $l = require_once 'loader.php'; echo $l->v;"),
+            ("loader.php", "<?php class Loader { public int $v = 7; } return new Loader();"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies `echo require X;` evaluates the include in the current scope and echoes its returned
+/// value (single-argument echo, not the multi-argument synthetic form).
+#[test]
+fn test_echo_require_value() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php echo require 'val.php';"),
+            ("val.php", "<?php return 5;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies `require` used as a function-call argument is evaluated before the call and its value
+/// is passed positionally.
+#[test]
+fn test_require_as_call_argument() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function add10(int $n): int { return $n + 10; } echo add10(require 'val.php');",
+            ),
+            ("val.php", "<?php return 20;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "30");
+}
+
+/// Verifies a deep `require` whose path is a `__DIR__`-concatenated expression (the Symfony
+/// `__DIR__.'/autoload.php'` form) resolves and runs in the caller's scope.
+#[test]
+fn test_require_value_with_dir_concat_path() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $v = require __DIR__ . '/cfg.php'; echo $v;",
+            ),
+            ("cfg.php", "<?php return 42;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "42");
+}

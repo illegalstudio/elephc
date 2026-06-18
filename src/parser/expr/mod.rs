@@ -35,6 +35,52 @@ pub(crate) fn parse_assignment_value_expr(
     pratt::parse_expr_bp(tokens, pos, 7)
 }
 
+/// Parses a `require`/`include` (optionally `_once`) used in expression position, returning an
+/// `IncludeValue` marker expression without consuming a trailing semicolon. Returns `Ok(None)`
+/// when the next token is not an include/require keyword so callers can use it speculatively.
+///
+/// PHP allows `include`/`require` in expression position (e.g. `if (true === (require_once X) || ...)`,
+/// `f(require X)`, `$x = require X;`, `return require X;`). The expression evaluates to the
+/// included file's `return` value, or `1` when the file has no explicit `return` (and `false`
+/// for a missing non-required include). The included file runs in the calling scope. elephc
+/// represents this with the transient `ExprKind::IncludeValue` marker, which the resolver
+/// expands by inlining the included file's statements into the caller's scope and capturing its
+/// top-level `return` into a hidden temporary. Statement-position includes (`require X;` as a
+/// whole statement) are routed to `parse_include` before the expression parser runs, so this
+/// helper only fires in true expression context.
+pub(in crate::parser) fn parse_include_value_expr(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+) -> Result<Option<Expr>, CompileError> {
+    let (once, required) = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Include) => (false, false),
+        Some(Token::IncludeOnce) => (true, false),
+        Some(Token::Require) => (false, true),
+        Some(Token::RequireOnce) => (true, true),
+        _ => return Ok(None),
+    };
+    let span = tokens[*pos].1;
+    *pos += 1; // consume the include/require keyword
+
+    let has_parens = *pos < tokens.len() && tokens[*pos].0 == Token::LParen;
+    if has_parens {
+        *pos += 1;
+    }
+    let path = parse_expr(tokens, pos)?;
+    if has_parens {
+        crate::parser::stmt::expect_token(tokens, pos, &Token::RParen, "Expected ')' after include path")?;
+    }
+
+    Ok(Some(Expr::new(
+        ExprKind::IncludeValue {
+            path: Box::new(path),
+            once,
+            required,
+        },
+        span,
+    )))
+}
+
 /// Returns the name to use for a named-argument label, accepting identifiers and PHP
 /// semi-reserved keywords (e.g. `f(array: 1)`); delegates to the shared bareword mapper.
 fn argument_name_from_token(token: &Token) -> Option<String> {
