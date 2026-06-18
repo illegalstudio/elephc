@@ -63,6 +63,39 @@ impl EvalStreamResources {
         Some(buffer)
     }
 
+    /// Reads one stream line up to a limit, newline, or custom delimiter.
+    pub(crate) fn read_line(
+        &mut self,
+        id: i64,
+        length: usize,
+        ending: Option<&[u8]>,
+        include_ending: bool,
+        stop_at_newline: bool,
+    ) -> Option<Vec<u8>> {
+        let stream = self.streams.get_mut(&id)?;
+        let mut output = Vec::new();
+        let mut byte = [0_u8; 1];
+        while output.len() < length {
+            let read = stream.file.read(&mut byte).ok()?;
+            if read == 0 {
+                stream.eof = true;
+                break;
+            }
+            output.push(byte[0]);
+            if let Some(ending) = ending {
+                if !ending.is_empty() && output.ends_with(ending) {
+                    if !include_ending {
+                        output.truncate(output.len().saturating_sub(ending.len()));
+                    }
+                    break;
+                }
+            } else if stop_at_newline && byte[0] == b'\n' {
+                break;
+            }
+        }
+        Some(output)
+    }
+
     /// Writes all provided bytes to a stream resource and returns the written byte count.
     pub(crate) fn write(&mut self, id: i64, data: &[u8]) -> Option<usize> {
         let stream = self.streams.get_mut(&id)?;

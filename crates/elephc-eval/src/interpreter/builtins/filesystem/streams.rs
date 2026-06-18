@@ -98,8 +98,22 @@ pub(in crate::interpreter) fn eval_unary_stream_result(
     let id = eval_stream_resource_id(stream, values)?;
     match name {
         "fclose" => values.bool_value(context.stream_resources_mut().close(id)),
+        "fgetc" => match context.stream_resources_mut().read(id, 1) {
+            Some(bytes) if !bytes.is_empty() => values.string_bytes_value(&bytes),
+            Some(_) => values.bool_value(false),
+            None => values.bool_value(false),
+        },
+        "fgets" => match context
+            .stream_resources_mut()
+            .read_line(id, usize::MAX, None, true, true)
+        {
+            Some(bytes) if !bytes.is_empty() => values.string_bytes_value(&bytes),
+            Some(_) => values.bool_value(false),
+            None => values.bool_value(false),
+        },
         "feof" => values.bool_value(context.stream_resources().eof(id).unwrap_or(false)),
         "fflush" => values.bool_value(context.stream_resources_mut().flush(id)),
+        "fpassthru" => eval_fpassthru_result(id, context, values),
         "fsync" => values.bool_value(context.stream_resources_mut().sync_all(id)),
         "fdatasync" => values.bool_value(context.stream_resources_mut().sync_data(id)),
         "ftell" => match context.stream_resources_mut().tell(id) {
@@ -116,6 +130,21 @@ pub(in crate::interpreter) fn eval_unary_stream_result(
         "stream_get_meta_data" => eval_stream_get_meta_data_result(id, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
+}
+
+/// Streams all remaining bytes to eval output and returns the emitted byte count.
+fn eval_fpassthru_result(
+    id: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(bytes) = context.stream_resources_mut().get_contents(id, None, None) else {
+        return values.bool_value(false);
+    };
+    let len = i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let output = values.string_bytes_value(&bytes)?;
+    values.echo(output)?;
+    values.int(len)
 }
 
 /// Evaluates PHP `fread($stream, $length)` over eval expressions.
@@ -312,6 +341,51 @@ pub(in crate::interpreter) fn eval_builtin_stream_copy_to_stream(
         None => None,
     };
     eval_stream_copy_to_stream_result(from, to, length, offset, context, values)
+}
+
+/// Evaluates PHP `stream_get_line($stream, $length, $ending = null)`.
+pub(in crate::interpreter) fn eval_builtin_stream_get_line(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !(2..=3).contains(&args.len()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let stream = eval_expr(&args[0], context, scope, values)?;
+    let length = eval_expr(&args[1], context, scope, values)?;
+    let ending = match args.get(2) {
+        Some(ending) => Some(eval_expr(ending, context, scope, values)?),
+        None => None,
+    };
+    eval_stream_get_line_result(stream, length, ending, context, values)
+}
+
+/// Reads one line-like byte sequence from a materialized stream resource.
+pub(in crate::interpreter) fn eval_stream_get_line_result(
+    stream: RuntimeCellHandle,
+    length: RuntimeCellHandle,
+    ending: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let id = eval_stream_resource_id(stream, values)?;
+    let length = eval_nonnegative_usize(length, values)?;
+    let ending = match ending {
+        Some(ending) if values.type_tag(ending)? != EVAL_TAG_NULL => {
+            Some(values.string_bytes(ending)?)
+        }
+        _ => None,
+    };
+    match context
+        .stream_resources_mut()
+        .read_line(id, length, ending.as_deref(), false, false)
+    {
+        Some(bytes) if !bytes.is_empty() => values.string_bytes_value(&bytes),
+        Some(_) => values.bool_value(false),
+        None => values.bool_value(false),
+    }
 }
 
 /// Copies bytes between two materialized stream resources.

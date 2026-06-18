@@ -82,8 +82,11 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             eval_file_put_contents_result(*filename, *data, values)?
         }
         "fclose"
+        | "fgetc"
+        | "fgets"
         | "feof"
         | "fflush"
+        | "fpassthru"
         | "fsync"
         | "fdatasync"
         | "ftell"
@@ -243,6 +246,15 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
                 context,
                 values,
             )?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "stream_get_line" => match evaluated_args {
+            [stream, length] => {
+                eval_stream_get_line_result(*stream, *length, None, context, values)?
+            }
+            [stream, length, ending] => {
+                eval_stream_get_line_result(*stream, *length, Some(*ending), context, values)?
+            }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "realpath_cache_get" => {

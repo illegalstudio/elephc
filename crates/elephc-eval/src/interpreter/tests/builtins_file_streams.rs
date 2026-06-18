@@ -86,3 +86,55 @@ return true;"#
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval line, character, and passthrough stream builtins.
+#[test]
+fn execute_program_dispatches_file_stream_line_builtins() {
+    let pid = std::process::id();
+    let file = format!("elephc_eval_stream_lines_{pid}.txt");
+    let ending = format!("elephc_eval_stream_ending_{pid}.txt");
+    let source = format!(
+        r#"file_put_contents("{file}", "a\nbc\nxyz");
+$h = fopen("{file}", "r");
+echo fgetc($h) === "a" ? "char" : "bad"; echo ":";
+echo fgets($h) === "\n" ? "line1" : "bad"; echo ":";
+echo fgets($h) === "bc\n" ? "line2" : "bad"; echo ":";
+echo stream_get_line($h, 2) === "xy" ? "getline" : "bad"; echo ":";
+echo "[";
+$passed = fpassthru($h);
+echo "]";
+echo $passed === 1 ? "passthru" : "bad"; echo ":";
+echo feof($h) ? "eof" : "bad"; echo ":";
+fclose($h);
+file_put_contents("{ending}", "leftENDright");
+$e = fopen("{ending}", "r");
+echo stream_get_line($e, 20, "END") === "left" ? "ending" : "bad"; echo ":";
+echo stream_get_contents($e) === "right" ? "after" : "bad"; echo ":";
+fclose($e);
+$call = call_user_func("fopen", "{file}", "r");
+echo call_user_func("fgetc", $call) === "a" ? "callchar" : "bad"; echo ":";
+echo call_user_func_array("stream_get_line", ["stream" => $call, "length" => 2]) === "\nb" ? "callline" : "bad"; echo ":";
+call_user_func("fclose", $call);
+echo unlink("{file}") && unlink("{ending}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("fgetc"); echo function_exists("fgets"); echo function_exists("fpassthru");
+echo function_exists("stream_get_line");
+return true;"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    for path in [&file, &ending] {
+        let _ = std::fs::remove_file(path);
+    }
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    for path in [&file, &ending] {
+        let _ = std::fs::remove_file(path);
+    }
+    assert_eq!(
+        values.output,
+        "char:line1:line2:getline:[z]passthru:eof:ending:after:callchar:callline:cleanup:1111"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

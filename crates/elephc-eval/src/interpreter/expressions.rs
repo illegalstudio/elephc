@@ -460,8 +460,11 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "file_get_contents" => eval_builtin_file_get_contents(args, context, scope, values),
         "file_put_contents" => eval_builtin_file_put_contents(args, context, scope, values),
         "fclose"
+        | "fgetc"
+        | "fgets"
         | "feof"
         | "fflush"
+        | "fpassthru"
         | "fsync"
         | "fdatasync"
         | "ftell"
@@ -594,6 +597,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "stream_copy_to_stream" => eval_builtin_stream_copy_to_stream(args, context, scope, values),
         "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
+        "stream_get_line" => eval_builtin_stream_get_line(args, context, scope, values),
         "strtotime" => eval_builtin_strtotime(args, context, scope, values),
         "unlink" => eval_builtin_unlink(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),

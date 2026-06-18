@@ -166,8 +166,11 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "fclose"
+        | "fgetc"
+        | "fgets"
         | "feof"
         | "fflush"
+        | "fpassthru"
         | "fsync"
         | "fdatasync"
         | "ftell"
@@ -259,6 +262,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "stream_is_local" | "stream_supports_lock" => Some(&["stream"]),
         "stream_copy_to_stream" => Some(&["from", "to", "length", "offset"]),
         "stream_get_contents" => Some(&["stream", "length", "offset"]),
+        "stream_get_line" => Some(&["stream", "length", "ending"]),
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
