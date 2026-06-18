@@ -84,3 +84,70 @@ fn parse_fragment_accepts_scoped_class_constant_fetches() {
         }))]
     );
 }
+
+/// Verifies `ClassName::class` lowers to a class-name fetch rather than a user constant.
+#[test]
+fn parse_fragment_accepts_class_name_fetches() {
+    let program = parse_fragment(br#"return EvalConstBox::class;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::ClassNameFetch {
+            class_name: "EvalConstBox".to_string(),
+        }))]
+    );
+}
+
+/// Verifies interface constants lower into eval interface metadata.
+#[test]
+fn parse_fragment_accepts_interface_constant_declarations() {
+    let program = parse_fragment(
+        br#"interface EvalConstIface {
+    public const SEED = 4;
+    function read();
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::InterfaceDecl(EvalInterface::with_constants(
+            "EvalConstIface",
+            Vec::new(),
+            vec![EvalClassConstant::new(
+                "SEED",
+                EvalExpr::Const(EvalConst::Int(4)),
+            )],
+            vec![EvalInterfaceMethod::new("read", Vec::new())],
+        ))]
+    );
+}
+
+/// Verifies trait constants lower into eval trait metadata.
+#[test]
+fn parse_fragment_accepts_trait_constant_declarations() {
+    let program = parse_fragment(
+        br#"trait EvalConstTrait {
+    public const SEED = 6;
+    public function read() { return self::SEED; }
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::TraitDecl(EvalTrait::with_constants(
+            "EvalConstTrait",
+            vec![EvalClassConstant::new(
+                "SEED",
+                EvalExpr::Const(EvalConst::Int(6)),
+            )],
+            Vec::new(),
+            vec![EvalClassMethod::new(
+                "read",
+                Vec::new(),
+                vec![EvalStmt::Return(Some(EvalExpr::ClassConstantFetch {
+                    class_name: "self".to_string(),
+                    constant: "SEED".to_string(),
+                }))],
+            )],
+        ))]
+    );
+}

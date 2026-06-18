@@ -180,6 +180,7 @@ impl EvalFunction {
 pub struct EvalInterface {
     name: String,
     parents: Vec<String>,
+    constants: Vec<EvalClassConstant>,
     methods: Vec<EvalInterfaceMethod>,
 }
 
@@ -190,9 +191,20 @@ impl EvalInterface {
         parents: Vec<String>,
         methods: Vec<EvalInterfaceMethod>,
     ) -> Self {
+        Self::with_constants(name, parents, Vec::new(), methods)
+    }
+
+    /// Creates a dynamic eval interface with optional parent interfaces, constants, and methods.
+    pub fn with_constants(
+        name: impl Into<String>,
+        parents: Vec<String>,
+        constants: Vec<EvalClassConstant>,
+        methods: Vec<EvalInterfaceMethod>,
+    ) -> Self {
         Self {
             name: name.into(),
             parents,
+            constants,
             methods,
         }
     }
@@ -205,6 +217,18 @@ impl EvalInterface {
     /// Returns interface names extended directly by this eval interface.
     pub fn parents(&self) -> &[String] {
         &self.parents
+    }
+
+    /// Returns constants declared directly by this eval interface.
+    pub fn constants(&self) -> &[EvalClassConstant] {
+        &self.constants
+    }
+
+    /// Returns one interface constant by PHP case-sensitive constant name.
+    pub fn constant(&self, name: &str) -> Option<&EvalClassConstant> {
+        self.constants()
+            .iter()
+            .find(|constant| constant.name() == name)
     }
 
     /// Returns method signatures declared directly by this eval interface.
@@ -453,6 +477,7 @@ impl EvalClassConstant {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalTrait {
     name: String,
+    constants: Vec<EvalClassConstant>,
     properties: Vec<EvalClassProperty>,
     methods: Vec<EvalClassMethod>,
 }
@@ -464,8 +489,19 @@ impl EvalTrait {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
+        Self::with_constants(name, Vec::new(), properties, methods)
+    }
+
+    /// Creates a dynamic eval trait with constants, properties, and methods.
+    pub fn with_constants(
+        name: impl Into<String>,
+        constants: Vec<EvalClassConstant>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+    ) -> Self {
         Self {
             name: name.into(),
+            constants,
             properties,
             methods,
         }
@@ -474,6 +510,18 @@ impl EvalTrait {
     /// Returns the original source spelling of this eval-declared trait name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns constants declared directly by this eval trait.
+    pub fn constants(&self) -> &[EvalClassConstant] {
+        &self.constants
+    }
+
+    /// Returns one trait constant by PHP case-sensitive constant name.
+    pub fn constant(&self, name: &str) -> Option<&EvalClassConstant> {
+        self.constants()
+            .iter()
+            .find(|constant| constant.name() == name)
     }
 
     /// Returns public properties declared directly by this eval trait.
@@ -709,6 +757,9 @@ pub enum EvalExpr {
     ClassConstantFetch {
         class_name: String,
         constant: String,
+    },
+    ClassNameFetch {
+        class_name: String,
     },
     NullCoalesce {
         value: Box<EvalExpr>,

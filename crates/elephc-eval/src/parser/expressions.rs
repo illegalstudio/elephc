@@ -598,6 +598,12 @@ impl Parser {
                     property,
                 })
             }
+            TokenKind::Ident(name)
+                if ident_eq(name, "class") && !matches!(self.peek(), TokenKind::LParen) =>
+            {
+                self.advance();
+                Ok(EvalExpr::ClassNameFetch { class_name })
+            }
             TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen) => {
                 let method = method.to_ascii_lowercase();
                 self.advance();

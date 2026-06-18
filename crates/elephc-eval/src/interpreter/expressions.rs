@@ -92,6 +92,9 @@ pub(in crate::interpreter) fn eval_expr(
             class_name,
             constant,
         } => eval_class_constant_fetch_result(class_name, constant, context, values),
+        EvalExpr::ClassNameFetch { class_name } => {
+            eval_class_name_fetch_result(class_name, context, values)
+        }
         EvalExpr::MethodCall {
             object,
             method,
