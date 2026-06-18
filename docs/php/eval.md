@@ -156,9 +156,11 @@ Eval-declared enums share the dynamic class-like metadata path used by
 eval-declared classes. Pure and backed enum cases are singleton objects,
 `EnumName::cases()` returns those singletons in declaration order, and backed
 `EnumName::from()` / `EnumName::tryFrom()` compare against the declared scalar
-values. Enums can implement eval-declared or generated interfaces and can use
-their own instance/static methods and class constants. Direct `new EnumName()`
-and property writes to enum cases are rejected.
+values. `EnumName::from()` misses throw a catchable `ValueError`, while
+`EnumName::tryFrom()` misses return `null`. Enums can implement eval-declared
+or generated interfaces and can use their own instance/static methods and class
+constants. Direct `new EnumName()` and property writes to enum cases are
+rejected.
 
 Public declared property reads/writes through `$this->property` from native
 methods are bridged to eval. Public zero-, one-, or two-scalar-argument method
@@ -283,10 +285,9 @@ arguments are supported for eval-declared methods but not for every generated
 native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
-remaining class-system gaps are enum trait-use declarations, enum `from()`
-misses as catchable `ValueError` objects, property hooks, attributes/reflection
-metadata, readonly semantics, and generated/AOT dynamic static-method call
-forms.
+remaining class-system gaps are enum trait-use declarations, property hooks,
+attributes/reflection metadata, readonly semantics, and generated/AOT dynamic
+static-method call forms.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

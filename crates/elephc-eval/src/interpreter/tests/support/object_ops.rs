@@ -77,7 +77,8 @@ impl FakeOps {
         method: &str,
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        match (self.get(object), method) {
+        let method = method.to_ascii_lowercase();
+        match (self.get(object), method.as_str()) {
             (FakeValue::Iterator { .. }, "rewind") if args.is_empty() => {
                 let id = object.as_ptr() as usize;
                 let Some(FakeValue::Iterator { position, .. }) = self.values.get_mut(&id) else {
@@ -98,6 +99,12 @@ impl FakeOps {
                 self.null()
             }
             (FakeValue::Object(_), "answer") if args.is_empty() => self.int(42),
+            (FakeValue::Object(properties), "getmessage") if args.is_empty() => {
+                Self::object_property(&properties, "message").map_or_else(|| self.string(""), Ok)
+            }
+            (FakeValue::Object(properties), "getcode") if args.is_empty() => {
+                Self::object_property(&properties, "code").map_or_else(|| self.int(0), Ok)
+            }
             (FakeValue::Object(properties), "read_x") => {
                 if !args.is_empty() {
                     return Err(EvalStatus::UnsupportedConstruct);
@@ -139,9 +146,12 @@ impl FakeOps {
     /// Creates one fake object for eval `new` unit tests.
     pub(super) fn runtime_new_object(
         &mut self,
-        _class_name: &str,
+        class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Ok(self.alloc(FakeValue::Object(Vec::new())))
+        let object = self.alloc(FakeValue::Object(Vec::new()));
+        self.object_classes
+            .insert(object.as_ptr() as usize, class_name.to_string());
+        Ok(object)
     }
     /// Applies fake constructor side effects for eval `new` unit tests.
     pub(super) fn runtime_construct_object(
@@ -150,9 +160,31 @@ impl FakeOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<(), EvalStatus> {
         let id = object.as_ptr() as usize;
+        let class_name = self.object_classes.get(&id).cloned();
         let Some(FakeValue::Object(properties)) = self.values.get_mut(&id) else {
             return Err(EvalStatus::UnsupportedConstruct);
         };
+        if class_name
+            .as_deref()
+            .is_some_and(fake_runtime_exception_like_class)
+        {
+            if let Some(message) = args.first().copied() {
+                if let Some((_, value)) = properties.iter_mut().find(|(name, _)| name == "message")
+                {
+                    *value = message;
+                } else {
+                    properties.push(("message".to_string(), message));
+                }
+            }
+            if let Some(code) = args.get(1).copied() {
+                if let Some((_, value)) = properties.iter_mut().find(|(name, _)| name == "code") {
+                    *value = code;
+                } else {
+                    properties.push(("code".to_string(), code));
+                }
+            }
+            return Ok(());
+        }
         if let Some(first) = args.first().copied() {
             if let Some((_, value)) = properties.iter_mut().find(|(name, _)| name == "x") {
                 *value = first;
@@ -185,7 +217,14 @@ impl FakeOps {
         target_class: &str,
         exclude_self: bool,
     ) -> Result<bool, EvalStatus> {
+        let object_id = object_or_class.as_ptr() as usize;
         match self.get(object_or_class) {
+            FakeValue::Object(_) if self.object_classes.contains_key(&object_id) => Ok(self
+                .object_classes
+                .get(&object_id)
+                .is_some_and(|class_name| {
+                    fake_runtime_object_is_a(class_name, target_class, exclude_self)
+                })),
             FakeValue::Object(_)
                 if target_class.eq_ignore_ascii_case("Exception")
                     || target_class.eq_ignore_ascii_case("Throwable") =>
@@ -204,6 +243,10 @@ impl FakeOps {
         &mut self,
         object: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let object_id = object.as_ptr() as usize;
+        if let Some(class_name) = self.object_classes.get(&object_id).cloned() {
+            return self.string(&class_name);
+        }
         match self.get(object) {
             FakeValue::Object(_) => self.string("stdClass"),
             FakeValue::Iterator { .. } => self.string("Iterator"),
@@ -233,4 +276,37 @@ impl FakeOps {
             _ => Err(EvalStatus::RuntimeFatal),
         }
     }
+}
+
+/// Returns whether a fake runtime class stores PHP Throwable constructor state.
+fn fake_runtime_exception_like_class(class_name: &str) -> bool {
+    ["Exception", "JsonException", "Error", "ValueError"]
+        .iter()
+        .any(|known| class_name.eq_ignore_ascii_case(known))
+}
+
+/// Checks the small fake Throwable inheritance graph used by eval interpreter tests.
+fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exclude_self: bool) -> bool {
+    if class_name.eq_ignore_ascii_case(target_class) {
+        return !exclude_self;
+    }
+    if class_name.eq_ignore_ascii_case("KnownClass")
+        && target_class.eq_ignore_ascii_case("ParentClass")
+    {
+        return true;
+    }
+    if target_class.eq_ignore_ascii_case("Throwable") {
+        return fake_runtime_exception_like_class(class_name);
+    }
+    if target_class.eq_ignore_ascii_case("Exception") {
+        return ["Exception", "JsonException"]
+            .iter()
+            .any(|known| class_name.eq_ignore_ascii_case(known));
+    }
+    if target_class.eq_ignore_ascii_case("Error") {
+        return ["Error", "ValueError"]
+            .iter()
+            .any(|known| class_name.eq_ignore_ascii_case(known));
+    }
+    false
 }

@@ -62,6 +62,35 @@ return EvalColor::tryFrom(99);"#,
     assert_eq!(values.get(result), FakeValue::Null);
 }
 
+/// Verifies eval enum `from()` misses throw catchable `ValueError` objects.
+#[test]
+fn execute_program_enum_from_miss_throws_value_error() {
+    let program = parse_fragment(
+        br#"enum EvalColor: int {
+    case Red = 1;
+}
+try {
+    EvalColor::from(99);
+    echo "bad";
+} catch (ValueError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+    return true;
+}
+return false;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "ValueError:99 is not a valid backing value for enum EvalColor"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval enum methods, constants, and interface implementation dispatch.
 #[test]
 fn execute_program_dispatches_eval_enum_methods_and_interfaces() {
