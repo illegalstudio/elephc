@@ -4398,6 +4398,28 @@ $box->run();
     assert_eq!(out, "16!");
 }
 
+/// Verifies eval fragments pass AOT method arguments that overflow onto the caller stack.
+#[test]
+fn test_eval_fragment_can_call_this_public_method_with_stack_string_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodStackStringArgBox {
+    public function join4(string $a, string $b, string $c, string $d): string {
+        return $a . $b . $c . $d;
+    }
+
+    public function run(): void {
+        echo eval('return $this->join4("A", "B", "C", "D");');
+    }
+}
+
+$box = new EvalMethodStackStringArgBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "ABCD");
+}
+
 /// Verifies eval fragments pass boxed Mixed values to public AOT methods.
 #[test]
 fn test_eval_fragment_can_call_this_public_mixed_arg_method() {
@@ -4507,6 +4529,23 @@ echo EvalAotStaticBox::sum4(1, 2, 3, 4);');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "AB:CD:EF:7:10");
+}
+
+/// Verifies eval static dispatch passes AOT static method arguments on the caller stack.
+#[test]
+fn test_eval_fragment_dispatches_aot_static_method_with_stack_string_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotStaticStackStringBox {
+    public static function join4(string $a, string $b, string $c, string $d): string {
+        return $a . $b . $c . $d;
+    }
+}
+
+eval('echo EvalAotStaticStackStringBox::join4("G", "H", "I", "J");');
+"#,
+    );
+    assert_eq!(out, "GHIJ");
 }
 
 /// Verifies native callable probes can see functions declared by eval after the barrier.
@@ -5781,6 +5820,23 @@ echo eval('$box = new EvalDynamicNewManyArgCtor(1, 2, 3, "!"); return $box->labe
 "#,
     );
     assert_eq!(out, "6!");
+}
+
+/// Verifies eval object construction passes AOT constructor arguments on the caller stack.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_stack_string_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewStackStringCtor {
+    public string $label = "";
+    public function __construct(string $a, string $b, string $c, string $d) {
+        $this->label = $a . $b . $c . $d;
+    }
+}
+echo eval('$box = new EvalDynamicNewStackStringCtor("Q", "R", "S", "T"); return $box->label;');
+"#,
+    );
+    assert_eq!(out, "QRST");
 }
 
 /// Verifies eval follows PHP by accepting constructor arguments when no constructor exists.

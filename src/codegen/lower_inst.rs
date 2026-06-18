@@ -6022,10 +6022,7 @@ pub(super) fn direct_call_stack_pad_bytes(
     ctx: &FunctionContext<'_>,
     overflow_bytes: usize,
 ) -> usize {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 if overflow_bytes > 0 => 16,
-        _ => 0,
-    }
+    abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, overflow_bytes)
 }
 
 /// Lowers a signed integer comparison into a boolean result value.

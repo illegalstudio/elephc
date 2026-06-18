@@ -9,14 +9,13 @@
 //! - The cacheable runtime object can allocate by name, but only user assembly
 //!   knows constructor symbols and parameter ABI shapes.
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
-//! - Constructors are bridged only when their fixed scalar/Mixed arguments fit
-//!   the target ABI register bridge.
+//! - Constructors are bridged for fixed non-by-ref scalar/Mixed arguments.
 
 use std::collections::BTreeMap;
 
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::{Arch, Target};
+use crate::codegen::platform::Arch;
 use crate::ir::{Function, LocalKind, Module};
 use crate::names::{method_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
@@ -101,7 +100,6 @@ fn collect_eval_constructor_slots(module: &Module) -> Vec<EvalConstructorSlot> {
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
         collect_class_constructor_slot(
-            module.target,
             class_name,
             class_info,
             &emitted_methods,
@@ -125,7 +123,6 @@ fn collect_builtin_throwable_constructor_class_ids(module: &Module) -> Vec<u64> 
 
 /// Adds one constructor slot for a class when the constructor has emitted code.
 fn collect_class_constructor_slot(
-    target: Target,
     class_name: &str,
     class_info: &ClassInfo,
     emitted_methods: &std::collections::HashSet<(String, String, bool)>,
@@ -144,7 +141,7 @@ fn collect_class_constructor_slot(
         return;
     }
     let supported = constructor_is_public(class_info, &method_key)
-        && constructor_signature_supported(target, class_name, sig);
+        && constructor_signature_supported(sig);
     let params = if supported {
         sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect()
     } else {
@@ -168,7 +165,7 @@ fn constructor_is_public(class_info: &ClassInfo, method_key: &str) -> bool {
 }
 
 /// Returns true for constructor signatures supported by this eval bridge slice.
-fn constructor_signature_supported(target: Target, class_name: &str, sig: &FunctionSig) -> bool {
+fn constructor_signature_supported(sig: &FunctionSig) -> bool {
     sig.params.len() <= MAX_EVAL_CONSTRUCTOR_ARGS
         && sig.variadic.is_none()
         && sig.ref_params.iter().all(|is_ref| !*is_ref)
@@ -176,7 +173,6 @@ fn constructor_signature_supported(target: Target, class_name: &str, sig: &Funct
             .params
             .iter()
             .all(|(_, ty)| constructor_param_supported(ty))
-        && eval_bridge_constructor_signature_fits_registers(target, class_name, sig)
 }
 
 /// Returns true for one constructor argument type supported by the bridge.
@@ -185,20 +181,6 @@ fn constructor_param_supported(ty: &PhpType) -> bool {
         ty.codegen_repr(),
         PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
     )
-}
-
-/// Returns true when this helper can materialize the complete constructor call in registers.
-fn eval_bridge_constructor_signature_fits_registers(
-    target: Target,
-    class_name: &str,
-    sig: &FunctionSig,
-) -> bool {
-    let mut arg_types = Vec::with_capacity(sig.params.len() + 1);
-    arg_types.push(PhpType::Object(class_name.to_string()));
-    arg_types.extend(sig.params.iter().map(|(_, ty)| ty.codegen_repr()));
-    abi::build_outgoing_arg_assignments_for_target(target, &arg_types, 0)
-        .iter()
-        .all(|assignment| assignment.in_register())
 }
 
 /// Emits `__elephc_eval_value_construct_object(Mixed*, MixedArray*) -> bool`.
@@ -495,7 +477,10 @@ fn emit_aarch64_constructor_body(
     }
     emit_aarch64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let overflow_bytes = emit_aarch64_prepare_constructor_args(module, emitter, slot);
+    let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
+    abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, "__construct"));
+    abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
     emitter.instruction(&format!("b {}", success_label));                       // constructor returned normally
 }
@@ -514,7 +499,10 @@ fn emit_x86_64_constructor_body(
     }
     emit_x86_64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let overflow_bytes = emit_x86_64_prepare_constructor_args(module, emitter, slot);
+    let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
+    abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, "__construct"));
+    abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
     emitter.instruction(&format!("jmp {}", success_label));                     // constructor returned normally
 }
