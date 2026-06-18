@@ -479,6 +479,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "fputcsv" => eval_builtin_fputcsv(args, context, scope, values),
         "fprintf" => eval_builtin_fprintf(args, context, scope, values),
         "fread" => eval_builtin_fread(args, context, scope, values),
+        "fscanf" => eval_builtin_fscanf(args, context, scope, values),
         "fseek" => eval_builtin_fseek(args, context, scope, values),
         "ftruncate" => eval_builtin_ftruncate(args, context, scope, values),
         "fwrite" => eval_builtin_fwrite(args, context, scope, values),

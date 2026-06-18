@@ -315,6 +315,42 @@ pub(in crate::interpreter) fn eval_builtin_fprintf(
     eval_fprintf_result(stream, format, &format_args, context, values)
 }
 
+/// Evaluates PHP `fscanf($stream, $format, ...$vars)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_fscanf(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.len() < 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let stream = eval_expr(&args[0], context, scope, values)?;
+    let format = eval_expr(&args[1], context, scope, values)?;
+    for arg in &args[2..] {
+        eval_expr(arg, context, scope, values)?;
+    }
+    eval_fscanf_result(stream, format, context, values)
+}
+
+/// Reads one line from a stream and scans it with the eval `sscanf()` subset.
+pub(in crate::interpreter) fn eval_fscanf_result(
+    stream: RuntimeCellHandle,
+    format: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let id = eval_stream_resource_id(stream, values)?;
+    let Some(line) = context
+        .stream_resources_mut()
+        .read_line(id, usize::MAX, None, true, true)
+    else {
+        return values.bool_value(false);
+    };
+    let input = values.string_bytes_value(&line)?;
+    eval_sscanf_result(input, format, values)
+}
+
 /// Formats and writes `fprintf()` arguments to a materialized stream resource.
 pub(in crate::interpreter) fn eval_fprintf_result(
     stream: RuntimeCellHandle,

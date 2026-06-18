@@ -188,6 +188,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "fputcsv" => Some(&["stream", "fields", "separator", "enclosure"]),
         "fprintf" => Some(&["stream", "format", "values"]),
         "fread" => Some(&["stream", "length"]),
+        "fscanf" => Some(&["stream", "format", "vars"]),
         "fseek" => Some(&["stream", "offset", "whence"]),
         "ftruncate" => Some(&["stream", "size"]),
         "fwrite" => Some(&["stream", "data"]),

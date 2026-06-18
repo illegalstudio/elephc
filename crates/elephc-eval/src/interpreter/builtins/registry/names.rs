@@ -122,6 +122,7 @@ pub(in crate::interpreter) fn eval_php_visible_builtin_exists(name: &str) -> boo
             | "fputcsv"
             | "fprintf"
             | "fread"
+            | "fscanf"
             | "fseek"
             | "fstat"
             | "fsync"

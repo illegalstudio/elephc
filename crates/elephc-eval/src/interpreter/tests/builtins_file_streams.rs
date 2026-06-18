@@ -155,6 +155,7 @@ fn execute_program_dispatches_file_stream_csv_builtins() {
     let file = format!("elephc_eval_stream_csv_{pid}.txt");
     let semi = format!("elephc_eval_stream_csv_semi_{pid}.txt");
     let call = format!("elephc_eval_stream_csv_call_{pid}.txt");
+    let scan = format!("elephc_eval_stream_scan_{pid}.txt");
     let source = format!(
         r#"$h = fopen("{file}", "w+");
 echo fputcsv($h, ["a", "b,c", "d\"e"]) > 0 ? "put" : "bad"; echo ":";
@@ -175,12 +176,19 @@ rewind($call);
 $call_row = call_user_func("fgetcsv", $call);
 echo $call_row[0] === "m" && $call_row[1] === "n" ? "callget" : "bad"; echo ":";
 fclose($call);
-echo unlink("{file}") && unlink("{semi}") && unlink("{call}") ? "cleanup" : "bad"; echo ":";
-echo function_exists("fgetcsv"); echo function_exists("fputcsv");
+file_put_contents("{scan}", "42 alpha\n7 beta\n");
+$scan = fopen("{scan}", "r");
+$matched = fscanf($scan, "%d %s");
+echo $matched[0] === "42" && $matched[1] === "alpha" ? "scan" : "bad"; echo ":";
+$call_matched = call_user_func("fscanf", $scan, "%d %s");
+echo $call_matched[0] === "7" && $call_matched[1] === "beta" ? "callscan" : "bad"; echo ":";
+fclose($scan);
+echo unlink("{file}") && unlink("{semi}") && unlink("{call}") && unlink("{scan}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("fgetcsv"); echo function_exists("fputcsv"); echo function_exists("fscanf");
 return true;"#
     );
     let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
-    for path in [&file, &semi, &call] {
+    for path in [&file, &semi, &call, &scan] {
         let _ = std::fs::remove_file(path);
     }
     let mut scope = ElephcEvalScope::new();
@@ -188,12 +196,12 @@ return true;"#
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    for path in [&file, &semi, &call] {
+    for path in [&file, &semi, &call, &scan] {
         let _ = std::fs::remove_file(path);
     }
     assert_eq!(
         values.output,
-        "put:get:eof:putsemi:getsemi:callput:callget:cleanup:11"
+        "put:get:eof:putsemi:getsemi:callput:callget:scan:callscan:cleanup:111"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

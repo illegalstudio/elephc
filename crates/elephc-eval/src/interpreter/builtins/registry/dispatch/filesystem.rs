@@ -163,6 +163,12 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_fread_result(*stream, *length, context, values)?
         }
+        "fscanf" => {
+            if evaluated_args.len() < 2 {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_fscanf_result(evaluated_args[0], evaluated_args[1], context, values)?
+        }
         "fseek" => match evaluated_args {
             [stream, offset] => eval_fseek_result(*stream, *offset, None, context, values)?,
             [stream, offset, whence] => {
