@@ -14,6 +14,7 @@ mod fnmatch;
 mod ops;
 mod path;
 mod stream_context;
+mod stream_settings;
 mod streams;
 
 pub(in crate::interpreter) use directories::*;
@@ -22,4 +23,5 @@ pub(in crate::interpreter) use fnmatch::*;
 pub(in crate::interpreter) use ops::*;
 pub(in crate::interpreter) use path::*;
 pub(in crate::interpreter) use stream_context::*;
+pub(in crate::interpreter) use stream_settings::*;
 pub(in crate::interpreter) use streams::*;

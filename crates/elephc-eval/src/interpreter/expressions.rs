@@ -634,6 +634,12 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         }
         "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
         "stream_get_line" => eval_builtin_stream_get_line(args, context, scope, values),
+        "stream_isatty" => eval_builtin_stream_isatty(args, context, scope, values),
+        "stream_set_blocking" => eval_builtin_stream_set_blocking(args, context, scope, values),
+        "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer" => {
+            eval_builtin_stream_set_buffer_like(name, args, context, scope, values)
+        }
+        "stream_set_timeout" => eval_builtin_stream_set_timeout(args, context, scope, values),
         "strtotime" => eval_builtin_strtotime(args, context, scope, values),
         "unlink" => eval_builtin_unlink(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),
