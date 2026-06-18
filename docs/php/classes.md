@@ -335,6 +335,18 @@ $t->fahrenheit = 212.0;
 echo $t->celsius; // 100
 ```
 
+The short `set => expr;` form stores `expr` into the property's own backing slot:
+
+```php
+<?php
+class Name {
+    public string $value {
+        get => $this->value;
+        set => trim($value);
+    }
+}
+```
+
 Inside a property's own hook, `$this->prop` accesses the raw stored value rather than re-running the hook, so a hook may read and write the property it belongs to (a *backed* property):
 
 ```php
@@ -356,7 +368,7 @@ Rules:
 - A property with a `get` hook but no `set` hook is read-only. Writing it is a compile-time error.
 - Hooked properties cannot have a default value and cannot be `static`, `final`, or `readonly`.
 - Each hook may be declared at most once per property.
-- The short `set => expr;` form is not supported; use a block `set { ... }`.
+- `set => expr;` is equivalent to assigning `expr` to the property's own backing slot.
 - Hooks are inherited by subclasses along with the property.
 
 Abstract classes, interfaces, and traits may declare hook *contracts* (`{ get; }`, `{ set; }`, `{ get; set; }`) with no body; see [Abstract properties](#abstract-properties) and [Interfaces](#interfaces).
@@ -1033,7 +1045,7 @@ Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfa
 
 ## Limitations
 - `readonly static` properties are rejected to match PHP. Static properties in a `readonly class` are still mutable.
-- Backed property hooks may read and write their own backing slot, but the short `set => expr;` form is not supported; use a block `set { ... }`.
+- Backed property hooks may read and write their own backing slot.
 - Shadowing a private parent property with a same-named child property is not yet supported (PHP gives them separate slots; elephc uses one slot per name)
 - Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
 - Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` APIs; parameter reflection is not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).

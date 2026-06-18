@@ -353,3 +353,36 @@ fn test_parse_get_set_hooks_generate_both_accessors() {
         other => panic!("Expected ClassDecl, got {:?}", other),
     }
 }
+
+/// Verifies a short `set => expr;` hook generates a setter accessor whose body writes to
+/// the hooked property's own raw backing slot.
+#[test]
+fn test_parse_short_set_hook_generates_backing_assignment() {
+    let stmts = parse_source(
+        "<?php class C { public string $v { get => $this->v; set => trim($value); } }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ClassDecl {
+            properties, methods, ..
+        } => {
+            let v = properties.iter().find(|p| p.name == "v").unwrap();
+            assert!(v.hooks.get);
+            assert!(v.hooks.set);
+            let setter = methods.iter().find(|m| m.name == "__propset_v").unwrap();
+            assert_eq!(setter.params.len(), 1);
+            match &setter.body[0].kind {
+                StmtKind::PropertyAssign {
+                    object,
+                    property,
+                    value,
+                } => {
+                    assert!(matches!(&object.kind, ExprKind::This));
+                    assert_eq!(property, "v");
+                    assert!(matches!(&value.kind, ExprKind::FunctionCall { .. }));
+                }
+                other => panic!("Expected synthetic PropertyAssign, got {:?}", other),
+            }
+        }
+        other => panic!("Expected ClassDecl, got {:?}", other),
+    }
+}

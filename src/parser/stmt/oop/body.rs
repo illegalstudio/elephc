@@ -12,8 +12,8 @@ use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::{property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, PropertyHooks, Stmt, StmtKind, TraitUse,
-    TypeExpr, Visibility,
+    ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind, PropertyHooks, Stmt,
+    StmtKind, TraitUse, TypeExpr, Visibility,
 };
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
@@ -907,10 +907,14 @@ fn parse_property_hooks(
                 if is_get {
                     Some(vec![Stmt::new(StmtKind::Return(Some(expr)), hook_span)])
                 } else {
-                    return Err(CompileError::new(
+                    Some(vec![Stmt::new(
+                        StmtKind::PropertyAssign {
+                            object: Box::new(Expr::new(ExprKind::This, hook_span)),
+                            property: prop_name.to_string(),
+                            value: expr,
+                        },
                         hook_span,
-                        "Short `set => expr` hooks require a backed property; use a block `set { ... }`",
-                    ));
+                    )])
                 }
             }
             Some(Token::LBrace) => Some(parse_block(tokens, pos)?),

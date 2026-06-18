@@ -737,13 +737,13 @@ fn test_error_write_to_get_only_hooked_property() {
     );
 }
 
-/// Verifies that the short `set => expr` hook form (which needs a backed property) is rejected.
+/// Verifies that a set hook cannot be declared by reference.
 #[test]
-fn test_error_short_set_hook_rejected() {
-    // short `set => expr` requires a backed property; only the block form is supported.
+fn test_error_set_hook_by_ref_rejected() {
+    // only get hooks may be declared by reference; set hooks receive the assigned value.
     expect_error(
-        "<?php class C { private int $n = 0; public int $v { get => $this->n; set => $this->n; } }",
-        "Short `set => expr` hooks require a backed property",
+        "<?php class C { public int $x { get => $this->x; &set { $this->x = $value; } } }",
+        "Set property hook cannot return by reference",
     );
 }
 
