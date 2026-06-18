@@ -21,6 +21,16 @@ use crate::types::TypeEnv;
 use super::super::Checker;
 
 impl Checker {
+    /// Returns true when `name` is bound as a `foreach` loop key in the current
+    /// scope. A foreach key is a boxed `Mixed` cell at runtime even when the
+    /// checker types it as `Int`/`Str` from the source array, so an array write
+    /// under such a key must defer the indexed-vs-hash decision to
+    /// `Op::ArraySetMixedKey` (destination `Array(Mixed)`) instead of promoting
+    /// the destination to `AssocArray` like a statically-known string key.
+    pub(crate) fn is_foreach_key(&self, name: &str) -> bool {
+        self.foreach_key_locals.contains(name)
+    }
+
     /// Validates assignment-like statements, dispatching to specialized checkers per variant.
     ///
     /// # Parameters
