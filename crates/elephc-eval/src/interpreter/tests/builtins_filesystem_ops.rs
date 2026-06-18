@@ -64,7 +64,42 @@ return true;"#,
     assert_eq!(
             values.output,
             "mkdir:dir:copy:rename:symlink:readlink:linkinfo:readlink-false:linkinfo-missing:hardlink:cache:cleanup:callmkdir:callrmdir:111111111"
-        );
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+/// Verifies eval `stream_resolve_include_path()` mirrors elephc realpath semantics.
+#[test]
+fn execute_program_dispatches_stream_resolve_include_path_builtin() {
+    let pid = std::process::id();
+    let file = format!("elephc_eval_stream_resolve_{pid}.txt");
+    let missing = format!("elephc_eval_stream_resolve_missing_{pid}.txt");
+    let source = format!(
+        r#"file_put_contents("{file}", "payload");
+$resolved = stream_resolve_include_path("{file}");
+echo is_string($resolved) && basename($resolved) === "{file}" && file_get_contents($resolved) === "payload" ? "resolved" : "bad"; echo ":";
+echo stream_resolve_include_path("{missing}") === false ? "missing" : "bad"; echo ":";
+$named = stream_resolve_include_path(path: "{file}");
+echo is_string($named) && basename($named) === "{file}" ? "named" : "bad"; echo ":";
+$call = call_user_func("stream_resolve_include_path", "{file}");
+echo is_string($call) && basename($call) === "{file}" ? "call" : "bad"; echo ":";
+$spread = call_user_func_array("stream_resolve_include_path", ["path" => "{file}"]);
+echo is_string($spread) && basename($spread) === "{file}" ? "spread" : "bad"; echo ":";
+echo unlink("{file}") ? "cleanup" : "bad"; echo ":";
+return function_exists("stream_resolve_include_path");"#,
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let _ = std::fs::remove_file(&file);
+    let _ = std::fs::remove_file(&missing);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    let _ = std::fs::remove_file(&file);
+    assert_eq!(
+        values.output,
+        "resolved:missing:named:call:spread:cleanup:"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval file-listing builtins build arrays, stream files, and dispatch dynamically.

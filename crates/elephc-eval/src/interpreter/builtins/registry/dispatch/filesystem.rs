@@ -163,6 +163,12 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_realpath_result(*path, values)?
         }
+        "stream_resolve_include_path" => {
+            let [filename] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_stream_resolve_include_path_result(*filename, values)?
+        }
         "realpath_cache_get" => {
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);

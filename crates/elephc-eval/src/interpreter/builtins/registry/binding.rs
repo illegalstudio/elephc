@@ -234,7 +234,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "putenv" => Some(&["assignment"]),
         "rand" | "mt_rand" | "random_int" => Some(&["min", "max"]),
         "range" => Some(&["start", "end"]),
-        "realpath" => Some(&["path"]),
+        "realpath" | "stream_resolve_include_path" => Some(&["path"]),
         "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
         "round" => Some(&["num", "precision"]),
         "sleep" => Some(&["seconds"]),
