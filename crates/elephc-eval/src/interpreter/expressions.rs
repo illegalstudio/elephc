@@ -576,6 +576,8 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "pi" => eval_builtin_pi(args, values),
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, values),
+        "pclose" => eval_builtin_pclose(args, context, scope, values),
+        "popen" => eval_builtin_popen(args, context, scope, values),
         "pow" => eval_builtin_pow(args, context, scope, values),
         "preg_match" => eval_builtin_preg_match(args, context, scope, values),
         "preg_match_all" => eval_builtin_preg_match_all(args, context, scope, values),

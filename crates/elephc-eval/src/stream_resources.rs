@@ -15,8 +15,9 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 
 use crate::value::RuntimeCellHandle;
 
@@ -28,6 +29,7 @@ pub(crate) struct EvalStreamResources {
     next_id: i64,
     directories: HashMap<i64, EvalDirectoryStream>,
     hash_contexts: HashMap<i64, EvalHashContext>,
+    process_children: HashMap<i64, Child>,
     stream_contexts: HashMap<i64, EvalStreamContext>,
     streams: HashMap<i64, EvalFileStream>,
 }
@@ -55,6 +57,52 @@ impl EvalStreamResources {
             path.to_string_lossy().into_owned(),
             "w+".to_string(),
         )))
+    }
+
+    /// Opens a shell process pipe and returns its stream resource id.
+    pub(crate) fn open_process_pipe(&mut self, command: &str, mode: &str) -> Option<i64> {
+        let read_mode = match mode.chars().next()? {
+            'r' => true,
+            'w' => false,
+            _ => return None,
+        };
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .stdin(if read_mode {
+                Stdio::null()
+            } else {
+                Stdio::piped()
+            })
+            .stdout(if read_mode {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .spawn()
+            .ok()?;
+        let file = if read_mode {
+            let stdout = child.stdout.take()?;
+            unsafe {
+                // The ChildStdout pipe is converted into the File that backs
+                // this eval stream; no second owner keeps the fd alive.
+                File::from_raw_fd(stdout.into_raw_fd())
+            }
+        } else {
+            let stdin = child.stdin.take()?;
+            unsafe {
+                // The ChildStdin pipe is converted into the File that backs
+                // this eval stream; dropping it before wait sends EOF.
+                File::from_raw_fd(stdin.into_raw_fd())
+            }
+        };
+        let id = self.insert(EvalFileStream::new(
+            file,
+            command.to_string(),
+            if read_mode { "r" } else { "w" }.to_string(),
+        ));
+        self.process_children.insert(id, child);
+        Some(id)
     }
 
     /// Opens a local directory and returns its resource id.
@@ -93,7 +141,19 @@ impl EvalStreamResources {
 
     /// Removes a stream resource from the table, closing its file handle.
     pub(crate) fn close(&mut self, id: i64) -> bool {
-        self.streams.remove(&id).is_some()
+        let closed = self.streams.remove(&id).is_some();
+        if let Some(mut child) = self.process_children.remove(&id) {
+            let _ = child.wait();
+        }
+        closed
+    }
+
+    /// Closes a process pipe stream and returns the child exit status.
+    pub(crate) fn pclose(&mut self, id: i64) -> Option<i64> {
+        let mut child = self.process_children.remove(&id)?;
+        self.streams.remove(&id)?;
+        let status = child.wait().ok()?;
+        Some(status.code().unwrap_or(0) as i64)
     }
 
     /// Removes a directory resource from the table.

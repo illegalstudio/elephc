@@ -256,6 +256,8 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "pi" => Some(&[]),
         "php_uname" => Some(&["mode"]),
         "phpversion" => Some(&[]),
+        "pclose" => Some(&["handle"]),
+        "popen" => Some(&["command", "mode"]),
         "pow" => Some(&["num", "exponent"]),
         "preg_match" => Some(&["pattern", "subject", "matches", "flags", "offset"]),
         "preg_match_all" => Some(&["pattern", "subject", "matches", "flags", "offset"]),
