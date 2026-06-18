@@ -63,6 +63,38 @@ fn test_parse_new_object() {
     }
 }
 
+/// Verifies that `<?php new Point(1, 2);` parses as an expression statement.
+#[test]
+fn test_parse_new_object_expression_statement() {
+    let stmts = parse_source("<?php new Point(1, 2);");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::NewObject { class_name, args } => {
+                assert_eq!(class_name, "Point");
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("Expected NewObject, got {:?}", other),
+        },
+        other => panic!("Expected ExprStmt, got {:?}", other),
+    }
+}
+
+/// Verifies that `<?php new $className();` parses as a dynamic-new expression statement.
+#[test]
+fn test_parse_new_dynamic_expression_statement() {
+    let stmts = parse_source("<?php new $className();");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                assert!(matches!(&name_expr.kind, ExprKind::Variable(name) if name == "className"));
+                assert!(args.is_empty());
+            }
+            other => panic!("Expected NewDynamic, got {:?}", other),
+        },
+        other => panic!("Expected ExprStmt, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php class Child extends Base { ... }` parses to `ClassDecl` with the
 /// extends name set and the subclass body (method count, name) correctly captured.
 #[test]

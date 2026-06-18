@@ -143,6 +143,37 @@ echo gettype($o) . ":" . $o->x;
     assert_eq!(out, "object:12");
 }
 
+/// Verifies `new ClassName();` is valid as a standalone expression statement and preserves
+/// constructor side effects.
+#[test]
+fn test_new_object_expression_statement_runs_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class SideEffectNew {
+    public function __construct() { echo "constructed"; }
+}
+new SideEffectNew();
+"#,
+    );
+    assert_eq!(out, "constructed");
+}
+
+/// Verifies `new $className();` is valid as a standalone expression statement and preserves
+/// constructor side effects.
+#[test]
+fn test_dynamic_new_expression_statement_runs_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicSideEffectNew {
+    public function __construct() { echo "dynamic"; }
+}
+$className = "DynamicSideEffectNew";
+new $className();
+"#,
+    );
+    assert_eq!(out, "dynamic");
+}
+
 /// Verifies dynamic instantiation of an unknown class exits with PHP's class-not-found fatal.
 #[test]
 fn test_dynamic_instantiation_missing_class_is_fatal() {
@@ -151,6 +182,18 @@ fn test_dynamic_instantiation_missing_class_is_fatal() {
 class Has { public int $x = 9; }
 $missing = "Nope";
 $bad = new $missing();
+"#,
+    );
+    assert!(err.contains("Fatal error: Uncaught Error: Class \"Nope\" not found"), "{err}");
+}
+
+/// Verifies a standalone dynamic-new statement uses the same class-not-found fatal.
+#[test]
+fn test_dynamic_new_expression_statement_missing_class_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$missing = "Nope";
+new $missing();
 "#,
     );
     assert!(err.contains("Fatal error: Uncaught Error: Class \"Nope\" not found"), "{err}");

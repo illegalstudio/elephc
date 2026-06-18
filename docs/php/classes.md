@@ -578,7 +578,7 @@ $obj = new $cls();                       // Foo instance
 echo gettype($obj);                      // "object"
 
 $missing = "NoSuchClass";
-$bad = new $missing();                   // fatal: Class "NoSuchClass" not found
+new $missing();                          // fatal: Class "NoSuchClass" not found
 ```
 
 elephc resolves the class name case-insensitively against compile-time class metadata, matching PHP class lookup. A match dispatches through the same allocation path as `new ClassName()`, including constructor calls, declared property defaults, and supported built-in/SPL runtime storage initialization. Unknown class strings are fatal, and non-string class expressions are rejected with PHP's invalid class-name fatal.
