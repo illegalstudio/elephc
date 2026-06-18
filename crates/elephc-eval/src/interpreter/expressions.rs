@@ -76,7 +76,8 @@ pub(in crate::interpreter) fn eval_expr(
                 let class_name = context
                     .resolve_class_name(class_name)
                     .unwrap_or_else(|| class_name.clone());
-                let args = positional_evaluated_arg_values(args)?;
+                let args =
+                    bind_native_callable_args(context.native_constructor_signature(&class_name), args)?;
                 values
                     .new_object(&class_name)
                     .and_then(|object| values.construct_object(object, args).map(|()| object))

@@ -222,9 +222,30 @@ return call_user_func_array(["KnownClass", "sum"], [2, 5]);"#,
     assert_eq!(values.get(result), FakeValue::Int(7));
 }
 
-/// Verifies runtime AOT static method fallback rejects named arguments.
+/// Verifies runtime AOT static method fallback binds registered named arguments.
 #[test]
-fn execute_program_static_runtime_method_hook_rejects_named_args() {
+fn execute_program_static_runtime_method_hook_binds_named_args() {
+    let program = parse_fragment(
+        br#"return call_user_func_array(["KnownClass", "join"], ["right" => "B", "left" => "A"]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(2);
+    assert!(signature.set_param_name(0, "left"));
+    assert!(signature.set_param_name(1, "right"));
+    assert!(context.define_native_static_method_signature("KnownClass", "join", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("registered named AOT call should bind");
+
+    assert_eq!(values.get(result), FakeValue::String("AB".to_string()));
+}
+
+/// Verifies runtime AOT static method fallback rejects named arguments without metadata.
+#[test]
+fn execute_program_static_runtime_method_hook_rejects_unregistered_named_args() {
     let program = parse_fragment(
         br#"return call_user_func_array(["KnownClass", "join"], ["right" => "B", "left" => "A"]);"#,
     )

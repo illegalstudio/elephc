@@ -64,9 +64,31 @@ return $box->read(missing: "bad");"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
-/// Verifies runtime/AOT method fallback still rejects named arguments.
+/// Verifies runtime/AOT method fallback binds registered native method named arguments.
 #[test]
-fn execute_program_rejects_named_args_for_runtime_method_fallback() {
+fn execute_program_binds_registered_runtime_method_named_args() {
+    let program = parse_fragment(
+        br#"$box = new KnownClass(10);
+return $box->add2_x(right: 2, left: 3);"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(2);
+    assert!(signature.set_param_name(0, "left"));
+    assert!(signature.set_param_name(1, "right"));
+    assert!(context.define_native_method_signature("KnownClass", "add2_x", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("registered runtime method named args should bind");
+
+    assert_eq!(values.get(result), FakeValue::Int(15));
+}
+
+/// Verifies runtime/AOT method fallback rejects named arguments without metadata.
+#[test]
+fn execute_program_rejects_unregistered_named_args_for_runtime_method_fallback() {
     let program =
         parse_fragment(br#"return $this->answer(value: 1);"#).expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
@@ -75,7 +97,7 @@ fn execute_program_rejects_named_args_for_runtime_method_fallback() {
     scope.set("this", object, ScopeCellOwnership::Borrowed);
 
     let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("runtime method fallback named args should fail");
+        .expect_err("unregistered runtime method fallback named args should fail");
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }

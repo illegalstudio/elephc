@@ -18,8 +18,9 @@ use crate::codegen::platform::Arch;
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed};
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op};
-use crate::names::{function_symbol, ir_global_symbol};
-use crate::types::{FunctionSig, PhpType};
+use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
+use crate::parser::ast::Visibility;
+use crate::types::{ClassInfo, FunctionSig, PhpType};
 
 use super::super::super::context::FunctionContext;
 use super::super::{
@@ -45,6 +46,7 @@ const EVAL_CODE_LEN_OFFSET: usize = 56;
 const EVAL_GLOBAL_SCOPE_HANDLE_OFFSET: usize = 64;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
+const MAX_EVAL_NATIVE_METHOD_PARAMS: usize = 8;
 
 /// Local slot metadata needed for conservative eval scope synchronization.
 #[derive(Clone)]
@@ -71,6 +73,20 @@ struct EvalGlobalAlias {
 /// A module-local function that can be registered with the eval context.
 struct EvalNativeFunctionRegistration {
     name: String,
+    signature: FunctionSig,
+}
+
+/// A module-local method signature that can be registered with the eval context.
+struct EvalNativeMethodRegistration {
+    class_name: String,
+    method_name: String,
+    is_static: bool,
+    signature: FunctionSig,
+}
+
+/// A module-local constructor signature that can be registered with the eval context.
+struct EvalNativeConstructorRegistration {
+    class_name: String,
     signature: FunctionSig,
 }
 
@@ -399,6 +415,7 @@ fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
     register_eval_native_functions(ctx, offset)?;
+    register_eval_native_method_signatures(ctx, offset);
     ctx.emitter.label(&ready);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
@@ -427,6 +444,16 @@ fn register_eval_native_functions(
     Ok(())
 }
 
+/// Registers eligible AOT method and constructor signatures with a newly allocated eval context.
+fn register_eval_native_method_signatures(ctx: &mut FunctionContext<'_>, context_offset: usize) {
+    for registration in eval_native_method_registrations(ctx) {
+        register_eval_native_method(ctx, context_offset, &registration);
+    }
+    for registration in eval_native_constructor_registrations(ctx) {
+        register_eval_native_constructor(ctx, context_offset, &registration);
+    }
+}
+
 /// Collects global PHP functions that can use the descriptor-invoker bridge.
 fn eval_native_function_registrations(
     ctx: &FunctionContext<'_>,
@@ -442,6 +469,92 @@ fn eval_native_function_registrations(
         .collect()
 }
 
+/// Collects public AOT methods whose parameter names can be exposed to eval binding.
+fn eval_native_method_registrations(
+    ctx: &FunctionContext<'_>,
+) -> Vec<EvalNativeMethodRegistration> {
+    let mut registrations = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    for (class_name, class_info) in classes {
+        collect_eval_native_instance_methods(class_name, class_info, &mut registrations);
+        collect_eval_native_static_methods(class_name, class_info, &mut registrations);
+    }
+    registrations
+}
+
+/// Collects public AOT constructors whose parameter names can be exposed to eval binding.
+fn eval_native_constructor_registrations(
+    ctx: &FunctionContext<'_>,
+) -> Vec<EvalNativeConstructorRegistration> {
+    let method_key = php_symbol_key("__construct");
+    let mut registrations = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    for (class_name, class_info) in classes {
+        let Some(signature) = class_info.methods.get(&method_key) else {
+            continue;
+        };
+        if !class_method_is_public(class_info, &method_key)
+            || !method_signature_can_register_with_eval(signature)
+        {
+            continue;
+        }
+        registrations.push(EvalNativeConstructorRegistration {
+            class_name: class_name.clone(),
+            signature: signature.clone(),
+        });
+    }
+    registrations
+}
+
+/// Adds eligible public instance methods for one class to eval signature registration.
+fn collect_eval_native_instance_methods(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativeMethodRegistration>,
+) {
+    let mut methods = class_info.methods.iter().collect::<Vec<_>>();
+    methods.sort_by_key(|(method, _)| method.as_str());
+    for (method_name, signature) in methods {
+        if method_name == "__construct"
+            || !class_method_is_public(class_info, method_name)
+            || !method_signature_can_register_with_eval(signature)
+        {
+            continue;
+        }
+        registrations.push(EvalNativeMethodRegistration {
+            class_name: class_name.to_string(),
+            method_name: method_name.clone(),
+            is_static: false,
+            signature: signature.clone(),
+        });
+    }
+}
+
+/// Adds eligible public static methods for one class to eval signature registration.
+fn collect_eval_native_static_methods(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativeMethodRegistration>,
+) {
+    let mut methods = class_info.static_methods.iter().collect::<Vec<_>>();
+    methods.sort_by_key(|(method, _)| method.as_str());
+    for (method_name, signature) in methods {
+        if !class_static_method_is_public(class_info, method_name)
+            || !method_signature_can_register_with_eval(signature)
+        {
+            continue;
+        }
+        registrations.push(EvalNativeMethodRegistration {
+            class_name: class_name.to_string(),
+            method_name: method_name.clone(),
+            is_static: true,
+            signature: signature.clone(),
+        });
+    }
+}
+
 /// Returns true when a module function is a PHP-visible AOT function supported by this bridge.
 fn function_can_register_with_eval(function: &Function) -> bool {
     !function.flags.is_main
@@ -450,6 +563,29 @@ fn function_can_register_with_eval(function: &Function) -> bool {
             .params
             .iter()
             .all(|param| !param.by_ref && !param.variadic)
+}
+
+/// Returns true when eval can bind native method arguments by fixed parameter names.
+fn method_signature_can_register_with_eval(signature: &FunctionSig) -> bool {
+    signature.params.len() <= MAX_EVAL_NATIVE_METHOD_PARAMS
+        && signature.variadic.is_none()
+        && signature.ref_params.iter().all(|is_ref| !*is_ref)
+}
+
+/// Returns true when an instance method is public in the class metadata.
+fn class_method_is_public(class_info: &ClassInfo, method_name: &str) -> bool {
+    class_info
+        .method_visibilities
+        .get(method_name)
+        .is_none_or(|visibility| matches!(visibility, Visibility::Public))
+}
+
+/// Returns true when a static method is public in the class metadata.
+fn class_static_method_is_public(class_info: &ClassInfo, method_name: &str) -> bool {
+    class_info
+        .static_method_visibilities
+        .get(method_name)
+        .is_none_or(|visibility| matches!(visibility, Visibility::Public))
 }
 
 /// Emits one native-function registration call into the just-created eval context.
@@ -516,6 +652,185 @@ fn register_eval_native_function(
         );
     }
     Ok(())
+}
+
+/// Emits one native method signature registration call into the eval context.
+fn register_eval_native_method(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    registration: &EvalNativeMethodRegistration,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let method_key = format!("{}::{}", registration.class_name, registration.method_name);
+    let (method_key_label, method_key_len) = ctx.data.add_string(method_key.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &method_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        method_key_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        registration.signature.params.len() as i64,
+    );
+    let symbol = if registration.is_static {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_static_method")
+    } else {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_method")
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
+    for (index, (param_name, _)) in registration.signature.params.iter().enumerate() {
+        register_eval_native_method_param(
+            ctx,
+            context_offset,
+            &method_key_label,
+            method_key_len,
+            registration.is_static,
+            index,
+            param_name,
+        );
+    }
+}
+
+/// Emits one native method parameter-name registration call.
+fn register_eval_native_method_param(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    method_key_label: &str,
+    method_key_len: usize,
+    is_static: bool,
+    param_index: usize,
+    param_name: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        method_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        method_key_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    let (param_name_label, param_name_len) = ctx.data.add_string(param_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        &param_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        param_name_len as i64,
+    );
+    let symbol = if is_static {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_static_method_param")
+    } else {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_method_param")
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native constructor signature registration call into the eval context.
+fn register_eval_native_constructor(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    registration: &EvalNativeConstructorRegistration,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let (class_name_label, class_name_len) = ctx.data.add_string(registration.class_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &class_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        class_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        registration.signature.params.len() as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_constructor");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    for (index, (param_name, _)) in registration.signature.params.iter().enumerate() {
+        register_eval_native_constructor_param(
+            ctx,
+            context_offset,
+            &class_name_label,
+            class_name_len,
+            index,
+            param_name,
+        );
+    }
+}
+
+/// Emits one native constructor parameter-name registration call.
+fn register_eval_native_constructor_param(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    class_name_label: &str,
+    class_name_len: usize,
+    param_index: usize,
+    param_name: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        class_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        class_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    let (param_name_label, param_name_len) = ctx.data.add_string(param_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        &param_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        param_name_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_constructor_param");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native-function parameter-name registration call.

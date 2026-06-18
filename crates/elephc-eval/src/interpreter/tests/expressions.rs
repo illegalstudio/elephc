@@ -307,6 +307,25 @@ fn execute_program_constructs_named_object_with_args() {
 
     assert_eq!(values.get(x), FakeValue::Int(1));
 }
+
+/// Verifies eval object construction binds registered AOT constructor named arguments.
+#[test]
+fn execute_program_constructs_named_object_with_registered_named_args() {
+    let program = parse_fragment(br#"$box = new KnownClass(value: 9); return $box->read_x();"#)
+        .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(1);
+    assert!(signature.set_param_name(0, "value"));
+    assert!(context.define_native_constructor_signature("KnownClass", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("registered constructor named args should bind");
+
+    assert_eq!(values.get(result), FakeValue::Int(9));
+}
+
 /// Verifies eval-declared classes create objects with properties and methods.
 #[test]
 fn execute_program_constructs_eval_declared_class_with_method() {

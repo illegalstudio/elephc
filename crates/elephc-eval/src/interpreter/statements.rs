@@ -1662,10 +1662,10 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if evaluated_args.iter().any(|arg| arg.name.is_some()) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let args = evaluated_args.into_iter().map(|arg| arg.value).collect();
+    let args = bind_native_callable_args(
+        context.native_static_method_signature(&class_name, method_name),
+        evaluated_args,
+    )?;
     values.static_method_call(&class_name, method_name, args)
 }
 
@@ -1990,7 +1990,11 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         }
     }
     let Some(class) = context.dynamic_object_class(identity) else {
-        let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
+        let class_name = runtime_object_class_name(object, values)?;
+        let evaluated_args = bind_native_callable_args(
+            context.native_method_signature(&class_name, method_name),
+            evaluated_args,
+        )?;
         return values.method_call(object, method_name, evaluated_args);
     };
     let called_class_name = class.name().to_string();
@@ -2010,6 +2014,17 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         context,
         values,
     )
+}
+
+/// Returns the runtime-visible class name for a non-eval object receiver.
+fn runtime_object_class_name(
+    object: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let class_name = values.object_class_name(object)?;
+    let bytes = values.string_bytes(class_name);
+    values.release(class_name)?;
+    String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Instantiates an eval-declared attribute class for `ReflectionAttribute::newInstance()`.
@@ -2215,6 +2230,21 @@ pub(in crate::interpreter) fn positional_evaluated_arg_values(
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(args.into_iter().map(|arg| arg.value).collect())
+}
+
+/// Binds native AOT callable args by registered names, or falls back to positional-only args.
+pub(in crate::interpreter) fn bind_native_callable_args(
+    signature: Option<NativeCallableSignature>,
+    args: Vec<EvaluatedCallArg>,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let Some(signature) = signature else {
+        return positional_evaluated_arg_values(args);
+    };
+    if signature.param_names().len() == signature.param_count() {
+        bind_evaluated_function_args(signature.param_names(), args)
+    } else {
+        positional_evaluated_arg_values(args)
+    }
 }
 
 /// Executes a PHP `static $name = expr;` declaration in the current eval scope.

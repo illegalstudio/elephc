@@ -13,6 +13,7 @@
 use super::context::*;
 use super::execute::*;
 use super::native_functions::*;
+use super::native_methods::*;
 use super::scope::*;
 use super::symbols::*;
 use crate::abi::{
@@ -228,6 +229,88 @@ fn register_native_function_reports_function_exists() {
     assert_eq!(param_registered, 1);
     assert_eq!(exists, 1);
     assert_eq!(native.param_names(), &["value".to_string()]);
+}
+
+/// Verifies native AOT method registration records instance/static/constructor parameters.
+#[test]
+fn register_native_methods_record_signature_metadata() {
+    let mut ctx = ElephcEvalContext::new();
+    let method = b"KnownClass::join";
+    let static_method = b"KnownClass::sum";
+    let class = b"KnownClass";
+    let left = b"left";
+    let right = b"right";
+    let value = b"value";
+
+    let method_registered = unsafe {
+        __elephc_eval_register_native_method(&mut ctx, method.as_ptr(), method.len() as u64, 2)
+    };
+    let method_param_registered = unsafe {
+        __elephc_eval_register_native_method_param(
+            &mut ctx,
+            method.as_ptr(),
+            method.len() as u64,
+            1,
+            right.as_ptr(),
+            right.len() as u64,
+        )
+    };
+    let static_registered = unsafe {
+        __elephc_eval_register_native_static_method(
+            &mut ctx,
+            static_method.as_ptr(),
+            static_method.len() as u64,
+            2,
+        )
+    };
+    let static_param_registered = unsafe {
+        __elephc_eval_register_native_static_method_param(
+            &mut ctx,
+            static_method.as_ptr(),
+            static_method.len() as u64,
+            0,
+            left.as_ptr(),
+            left.len() as u64,
+        )
+    };
+    let constructor_registered = unsafe {
+        __elephc_eval_register_native_constructor(&mut ctx, class.as_ptr(), class.len() as u64, 1)
+    };
+    let constructor_param_registered = unsafe {
+        __elephc_eval_register_native_constructor_param(
+            &mut ctx,
+            class.as_ptr(),
+            class.len() as u64,
+            0,
+            value.as_ptr(),
+            value.len() as u64,
+        )
+    };
+
+    assert_eq!(method_registered, 1);
+    assert_eq!(method_param_registered, 1);
+    assert_eq!(static_registered, 1);
+    assert_eq!(static_param_registered, 1);
+    assert_eq!(constructor_registered, 1);
+    assert_eq!(constructor_param_registered, 1);
+    assert_eq!(
+        ctx.native_method_signature("knownclass", "JOIN")
+            .expect("method metadata")
+            .param_names(),
+        &["".to_string(), "right".to_string()]
+    );
+    assert_eq!(
+        ctx.native_static_method_signature("KnownClass", "SUM")
+            .expect("static method metadata")
+            .param_names(),
+        &["left".to_string(), "".to_string()]
+    );
+    assert_eq!(
+        ctx.native_constructor_signature("knownclass")
+            .expect("constructor metadata")
+            .param_names(),
+        &["value".to_string()]
+    );
 }
 
 /// Verifies scope allocation returns an empty opaque activation scope handle.

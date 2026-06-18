@@ -83,6 +83,45 @@ impl NativeFunction {
     }
 }
 
+/// Native AOT method or constructor signature metadata visible to eval fragments.
+#[derive(Clone)]
+pub struct NativeCallableSignature {
+    param_count: usize,
+    param_names: Vec<String>,
+}
+
+impl NativeCallableSignature {
+    /// Creates signature metadata with the visible positional parameter count.
+    pub const fn new(param_count: usize) -> Self {
+        Self {
+            param_count,
+            param_names: Vec::new(),
+        }
+    }
+
+    /// Returns the visible positional parameter count accepted by this callable.
+    pub const fn param_count(&self) -> usize {
+        self.param_count
+    }
+
+    /// Records the PHP parameter name for one positional callable slot.
+    pub fn set_param_name(&mut self, index: usize, name: impl Into<String>) -> bool {
+        if index >= self.param_count {
+            return false;
+        }
+        if self.param_names.len() < self.param_count {
+            self.param_names.resize(self.param_count, String::new());
+        }
+        self.param_names[index] = name.into();
+        true
+    }
+
+    /// Returns the PHP-visible parameter names registered for this callable.
+    pub fn param_names(&self) -> &[String] {
+        &self.param_names
+    }
+}
+
 /// Process-level eval context passed opaquely across the C ABI.
 ///
 /// Generated code never inspects this layout directly; it only passes pointers
@@ -104,6 +143,9 @@ pub struct ElephcEvalContext {
     constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
+    native_methods: HashMap<(String, String), NativeCallableSignature>,
+    native_static_methods: HashMap<(String, String), NativeCallableSignature>,
+    native_constructors: HashMap<String, NativeCallableSignature>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
     static_properties: HashMap<(String, String), RuntimeCellHandle>,
     class_constants: HashMap<(String, String), RuntimeCellHandle>,
@@ -144,6 +186,9 @@ impl ElephcEvalContext {
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
+            native_methods: HashMap::new(),
+            native_static_methods: HashMap::new(),
+            native_constructors: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             class_constants: HashMap::new(),
@@ -185,6 +230,9 @@ impl ElephcEvalContext {
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
+            native_methods: HashMap::new(),
+            native_static_methods: HashMap::new(),
+            native_constructors: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             class_constants: HashMap::new(),
@@ -914,6 +962,111 @@ impl ElephcEvalContext {
             .is_some_and(|function| function.set_param_name(index, param_name))
     }
 
+    /// Defines native AOT instance-method signature metadata for eval named-argument binding.
+    pub fn define_native_method_signature(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        signature: NativeCallableSignature,
+    ) -> bool {
+        self.native_methods
+            .insert(native_method_key(class_name, method_name), signature)
+            .is_none()
+    }
+
+    /// Defines native AOT static-method signature metadata for eval named-argument binding.
+    pub fn define_native_static_method_signature(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        signature: NativeCallableSignature,
+    ) -> bool {
+        self.native_static_methods
+            .insert(native_method_key(class_name, method_name), signature)
+            .is_none()
+    }
+
+    /// Defines native AOT constructor signature metadata for eval named-argument binding.
+    pub fn define_native_constructor_signature(
+        &mut self,
+        class_name: &str,
+        signature: NativeCallableSignature,
+    ) -> bool {
+        self.native_constructors
+            .insert(normalize_class_name(class_name), signature)
+            .is_none()
+    }
+
+    /// Records one parameter name for registered native AOT instance-method metadata.
+    pub fn define_native_method_param(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+        param_name: impl Into<String>,
+    ) -> bool {
+        self.native_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_param_name(index, param_name))
+    }
+
+    /// Records one parameter name for registered native AOT static-method metadata.
+    pub fn define_native_static_method_param(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+        param_name: impl Into<String>,
+    ) -> bool {
+        self.native_static_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_param_name(index, param_name))
+    }
+
+    /// Records one parameter name for registered native AOT constructor metadata.
+    pub fn define_native_constructor_param(
+        &mut self,
+        class_name: &str,
+        index: usize,
+        param_name: impl Into<String>,
+    ) -> bool {
+        self.native_constructors
+            .get_mut(&normalize_class_name(class_name))
+            .is_some_and(|signature| signature.set_param_name(index, param_name))
+    }
+
+    /// Returns native AOT instance-method signature metadata by PHP class and method name.
+    pub fn native_method_signature(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<NativeCallableSignature> {
+        self.native_methods
+            .get(&native_method_key(class_name, method_name))
+            .cloned()
+    }
+
+    /// Returns native AOT static-method signature metadata by PHP class and method name.
+    pub fn native_static_method_signature(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<NativeCallableSignature> {
+        self.native_static_methods
+            .get(&native_method_key(class_name, method_name))
+            .cloned()
+    }
+
+    /// Returns native AOT constructor signature metadata by PHP class name.
+    pub fn native_constructor_signature(
+        &self,
+        class_name: &str,
+    ) -> Option<NativeCallableSignature> {
+        self.native_constructors
+            .get(&normalize_class_name(class_name))
+            .cloned()
+    }
+
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
     pub fn has_function(&self, name: &str) -> bool {
         self.functions.contains_key(name) || self.native_functions.contains_key(name)
@@ -1158,6 +1311,19 @@ fn normalize_class_name(name: &str) -> String {
 /// Normalizes PHP enum case names for case-sensitive eval enum lookup.
 fn normalize_enum_case_name(name: &str) -> String {
     name.to_string()
+}
+
+/// Normalizes PHP method names for case-insensitive native metadata lookup.
+fn normalize_method_name(name: &str) -> String {
+    name.to_ascii_lowercase()
+}
+
+/// Builds the folded native method metadata key used for eval argument binding.
+fn native_method_key(class_name: &str, method_name: &str) -> (String, String) {
+    (
+        normalize_class_name(class_name),
+        normalize_method_name(method_name),
+    )
 }
 
 /// Pushes a PHP class-like name once, preserving the first visible spelling.

@@ -4548,6 +4548,62 @@ eval('echo EvalAotStaticStackStringBox::join4("G", "H", "I", "J");');
     assert_eq!(out, "GHIJ");
 }
 
+/// Verifies eval binds named arguments before dispatching an AOT instance method.
+#[test]
+fn test_eval_fragment_dispatches_aot_instance_method_with_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNamedMethodBox {
+    public function run() {
+        return eval('return $this->join(right: "B", left: "A");');
+    }
+
+    public function join(string $left, string $right): string {
+        return $left . $right;
+    }
+}
+
+echo (new EvalAotNamedMethodBox())->run();
+"#,
+    );
+    assert_eq!(out, "AB");
+}
+
+/// Verifies eval binds named arguments before dispatching an AOT static method.
+#[test]
+fn test_eval_fragment_dispatches_aot_static_method_with_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNamedStaticBox {
+    public static function join(string $left, string $right): string {
+        return $left . $right;
+    }
+}
+
+eval('echo EvalAotNamedStaticBox::join(right: "D", left: "C");');
+"#,
+    );
+    assert_eq!(out, "CD");
+}
+
+/// Verifies eval binds named arguments before dispatching an AOT constructor.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewNamedCtor {
+    public string $label = "";
+    public function __construct(string $left, string $right) {
+        $this->label = $left . $right;
+    }
+}
+
+echo eval('$box = new EvalDynamicNewNamedCtor(right: "F", left: "E"); return $box->label;');
+"#,
+    );
+    assert_eq!(out, "EF");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {
