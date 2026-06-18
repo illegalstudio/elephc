@@ -5668,6 +5668,33 @@ echo (new ReflectionClass("EvalModifierTrait"))->getModifiers();');
     assert_eq!(out.stdout, "64:32:65536:65568:32:0:0");
 }
 
+/// Verifies eval ReflectionClass reports readonly class status through the bridge.
+#[test]
+fn test_eval_reflection_class_readonly_predicate() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReadonlyPlain {}
+readonly class EvalReadonlyReflect {}
+final readonly class EvalReadonlyFinalReflect {}
+enum EvalReadonlyEnumReflect { case Ready; }
+interface EvalReadonlyIface {}
+trait EvalReadonlyTrait {}
+echo (new ReflectionClass("EvalReadonlyPlain"))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass("EvalReadonlyReflect"))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass("EvalReadonlyFinalReflect"))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass("EvalReadonlyEnumReflect"))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass("EvalReadonlyIface"))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass("EvalReadonlyTrait"))->isReadOnly() ? "R" : "r";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "rRRrrr");
+}
+
 /// Verifies eval ReflectionClass reports method and property membership through the bridge.
 #[test]
 fn test_eval_reflection_class_member_existence() {

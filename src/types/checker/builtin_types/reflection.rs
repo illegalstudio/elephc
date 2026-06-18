@@ -377,6 +377,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 false_bool(),
             ),
             builtin_property(
+                "__is_readonly",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
                 "__modifiers",
                 Visibility::Private,
                 Some(TypeExpr::Int),
@@ -443,6 +449,7 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_bool_method("isInterface", "__is_interface"),
             builtin_reflection_class_bool_method("isTrait", "__is_trait"),
             builtin_reflection_class_bool_method("isEnum", "__is_enum"),
+            builtin_reflection_class_bool_method("isReadOnly", "__is_readonly"),
             builtin_reflection_class_int_method("getModifiers", "__modifiers"),
             builtin_reflection_class_has_name_method("hasMethod", "__method_names", true),
             builtin_reflection_class_has_name_method("hasProperty", "__property_names", false),
@@ -832,6 +839,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "isinterface",
                     "istrait",
                     "isenum",
+                    "isreadonly",
                     "hasmethod",
                     "hasproperty",
                 ] {

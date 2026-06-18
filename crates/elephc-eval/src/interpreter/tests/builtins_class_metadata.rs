@@ -334,6 +334,34 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass exposes eval readonly class metadata.
+#[test]
+fn execute_program_reflects_eval_class_readonly_predicate() {
+    let program = parse_fragment(
+        br#"class EvalReadonlyPlain {}
+readonly class EvalReadonlyReflect {}
+final readonly class EvalReadonlyFinalReflect {}
+enum EvalReadonlyEnumReflect { case Ready; }
+interface EvalReadonlyIface {}
+trait EvalReadonlyTrait {}
+echo (new ReflectionClass("EvalReadonlyPlain"))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass("EvalReadonlyReflect"))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass("EvalReadonlyFinalReflect"))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass("EvalReadonlyEnumReflect"))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass("EvalReadonlyIface"))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass("EvalReadonlyTrait"))->isReadOnly() ? "R" : "r";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "rRRrrr");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass reports eval class-like method and property membership.
 #[test]
 fn execute_program_reflects_eval_class_member_existence() {

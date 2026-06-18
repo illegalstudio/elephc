@@ -17,6 +17,7 @@ const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
 const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
 const EVAL_REFLECTION_CLASS_FLAG_TRAIT: u64 = 8;
 const EVAL_REFLECTION_CLASS_FLAG_ENUM: u64 = 16;
+const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
@@ -325,6 +326,9 @@ fn eval_reflection_class_like_attributes(
         }
         if is_enum {
             flags |= EVAL_REFLECTION_CLASS_FLAG_ENUM;
+        }
+        if class.is_readonly_class() && !is_enum {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_READONLY;
         }
         let modifiers = eval_reflection_class_modifiers(
             class.is_final(),

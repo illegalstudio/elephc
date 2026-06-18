@@ -1014,6 +1014,28 @@ echo ReflectionClass::IS_READONLY;
     assert_eq!(out, "64:32:65536:65568:32:0:0:16:32:64:65536");
 }
 
+/// Verifies that `ReflectionClass::isReadOnly()` reports readonly class metadata.
+#[test]
+fn test_reflection_class_is_readonly_reports_class_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticReadonlyPlain {}
+readonly class StaticReadonlyReflect {}
+final readonly class StaticReadonlyFinalReflect {}
+enum StaticReadonlyEnumReflect { case Ready; }
+interface StaticReadonlyIface {}
+trait StaticReadonlyTrait {}
+echo (new ReflectionClass(StaticReadonlyPlain::class))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass(StaticReadonlyReflect::class))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass(StaticReadonlyFinalReflect::class))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass(StaticReadonlyEnumReflect::class))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass(StaticReadonlyIface::class))->isReadOnly() ? "R" : "r";
+echo (new ReflectionClass(StaticReadonlyTrait::class))->isReadOnly() ? "R" : "r";
+"#,
+    );
+    assert_eq!(out, "rRRrrr");
+}
+
 /// Verifies that `ReflectionClass::hasMethod()` and `hasProperty()` report
 /// PHP-visible members for static class-like metadata.
 #[test]

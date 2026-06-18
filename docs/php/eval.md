@@ -159,7 +159,8 @@ derive namespace-aware parts from the resolved eval class-like name.
 `ReflectionClass::isInterface()`, `ReflectionClass::isTrait()`, and
 `ReflectionClass::isEnum()` report eval class-like metadata, including
 PHP-compatible enum finality and class-like kind checks for eval interfaces,
-traits, and enums. `ReflectionClass::getModifiers()` returns PHP's
+traits, and enums. `ReflectionClass::isReadOnly()` reports eval `readonly class`
+metadata. `ReflectionClass::getModifiers()` returns PHP's
 `ReflectionClass::IS_*` modifier bitmask for eval class-like metadata.
 `ReflectionClass::getInterfaceNames()` returns implemented interfaces for eval
 classes and parent interfaces for eval interfaces, while
