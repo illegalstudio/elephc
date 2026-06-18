@@ -162,3 +162,106 @@ readonly class EvalReadonlyParentMismatchChild extends EvalReadonlyParentMismatc
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
+
+/// Verifies a get-only property hook computes a virtual eval property.
+#[test]
+fn execute_program_reads_eval_property_get_hook() {
+    let program = parse_fragment(
+        br#"class EvalHookPerson {
+    public string $first = "Ada";
+    public string $last = "Lovelace";
+    public string $full {
+        get => $this->first . " " . $this->last;
+    }
+}
+$person = new EvalHookPerson();
+echo $person->full;
+return $person->full;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Ada Lovelace");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("Ada Lovelace".to_string())
+    );
+}
+
+/// Verifies get/set property hooks can use the raw backing slot from inside accessors.
+#[test]
+fn execute_program_routes_eval_property_get_and_set_hooks() {
+    let program = parse_fragment(
+        br#"class EvalHookName {
+    public string $value {
+        get => $this->value;
+        set { $this->value = $value . "!"; }
+    }
+}
+$name = new EvalHookName();
+$name->value = "Ada";
+echo $name->value;
+return $name->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Ada!");
+    assert_eq!(values.get(result), FakeValue::String("Ada!".to_string()));
+}
+
+/// Verifies get-only property hooks reject writes outside a set accessor.
+#[test]
+fn execute_program_rejects_write_to_get_only_eval_property_hook() {
+    let program = parse_fragment(
+        br#"class EvalHookReadOnly {
+    public int $answer {
+        get => 42;
+    }
+}
+$box = new EvalHookReadOnly();
+$box->answer = 7;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("get-only property hook write should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies eval subclasses inherit parent property hooks.
+#[test]
+fn execute_program_inherits_eval_property_hooks() {
+    let program = parse_fragment(
+        br#"class EvalHookBase {
+    public string $value {
+        get => $this->value;
+        set { $this->value = $value . "!"; }
+    }
+}
+class EvalHookChild extends EvalHookBase {
+    public function shout() { return $this->value . "?"; }
+}
+$box = new EvalHookChild();
+$box->value = "Ada";
+echo $box->value; echo ":";
+return $box->shout();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Ada!:");
+    assert_eq!(values.get(result), FakeValue::String("Ada!?".to_string()));
+}

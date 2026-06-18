@@ -1007,6 +1007,11 @@ fn validate_eval_declared_properties(properties: &[EvalClassProperty]) -> Result
         if property.is_readonly() && property.default().is_some() {
             return Err(EvalStatus::RuntimeFatal);
         }
+        if (property.has_get_hook() || property.has_set_hook())
+            && (property.is_static() || property.is_readonly() || property.default().is_some())
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
     }
     Ok(())
 }
@@ -1212,10 +1217,35 @@ pub(in crate::interpreter) fn eval_property_get_result(
     let Some(class) = context.dynamic_object_class(identity) else {
         return values.property_get(object, property_name);
     };
+    let object_class_name = class.name().to_string();
     if let Some((declaring_class, property)) =
-        eval_dynamic_property_for_access(class.name(), property_name, context)
+        eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
         validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+        if property.has_get_hook()
+            && !current_eval_property_hook_is(
+                &declaring_class,
+                property.name(),
+                &property_hook_get_method(property.name()),
+                context,
+            )
+        {
+            let (hook_class, hook_method) = context
+                .class_method(
+                    &object_class_name,
+                    &property_hook_get_method(property.name()),
+                )
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            return eval_dynamic_method_with_values(
+                &hook_class,
+                &object_class_name,
+                &hook_method,
+                object,
+                Vec::new(),
+                context,
+                values,
+            );
+        }
     }
     values.property_get(object, property_name)
 }
@@ -1234,16 +1264,79 @@ pub(in crate::interpreter) fn eval_property_set_result(
     let Some(class) = context.dynamic_object_class(identity) else {
         return values.property_set(object, property_name, value);
     };
-    if context.has_enum(class.name()) {
+    let object_class_name = class.name().to_string();
+    if context.has_enum(&object_class_name) {
         return Err(EvalStatus::RuntimeFatal);
     }
     if let Some((declaring_class, property)) =
-        eval_dynamic_property_for_access(class.name(), property_name, context)
+        eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
         validate_eval_member_access(&declaring_class, property.visibility(), context)?;
         validate_eval_readonly_property_write(&declaring_class, &property, context)?;
+        if property.has_set_hook() {
+            if !current_eval_property_hook_is(
+                &declaring_class,
+                property.name(),
+                &property_hook_set_method(property.name()),
+                context,
+            ) {
+                let (hook_class, hook_method) = context
+                    .class_method(
+                        &object_class_name,
+                        &property_hook_set_method(property.name()),
+                    )
+                    .ok_or(EvalStatus::RuntimeFatal)?;
+                let hook_result = eval_dynamic_method_with_values(
+                    &hook_class,
+                    &object_class_name,
+                    &hook_method,
+                    object,
+                    vec![EvaluatedCallArg { name: None, value }],
+                    context,
+                    values,
+                )?;
+                values.release(hook_result)?;
+                return Ok(());
+            }
+        } else if property.has_get_hook() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
     }
     values.property_set(object, property_name, value)
+}
+
+/// Returns true while executing the named hook accessor for one property.
+fn current_eval_property_hook_is(
+    declaring_class: &str,
+    property_name: &str,
+    hook_method: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    let Some(current_class) = context.current_class_scope() else {
+        return false;
+    };
+    if !same_eval_class_name(current_class, declaring_class) {
+        return false;
+    }
+    let Some((_, method)) = context
+        .current_function()
+        .and_then(|function| function.rsplit_once("::"))
+    else {
+        return false;
+    };
+    method.eq_ignore_ascii_case(hook_method)
+        || method.eq_ignore_ascii_case(&property_hook_get_method(property_name))
+        || method.eq_ignore_ascii_case(&property_hook_set_method(property_name))
+}
+
+/// Returns the synthetic get-hook method name for one property.
+fn property_hook_get_method(property_name: &str) -> String {
+    format!("__propget_{property_name}")
+}
+
+/// Returns the synthetic set-hook method name for one property.
+fn property_hook_set_method(property_name: &str) -> String {
+    format!("__propset_{property_name}")
 }
 
 /// Rejects writes to readonly eval-declared properties outside their declaring constructor.

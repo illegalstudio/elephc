@@ -415,12 +415,10 @@ impl Parser {
         if is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        properties.push(self.parse_class_property_decl(
-            visibility,
-            is_static,
-            is_readonly,
-            is_readonly_class,
-        )?);
+        let (property, mut hook_methods) =
+            self.parse_class_property_decl(visibility, is_static, is_readonly, is_readonly_class)?;
+        properties.push(property);
+        methods.append(&mut hook_methods);
         Ok(())
     }
 
@@ -670,7 +668,7 @@ impl Parser {
         is_static: bool,
         is_readonly: bool,
         is_readonly_class: bool,
-    ) -> Result<EvalClassProperty, EvalParseError> {
+    ) -> Result<(EvalClassProperty, Vec<EvalClassMethod>), EvalParseError> {
         if is_static && is_readonly {
             return Err(EvalParseError::UnsupportedConstruct);
         }
@@ -689,14 +687,131 @@ impl Parser {
         } else {
             None
         };
-        self.expect_semicolon()?;
-        Ok(EvalClassProperty::with_visibility_static_and_readonly(
+        let default_is_some = default.is_some();
+        let (has_get_hook, has_set_hook, hook_methods) =
+            self.parse_property_hook_tail(&name, is_static, effective_readonly, default_is_some)?;
+        let property = EvalClassProperty::with_visibility_static_and_readonly(
             name,
             visibility,
             is_static,
             effective_readonly,
             default,
+        )
+        .with_hooks(has_get_hook, has_set_hook);
+        Ok((property, hook_methods))
+    }
+
+    /// Parses `;` or a concrete eval property hook block after one property declaration.
+    pub(super) fn parse_property_hook_tail(
+        &mut self,
+        property_name: &str,
+        is_static: bool,
+        is_readonly: bool,
+        has_default: bool,
+    ) -> Result<(bool, bool, Vec<EvalClassMethod>), EvalParseError> {
+        if self.consume(TokenKind::Semicolon) {
+            return Ok((false, false, Vec::new()));
+        }
+        if !matches!(self.current(), TokenKind::LBrace) {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        if is_static || is_readonly || has_default {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        self.advance();
+        let mut has_get_hook = false;
+        let mut has_set_hook = false;
+        let mut methods = Vec::new();
+        while !self.consume(TokenKind::RBrace) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            let (is_get, method) = self.parse_property_hook_decl(property_name)?;
+            if is_get {
+                if has_get_hook {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                has_get_hook = true;
+            } else {
+                if has_set_hook {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                has_set_hook = true;
+            }
+            methods.push(method);
+        }
+        if !has_get_hook && !has_set_hook {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        Ok((has_get_hook, has_set_hook, methods))
+    }
+
+    /// Parses one concrete `get` or `set` property hook declaration.
+    pub(super) fn parse_property_hook_decl(
+        &mut self,
+        property_name: &str,
+    ) -> Result<(bool, EvalClassMethod), EvalParseError> {
+        if self.consume(TokenKind::Ampersand) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        let TokenKind::Ident(hook_name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let is_get = ident_eq(hook_name, "get");
+        let is_set = ident_eq(hook_name, "set");
+        if !is_get && !is_set {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        self.advance();
+        let params = if is_set {
+            vec![self.parse_property_set_hook_param()?]
+        } else {
+            Vec::new()
+        };
+        let body = match self.current() {
+            TokenKind::Semicolon => return Err(EvalParseError::UnsupportedConstruct),
+            TokenKind::FatArrow if is_get => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                self.expect_semicolon()?;
+                vec![EvalStmt::Return(Some(expr))]
+            }
+            TokenKind::FatArrow => return Err(EvalParseError::UnsupportedConstruct),
+            TokenKind::LBrace => self.parse_block()?,
+            _ => return Err(EvalParseError::UnexpectedToken),
+        };
+        let method_name = if is_get {
+            property_hook_get_method(property_name)
+        } else {
+            property_hook_set_method(property_name)
+        };
+        Ok((
+            is_get,
+            EvalClassMethod::with_visibility_and_modifiers(
+                method_name,
+                EvalVisibility::Public,
+                false,
+                false,
+                false,
+                params,
+                body,
+            ),
         ))
+    }
+
+    /// Parses an optional set-hook parameter list and returns the hook value variable.
+    pub(super) fn parse_property_set_hook_param(&mut self) -> Result<String, EvalParseError> {
+        if !self.consume(TokenKind::LParen) {
+            return Ok("value".to_string());
+        }
+        self.skip_optional_property_type()?;
+        let TokenKind::DollarIdent(name) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let name = name.clone();
+        self.advance();
+        self.expect(TokenKind::RParen)?;
+        Ok(name)
     }
 
     /// Parses `trait Name { ... }` declarations into dynamic trait metadata.
@@ -759,12 +874,10 @@ impl Parser {
         if is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        properties.push(self.parse_class_property_decl(
-            visibility,
-            is_static,
-            is_readonly,
-            false,
-        )?);
+        let (property, mut hook_methods) =
+            self.parse_class_property_decl(visibility, is_static, is_readonly, false)?;
+        properties.push(property);
+        methods.append(&mut hook_methods);
         Ok(())
     }
 
@@ -1652,4 +1765,14 @@ impl Parser {
         self.expect(TokenKind::RBrace)?;
         Ok(statements)
     }
+}
+
+/// Returns the synthetic get-hook method name for one property.
+fn property_hook_get_method(property_name: &str) -> String {
+    format!("__propget_{property_name}")
+}
+
+/// Returns the synthetic set-hook method name for one property.
+fn property_hook_set_method(property_name: &str) -> String {
+    format!("__propset_{property_name}")
 }

@@ -851,6 +851,8 @@ pub struct EvalClassProperty {
     visibility: EvalVisibility,
     is_static: bool,
     is_readonly: bool,
+    has_get_hook: bool,
+    has_set_hook: bool,
     default: Option<EvalExpr>,
 }
 
@@ -892,8 +894,17 @@ impl EvalClassProperty {
             visibility,
             is_static,
             is_readonly,
+            has_get_hook: false,
+            has_set_hook: false,
             default,
         }
+    }
+
+    /// Returns a copy of this property marked with concrete get/set hook metadata.
+    pub const fn with_hooks(mut self, has_get_hook: bool, has_set_hook: bool) -> Self {
+        self.has_get_hook = has_get_hook;
+        self.has_set_hook = has_set_hook;
+        self
     }
 
     /// Returns the PHP-visible property name without `$`.
@@ -914,6 +925,16 @@ impl EvalClassProperty {
     /// Returns whether this property was declared `readonly`.
     pub const fn is_readonly(&self) -> bool {
         self.is_readonly
+    }
+
+    /// Returns whether this property has a concrete get hook accessor.
+    pub const fn has_get_hook(&self) -> bool {
+        self.has_get_hook
+    }
+
+    /// Returns whether this property has a concrete set hook accessor.
+    pub const fn has_set_hook(&self) -> bool {
+        self.has_set_hook
     }
 
     /// Returns the property initializer expression, when one was declared.

@@ -4946,6 +4946,49 @@ readonly class EvalReadonlyClassChild extends EvalReadonlyClassBase {}');
     );
 }
 
+/// Verifies eval-declared property hooks route get/set access through accessors.
+#[test]
+fn test_eval_declared_property_hooks() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalHookName {
+    public string $value {
+        get => $this->value;
+        set { $this->value = $value . "!"; }
+    }
+}
+class EvalHookChild extends EvalHookName {
+    public function shout() { return $this->value . "?"; }
+}
+$box = new EvalHookChild();
+$box->value = "Ada";
+echo $box->value . ":" . $box->shout();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Ada!:Ada!?");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalHookReadOnly {
+    public int $answer {
+        get => 42;
+    }
+}
+$box = new EvalHookReadOnly();
+$box->answer = 7;');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared static properties and static methods work through the bridge.
 #[test]
 fn test_eval_declared_static_members_and_late_static_binding() {
