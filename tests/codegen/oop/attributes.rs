@@ -1040,13 +1040,14 @@ class Controller {
 }
 $ref = new ReflectionMethod('Controller', 'index');
 $attrs = $ref->getAttributes();
+echo $ref->getName() . "/";
 echo count($attrs) . "/";
 echo $attrs[0]->getName() . "/";
 echo $attrs[0]->getArguments()[0] . "/";
 echo $attrs[0]->getArguments()[1];
 "#,
     );
-    assert_eq!(out, "1/Route//home/GET");
+    assert_eq!(out, "index/1/Route//home/GET");
 }
 
 /// Verifies that `ReflectionMethod`'s constructor accepts named arguments
@@ -1062,12 +1063,13 @@ class Controller {
 }
 $ref = new ReflectionMethod(method_name: 'index', class_name: 'Controller');
 $attrs = $ref->getAttributes();
+echo $ref->getName() . "/";
 echo count($attrs) . "/";
 echo $attrs[0]->getName() . "/";
 echo $attrs[0]->getArguments()[0];
 "#,
     );
-    assert_eq!(out, "1/Route//home");
+    assert_eq!(out, "index/1/Route//home");
 }
 
 /// Verifies that `ReflectionProperty::getAttributes()` works when the class
@@ -1083,12 +1085,13 @@ class User {
 }
 $ref = new ReflectionProperty(User::class, 'id');
 $attrs = $ref->getAttributes();
+echo $ref->getName() . "/";
 echo count($attrs) . "/";
 echo $attrs[0]->getName() . "/";
 echo $attrs[0]->getArguments()[0];
 "#,
     );
-    assert_eq!(out, "1/Column/id");
+    assert_eq!(out, "id/1/Column/id");
 }
 
 /// Verifies that `ReflectionProperty`'s constructor accepts static associative
@@ -1104,12 +1107,13 @@ class User {
 }
 $ref = new ReflectionProperty(...["property_name" => "id", "class_name" => "User"]);
 $attrs = $ref->getAttributes();
+echo $ref->getName() . "/";
 echo count($attrs) . "/";
 echo $attrs[0]->getName() . "/";
 echo $attrs[0]->getArguments()[0];
 "#,
     );
-    assert_eq!(out, "1/Column/id");
+    assert_eq!(out, "id/1/Column/id");
 }
 
 /// Verifies that `ReflectionClassConstant` and enum-case reflectors expose

@@ -180,10 +180,12 @@ $class_attrs = (new ReflectionClass("EvalReflectTarget"))->getAttributes();
 echo count($class_attrs); echo ":"; echo (new ReflectionClass("EvalReflectTarget"))->getName(); echo ":";
 echo $class_attrs[0]->getName(); echo ":"; echo $class_attrs[0]->newInstance()->label(); echo ":";
 $method_attrs = (new ReflectionMethod("EvalReflectTarget", "handle"))->getAttributes();
-echo count($method_attrs); echo ":"; echo $method_attrs[0]->getName(); echo ":";
+echo count($method_attrs); echo ":"; echo (new ReflectionMethod("EvalReflectTarget", "handle"))->getName(); echo ":";
+echo $method_attrs[0]->getName(); echo ":";
 echo $method_attrs[0]->getArguments()[0]; echo ":"; echo $method_attrs[0]->newInstance()->label(); echo ":";
 $property_attrs = (new ReflectionProperty("EvalReflectTarget", "id"))->getAttributes();
-echo count($property_attrs); echo ":"; echo $property_attrs[0]->getName(); echo ":";
+echo count($property_attrs); echo ":"; echo (new ReflectionProperty("EvalReflectTarget", "id"))->getName(); echo ":";
+echo $property_attrs[0]->getName(); echo ":";
 echo $property_attrs[0]->getArguments()[0]; echo ":"; echo $property_attrs[0]->newInstance()->label();
 return true;"#,
     )
@@ -195,7 +197,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "1:EvalReflectTarget:EvalMarker:class:1:EvalMarker:method:method:1:EvalMarker:property:property"
+        "1:EvalReflectTarget:EvalMarker:class:1:handle:EvalMarker:method:method:1:id:EvalMarker:property:property"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
