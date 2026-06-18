@@ -95,6 +95,13 @@ pub trait RuntimeValueOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Materializes a synthetic `ReflectionAttribute` object through generated private-layout code.
+    fn reflection_attribute_new(
+        &mut self,
+        name: &str,
+        args: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Creates a named runtime object without constructor arguments.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus>;
 

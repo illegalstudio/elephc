@@ -123,8 +123,11 @@ pub(in crate::interpreter) fn eval_class_attribute_metadata_result(
             eval_class_attribute_names_result(attributes, values)
         }
         ("class_get_attributes", [class_name]) => {
-            let _ = eval_class_metadata_name(*class_name, values)?;
-            values.array_new(0)
+            let class_name = eval_class_metadata_name(*class_name, values)?;
+            let Some(attributes) = eval_class_like_attributes(context, &class_name) else {
+                return values.array_new(0);
+            };
+            eval_class_get_attributes_result(attributes, values)
         }
         ("class_attribute_args", [class_name, attribute_name]) => {
             let class_name = eval_class_metadata_name(*class_name, values)?;
@@ -174,6 +177,25 @@ fn eval_class_attribute_names_result(
         let key = values.int(index as i64)?;
         let value = values.string(attribute.name())?;
         result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Builds the indexed `ReflectionAttribute` array returned by `class_get_attributes()`.
+fn eval_class_get_attributes_result(
+    attributes: &[EvalAttribute],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(attributes.len())?;
+    for (index, attribute) in attributes.iter().enumerate() {
+        let Some(args) = attribute.args() else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        let key = values.int(index as i64)?;
+        let args = eval_class_attribute_args_result(args, values)?;
+        let attribute = values.reflection_attribute_new(attribute.name(), args)?;
+        values.release(args)?;
+        result = values.array_set(result, key, attribute)?;
     }
     Ok(result)
 }

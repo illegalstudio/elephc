@@ -5296,7 +5296,13 @@ echo ($args[2] ? "T" : "F") . ":" . (is_null($args[3]) ? "N" : "bad") . ":";
 $tag = class_attribute_args("evalattrmeta", "Tag");
 echo $tag[0] . ":";
 $attrs = class_get_attributes("EvalAttrMeta");
-echo count($attrs);');
+echo count($attrs) . ":" . $attrs[0]->getName() . ":";
+$attrArgs = $attrs[0]->getArguments();
+echo count($attrArgs) . ":" . $attrArgs[0] . ":" . $attrArgs[1] . ":";
+echo ($attrArgs[2] ? "T" : "F") . ":" . (is_null($attrArgs[3]) ? "N" : "bad") . ":";
+$tagArgs = $attrs[1]->getArguments();
+echo $attrs[1]->getName() . ":" . $tagArgs[0] . ":";
+echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
 "#,
     );
     assert!(
@@ -5304,7 +5310,10 @@ echo count($attrs);');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "3:Route:Tag:Tag:4:/home:-1:T:N:first:0");
+    assert_eq!(
+        out.stdout,
+        "3:Route:Tag:Tag:4:/home:-1:T:N:first:3:Route:4:/home:-1:T:N:Tag:first:N"
+    );
 }
 
 /// Verifies eval interface and trait constants work through the bridge.

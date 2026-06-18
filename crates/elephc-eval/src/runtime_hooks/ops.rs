@@ -167,6 +167,17 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         result
     }
 
+    /// Materializes a populated synthetic `ReflectionAttribute` object for eval metadata.
+    fn reflection_attribute_new(
+        &mut self,
+        name: &str,
+        args: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_reflection_attribute_new(name.as_ptr(), name.len() as u64, args.as_ptr())
+        })
+    }
+
     /// Creates a boxed Mixed object through the generated dynamic class-name wrapper.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         let object = Self::handle(unsafe {
