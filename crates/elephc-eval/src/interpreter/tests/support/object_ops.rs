@@ -137,6 +137,12 @@ impl FakeOps {
             (FakeValue::Object(properties), "getmodifiers") if args.is_empty() => {
                 Self::object_property(&properties, "__modifiers").map_or_else(|| self.int(0), Ok)
             }
+            (FakeValue::Object(properties), "hasmethod") if args.len() == 1 => {
+                self.object_string_array_contains(&properties, "__method_names", args[0], true)
+            }
+            (FakeValue::Object(properties), "hasproperty") if args.len() == 1 => {
+                self.object_string_array_contains(&properties, "__property_names", args[0], false)
+            }
             (FakeValue::Object(properties), "getinterfacenames") if args.is_empty() => {
                 Self::object_property(&properties, "__interface_names")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
@@ -262,6 +268,8 @@ impl FakeOps {
         attrs: RuntimeCellHandle,
         interface_names: RuntimeCellHandle,
         trait_names: RuntimeCellHandle,
+        method_names: RuntimeCellHandle,
+        property_names: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -299,11 +307,42 @@ impl FakeOps {
             properties.push(("__in_namespace".to_string(), in_namespace));
             properties.push(("__interface_names".to_string(), interface_names));
             properties.push(("__trait_names".to_string(), trait_names));
+            properties.push(("__method_names".to_string(), method_names));
+            properties.push(("__property_names".to_string(), property_names));
         }
         let object = self.alloc(FakeValue::Object(properties));
         self.object_classes
             .insert(object.as_ptr() as usize, class_name.to_string());
         Ok(object)
+    }
+    /// Checks whether a private fake object array property contains one string.
+    fn object_string_array_contains(
+        &mut self,
+        properties: &[(String, RuntimeCellHandle)],
+        property: &str,
+        needle: RuntimeCellHandle,
+        case_insensitive: bool,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let FakeValue::String(mut needle) = self.get(needle) else {
+            return Err(EvalStatus::UnsupportedConstruct);
+        };
+        if case_insensitive {
+            needle = needle.to_ascii_lowercase();
+        }
+        let Some(array) = Self::object_property(properties, property) else {
+            return self.bool_value(false);
+        };
+        let contains = match self.get(array) {
+            FakeValue::Array(elements) => elements.iter().any(|element| match self.get(*element) {
+                FakeValue::String(value) if case_insensitive => {
+                    value.to_ascii_lowercase() == needle
+                }
+                FakeValue::String(value) => value == needle,
+                _ => false,
+            }),
+            _ => false,
+        };
+        self.bool_value(contains)
     }
     /// Creates one fake object for eval `new` unit tests.
     pub(super) fn runtime_new_object(

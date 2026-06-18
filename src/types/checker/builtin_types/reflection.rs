@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
+use crate::names::Name;
 use crate::parser::ast::{
     ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
 };
@@ -411,6 +412,18 @@ fn builtin_reflection_class() -> FlattenedClass {
                 Some(string_array_type()),
                 empty_array(),
             ),
+            builtin_property(
+                "__method_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__property_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
@@ -431,6 +444,8 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_bool_method("isTrait", "__is_trait"),
             builtin_reflection_class_bool_method("isEnum", "__is_enum"),
             builtin_reflection_class_int_method("getModifiers", "__modifiers"),
+            builtin_reflection_class_has_name_method("hasMethod", "__method_names", true),
+            builtin_reflection_class_has_name_method("hasProperty", "__property_names", false),
             builtin_reflection_owner_get_attributes_method(),
         ],
         attributes: Vec::new(),
@@ -514,6 +529,56 @@ fn builtin_reflection_class_int_method(method_name: &str, property: &str) -> Cla
             ))),
             dummy_span,
         )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass` membership probe backed by a private string array.
+fn builtin_reflection_class_has_name_method(
+    method_name: &str,
+    property: &str,
+    case_insensitive: bool,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name_arg = Expr::new(ExprKind::Variable("name".to_string()), dummy_span);
+    let needle = if case_insensitive {
+        Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("strtolower"),
+                args: vec![name_arg],
+            },
+            dummy_span,
+        )
+    } else {
+        name_arg
+    };
+    let haystack = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+            property: property.to_string(),
+        },
+        dummy_span,
+    );
+    let contains = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("in_array"),
+            args: vec![needle, haystack],
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Int),
+        body: vec![Stmt::new(StmtKind::Return(Some(contains)), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
     }
@@ -724,7 +789,15 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionClass" {
-                for method_name in ["isfinal", "isabstract"] {
+                for method_name in [
+                    "isfinal",
+                    "isabstract",
+                    "isinterface",
+                    "istrait",
+                    "isenum",
+                    "hasmethod",
+                    "hasproperty",
+                ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }

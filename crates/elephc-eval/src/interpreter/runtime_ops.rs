@@ -19,6 +19,16 @@ pub trait RuntimeValueOps {
     /// Creates a runtime indexed-array cell with room for at least `capacity` elements.
     fn array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Creates a runtime indexed-array cell specialized for direct string payload slots.
+    fn string_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Appends one string payload to a runtime string-array cell.
+    fn string_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        value: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Creates a runtime associative-array cell with room for at least `capacity` elements.
     fn assoc_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -110,6 +120,8 @@ pub trait RuntimeValueOps {
         attrs: RuntimeCellHandle,
         interface_names: RuntimeCellHandle,
         trait_names: RuntimeCellHandle,
+        method_names: RuntimeCellHandle,
+        property_names: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus>;

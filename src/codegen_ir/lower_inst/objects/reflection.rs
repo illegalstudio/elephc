@@ -16,6 +16,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
+use crate::parser::ast::Visibility;
 use crate::types::AttrArgValue;
 
 use super::super::super::context::FunctionContext;
@@ -27,6 +28,8 @@ struct ReflectionOwnerMetadata {
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
     interface_names: Vec<String>,
     trait_names: Vec<String>,
+    method_names: Vec<String>,
+    property_names: Vec<String>,
     is_final: bool,
     is_abstract: bool,
     is_interface: bool,
@@ -86,6 +89,16 @@ pub(super) fn lower_reflection_owner_new(
                 ctx,
                 "__trait_names",
                 &metadata.trait_names,
+            )?;
+            emit_reflection_string_array_property_by_name(
+                ctx,
+                "__method_names",
+                &metadata.method_names,
+            )?;
+            emit_reflection_string_array_property_by_name(
+                ctx,
+                "__property_names",
+                &metadata.property_names,
             )?;
         }
     }
@@ -162,6 +175,8 @@ fn reflection_class_metadata(
             attr_args: info.attribute_args.clone(),
             interface_names: info.interfaces.clone(),
             trait_names: info.used_traits.clone(),
+            method_names: reflection_class_method_names(ctx, class_name),
+            property_names: reflection_class_property_names(ctx, class_name, info),
             is_final: info.is_final,
             is_abstract: info.is_abstract,
             is_interface: false,
@@ -180,6 +195,8 @@ fn reflection_class_metadata(
             interface_name,
             reflection_interface_parent_names(ctx, interface_name),
             Vec::new(),
+            reflection_interface_method_names(ctx, interface_name),
+            reflection_interface_property_names(ctx, interface_name),
             true,
             false,
             false,
@@ -196,6 +213,8 @@ fn reflection_class_metadata(
             trait_name,
             Vec::new(),
             trait_names,
+            reflection_trait_method_names(ctx, trait_name),
+            reflection_trait_property_names(ctx, trait_name),
             false,
             true,
             false,
@@ -226,6 +245,8 @@ fn reflection_method_metadata(
                 attr_args: info.method_attribute_args.get(&method_key)?.clone(),
                 interface_names: Vec::new(),
                 trait_names: Vec::new(),
+                method_names: Vec::new(),
+                property_names: Vec::new(),
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -258,6 +279,8 @@ fn reflection_property_metadata(
                 attr_args: info.property_attribute_args.get(&property_name)?.clone(),
                 interface_names: Vec::new(),
                 trait_names: Vec::new(),
+                method_names: Vec::new(),
+                property_names: Vec::new(),
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -291,13 +314,15 @@ fn reflection_class_constant_metadata(
             attr_args: case.attribute_args.clone(),
             interface_names: Vec::new(),
             trait_names: Vec::new(),
+            method_names: Vec::new(),
+            property_names: Vec::new(),
             is_final: false,
             is_abstract: false,
-                is_interface: false,
-                is_trait: false,
-                is_enum: false,
-                modifiers: 0,
-            });
+            is_interface: false,
+            is_trait: false,
+            is_enum: false,
+            modifiers: 0,
+        });
     }
     Ok(
         resolve_reflection_class_constant(ctx, &reflected_class, &constant_name)
@@ -318,6 +343,8 @@ fn reflection_class_constant_metadata(
                     attr_args,
                     interface_names: Vec::new(),
                     trait_names: Vec::new(),
+                    method_names: Vec::new(),
+                    property_names: Vec::new(),
                     is_final: false,
                     is_abstract: false,
                     is_interface: false,
@@ -352,6 +379,8 @@ fn reflection_enum_case_metadata(
                 attr_args: case.attribute_args.clone(),
                 interface_names: Vec::new(),
                 trait_names: Vec::new(),
+                method_names: Vec::new(),
+                property_names: Vec::new(),
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -442,11 +471,160 @@ fn collect_reflection_interface_parent_names(
     }
 }
 
+/// Returns PHP case-insensitive method names visible to `ReflectionClass::hasMethod()`.
+fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut current = Some(class_name.to_string());
+    while let Some(current_name) = current {
+        let Some((resolved_name, info)) = resolve_reflection_class(ctx, &current_name) else {
+            break;
+        };
+        push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
+        push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
+        current = info.parent.clone();
+        if current.as_deref() == Some(resolved_name) {
+            break;
+        }
+    }
+    names
+}
+
+/// Returns PHP case-sensitive property names visible to `ReflectionClass::hasProperty()`.
+fn reflection_class_property_names(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    info: &crate::types::ClassInfo,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if is_reflection_enum(ctx, class_name) {
+        push_unique_property_name("name", &mut names, &mut seen);
+    }
+    for (name, _) in &info.properties {
+        if reflection_property_visible_from_class(info, class_name, name, false) {
+            push_unique_property_name(name, &mut names, &mut seen);
+        }
+    }
+    for (name, _) in &info.static_properties {
+        if reflection_property_visible_from_class(info, class_name, name, true) {
+            push_unique_property_name(name, &mut names, &mut seen);
+        }
+    }
+    names
+}
+
+/// Returns true when a property should be visible for `ReflectionClass::hasProperty()`.
+fn reflection_property_visible_from_class(
+    info: &crate::types::ClassInfo,
+    reflected_class: &str,
+    property_name: &str,
+    is_static: bool,
+) -> bool {
+    let visibility = if is_static {
+        info.static_property_visibilities.get(property_name)
+    } else {
+        info.property_visibilities.get(property_name)
+    };
+    if visibility != Some(&Visibility::Private) {
+        return true;
+    }
+    let declaring_class = if is_static {
+        info.static_property_declaring_classes.get(property_name)
+    } else {
+        info.property_declaring_classes.get(property_name)
+    };
+    declaring_class
+        .map(|declaring_class| php_symbol_key(declaring_class) == php_symbol_key(reflected_class))
+        .unwrap_or(false)
+}
+
+/// Returns PHP case-insensitive method names declared by an interface and its parents.
+fn reflection_interface_method_names(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+) -> Vec<String> {
+    let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
+        return Vec::new();
+    };
+    let Some(info) = ctx.module.interface_infos.get(interface_name) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
+    names
+}
+
+/// Returns PHP case-sensitive property names declared by an interface and its parents.
+fn reflection_interface_property_names(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+) -> Vec<String> {
+    let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
+        return Vec::new();
+    };
+    let Some(info) = ctx.module.interface_infos.get(interface_name) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for property in info.properties.keys() {
+        push_unique_property_name(property, &mut names, &mut seen);
+    }
+    names
+}
+
+/// Returns PHP case-insensitive direct method names declared by a trait.
+fn reflection_trait_method_names(ctx: &FunctionContext<'_>, trait_name: &str) -> Vec<String> {
+    ctx.module
+        .declared_trait_method_names
+        .get(trait_name)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Returns PHP case-sensitive direct property names declared by a trait.
+fn reflection_trait_property_names(ctx: &FunctionContext<'_>, trait_name: &str) -> Vec<String> {
+    ctx.module
+        .declared_trait_property_names
+        .get(trait_name)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Appends lower-case method names while preserving first-seen order.
+fn push_unique_method_names<'a>(
+    method_names: impl Iterator<Item = &'a String>,
+    names: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    for method_name in method_names {
+        let key = php_symbol_key(method_name);
+        if seen.insert(key.clone()) {
+            names.push(key);
+        }
+    }
+}
+
+/// Appends one case-sensitive property name while preserving first-seen order.
+fn push_unique_property_name(
+    property_name: &str,
+    names: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if seen.insert(property_name.to_string()) {
+        names.push(property_name.to_string());
+    }
+}
+
 /// Builds empty ReflectionClass metadata for class-like symbols without stored attributes.
 fn class_like_reflection_metadata(
     class_like_name: &str,
     interface_names: Vec<String>,
     trait_names: Vec<String>,
+    method_names: Vec<String>,
+    property_names: Vec<String>,
     is_interface: bool,
     is_trait: bool,
     is_enum: bool,
@@ -457,6 +635,8 @@ fn class_like_reflection_metadata(
         attr_args: Vec::new(),
         interface_names,
         trait_names,
+        method_names,
+        property_names,
         is_final: false,
         is_abstract: false,
         is_interface,
@@ -502,6 +682,8 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         attr_args: Vec::new(),
         interface_names: Vec::new(),
         trait_names: Vec::new(),
+        method_names: Vec::new(),
+        property_names: Vec::new(),
         is_final: false,
         is_abstract: false,
         is_interface: false,
@@ -695,7 +877,7 @@ fn emit_reflection_string_array_property_by_name(
     Ok(())
 }
 
-/// Allocates an indexed string array containing ReflectionClass relation names.
+/// Allocates an indexed string array containing ReflectionClass metadata names.
 fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -715,34 +897,34 @@ fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String])
     Ok(())
 }
 
-/// Appends ReflectionClass relation names to the current ARM64 result array.
+/// Appends ReflectionClass metadata names to the current ARM64 result array.
 fn emit_reflection_string_array_fill_aarch64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the relation-name array while appending strings
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the metadata-name array while appending strings
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the relation-name array for this append
+        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "x1", &label);
         abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown relation-name array
+        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final relation-name array as the result
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final metadata-name array as the result
 }
 
-/// Appends ReflectionClass relation names to the current x86_64 result array.
+/// Appends ReflectionClass metadata names to the current x86_64 result array.
 fn emit_reflection_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("push rax");                                        // park the relation-name array while appending strings
+    ctx.emitter.instruction("push rax");                                        // park the metadata-name array while appending strings
     ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across append helper calls
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the relation-name array for this append
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "rsi", &label);
         abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown relation-name array
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown metadata-name array
     }
     ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
-    ctx.emitter.instruction("pop rax");                                         // restore the final relation-name array as the result
+    ctx.emitter.instruction("pop rax");                                         // restore the final metadata-name array as the result
 }
 
 /// Stores one boolean property on the current ReflectionClass object result.

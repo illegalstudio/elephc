@@ -26,6 +26,8 @@ struct EvalReflectionClassMetadata {
     modifiers: u64,
     interface_names: Vec<String>,
     trait_names: Vec<String>,
+    method_names: Vec<String>,
+    property_names: Vec<String>,
 }
 
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.
@@ -82,6 +84,8 @@ fn eval_reflection_class_new(
         &metadata.attributes,
         &metadata.interface_names,
         &metadata.trait_names,
+        &metadata.method_names,
+        &metadata.property_names,
         metadata.flags,
         metadata.modifiers,
         context,
@@ -111,6 +115,8 @@ fn eval_reflection_method_new(
         EVAL_REFLECTION_OWNER_METHOD,
         &method_name,
         &attributes,
+        &[],
+        &[],
         &[],
         &[],
         0,
@@ -144,6 +150,8 @@ fn eval_reflection_property_new(
         &attributes,
         &[],
         &[],
+        &[],
+        &[],
         0,
         0,
         context,
@@ -174,6 +182,8 @@ fn eval_reflection_class_constant_new(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
         &constant_name,
         &attributes,
+        &[],
+        &[],
         &[],
         &[],
         0,
@@ -217,6 +227,8 @@ fn eval_reflection_enum_case_new(
         &attributes,
         &[],
         &[],
+        &[],
+        &[],
         0,
         0,
         context,
@@ -232,6 +244,8 @@ fn eval_reflection_owner_object(
     attributes: &[EvalAttribute],
     interface_names: &[String],
     trait_names: &[String],
+    method_names: &[String],
+    property_names: &[String],
     flags: u64,
     modifiers: u64,
     context: &mut ElephcEvalContext,
@@ -240,32 +254,35 @@ fn eval_reflection_owner_object(
     let attrs = eval_reflection_attribute_array_result(attributes, context, values)?;
     let interface_names = eval_reflection_string_array_result(interface_names, values)?;
     let trait_names = eval_reflection_string_array_result(trait_names, values)?;
+    let method_names = eval_reflection_string_array_result(method_names, values)?;
+    let property_names = eval_reflection_string_array_result(property_names, values)?;
     let object = values.reflection_owner_new(
         owner_kind,
         reflected_name,
         attrs,
         interface_names,
         trait_names,
+        method_names,
+        property_names,
         flags,
         modifiers,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
     values.release(trait_names)?;
+    values.release(method_names)?;
+    values.release(property_names)?;
     Ok(object)
 }
 
-/// Builds an indexed PHP string array for ReflectionClass relation metadata.
+/// Builds an indexed PHP string array for ReflectionClass metadata names.
 fn eval_reflection_string_array_result(
     names: &[String],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(names.len())?;
-    for (index, name) in names.iter().enumerate() {
-        let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let key = values.int(index)?;
-        let value = values.string(name)?;
-        result = values.array_set(result, key, value)?;
+    let mut result = values.string_array_new(names.len())?;
+    for name in names {
+        result = values.string_array_push(result, name)?;
     }
     Ok(result)
 }
@@ -298,6 +315,8 @@ fn eval_reflection_class_like_attributes(
             attributes: class.attributes().to_vec(),
             interface_names: context.class_interface_names(class.name()),
             trait_names: context.class_trait_names(class.name()),
+            method_names: context.class_method_names(class.name()),
+            property_names: context.class_property_names(class.name()),
             flags,
             modifiers,
         });
@@ -308,6 +327,8 @@ fn eval_reflection_class_like_attributes(
             attributes: interface.attributes().to_vec(),
             interface_names: context.interface_parent_names(interface.name()),
             trait_names: Vec::new(),
+            method_names: context.interface_method_names(interface.name()),
+            property_names: context.interface_property_names(interface.name()),
             flags: EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
             modifiers: 0,
         });
@@ -318,6 +339,8 @@ fn eval_reflection_class_like_attributes(
             attributes: trait_decl.attributes().to_vec(),
             interface_names: Vec::new(),
             trait_names: Vec::new(),
+            method_names: context.trait_method_names(trait_decl.name()),
+            property_names: context.trait_property_names(trait_decl.name()),
             flags: EVAL_REFLECTION_CLASS_FLAG_TRAIT,
             modifiers: 0,
         });
@@ -329,6 +352,8 @@ fn eval_reflection_class_like_attributes(
             attributes: enum_decl.attributes().to_vec(),
             interface_names: context.class_interface_names(enum_decl.name()),
             trait_names: Vec::new(),
+            method_names: context.class_method_names(enum_decl.name()),
+            property_names: context.class_property_names(enum_decl.name()),
             flags: EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM,
             modifiers: 32,
         })

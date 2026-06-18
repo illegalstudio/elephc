@@ -1014,6 +1014,74 @@ echo ReflectionClass::IS_READONLY;
     assert_eq!(out, "64:32:65536:65568:32:0:0:16:32:64:65536");
 }
 
+/// Verifies that `ReflectionClass::hasMethod()` and `hasProperty()` report
+/// PHP-visible members for static class-like metadata.
+#[test]
+fn test_reflection_class_reports_member_existence() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticMemberParent {
+    private function hiddenParent() {}
+    protected static function parentStatic() {}
+    private $hiddenProp;
+    protected static $parentStaticProp;
+}
+class StaticMemberChild extends StaticMemberParent {
+    public function ChildMethod() {}
+    public $childProp;
+}
+interface StaticMemberIfaceParent {
+    public function parentRequirement();
+}
+interface StaticMemberIface extends StaticMemberIfaceParent {
+    public function childRequirement();
+    public string $hook { get; }
+}
+trait StaticMemberTrait {
+    private function traitHidden() {}
+    public $traitProp;
+}
+enum StaticMemberPureEnum {
+    case Ready;
+    public function label() { return "ok"; }
+}
+enum StaticMemberBackedEnum: string {
+    case Ready = "ready";
+}
+$child = new ReflectionClass(StaticMemberChild::class);
+echo $child->hasMethod("childmethod") ? "M" : "m";
+echo $child->hasMethod("HIDDENPARENT") ? "P" : "p";
+echo $child->hasMethod("parentStatic") ? "S" : "s";
+echo $child->hasMethod("missing") ? "X" : "x";
+echo ":";
+echo $child->hasProperty("childProp") ? "C" : "c";
+echo $child->hasProperty("hiddenProp") ? "H" : "h";
+echo $child->hasProperty("parentStaticProp") ? "T" : "t";
+echo $child->hasProperty("childprop") ? "W" : "w";
+echo ":";
+$iface = new ReflectionClass(StaticMemberIface::class);
+echo $iface->hasMethod("parentrequirement") ? "I" : "i";
+echo $iface->hasMethod("childRequirement") ? "J" : "j";
+echo $iface->hasProperty("hook") ? "K" : "k";
+echo ":";
+$trait = new ReflectionClass(StaticMemberTrait::class);
+echo $trait->hasMethod("traithidden") ? "R" : "r";
+echo $trait->hasProperty("traitProp") ? "U" : "u";
+echo ":";
+$pure = new ReflectionClass(StaticMemberPureEnum::class);
+echo $pure->hasMethod("cases") ? "E" : "e";
+echo $pure->hasMethod("label") ? "L" : "l";
+echo $pure->hasProperty("name") ? "N" : "n";
+echo $pure->hasProperty("value") ? "V" : "v";
+echo ":";
+$backed = new ReflectionClass(StaticMemberBackedEnum::class);
+echo $backed->hasMethod("tryfrom") ? "B" : "b";
+echo $backed->hasProperty("value") ? "Y" : "y";
+"#,
+    );
+    assert_eq!(out, "MPSx:ChTw:IJK:RU:ELNv:BY");
+}
+
 /// Verifies that `ReflectionClass` reports implemented interface and used trait names.
 #[test]
 fn test_reflection_class_reports_relation_names() {

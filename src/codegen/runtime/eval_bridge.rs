@@ -344,6 +344,53 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the array-new wrapper frame
     emitter.instruction("ret");                                                 // return the boxed array Mixed cell to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_string_array_new");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for string-array allocation and boxing
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across runtime calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("mov x9, #4");                                          // minimum indexed-array capacity for eval metadata lists
+    emitter.instruction("cmp x0, x9");                                          // compare requested capacity with the minimum capacity
+    emitter.instruction("csel x0, x0, x9, hs");                                 // use max(requested, 4) as the runtime allocation capacity
+    emitter.instruction("mov x1, #16");                                         // direct string arrays store pointer/length pairs
+    emitter.instruction("bl __rt_array_new");                                   // allocate indexed-array storage for direct string slots
+    emitter.instruction("str x0, [sp, #0]");                                    // save the owned string-array pointer while boxing it
+    emitter.instruction("mov x0, #24");                                         // Mixed cells store tag plus two payload words
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a boxed Mixed cell without retaining the new array
+    emitter.instruction("mov x9, #5");                                          // low byte 5 = mixed cell heap kind
+    emitter.instruction("str x9, [x0, #-8]");                                   // install the mixed-cell heap kind in the uniform header
+    emitter.instruction("mov x10, #4");                                         // runtime tag 4 = indexed array
+    emitter.instruction("str x10, [x0]");                                       // store the indexed-array tag in the Mixed cell
+    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the owned direct-string array pointer
+    emitter.instruction("str x11, [x0, #8]");                                   // store the string-array pointer as the Mixed low payload word
+    emitter.instruction("str xzr, [x0, #16]");                                  // indexed arrays do not use the high payload word
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the string-array-new wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed direct-string array Mixed cell to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_string_array_push");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame while appending one metadata string
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across runtime calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the boxed string-array owner
+    emitter.instruction("stp x1, x2, [sp, #8]");                                // save the incoming string pointer and length
+    emitter.instruction("cbz x0, __elephc_eval_value_string_array_push_fail");  // reject malformed null string-array handles
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the indexed-array tag and payload pointer
+    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction("b.ne __elephc_eval_value_string_array_push_fail");     // reject non-array metadata containers
+    emitter.instruction("mov x0, x1");                                          // pass the unboxed array payload to the string append helper
+    emitter.instruction("ldp x1, x2, [sp, #8]");                                // reload the string payload to append
+    emitter.instruction("bl __rt_array_push_str");                              // persist and append the string, returning the updated array payload
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the boxed string-array owner
+    emitter.instruction("str x0, [x9, #8]");                                    // update the boxed payload in case the array grew
+    emitter.instruction("mov x0, x9");                                          // return the boxed string-array owner to Rust
+    emitter.instruction("b __elephc_eval_value_string_array_push_done");        // skip the malformed-input null result
+    emitter.label("__elephc_eval_value_string_array_push_fail");
+    emitter.instruction("mov x0, xzr");                                         // report a null pointer so Rust converts it to RuntimeFatal
+    emitter.label("__elephc_eval_value_string_array_push_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the string-array-push wrapper frame
+    emitter.instruction("ret");                                                 // return the updated boxed string-array handle to Rust
+
     label_c_global(emitter, "__elephc_eval_value_assoc_new");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for hash allocation and boxing
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across runtime calls
@@ -1687,6 +1734,55 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the array-new wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed array Mixed cell to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_string_array_new");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve local slots for the string-array pointer
+    emitter.instruction("cmp rdi, 4");                                          // compare requested capacity with the minimum capacity
+    emitter.instruction("mov r10, 4");                                          // minimum indexed-array capacity for eval metadata lists
+    emitter.instruction("cmovb rdi, r10");                                      // use max(requested, 4) as the runtime allocation capacity
+    emitter.instruction("mov rsi, 16");                                         // direct string arrays store pointer/length pairs
+    emitter.instruction("call __rt_array_new");                                 // allocate indexed-array storage for direct string slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned direct-string array pointer while boxing it
+    emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
+    emitter.instruction("call __rt_heap_alloc");                                // allocate a boxed Mixed cell without retaining the new array
+    emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the mixed-cell heap kind with the x86_64 heap marker
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
+    emitter.instruction("mov QWORD PTR [rax], 4");                              // runtime tag 4 = indexed array
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned direct-string array pointer
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the string-array pointer as the Mixed low payload word
+    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // indexed arrays do not use the high payload word
+    emitter.instruction("add rsp, 16");                                         // release the string-array-new wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed direct-string array Mixed cell to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_string_array_push");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve local slots for boxed owner and incoming string payload
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed string-array owner
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the incoming string pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the incoming string length
+    emitter.instruction("test rdi, rdi");                                       // check whether the boxed string-array handle is null
+    emitter.instruction("jz __elephc_eval_value_string_array_push_fail_x86");   // reject malformed null string-array handles
+    emitter.instruction("mov rax, rdi");                                        // move the boxed owner into mixed_unbox's input register
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the indexed-array tag and payload pointer
+    emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
+    emitter.instruction("jne __elephc_eval_value_string_array_push_fail_x86");  // reject non-array metadata containers
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the string pointer to append
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the string length to append
+    emitter.instruction("call __rt_array_push_str");                            // persist and append the string, returning the updated array payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the boxed string-array owner
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // update the boxed payload in case the array grew
+    emitter.instruction("mov rax, r10");                                        // return the boxed string-array owner to Rust
+    emitter.instruction("jmp __elephc_eval_value_string_array_push_done_x86");  // skip the malformed-input null result
+    emitter.label("__elephc_eval_value_string_array_push_fail_x86");
+    emitter.instruction("xor eax, eax");                                        // report a null pointer so Rust converts it to RuntimeFatal
+    emitter.label("__elephc_eval_value_string_array_push_done_x86");
+    emitter.instruction("add rsp, 32");                                         // release the string-array-push wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the updated boxed string-array handle to Rust
 
     label_c_global(emitter, "__elephc_eval_value_assoc_new");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls

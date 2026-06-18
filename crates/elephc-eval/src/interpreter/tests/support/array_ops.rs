@@ -17,6 +17,27 @@ impl FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(self.alloc(FakeValue::Array(Vec::with_capacity(capacity))))
     }
+    /// Creates a fake direct-string indexed array cell.
+    pub(super) fn runtime_string_array_new(
+        &mut self,
+        capacity: usize,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_array_new(capacity)
+    }
+    /// Appends one string to a fake direct-string indexed array.
+    pub(super) fn runtime_string_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        value: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let value = self.runtime_string(value)?;
+        let id = array.as_ptr() as usize;
+        let Some(FakeValue::Array(elements)) = self.values.get_mut(&id) else {
+            return Err(EvalStatus::UnsupportedConstruct);
+        };
+        elements.push(value);
+        Ok(array)
+    }
     /// Creates a fake associative array cell.
     pub(super) fn runtime_assoc_new(
         &mut self,

@@ -16,6 +16,12 @@ use crate::value::RuntimeCell;
 #[cfg(not(test))]
 unsafe extern "C" {
     pub(super) fn __elephc_eval_value_array_new(capacity: u64) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_string_array_new(capacity: u64) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_string_array_push(
+        array: *mut RuntimeCell,
+        value_ptr: *const u8,
+        value_len: u64,
+    ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_assoc_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_array_get(
         array: *mut RuntimeCell,
@@ -75,6 +81,8 @@ unsafe extern "C" {
         attrs: *mut RuntimeCell,
         interface_names: *mut RuntimeCell,
         trait_names: *mut RuntimeCell,
+        method_names: *mut RuntimeCell,
+        property_names: *mut RuntimeCell,
         flags: u64,
         modifiers: u64,
     ) -> *mut RuntimeCell;

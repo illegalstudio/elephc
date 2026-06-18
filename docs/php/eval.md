@@ -164,6 +164,9 @@ traits, and enums. `ReflectionClass::getModifiers()` returns PHP's
 `ReflectionClass::getInterfaceNames()` returns implemented interfaces for eval
 classes and parent interfaces for eval interfaces, while
 `ReflectionClass::getTraitNames()` returns traits used directly by eval classes.
+`ReflectionClass::hasMethod()` and `ReflectionClass::hasProperty()` report
+method and property membership for eval classes, interfaces, traits, and enums;
+method lookup is case-insensitive, while property lookup is case-sensitive.
 `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant
@@ -325,8 +328,8 @@ broader parameter/return ABI shapes are still outside that bridge.
 
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
-attribute/getName slice and broader generated/AOT method bridge signatures
-beyond the current public non-by-reference fixed scalar/Mixed slice.
+ReflectionClass/attribute slice and broader generated/AOT method bridge
+signatures beyond the current public non-by-reference fixed scalar/Mixed slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

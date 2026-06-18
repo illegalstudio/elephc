@@ -18,6 +18,7 @@ use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
     EvalAttribute, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum,
     EvalFunction, EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalTrait,
+    EvalVisibility,
 };
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
@@ -757,6 +758,96 @@ impl ElephcEvalContext {
         })
     }
 
+    /// Returns PHP case-insensitive method names visible to `ReflectionClass::hasMethod()`.
+    pub fn class_method_names(&self, class_name: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        for class in self.class_chain(class_name).into_iter().rev() {
+            for method in class.methods() {
+                push_unique_method_name(method.name(), &mut names, &mut seen);
+            }
+            if let Some(enum_decl) = self.enum_decl(class.name()) {
+                push_unique_method_name("cases", &mut names, &mut seen);
+                if enum_decl.backing_type().is_some() {
+                    push_unique_method_name("from", &mut names, &mut seen);
+                    push_unique_method_name("tryFrom", &mut names, &mut seen);
+                }
+            }
+        }
+        names
+    }
+
+    /// Returns PHP case-sensitive property names visible to `ReflectionClass::hasProperty()`.
+    pub fn class_property_names(&self, class_name: &str) -> Vec<String> {
+        let reflected_name = self
+            .resolve_class_name(class_name)
+            .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        if let Some(enum_decl) = self.enum_decl(&reflected_name) {
+            push_unique_property_name("name", &mut names, &mut seen);
+            if enum_decl.backing_type().is_some() {
+                push_unique_property_name("value", &mut names, &mut seen);
+            }
+        }
+        for class in self.class_chain(&reflected_name) {
+            let declaring_is_reflected = same_class_name(class.name(), &reflected_name);
+            for property in class.properties() {
+                if property.visibility() == EvalVisibility::Private && !declaring_is_reflected {
+                    continue;
+                }
+                push_unique_property_name(property.name(), &mut names, &mut seen);
+            }
+        }
+        names
+    }
+
+    /// Returns PHP case-insensitive method names declared by an eval interface hierarchy.
+    pub fn interface_method_names(&self, interface_name: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        for method in self.interface_method_requirements(interface_name) {
+            push_unique_method_name(method.name(), &mut names, &mut seen);
+        }
+        names
+    }
+
+    /// Returns PHP case-sensitive property names declared by an eval interface hierarchy.
+    pub fn interface_property_names(&self, interface_name: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        for property in self.interface_property_requirements(interface_name) {
+            push_unique_property_name(property.name(), &mut names, &mut seen);
+        }
+        names
+    }
+
+    /// Returns PHP case-insensitive direct method names declared by an eval trait.
+    pub fn trait_method_names(&self, trait_name: &str) -> Vec<String> {
+        let Some(trait_decl) = self.trait_decl(trait_name) else {
+            return Vec::new();
+        };
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        for method in trait_decl.methods() {
+            push_unique_method_name(method.name(), &mut names, &mut seen);
+        }
+        names
+    }
+
+    /// Returns PHP case-sensitive direct property names declared by an eval trait.
+    pub fn trait_property_names(&self, trait_name: &str) -> Vec<String> {
+        let Some(trait_decl) = self.trait_decl(trait_name) else {
+            return Vec::new();
+        };
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        for property in trait_decl.properties() {
+            push_unique_property_name(property.name(), &mut names, &mut seen);
+        }
+        names
+    }
+
     /// Returns parent interface names for an eval-declared interface.
     pub fn interface_parent_names(&self, interface_name: &str) -> Vec<String> {
         let mut parents = Vec::new();
@@ -1331,6 +1422,26 @@ fn push_unique_class_name(name: &str, names: &mut Vec<String>, seen: &mut HashSe
     let key = normalize_class_name(name);
     if seen.insert(key) {
         names.push(name.trim_start_matches('\\').to_string());
+    }
+}
+
+/// Returns whether two PHP class-like names resolve to the same normalized spelling.
+fn same_class_name(left: &str, right: &str) -> bool {
+    normalize_class_name(left) == normalize_class_name(right)
+}
+
+/// Pushes a case-insensitive PHP method name once for ReflectionClass metadata.
+fn push_unique_method_name(name: &str, names: &mut Vec<String>, seen: &mut HashSet<String>) {
+    let key = normalize_method_name(name);
+    if seen.insert(key.clone()) {
+        names.push(key);
+    }
+}
+
+/// Pushes a case-sensitive PHP property name once for ReflectionClass metadata.
+fn push_unique_property_name(name: &str, names: &mut Vec<String>, seen: &mut HashSet<String>) {
+    if seen.insert(name.to_string()) {
+        names.push(name.to_string());
     }
 }
 

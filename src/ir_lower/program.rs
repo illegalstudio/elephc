@@ -66,6 +66,8 @@ fn populate_metadata(module: &mut Module, program: &Program, check_result: &Chec
         collect_declared_interface_names(program, &check_result.interfaces);
     module.declared_trait_names = collect_declared_trait_names(program);
     module.declared_trait_uses = collect_declared_trait_uses(program);
+    module.declared_trait_method_names = collect_declared_trait_method_names(program);
+    module.declared_trait_property_names = collect_declared_trait_property_names(program);
     module.class_infos = check_result.classes.clone();
     module.interface_infos = check_result.interfaces.clone();
     module.enum_infos = check_result.enums.clone();
@@ -373,6 +375,60 @@ fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>
         }
     }
     uses
+}
+
+/// Collects direct PHP method names declared by each trait in source order.
+fn collect_declared_trait_method_names(program: &Program) -> HashMap<String, Vec<String>> {
+    let mut methods = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl {
+                name,
+                methods: trait_methods,
+                ..
+            } => {
+                methods.insert(
+                    name.clone(),
+                    trait_methods
+                        .iter()
+                        .map(|method| php_symbol_key(&method.name))
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                methods.extend(collect_declared_trait_method_names(body));
+            }
+            _ => {}
+        }
+    }
+    methods
+}
+
+/// Collects direct PHP property names declared by each trait in source order.
+fn collect_declared_trait_property_names(program: &Program) -> HashMap<String, Vec<String>> {
+    let mut properties = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl {
+                name,
+                properties: trait_properties,
+                ..
+            } => {
+                properties.insert(
+                    name.clone(),
+                    trait_properties
+                        .iter()
+                        .map(|property| property.name.clone())
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                properties.extend(collect_declared_trait_property_names(body));
+            }
+            _ => {}
+        }
+    }
+    properties
 }
 
 /// Recursively collects source-declared names that are present in checked metadata.

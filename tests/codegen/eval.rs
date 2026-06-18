@@ -5668,6 +5668,78 @@ echo (new ReflectionClass("EvalModifierTrait"))->getModifiers();');
     assert_eq!(out.stdout, "64:32:65536:65568:32:0:0");
 }
 
+/// Verifies eval ReflectionClass reports method and property membership through the bridge.
+#[test]
+fn test_eval_reflection_class_member_existence() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalMemberParent {
+    private function hiddenParent() {}
+    protected static function parentStatic() {}
+    private $hiddenProp;
+    protected static $parentStaticProp;
+}
+class EvalMemberChild extends EvalMemberParent {
+    public function ChildMethod() {}
+    public $childProp;
+}
+interface EvalMemberIfaceParent {
+    public function parentRequirement();
+}
+interface EvalMemberIface extends EvalMemberIfaceParent {
+    public function childRequirement();
+    public string $hook { get; }
+}
+trait EvalMemberTrait {
+    private function traitHidden() {}
+    public $traitProp;
+}
+enum EvalMemberPureEnum {
+    case Ready;
+    public function label() { return "ok"; }
+}
+enum EvalMemberBackedEnum: string {
+    case Ready = "ready";
+}
+$child = new ReflectionClass("EvalMemberChild");
+echo $child->hasMethod("childmethod") ? "M" : "m";
+echo $child->hasMethod("HIDDENPARENT") ? "P" : "p";
+echo $child->hasMethod("parentStatic") ? "S" : "s";
+echo $child->hasMethod("missing") ? "X" : "x";
+echo ":";
+echo $child->hasProperty("childProp") ? "C" : "c";
+echo $child->hasProperty("hiddenProp") ? "H" : "h";
+echo $child->hasProperty("parentStaticProp") ? "T" : "t";
+echo $child->hasProperty("childprop") ? "W" : "w";
+echo ":";
+$iface = new ReflectionClass("EvalMemberIface");
+echo $iface->hasMethod("parentrequirement") ? "I" : "i";
+echo $iface->hasMethod("childRequirement") ? "J" : "j";
+echo $iface->hasProperty("hook") ? "K" : "k";
+echo ":";
+$trait = new ReflectionClass("EvalMemberTrait");
+echo $trait->hasMethod("traithidden") ? "R" : "r";
+echo $trait->hasProperty("traitProp") ? "U" : "u";
+echo ":";
+$pure = new ReflectionClass("EvalMemberPureEnum");
+echo $pure->hasMethod("cases") ? "E" : "e";
+echo $pure->hasMethod("label") ? "L" : "l";
+echo $pure->hasProperty("name") ? "N" : "n";
+echo $pure->hasProperty("value") ? "V" : "v";
+echo ":";
+$backed = new ReflectionClass("EvalMemberBackedEnum");
+echo $backed->hasMethod("tryfrom") ? "B" : "b";
+echo $backed->hasProperty("value") ? "Y" : "y";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "MPSx:ChTw:IJK:RU:ELNv:BY");
+}
+
 /// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.
 #[test]
 fn test_eval_reflection_constant_and_enum_case_attributes() {

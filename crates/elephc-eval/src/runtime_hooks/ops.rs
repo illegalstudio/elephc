@@ -24,6 +24,26 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_array_new(capacity as u64) })
     }
 
+    /// Creates a boxed Mixed indexed array whose payload uses direct string slots.
+    fn string_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_string_array_new(capacity as u64) })
+    }
+
+    /// Appends one string to a boxed direct-string indexed array.
+    fn string_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        value: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_value_string_array_push(
+                array.as_ptr(),
+                value.as_ptr(),
+                value.len() as u64,
+            )
+        })
+    }
+
     /// Creates a boxed Mixed associative array through the generated runtime wrapper.
     fn assoc_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_assoc_new(capacity as u64) })
@@ -186,6 +206,8 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         attrs: RuntimeCellHandle,
         interface_names: RuntimeCellHandle,
         trait_names: RuntimeCellHandle,
+        method_names: RuntimeCellHandle,
+        property_names: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -197,6 +219,8 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 attrs.as_ptr(),
                 interface_names.as_ptr(),
                 trait_names.as_ptr(),
+                method_names.as_ptr(),
+                property_names.as_ptr(),
                 flags,
                 modifiers,
             )

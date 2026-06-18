@@ -17,6 +17,18 @@ impl RuntimeValueOps for FakeOps {
     fn array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_array_new(capacity)
     }
+    /// Creates a fake direct-string indexed array cell.
+    fn string_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_string_array_new(capacity)
+    }
+    /// Appends one string to a fake direct-string indexed array cell.
+    fn string_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        value: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_string_array_push(array, value)
+    }
     /// Creates a fake associative array cell.
     fn assoc_new(&mut self, _capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_assoc_new(_capacity)
@@ -117,6 +129,8 @@ impl RuntimeValueOps for FakeOps {
         attrs: RuntimeCellHandle,
         interface_names: RuntimeCellHandle,
         trait_names: RuntimeCellHandle,
+        method_names: RuntimeCellHandle,
+        property_names: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -126,6 +140,8 @@ impl RuntimeValueOps for FakeOps {
             attrs,
             interface_names,
             trait_names,
+            method_names,
+            property_names,
             flags,
             modifiers,
         )
