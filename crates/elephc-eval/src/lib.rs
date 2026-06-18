@@ -18,6 +18,7 @@ pub mod eval_ir;
 mod ffi;
 pub mod interpreter;
 mod json_validate;
+mod lexer;
 pub mod lower;
 pub mod parser;
 pub mod runtime_hooks;
