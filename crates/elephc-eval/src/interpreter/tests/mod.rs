@@ -22,6 +22,7 @@ mod builtins_filesystem_ops;
 mod builtins_json;
 mod builtins_math_formatting;
 mod builtins_scalars;
+mod builtins_spl_autoload;
 mod builtins_stream_contexts;
 mod builtins_stream_settings;
 mod builtins_strings_binary;
