@@ -547,6 +547,7 @@ name = "elephc-eval"
 version = "0.1.0"
 dependencies = [
  "elephc-crypto",
+ "flate2",
  "libc",
  "regex",
  "unicode-segmentation",

@@ -10,6 +10,7 @@
 
 mod ctype;
 mod grapheme_strrev;
+mod gzip;
 mod hash;
 mod html;
 mod introspection;
@@ -24,6 +25,7 @@ mod url;
 
 pub(in crate::interpreter) use ctype::*;
 pub(in crate::interpreter) use grapheme_strrev::*;
+pub(in crate::interpreter) use gzip::*;
 pub(in crate::interpreter) use hash::*;
 pub(in crate::interpreter) use html::*;
 pub(in crate::interpreter) use introspection::*;

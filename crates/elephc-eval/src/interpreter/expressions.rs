@@ -487,6 +487,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "gettype" => eval_builtin_gettype(args, context, scope, values),
         "glob" => eval_builtin_glob(args, context, scope, values),
         "grapheme_strrev" => eval_builtin_grapheme_strrev(args, context, scope, values),
+        "gzcompress" | "gzdeflate" | "gzinflate" | "gzuncompress" => {
+            eval_builtin_gzip(name, args, context, scope, values)
+        }
         "hash" | "hash_file" | "hash_hmac" | "md5" | "sha1" => {
             eval_builtin_hash_one_shot(name, args, context, scope, values)
         }

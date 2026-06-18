@@ -55,6 +55,9 @@ pub(in crate::interpreter) fn eval_strings_builtin_with_values(
             };
             eval_grapheme_strrev_result(*value, values)?
         }
+        "gzcompress" | "gzdeflate" | "gzinflate" | "gzuncompress" => {
+            eval_gzip_result(name, evaluated_args, values)?
+        }
         "rawurldecode" | "urldecode" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
