@@ -430,6 +430,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_class_like_exists(name, args, context, scope, values)
         }
         "is_a" | "is_subclass_of" => eval_builtin_is_a_relation(name, args, context, scope, values),
+        "closedir" | "readdir" | "rewinddir" => {
+            eval_builtin_unary_directory(name, args, context, scope, values)
+        }
         "chop" => eval_builtin_trim_like(name, args, context, scope, values),
         "boolval" | "floatval" | "intval" | "strval" => {
             eval_builtin_cast(name, args, context, scope, values)
@@ -555,6 +558,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "nl2br" => eval_builtin_nl2br(args, context, scope, values),
         "number_format" => eval_builtin_number_format(args, context, scope, values),
         "ord" => eval_builtin_ord(args, context, scope, values),
+        "opendir" => eval_builtin_opendir(args, context, scope, values),
         "pathinfo" => eval_builtin_pathinfo(args, context, scope, values),
         "pi" => eval_builtin_pi(args, values),
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
