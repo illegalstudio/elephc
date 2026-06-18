@@ -207,6 +207,70 @@ pub(in crate::interpreter) fn eval_fwrite_result(
     }
 }
 
+/// Evaluates PHP `fprintf($stream, $format, ...$values)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_fprintf(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if args.len() < 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let stream = eval_expr(&args[0], context, scope, values)?;
+    let format = eval_expr(&args[1], context, scope, values)?;
+    let mut format_args = Vec::with_capacity(args.len().saturating_sub(2));
+    for arg in &args[2..] {
+        format_args.push(eval_expr(arg, context, scope, values)?);
+    }
+    eval_fprintf_result(stream, format, &format_args, context, values)
+}
+
+/// Formats and writes `fprintf()` arguments to a materialized stream resource.
+pub(in crate::interpreter) fn eval_fprintf_result(
+    stream: RuntimeCellHandle,
+    format: RuntimeCellHandle,
+    format_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let id = eval_stream_resource_id(stream, values)?;
+    let format = values.string_bytes(format)?;
+    let output = eval_sprintf_bytes(&format, format_args, values)?;
+    match context.stream_resources_mut().write(id, &output) {
+        Some(written) => values.int(i64::try_from(written).map_err(|_| EvalStatus::RuntimeFatal)?),
+        None => values.bool_value(false),
+    }
+}
+
+/// Evaluates PHP `vfprintf($stream, $format, $values)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_vfprintf(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [stream, format, array] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let stream = eval_expr(stream, context, scope, values)?;
+    let format = eval_expr(format, context, scope, values)?;
+    let array = eval_expr(array, context, scope, values)?;
+    eval_vfprintf_result(stream, format, array, context, values)
+}
+
+/// Formats and writes `vfprintf()` array arguments to a materialized stream resource.
+pub(in crate::interpreter) fn eval_vfprintf_result(
+    stream: RuntimeCellHandle,
+    format: RuntimeCellHandle,
+    array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let format_args = eval_sprintf_argument_array_values(array, values)?;
+    eval_fprintf_result(stream, format, &format_args, context, values)
+}
+
 /// Evaluates PHP `fseek($stream, $offset, $whence = SEEK_SET)` over eval expressions.
 pub(in crate::interpreter) fn eval_builtin_fseek(
     args: &[EvalExpr],
