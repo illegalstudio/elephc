@@ -173,6 +173,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         | "is_writeable" | "lstat" | "readfile" | "stat" | "unlink" => Some(&["filename"]),
         "file_put_contents" => Some(&["filename", "data"]),
         "function_exists" => Some(&["function"]),
+        "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => Some(&[]),
         "gethostbyaddr" => Some(&["ip"]),
         "gethostbyname" => Some(&["hostname"]),
         "gethostname" => Some(&[]),

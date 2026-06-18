@@ -88,6 +88,7 @@ pub struct ElephcEvalContext {
     abi_version: u32,
     classes: HashMap<String, EvalClass>,
     class_aliases: HashMap<String, String>,
+    declared_class_names: Vec<String>,
     constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
@@ -112,6 +113,7 @@ impl ElephcEvalContext {
             abi_version: ABI_VERSION,
             classes: HashMap::new(),
             class_aliases: HashMap::new(),
+            declared_class_names: Vec::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
@@ -137,6 +139,7 @@ impl ElephcEvalContext {
             abi_version,
             classes: HashMap::new(),
             class_aliases: HashMap::new(),
+            declared_class_names: Vec::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
@@ -166,6 +169,7 @@ impl ElephcEvalContext {
         if self.classes.contains_key(&key) || self.class_aliases.contains_key(&key) {
             return false;
         }
+        self.declared_class_names.push(class.name().to_string());
         self.classes.insert(key, class);
         true
     }
@@ -215,7 +219,14 @@ impl ElephcEvalContext {
         }
         self.class_aliases
             .insert(alias_key, original.trim_start_matches('\\').to_string());
+        self.declared_class_names
+            .push(alias.trim_start_matches('\\').to_string());
         true
+    }
+
+    /// Returns class names declared or aliased through eval in PHP-visible order.
+    pub fn declared_class_names(&self) -> &[String] {
+        &self.declared_class_names
     }
 
     /// Records that one runtime object handle was created for an eval-declared class.
