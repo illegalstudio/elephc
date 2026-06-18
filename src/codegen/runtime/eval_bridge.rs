@@ -775,6 +775,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
     emitter.instruction("b __rt_mixed_from_value");                             // box the integer payload and return to Rust
 
+    label_c_global(emitter, "__elephc_eval_value_resource");
+    emitter.instruction("mov x1, x0");                                          // move the C resource id into the mixed payload slot
+    emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource
+    emitter.instruction("mov x2, xzr");                                         // resource payloads do not use a high word
+    emitter.instruction("b __rt_mixed_from_value");                             // box the resource payload and return to Rust
+
     label_c_global(emitter, "__elephc_eval_value_float");
     emitter.instruction("fmov x1, d0");                                         // move the C double bits into the mixed payload slot
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
@@ -2141,6 +2147,11 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer
     emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the C integer payload in rdi and return
+
+    label_c_global(emitter, "__elephc_eval_value_resource");
+    emitter.instruction("mov eax, 9");                                          // runtime tag 9 = resource, with C id already in rdi
+    emitter.instruction("xor esi, esi");                                        // resource payloads do not use a high word
+    emitter.instruction("jmp __rt_mixed_from_value");                           // box the resource payload and return to Rust
 
     label_c_global(emitter, "__elephc_eval_value_float");
     emitter.instruction("movq rdi, xmm0");                                      // move the C double bits into mixed value_lo

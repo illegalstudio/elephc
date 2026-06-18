@@ -1,0 +1,463 @@
+//! Purpose:
+//! Implements eval-local file stream builtins backed by host file handles.
+//! These builtins turn PHP resource cells into ids stored in the eval context's
+//! stream table.
+//!
+//! Called from:
+//! - `crate::interpreter::expressions::eval_positional_expr_call()`.
+//! - Dynamic callable dispatch under `builtins::registry::dispatch`.
+//!
+//! Key details:
+//! - Runtime resource payloads are zero-based; `get_resource_id()` exposes payload + 1.
+//! - This module supports local file resources, not sockets, pipes, wrappers, or filters.
+
+use super::super::super::*;
+use super::*;
+
+/// Evaluates PHP `fopen($filename, $mode, ...)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_fopen(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !(2..=4).contains(&args.len()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let filename = eval_expr(&args[0], context, scope, values)?;
+    let mode = eval_expr(&args[1], context, scope, values)?;
+    for arg in &args[2..] {
+        eval_expr(arg, context, scope, values)?;
+    }
+    eval_fopen_result(filename, mode, context, values)
+}
+
+/// Opens a local file stream and returns a resource cell or PHP false.
+pub(in crate::interpreter) fn eval_fopen_result(
+    filename: RuntimeCellHandle,
+    mode: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let filename = eval_path_string(filename, values)?;
+    let mode = eval_stream_string(mode, values)?;
+    match context.stream_resources_mut().open_path(&filename, &mode) {
+        Some(id) => values.resource(id),
+        None => {
+            values.warning("Warning: fopen(): Failed to open stream\n")?;
+            values.bool_value(false)
+        }
+    }
+}
+
+/// Evaluates PHP `tmpfile()` with no arguments.
+pub(in crate::interpreter) fn eval_builtin_tmpfile(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_tmpfile_result(context, values)
+}
+
+/// Creates an anonymous temporary file stream resource or returns PHP false.
+pub(in crate::interpreter) fn eval_tmpfile_result(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match context.stream_resources_mut().open_tmpfile() {
+        Some(id) => values.resource(id),
+        None => values.bool_value(false),
+    }
+}
+
+/// Evaluates one unary stream builtin over an eval expression.
+pub(in crate::interpreter) fn eval_builtin_unary_stream(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [stream] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let stream = eval_expr(stream, context, scope, values)?;
+    eval_unary_stream_result(name, stream, context, values)
+}
+
+/// Evaluates a materialized unary stream builtin argument.
+pub(in crate::interpreter) fn eval_unary_stream_result(
+    name: &str,
+    stream: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let id = eval_stream_resource_id(stream, values)?;
+    match name {
+        "fclose" => values.bool_value(context.stream_resources_mut().close(id)),
+        "feof" => values.bool_value(context.stream_resources().eof(id).unwrap_or(false)),
+        "fflush" => values.bool_value(context.stream_resources_mut().flush(id)),
+        "fsync" => values.bool_value(context.stream_resources_mut().sync_all(id)),
+        "fdatasync" => values.bool_value(context.stream_resources_mut().sync_data(id)),
+        "ftell" => match context.stream_resources_mut().tell(id) {
+            Some(position) => {
+                values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)
+            }
+            None => values.bool_value(false),
+        },
+        "rewind" => values.bool_value(context.stream_resources_mut().rewind(id)),
+        "fstat" => match context.stream_resources().metadata(id) {
+            Some(metadata) => eval_stat_metadata_array(&metadata, values),
+            None => values.bool_value(false),
+        },
+        "stream_get_meta_data" => eval_stream_get_meta_data_result(id, context, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Evaluates PHP `fread($stream, $length)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_fread(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [stream, length] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let stream = eval_expr(stream, context, scope, values)?;
+    let length = eval_expr(length, context, scope, values)?;
+    eval_fread_result(stream, length, context, values)
+}
+
+/// Reads bytes from a materialized stream resource.
+pub(in crate::interpreter) fn eval_fread_result(
+    stream: RuntimeCellHandle,
+    length: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let id = eval_stream_resource_id(stream, values)?;
+    let length = eval_nonnegative_usize(length, values)?;
+    match context.stream_resources_mut().read(id, length) {
+        Some(bytes) => values.string_bytes_value(&bytes),
+        None => values.bool_value(false),
+    }
+}
+
+/// Evaluates PHP `fwrite($stream, $data)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_fwrite(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [stream, data] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let stream = eval_expr(stream, context, scope, values)?;
+    let data = eval_expr(data, context, scope, values)?;
+    eval_fwrite_result(stream, data, context, values)
+}
+
+/// Writes bytes to a materialized stream resource.
+pub(in crate::interpreter) fn eval_fwrite_result(
+    stream: RuntimeCellHandle,
+    data: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let id = eval_stream_resource_id(stream, values)?;
+    let data = values.string_bytes(data)?;
+    match context.stream_resources_mut().write(id, &data) {
+        Some(written) => values.int(i64::try_from(written).map_err(|_| EvalStatus::RuntimeFatal)?),
+        None => values.bool_value(false),
+    }
+}
+
+/// Evaluates PHP `fseek($stream, $offset, $whence = SEEK_SET)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_fseek(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !(2..=3).contains(&args.len()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let stream = eval_expr(&args[0], context, scope, values)?;
+    let offset = eval_expr(&args[1], context, scope, values)?;
+    let whence = match args.get(2) {
+        Some(whence) => Some(eval_expr(whence, context, scope, values)?),
+        None => None,
+    };
+    eval_fseek_result(stream, offset, whence, context, values)
+}
+
+/// Seeks a materialized stream and returns PHP's 0 or -1 status code.
+pub(in crate::interpreter) fn eval_fseek_result(
+    stream: RuntimeCellHandle,
+    offset: RuntimeCellHandle,
+    whence: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let id = eval_stream_resource_id(stream, values)?;
+    let offset = eval_int_value(offset, values)?;
+    let whence = match whence {
+        Some(whence) => eval_int_value(whence, values)?,
+        None => 0,
+    };
+    let status = if context.stream_resources_mut().seek(id, offset, whence) {
+        0
+    } else {
+        -1
+    };
+    values.int(status)
+}
+
+/// Evaluates PHP `ftruncate($stream, $size)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_ftruncate(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [stream, size] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let stream = eval_expr(stream, context, scope, values)?;
+    let size = eval_expr(size, context, scope, values)?;
+    eval_ftruncate_result(stream, size, context, values)
+}
+
+/// Truncates a materialized stream resource.
+pub(in crate::interpreter) fn eval_ftruncate_result(
+    stream: RuntimeCellHandle,
+    size: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let id = eval_stream_resource_id(stream, values)?;
+    let size = eval_int_value(size, values)?;
+    let Ok(size) = u64::try_from(size) else {
+        return values.bool_value(false);
+    };
+    values.bool_value(context.stream_resources_mut().truncate(id, size))
+}
+
+/// Evaluates PHP `stream_get_contents($stream, $length = null, $offset = -1)`.
+pub(in crate::interpreter) fn eval_builtin_stream_get_contents(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !(1..=3).contains(&args.len()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let stream = eval_expr(&args[0], context, scope, values)?;
+    let length = match args.get(1) {
+        Some(length) => Some(eval_expr(length, context, scope, values)?),
+        None => None,
+    };
+    let offset = match args.get(2) {
+        Some(offset) => Some(eval_expr(offset, context, scope, values)?),
+        None => None,
+    };
+    eval_stream_get_contents_result(stream, length, offset, context, values)
+}
+
+/// Reads the remaining or bounded contents from a materialized stream resource.
+pub(in crate::interpreter) fn eval_stream_get_contents_result(
+    stream: RuntimeCellHandle,
+    length: Option<RuntimeCellHandle>,
+    offset: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let id = eval_stream_resource_id(stream, values)?;
+    let length = eval_optional_stream_length(length, values)?;
+    let offset = eval_optional_stream_offset(offset, values)?;
+    match context
+        .stream_resources_mut()
+        .get_contents(id, length, offset)
+    {
+        Some(bytes) => values.string_bytes_value(&bytes),
+        None => values.bool_value(false),
+    }
+}
+
+/// Evaluates PHP `stream_copy_to_stream($from, $to, $length = null, $offset = -1)`.
+pub(in crate::interpreter) fn eval_builtin_stream_copy_to_stream(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !(2..=4).contains(&args.len()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let from = eval_expr(&args[0], context, scope, values)?;
+    let to = eval_expr(&args[1], context, scope, values)?;
+    let length = match args.get(2) {
+        Some(length) => Some(eval_expr(length, context, scope, values)?),
+        None => None,
+    };
+    let offset = match args.get(3) {
+        Some(offset) => Some(eval_expr(offset, context, scope, values)?),
+        None => None,
+    };
+    eval_stream_copy_to_stream_result(from, to, length, offset, context, values)
+}
+
+/// Copies bytes between two materialized stream resources.
+pub(in crate::interpreter) fn eval_stream_copy_to_stream_result(
+    from: RuntimeCellHandle,
+    to: RuntimeCellHandle,
+    length: Option<RuntimeCellHandle>,
+    offset: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let from = eval_stream_resource_id(from, values)?;
+    let to = eval_stream_resource_id(to, values)?;
+    let length = eval_optional_stream_length(length, values)?;
+    let offset = eval_optional_stream_offset(offset, values)?;
+    match context
+        .stream_resources_mut()
+        .copy_to_stream(from, to, length, offset)
+    {
+        Some(written) => values.int(i64::try_from(written).map_err(|_| EvalStatus::RuntimeFatal)?),
+        None => values.bool_value(false),
+    }
+}
+
+/// Builds PHP's stream metadata array for one eval-local stream resource.
+fn eval_stream_get_meta_data_result(
+    id: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(meta) = context.stream_resources().meta_data(id) else {
+        return values.bool_value(false);
+    };
+    let mut result = values.assoc_new(9)?;
+    result = eval_stream_meta_set_bool(result, "timed_out", false, values)?;
+    result = eval_stream_meta_set_bool(result, "blocked", true, values)?;
+    result = eval_stream_meta_set_bool(result, "eof", meta.eof, values)?;
+    result = eval_stream_meta_set_string(result, "wrapper_type", "plainfile", values)?;
+    result = eval_stream_meta_set_string(result, "stream_type", "STDIO", values)?;
+    result = eval_stream_meta_set_string(result, "mode", &meta.mode, values)?;
+    result = eval_stream_meta_set_int(result, "unread_bytes", 0, values)?;
+    result = eval_stream_meta_set_bool(result, "seekable", true, values)?;
+    eval_stream_meta_set_string(result, "uri", &meta.uri, values)
+}
+
+/// Converts a runtime resource cell into eval's zero-based stream id.
+fn eval_stream_resource_id(
+    stream: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    if values.type_tag(stream)? != EVAL_TAG_RESOURCE {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let display_id = eval_int_value(stream, values)?;
+    display_id.checked_sub(1).ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Converts a stream length argument into a non-negative `usize`.
+fn eval_nonnegative_usize(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<usize, EvalStatus> {
+    let value = eval_int_value(value, values)?;
+    usize::try_from(value).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Converts an optional stream length where null and -1 mean "read all".
+fn eval_optional_stream_length(
+    value: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<usize>, EvalStatus> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if values.type_tag(value)? == EVAL_TAG_NULL {
+        return Ok(None);
+    }
+    let value = eval_int_value(value, values)?;
+    if value == -1 {
+        return Ok(None);
+    }
+    Ok(Some(
+        usize::try_from(value).map_err(|_| EvalStatus::RuntimeFatal)?,
+    ))
+}
+
+/// Converts an optional absolute stream offset where null and -1 mean no seek.
+fn eval_optional_stream_offset(
+    value: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<i64>, EvalStatus> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if values.type_tag(value)? == EVAL_TAG_NULL {
+        return Ok(None);
+    }
+    let value = eval_int_value(value, values)?;
+    if value < 0 {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
+}
+
+/// Converts one runtime cell to a UTF-8 string for stream mode arguments.
+fn eval_stream_string(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Inserts a boolean field into the stream metadata array.
+fn eval_stream_meta_set_bool(
+    array: RuntimeCellHandle,
+    key: &str,
+    value: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = values.string(key)?;
+    let value = values.bool_value(value)?;
+    values.array_set(array, key, value)
+}
+
+/// Inserts an integer field into the stream metadata array.
+fn eval_stream_meta_set_int(
+    array: RuntimeCellHandle,
+    key: &str,
+    value: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = values.string(key)?;
+    let value = values.int(value)?;
+    values.array_set(array, key, value)
+}
+
+/// Inserts a string field into the stream metadata array.
+fn eval_stream_meta_set_string(
+    array: RuntimeCellHandle,
+    key: &str,
+    value: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = values.string(key)?;
+    let value = values.string(value)?;
+    values.array_set(array, key, value)
+}

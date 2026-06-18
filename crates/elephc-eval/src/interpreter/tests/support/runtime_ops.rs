@@ -187,6 +187,10 @@ impl RuntimeValueOps for FakeOps {
     fn int(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_int(value)
     }
+    /// Creates a fake resource cell.
+    fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_resource(value)
+    }
     /// Creates a fake float cell.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_float(value)

@@ -165,12 +165,26 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "exec" | "shell_exec" | "system" | "passthru" => Some(&["command"]),
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
+        "fclose"
+        | "feof"
+        | "fflush"
+        | "fsync"
+        | "fdatasync"
+        | "ftell"
+        | "rewind"
+        | "fstat"
+        | "stream_get_meta_data" => Some(&["stream"]),
         "fnmatch" => Some(&["pattern", "filename", "flags"]),
         "file" | "file_get_contents" | "file_exists" | "fileatime" | "filectime" | "filegroup"
         | "fileinode" | "filemtime" | "fileowner" | "fileperms" | "filesize" | "filetype"
         | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable" | "is_writable"
         | "is_writeable" | "lstat" | "readfile" | "stat" | "unlink" => Some(&["filename"]),
         "file_put_contents" => Some(&["filename", "data"]),
+        "fopen" => Some(&["filename", "mode", "use_include_path", "context"]),
+        "fread" => Some(&["stream", "length"]),
+        "fseek" => Some(&["stream", "offset", "whence"]),
+        "ftruncate" => Some(&["stream", "size"]),
+        "fwrite" => Some(&["stream", "data"]),
         "function_exists" => Some(&["function"]),
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => Some(&[]),
         "gethostbyaddr" => Some(&["ip"]),
@@ -243,6 +257,8 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "sscanf" => Some(&["string", "format", "vars"]),
         "sprintf" | "printf" => Some(&["format", "values"]),
         "stream_is_local" | "stream_supports_lock" => Some(&["stream"]),
+        "stream_copy_to_stream" => Some(&["from", "to", "length", "offset"]),
+        "stream_get_contents" => Some(&["stream", "length", "offset"]),
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
@@ -255,7 +271,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "str_split" => Some(&["string", "length"]),
         "substr" => Some(&["string", "offset", "length"]),
         "substr_replace" => Some(&["string", "replace", "offset", "length"]),
-        "sys_get_temp_dir" | "time" => Some(&[]),
+        "sys_get_temp_dir" | "time" | "tmpfile" => Some(&[]),
         "tempnam" => Some(&["directory", "prefix"]),
         "touch" => Some(&["filename", "mtime", "atime"]),
         "chown" | "lchown" => Some(&["filename", "user"]),

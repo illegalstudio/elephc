@@ -303,6 +303,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Self::handle(unsafe { __elephc_eval_value_int(value) })
     }
 
+    /// Creates a boxed resource Mixed cell through the generated runtime wrapper.
+    fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_resource(value) })
+    }
+
     /// Creates a boxed float Mixed cell through the generated runtime wrapper.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_float(value) })

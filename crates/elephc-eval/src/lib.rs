@@ -23,6 +23,7 @@ pub mod lower;
 pub mod parser;
 pub mod runtime_hooks;
 pub mod scope;
+mod stream_resources;
 pub mod value;
 
 pub use ffi::*;

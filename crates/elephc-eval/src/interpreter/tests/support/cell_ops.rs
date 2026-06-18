@@ -43,6 +43,10 @@ impl FakeOps {
     pub(super) fn runtime_int(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(self.alloc(FakeValue::Int(value)))
     }
+    /// Creates a fake resource cell.
+    pub(super) fn runtime_resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
+        Ok(self.alloc(FakeValue::Resource(value)))
+    }
     /// Creates a fake float cell.
     pub(super) fn runtime_float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(self.alloc(FakeValue::Float(value)))

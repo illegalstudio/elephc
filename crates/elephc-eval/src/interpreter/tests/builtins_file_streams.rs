@@ -1,0 +1,88 @@
+//! Purpose:
+//! Interpreter tests for eval local file stream resource builtins.
+//!
+//! Called from:
+//! - `cargo test -p elephc-eval` through Rust's test harness.
+//!
+//! Key details:
+//! - These cases use process-unique local files and clean them before and after execution.
+//! - Stream resources are eval-owned fake/runtime cells whose ids map into context state.
+
+use super::super::*;
+use super::support::*;
+
+/// Verifies eval file stream resources support open/read/write/seek/stat/close operations.
+#[test]
+fn execute_program_dispatches_file_stream_builtins() {
+    let pid = std::process::id();
+    let file = format!("elephc_eval_stream_file_{pid}.txt");
+    let copy = format!("elephc_eval_stream_copy_{pid}.txt");
+    let call = format!("elephc_eval_stream_call_{pid}.txt");
+    let source = format!(
+        r#"$h = fopen(filename: "{file}", mode: "w+");
+echo is_resource($h) ? "open" : "bad"; echo ":";
+echo get_resource_type($h) === "stream" ? "rtype" : "bad"; echo ":";
+echo get_resource_id($h) >= 1 ? "rid" : "bad"; echo ":";
+echo fwrite($h, "abcdef") === 6 ? "write" : "bad"; echo ":";
+echo ftell($h) === 6 ? "tell" : "bad"; echo ":";
+echo rewind($h) ? "rewind" : "bad"; echo ":";
+echo fread($h, 2) === "ab" ? "read" : "bad"; echo ":";
+echo fseek($h, 1) === 0 ? "seek" : "bad"; echo ":";
+echo stream_get_contents($h, 3) === "bcd" ? "bounded" : "bad"; echo ":";
+rewind($h);
+echo stream_get_contents($h) === "abcdef" ? "contents" : "bad"; echo ":";
+echo feof($h) ? "eof" : "bad"; echo ":";
+$meta = stream_get_meta_data($h);
+echo $meta["wrapper_type"] === "plainfile" && $meta["stream_type"] === "STDIO" && $meta["mode"] === "w+" ? "meta" : "bad"; echo ":";
+echo ftruncate($h, 3) ? "truncate" : "bad"; echo ":";
+$stat = fstat($h);
+echo $stat["size"] === 3 ? "fstat" : "bad"; echo ":";
+echo fflush($h) && fsync($h) && fdatasync($h) ? "sync" : "bad"; echo ":";
+echo fclose($h) ? "close" : "bad"; echo ":";
+echo file_get_contents("{file}") === "abc" ? "truncated" : "bad"; echo ":";
+$src = fopen("{file}", "r");
+$dst = fopen("{copy}", "w+");
+echo stream_copy_to_stream($src, $dst, null, 1) === 2 ? "copy" : "bad"; echo ":";
+rewind($dst);
+echo stream_get_contents($dst) === "bc" ? "copied" : "bad"; echo ":";
+fclose($src);
+fclose($dst);
+$tmp = tmpfile();
+echo is_resource($tmp) ? "tmp" : "bad"; echo ":";
+fwrite($tmp, "xy");
+rewind($tmp);
+echo fread($tmp, 2) === "xy" ? "tmpread" : "bad"; echo ":";
+fclose($tmp);
+$call = call_user_func_array("fopen", ["filename" => "{call}", "mode" => "w+"]);
+echo call_user_func_array("fwrite", ["stream" => $call, "data" => "zz"]) === 2 ? "callwrite" : "bad"; echo ":";
+call_user_func("rewind", $call);
+echo call_user_func("fread", $call, 2) === "zz" ? "callread" : "bad"; echo ":";
+echo call_user_func("fclose", $call) ? "callclose" : "bad"; echo ":";
+echo unlink("{file}") && unlink("{copy}") && unlink("{call}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("fopen"); echo function_exists("fclose"); echo function_exists("fread");
+echo function_exists("fwrite"); echo function_exists("feof"); echo function_exists("fflush");
+echo function_exists("ftell"); echo function_exists("fseek"); echo function_exists("rewind");
+echo function_exists("ftruncate"); echo function_exists("fsync"); echo function_exists("fdatasync");
+echo function_exists("fstat"); echo function_exists("stream_get_contents");
+echo function_exists("stream_copy_to_stream"); echo function_exists("stream_get_meta_data");
+echo function_exists("tmpfile");
+return true;"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    for path in [&file, &copy, &call] {
+        let _ = std::fs::remove_file(path);
+    }
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    for path in [&file, &copy, &call] {
+        let _ = std::fs::remove_file(path);
+    }
+    assert_eq!(
+        values.output,
+        "open:rtype:rid:write:tell:rewind:read:seek:bounded:contents:eof:meta:truncate:fstat:sync:close:truncated:copy:copied:tmp:tmpread:callwrite:callread:callclose:cleanup:11111111111111111"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

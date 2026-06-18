@@ -162,6 +162,9 @@ pub trait RuntimeValueOps {
     /// Creates a runtime int cell.
     fn int(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Creates a runtime resource cell with a zero-based native resource payload.
+    fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Creates a runtime float cell.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus>;
 

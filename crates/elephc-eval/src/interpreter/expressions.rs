@@ -459,9 +459,23 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         | "fileperms" => eval_builtin_file_stat_scalar(name, args, context, scope, values),
         "file_get_contents" => eval_builtin_file_get_contents(args, context, scope, values),
         "file_put_contents" => eval_builtin_file_put_contents(args, context, scope, values),
+        "fclose"
+        | "feof"
+        | "fflush"
+        | "fsync"
+        | "fdatasync"
+        | "ftell"
+        | "rewind"
+        | "fstat"
+        | "stream_get_meta_data" => eval_builtin_unary_stream(name, args, context, scope, values),
         "filesize" => eval_builtin_filesize(args, context, scope, values),
         "filetype" => eval_builtin_filetype(args, context, scope, values),
         "fnmatch" => eval_builtin_fnmatch(args, context, scope, values),
+        "fopen" => eval_builtin_fopen(args, context, scope, values),
+        "fread" => eval_builtin_fread(args, context, scope, values),
+        "fseek" => eval_builtin_fseek(args, context, scope, values),
+        "ftruncate" => eval_builtin_ftruncate(args, context, scope, values),
+        "fwrite" => eval_builtin_fwrite(args, context, scope, values),
         "stat" | "lstat" => eval_builtin_stat_array(name, args, context, scope, values),
         "floor" => eval_builtin_floor(args, context, scope, values),
         "function_exists" | "is_callable" => {
@@ -568,6 +582,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "tempnam" => eval_builtin_tempnam(args, context, scope, values),
         "time" => eval_builtin_time(args, values),
         "touch" => eval_builtin_touch(args, context, scope, values),
+        "tmpfile" => eval_builtin_tmpfile(args, context, values),
         "stream_is_local" | "stream_supports_lock" => {
             eval_builtin_stream_bool_predicate(name, args, context, scope, values)
         }
@@ -577,6 +592,8 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "stream_resolve_include_path" => {
             eval_builtin_stream_resolve_include_path(args, context, scope, values)
         }
+        "stream_copy_to_stream" => eval_builtin_stream_copy_to_stream(args, context, scope, values),
+        "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
         "strtotime" => eval_builtin_strtotime(args, context, scope, values),
         "unlink" => eval_builtin_unlink(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),

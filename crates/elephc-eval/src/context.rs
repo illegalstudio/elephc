@@ -17,6 +17,7 @@ use std::ffi::c_void;
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::{EvalClass, EvalFunction};
 use crate::scope::ElephcEvalScope;
+use crate::stream_resources::EvalStreamResources;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 /// Native descriptor-invoker ABI registered by generated code for AOT functions.
@@ -98,6 +99,7 @@ pub struct ElephcEvalContext {
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     pending_throw: Option<RuntimeCellHandle>,
+    streams: EvalStreamResources,
     json_last_error: i64,
     json_last_error_msg: String,
     call_file: String,
@@ -123,6 +125,7 @@ impl ElephcEvalContext {
             global_scope: None,
             function_stack: Vec::new(),
             pending_throw: None,
+            streams: EvalStreamResources::default(),
             json_last_error: 0,
             json_last_error_msg: String::from("No error"),
             call_file: String::new(),
@@ -149,6 +152,7 @@ impl ElephcEvalContext {
             global_scope: None,
             function_stack: Vec::new(),
             pending_throw: None,
+            streams: EvalStreamResources::default(),
             json_last_error: 0,
             json_last_error_msg: String::from("No error"),
             call_file: String::new(),
@@ -389,6 +393,16 @@ impl ElephcEvalContext {
     /// Returns and clears the Throwable cell currently escaping through eval.
     pub fn take_pending_throw(&mut self) -> Option<RuntimeCellHandle> {
         self.pending_throw.take()
+    }
+
+    /// Returns the eval-local stream resource table.
+    pub(crate) fn stream_resources(&self) -> &EvalStreamResources {
+        &self.streams
+    }
+
+    /// Returns mutable access to the eval-local stream resource table.
+    pub(crate) fn stream_resources_mut(&mut self) -> &mut EvalStreamResources {
+        &mut self.streams
     }
 
     /// Clears the eval-local JSON error state after a successful JSON operation.

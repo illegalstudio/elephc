@@ -92,6 +92,7 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_null() -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_int(value: i64) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_resource(value: i64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_float(value: f64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string(ptr: *const u8, len: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_cast_int(value: *mut RuntimeCell) -> *mut RuntimeCell;

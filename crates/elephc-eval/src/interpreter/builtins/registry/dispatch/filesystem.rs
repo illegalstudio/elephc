@@ -15,7 +15,7 @@ use super::super::super::*;
 pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
@@ -81,6 +81,20 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_file_put_contents_result(*filename, *data, values)?
         }
+        "fclose"
+        | "feof"
+        | "fflush"
+        | "fsync"
+        | "fdatasync"
+        | "ftell"
+        | "rewind"
+        | "fstat"
+        | "stream_get_meta_data" => {
+            let [stream] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_unary_stream_result(name, *stream, context, values)?
+        }
         "filesize" => {
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -100,6 +114,37 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "fopen" => {
+            if !(2..=4).contains(&evaluated_args.len()) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_fopen_result(evaluated_args[0], evaluated_args[1], context, values)?
+        }
+        "fread" => {
+            let [stream, length] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_fread_result(*stream, *length, context, values)?
+        }
+        "fseek" => match evaluated_args {
+            [stream, offset] => eval_fseek_result(*stream, *offset, None, context, values)?,
+            [stream, offset, whence] => {
+                eval_fseek_result(*stream, *offset, Some(*whence), context, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "ftruncate" => {
+            let [stream, size] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_ftruncate_result(*stream, *size, context, values)?
+        }
+        "fwrite" => {
+            let [stream, data] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_fwrite_result(*stream, *data, context, values)?
+        }
         "stat" | "lstat" => {
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
@@ -169,6 +214,37 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             };
             eval_stream_resolve_include_path_result(*filename, values)?
         }
+        "stream_copy_to_stream" => match evaluated_args {
+            [from, to] => {
+                eval_stream_copy_to_stream_result(*from, *to, None, None, context, values)?
+            }
+            [from, to, length] => {
+                eval_stream_copy_to_stream_result(*from, *to, Some(*length), None, context, values)?
+            }
+            [from, to, length, offset] => eval_stream_copy_to_stream_result(
+                *from,
+                *to,
+                Some(*length),
+                Some(*offset),
+                context,
+                values,
+            )?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "stream_get_contents" => match evaluated_args {
+            [stream] => eval_stream_get_contents_result(*stream, None, None, context, values)?,
+            [stream, length] => {
+                eval_stream_get_contents_result(*stream, Some(*length), None, context, values)?
+            }
+            [stream, length, offset] => eval_stream_get_contents_result(
+                *stream,
+                Some(*length),
+                Some(*offset),
+                context,
+                values,
+            )?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
         "realpath_cache_get" => {
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);
@@ -192,6 +268,12 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_tempnam_result(*directory, *prefix, values)?
+        }
+        "tmpfile" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_tmpfile_result(context, values)?
         }
         "touch" => match evaluated_args {
             [filename] => eval_touch_result(*filename, None, None, values)?,
