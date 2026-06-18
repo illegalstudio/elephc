@@ -95,7 +95,7 @@ pub(in crate::interpreter) fn eval_expr(
         }
         EvalExpr::PropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
-            values.property_get(object, property)
+            eval_property_get_result(object, property, context, values)
         }
         EvalExpr::Print(inner) => {
             let value = eval_expr(inner, context, scope, values)?;
@@ -637,9 +637,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_stream_resolve_include_path(args, context, scope, values)
         }
         "stream_copy_to_stream" => eval_builtin_stream_copy_to_stream(args, context, scope, values),
-        "stream_context_create" => {
-            eval_builtin_stream_context_create(args, context, scope, values)
-        }
+        "stream_context_create" => eval_builtin_stream_context_create(args, context, scope, values),
         "stream_context_get_default" => {
             eval_builtin_stream_context_get_default(args, context, scope, values)
         }
@@ -667,9 +665,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "stream_filter_append" | "stream_filter_prepend" => {
             eval_builtin_stream_filter_attach(name, args, context, scope, values)
         }
-        "stream_filter_remove" => {
-            eval_builtin_stream_filter_remove(args, context, scope, values)
-        }
+        "stream_filter_remove" => eval_builtin_stream_filter_remove(args, context, scope, values),
         "stream_bucket_new" => eval_builtin_stream_bucket_new(args, context, scope, values),
         "stream_bucket_make_writeable" => {
             eval_builtin_stream_bucket_make_writeable(args, context, scope, values)
@@ -690,9 +686,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "stream_socket_enable_crypto" => {
             eval_builtin_stream_socket_enable_crypto(args, context, scope, values)
         }
-        "stream_socket_sendto" => {
-            eval_builtin_stream_socket_sendto(args, context, scope, values)
-        }
+        "stream_socket_sendto" => eval_builtin_stream_socket_sendto(args, context, scope, values),
         "stream_socket_recvfrom" => {
             eval_builtin_stream_socket_recvfrom(args, context, scope, values)
         }

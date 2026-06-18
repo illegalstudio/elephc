@@ -4720,6 +4720,52 @@ class EvalTraitMissingConcrete {
     );
 }
 
+/// Verifies eval-declared private/protected members are usable from valid class scopes.
+#[test]
+fn test_eval_declared_private_and_protected_members() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalVisibilityBase {
+    private int $secret = 4;
+    protected int $base = 5;
+    private function bump($n) { return $this->secret + $n; }
+    protected function add($n) { return $this->base + $n; }
+    public function readPrivate($n) { return $this->bump($n); }
+}
+class EvalVisibilityChild extends EvalVisibilityBase {
+    public function readProtected($n) { return $this->add($n); }
+}
+$box = new EvalVisibilityChild();
+echo $box->readPrivate(3) . ":";
+echo $box->readProtected(2);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7:7");
+}
+
+/// Verifies eval rejects private member access from outside the declaring class.
+#[test]
+fn test_eval_declared_private_member_access_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalPrivateAccessBox {
+    private int $secret = 4;
+}
+$box = new EvalPrivateAccessBox();
+echo $box->secret;');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {

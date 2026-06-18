@@ -16,7 +16,8 @@ use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
-    EvalClass, EvalClassMethod, EvalFunction, EvalInterface, EvalInterfaceMethod, EvalTrait,
+    EvalClass, EvalClassMethod, EvalClassProperty, EvalFunction, EvalInterface,
+    EvalInterfaceMethod, EvalTrait,
 };
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
@@ -104,6 +105,7 @@ pub struct ElephcEvalContext {
     dynamic_objects: HashMap<u64, String>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
+    class_stack: Vec<String>,
     pending_throw: Option<RuntimeCellHandle>,
     spl_autoload_extensions: String,
     streams: EvalStreamResources,
@@ -135,6 +137,7 @@ impl ElephcEvalContext {
             dynamic_objects: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
+            class_stack: Vec::new(),
             pending_throw: None,
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
@@ -167,6 +170,7 @@ impl ElephcEvalContext {
             dynamic_objects: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
+            class_stack: Vec::new(),
             pending_throw: None,
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
@@ -381,6 +385,57 @@ impl ElephcEvalContext {
             }
             current_name = class.parent()?.to_string();
         }
+    }
+
+    /// Finds a method declared directly by one eval-declared class.
+    pub fn class_own_method(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(String, EvalClassMethod)> {
+        let class = self.class(class_name)?;
+        class
+            .method(method_name)
+            .map(|method| (class.name().to_string(), method.clone()))
+    }
+
+    /// Finds a property in an eval-declared class or its eval-declared parents.
+    pub fn class_property(
+        &self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Option<(String, EvalClassProperty)> {
+        let mut current_name = self.resolve_class_name(class_name)?;
+        let mut seen = HashSet::new();
+        loop {
+            let key = normalize_class_name(&current_name);
+            if !seen.insert(key.clone()) {
+                return None;
+            }
+            let class = self.classes.get(&key)?;
+            if let Some(property) = class
+                .properties()
+                .iter()
+                .find(|property| property.name() == property_name)
+            {
+                return Some((class.name().to_string(), property.clone()));
+            }
+            current_name = class.parent()?.to_string();
+        }
+    }
+
+    /// Finds a property declared directly by one eval-declared class.
+    pub fn class_own_property(
+        &self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Option<(String, EvalClassProperty)> {
+        let class = self.class(class_name)?;
+        class
+            .properties()
+            .iter()
+            .find(|property| property.name() == property_name)
+            .map(|property| (class.name().to_string(), property.clone()))
     }
 
     /// Returns direct and inherited parent class names for an eval-declared class.
@@ -652,6 +707,21 @@ impl ElephcEvalContext {
     /// Returns the current eval-executed function name, if execution is inside one.
     pub fn current_function(&self) -> Option<&str> {
         self.function_stack.last().map(String::as_str)
+    }
+
+    /// Pushes the eval class whose method is currently executing.
+    pub fn push_class_scope(&mut self, name: impl Into<String>) {
+        self.class_stack.push(name.into());
+    }
+
+    /// Pops the current eval class method scope.
+    pub fn pop_class_scope(&mut self) {
+        self.class_stack.pop();
+    }
+
+    /// Returns the current eval class scope, if execution is inside a method.
+    pub fn current_class_scope(&self) -> Option<&str> {
+        self.class_stack.last().map(String::as_str)
     }
 
     /// Records a Throwable cell that escaped from an eval-executed function call.

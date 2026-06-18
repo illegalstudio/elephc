@@ -13,7 +13,7 @@ use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalCatch, EvalClass, EvalClassMethod, EvalClassProperty, EvalExpr, EvalInterface,
-    EvalInterfaceMethod, EvalStmt, EvalSwitchCase, EvalTrait,
+    EvalInterfaceMethod, EvalStmt, EvalSwitchCase, EvalTrait, EvalVisibility,
 };
 use crate::lexer::TokenKind;
 
@@ -296,13 +296,13 @@ impl Parser {
         methods: &mut Vec<EvalClassMethod>,
         traits: &mut Vec<String>,
     ) -> Result<(), EvalParseError> {
-        let (public, is_abstract, is_final) = self.parse_class_member_modifiers()?;
+        let (visibility, is_abstract, is_final) = self.parse_class_member_modifiers()?;
 
         if is_abstract && is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
 
-        if !public
+        if visibility.is_none()
             && !is_abstract
             && !is_final
             && matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "use"))
@@ -312,14 +312,21 @@ impl Parser {
         }
 
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
-            methods.push(self.parse_class_method_decl(is_abstract, is_final)?);
+            methods.push(self.parse_class_method_decl(
+                visibility.unwrap_or(EvalVisibility::Public),
+                is_abstract,
+                is_final,
+            )?);
             return Ok(());
         }
 
-        if !public || is_abstract || is_final {
+        let Some(visibility) = visibility else {
+            return Err(EvalParseError::UnsupportedConstruct);
+        };
+        if is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        properties.push(self.parse_class_property_decl()?);
+        properties.push(self.parse_class_property_decl(visibility)?);
         Ok(())
     }
 
@@ -342,17 +349,31 @@ impl Parser {
     /// Parses method modifiers supported by eval class declarations.
     pub(super) fn parse_class_member_modifiers(
         &mut self,
-    ) -> Result<(bool, bool, bool), EvalParseError> {
-        let mut public = false;
+    ) -> Result<(Option<EvalVisibility>, bool, bool), EvalParseError> {
+        let mut visibility = None;
         let mut is_abstract = false;
         let mut is_final = false;
         loop {
             match self.current() {
                 TokenKind::Ident(name) if ident_eq(name, "public") => {
-                    if public {
+                    if visibility.is_some() {
                         return Err(EvalParseError::UnsupportedConstruct);
                     }
-                    public = true;
+                    visibility = Some(EvalVisibility::Public);
+                    self.advance();
+                }
+                TokenKind::Ident(name) if ident_eq(name, "protected") => {
+                    if visibility.is_some() {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    visibility = Some(EvalVisibility::Protected);
+                    self.advance();
+                }
+                TokenKind::Ident(name) if ident_eq(name, "private") => {
+                    if visibility.is_some() {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    visibility = Some(EvalVisibility::Private);
                     self.advance();
                 }
                 TokenKind::Ident(name) if ident_eq(name, "abstract") => {
@@ -372,7 +393,7 @@ impl Parser {
                 TokenKind::Ident(name) if is_unsupported_class_member_modifier(name) => {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
-                _ => return Ok((public, is_abstract, is_final)),
+                _ => return Ok((visibility, is_abstract, is_final)),
             }
         }
     }
@@ -380,6 +401,7 @@ impl Parser {
     /// Parses `function name($param, ...) { ... }` or an abstract method signature.
     pub(super) fn parse_class_method_decl(
         &mut self,
+        visibility: EvalVisibility,
         is_abstract: bool,
         is_final: bool,
     ) -> Result<EvalClassMethod, EvalParseError> {
@@ -397,8 +419,9 @@ impl Parser {
         } else {
             self.parse_block()?
         };
-        Ok(EvalClassMethod::with_modifiers(
+        Ok(EvalClassMethod::with_visibility_and_modifiers(
             name,
+            visibility,
             is_abstract,
             is_final,
             params,
@@ -409,6 +432,7 @@ impl Parser {
     /// Parses one public property declaration with an optional initializer.
     pub(super) fn parse_class_property_decl(
         &mut self,
+        visibility: EvalVisibility,
     ) -> Result<EvalClassProperty, EvalParseError> {
         self.skip_optional_property_type()?;
         let TokenKind::DollarIdent(name) = self.current() else {
@@ -422,7 +446,9 @@ impl Parser {
             None
         };
         self.expect_semicolon()?;
-        Ok(EvalClassProperty::new(name, default))
+        Ok(EvalClassProperty::with_visibility(
+            name, visibility, default,
+        ))
     }
 
     /// Parses `trait Name { ... }` declarations into dynamic trait metadata.
@@ -454,18 +480,25 @@ impl Parser {
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
     ) -> Result<(), EvalParseError> {
-        let (public, is_abstract, is_final) = self.parse_class_member_modifiers()?;
+        let (visibility, is_abstract, is_final) = self.parse_class_member_modifiers()?;
         if is_abstract && is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
-            methods.push(self.parse_class_method_decl(is_abstract, is_final)?);
+            methods.push(self.parse_class_method_decl(
+                visibility.unwrap_or(EvalVisibility::Public),
+                is_abstract,
+                is_final,
+            )?);
             return Ok(());
         }
-        if !public || is_abstract || is_final {
+        let Some(visibility) = visibility else {
+            return Err(EvalParseError::UnsupportedConstruct);
+        };
+        if is_abstract || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        properties.push(self.parse_class_property_decl()?);
+        properties.push(self.parse_class_property_decl(visibility)?);
         Ok(())
     }
 

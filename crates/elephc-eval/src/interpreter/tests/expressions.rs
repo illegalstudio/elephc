@@ -607,6 +607,107 @@ fn execute_program_rejects_missing_eval_trait_use() {
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
+/// Verifies eval methods can access private properties and methods declared in their class.
+#[test]
+fn execute_program_allows_private_eval_members_inside_declaring_class() {
+    let program = parse_fragment(
+        br#"class EvalPrivateBox {
+    private int $secret = 4;
+    private function bump($n) { return $this->secret + $n; }
+    public function read($n) { return $this->bump($n); }
+}
+$box = new EvalPrivateBox();
+return $box->read(3);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(7));
+}
+/// Verifies protected eval members are accessible across a class hierarchy.
+#[test]
+fn execute_program_allows_protected_eval_members_from_related_classes() {
+    let program = parse_fragment(
+        br#"class EvalProtectedBase {
+    protected int $base = 5;
+    protected function add($n) { return $this->base + $n; }
+}
+class EvalProtectedChild extends EvalProtectedBase {
+    public function read($n) { return $this->add($n); }
+}
+$box = new EvalProtectedChild();
+return $box->read(2);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(7));
+}
+/// Verifies eval rejects private member access from global scope.
+#[test]
+fn execute_program_rejects_private_eval_member_access_from_global_scope() {
+    let program = parse_fragment(
+        br#"class EvalPrivateGlobalBox {
+    private int $secret = 4;
+    private function read() { return $this->secret; }
+}
+$box = new EvalPrivateGlobalBox();
+echo $box->secret;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("global private property access should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+/// Verifies eval rejects calls to private methods from global scope.
+#[test]
+fn execute_program_rejects_private_eval_method_call_from_global_scope() {
+    let program = parse_fragment(
+        br#"class EvalPrivateMethodBox {
+    private function read() { return 4; }
+}
+$box = new EvalPrivateMethodBox();
+return $box->read();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("global private method call should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+/// Verifies eval rejects overriding a public method with lower visibility.
+#[test]
+fn execute_program_rejects_method_override_with_reduced_visibility() {
+    let program = parse_fragment(
+        br#"class EvalVisibleBase {
+    public function read() { return 1; }
+}
+class EvalVisibleChild extends EvalVisibleBase {
+    protected function read() { return 2; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("reduced method visibility should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
 /// Verifies eval rejects classes missing methods required by eval interfaces.
 #[test]
 fn execute_program_rejects_missing_dynamic_interface_method() {

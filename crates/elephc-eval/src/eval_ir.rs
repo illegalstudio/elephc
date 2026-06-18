@@ -404,14 +404,25 @@ impl EvalTrait {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalClassProperty {
     name: String,
+    visibility: EvalVisibility,
     default: Option<EvalExpr>,
 }
 
 impl EvalClassProperty {
     /// Creates a public eval class property with an optional initializer.
     pub fn new(name: impl Into<String>, default: Option<EvalExpr>) -> Self {
+        Self::with_visibility(name, EvalVisibility::Public, default)
+    }
+
+    /// Creates an eval class property with explicit PHP visibility.
+    pub fn with_visibility(
+        name: impl Into<String>,
+        visibility: EvalVisibility,
+        default: Option<EvalExpr>,
+    ) -> Self {
         Self {
             name: name.into(),
+            visibility,
             default,
         }
     }
@@ -421,16 +432,30 @@ impl EvalClassProperty {
         &self.name
     }
 
+    /// Returns the PHP visibility declared for this property.
+    pub const fn visibility(&self) -> EvalVisibility {
+        self.visibility
+    }
+
     /// Returns the property initializer expression, when one was declared.
     pub fn default(&self) -> Option<&EvalExpr> {
         self.default.as_ref()
     }
 }
 
+/// PHP visibility for eval-declared object members.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalVisibility {
+    Public,
+    Protected,
+    Private,
+}
+
 /// Public method metadata for a runtime eval class.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalClassMethod {
     name: String,
+    visibility: EvalVisibility,
     is_abstract: bool,
     is_final: bool,
     params: Vec<String>,
@@ -451,8 +476,28 @@ impl EvalClassMethod {
         params: Vec<String>,
         body: Vec<EvalStmt>,
     ) -> Self {
+        Self::with_visibility_and_modifiers(
+            name,
+            EvalVisibility::Public,
+            is_abstract,
+            is_final,
+            params,
+            body,
+        )
+    }
+
+    /// Creates an eval class method with explicit visibility and optional modifiers.
+    pub fn with_visibility_and_modifiers(
+        name: impl Into<String>,
+        visibility: EvalVisibility,
+        is_abstract: bool,
+        is_final: bool,
+        params: Vec<String>,
+        body: Vec<EvalStmt>,
+    ) -> Self {
         Self {
             name: name.into(),
+            visibility,
             is_abstract,
             is_final,
             params,
@@ -463,6 +508,11 @@ impl EvalClassMethod {
     /// Returns the PHP-visible method name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the PHP visibility declared for this method.
+    pub const fn visibility(&self) -> EvalVisibility {
+        self.visibility
     }
 
     /// Returns whether this eval-declared method was declared `abstract`.

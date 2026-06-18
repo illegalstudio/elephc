@@ -179,7 +179,7 @@ pub(in crate::interpreter) fn execute_stmt(
         } => {
             let object = eval_expr(object, context, scope, values)?;
             let value = eval_expr(value, context, scope, values)?;
-            values.property_set(object, property, value)?;
+            eval_property_set_result(object, property, value, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {
@@ -557,6 +557,9 @@ fn validate_eval_class_modifiers(
         if method.is_abstract() && method.is_final() {
             return Err(EvalStatus::RuntimeFatal);
         }
+        if method.is_abstract() && method.visibility() == EvalVisibility::Private {
+            return Err(EvalStatus::RuntimeFatal);
+        }
         if method.is_abstract() && !class.is_abstract() {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -577,6 +580,14 @@ fn validate_method_parent_override(
     let Some((_, parent_method)) = context.class_method(parent, method.name()) else {
         return Ok(());
     };
+    if parent_method.visibility() == EvalVisibility::Private {
+        return Ok(());
+    }
+    if method_visibility_rank(method.visibility())
+        < method_visibility_rank(parent_method.visibility())
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     if parent_method.is_final() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -584,6 +595,15 @@ fn validate_method_parent_override(
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(())
+}
+
+/// Returns a comparable rank where larger means less restrictive visibility.
+fn method_visibility_rank(visibility: EvalVisibility) -> u8 {
+    match visibility {
+        EvalVisibility::Private => 1,
+        EvalVisibility::Protected => 2,
+        EvalVisibility::Public => 3,
+    }
 }
 
 /// Validates that a concrete class has satisfied inherited abstract and interface requirements.
@@ -706,14 +726,81 @@ fn class_has_interface_method(
     context: &ElephcEvalContext,
 ) -> bool {
     if let Some(method) = class.method(requirement.name()) {
-        return !method.is_abstract() && method.params().len() == requirement.params().len();
+        return method.visibility() == EvalVisibility::Public
+            && !method.is_abstract()
+            && method.params().len() == requirement.params().len();
     }
     class
         .parent()
         .and_then(|parent| context.class_method(parent, requirement.name()))
         .is_some_and(|(_, method)| {
-            !method.is_abstract() && method.params().len() == requirement.params().len()
+            method.visibility() == EvalVisibility::Public
+                && !method.is_abstract()
+                && method.params().len() == requirement.params().len()
         })
+}
+
+/// Reads one object property while enforcing eval-declared member visibility.
+pub(in crate::interpreter) fn eval_property_get_result(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        return values.property_get(object, property_name);
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return values.property_get(object, property_name);
+    };
+    if let Some((declaring_class, property)) =
+        eval_dynamic_property_for_access(class.name(), property_name, context)
+    {
+        validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+    }
+    values.property_get(object, property_name)
+}
+
+/// Writes one object property while enforcing eval-declared member visibility.
+pub(in crate::interpreter) fn eval_property_set_result(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        return values.property_set(object, property_name, value);
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return values.property_set(object, property_name, value);
+    };
+    if let Some((declaring_class, property)) =
+        eval_dynamic_property_for_access(class.name(), property_name, context)
+    {
+        validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+    }
+    values.property_set(object, property_name, value)
+}
+
+/// Resolves the property metadata visible from the current class scope, if any.
+fn eval_dynamic_property_for_access(
+    object_class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<(String, EvalClassProperty)> {
+    if let Some(current_class) = context.current_class_scope() {
+        if context.class_is_a(object_class_name, current_class, false) {
+            if let Some((declaring_class, property)) =
+                context.class_own_property(current_class, property_name)
+            {
+                if property.visibility() == EvalVisibility::Private {
+                    return Some((declaring_class, property));
+                }
+            }
+        }
+    }
+    context.class_property(object_class_name, property_name)
 }
 
 /// Creates a backing object for an eval-declared class and runs its constructor.
@@ -747,6 +834,7 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
     if let Some((constructor_class, constructor)) =
         context.class_method(class.name(), "__construct")
     {
+        validate_eval_member_access(&constructor_class, constructor.visibility(), context)?;
         eval_dynamic_method_with_values(
             &constructor_class,
             &constructor,
@@ -775,9 +863,9 @@ pub(in crate::interpreter) fn eval_method_call_result(
     let Some(class) = context.dynamic_object_class(identity) else {
         return values.method_call(object, method_name, evaluated_args);
     };
-    let (class_name, method) = context
-        .class_method(class.name(), method_name)
+    let (class_name, method) = eval_dynamic_method_for_call(class.name(), method_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
+    validate_eval_member_access(&class_name, method.visibility(), context)?;
     if method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -789,6 +877,64 @@ pub(in crate::interpreter) fn eval_method_call_result(
         context,
         values,
     )
+}
+
+/// Resolves the method metadata visible from the current class scope.
+fn eval_dynamic_method_for_call(
+    object_class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<(String, EvalClassMethod)> {
+    if let Some(current_class) = context.current_class_scope() {
+        if context.class_is_a(object_class_name, current_class, false) {
+            if let Some((declaring_class, method)) =
+                context.class_own_method(current_class, method_name)
+            {
+                if method.visibility() == EvalVisibility::Private {
+                    return Some((declaring_class, method));
+                }
+            }
+        }
+    }
+    context.class_method(object_class_name, method_name)
+}
+
+/// Returns whether the current eval class scope can access one declared member.
+fn validate_eval_member_access(
+    declaring_class: &str,
+    visibility: EvalVisibility,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    if visibility == EvalVisibility::Public {
+        return Ok(());
+    }
+    let Some(current_class) = context.current_class_scope() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    match visibility {
+        EvalVisibility::Public => Ok(()),
+        EvalVisibility::Private => same_eval_class_name(current_class, declaring_class)
+            .then_some(())
+            .ok_or(EvalStatus::RuntimeFatal),
+        EvalVisibility::Protected => {
+            eval_classes_are_related(current_class, declaring_class, context)
+                .then_some(())
+                .ok_or(EvalStatus::RuntimeFatal)
+        }
+    }
+}
+
+/// Returns true when two PHP class names refer to the same eval class.
+fn same_eval_class_name(left: &str, right: &str) -> bool {
+    left.trim_start_matches('\\')
+        .eq_ignore_ascii_case(right.trim_start_matches('\\'))
+}
+
+/// Returns true when two eval classes are in the same inheritance family.
+fn eval_classes_are_related(left: &str, right: &str, context: &ElephcEvalContext) -> bool {
+    same_eval_class_name(left, right)
+        || context.class_is_a(left, right, false)
+        || context.class_is_a(right, left, false)
 }
 
 /// Executes one eval-declared class method with `$this` bound in method scope.
@@ -811,6 +957,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
         format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
     let static_names = static_var_names(method.body());
     context.push_function(qualified_method_name.clone());
+    context.push_class_scope(class_name.to_string());
     let result = execute_statements(method.body(), context, &mut method_scope, values);
     let persist_result = persist_static_locals(
         context,
@@ -819,6 +966,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
         &method_scope,
         values,
     );
+    context.pop_class_scope();
     context.pop_function();
     persist_result?;
     match result? {

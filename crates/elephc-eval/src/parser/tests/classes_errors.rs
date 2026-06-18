@@ -88,6 +88,36 @@ fn parse_fragment_accepts_public_class_members() {
         ))]
     );
 }
+/// Verifies private and protected class members lower with explicit visibility metadata.
+#[test]
+fn parse_fragment_accepts_private_and_protected_class_members() {
+    let program = parse_fragment(
+        b"class DynEvalVisibility { private int $secret = 3; protected function reveal() { return $this->secret; } }",
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::new(
+            "DynEvalVisibility",
+            vec![EvalClassProperty::with_visibility(
+                "secret",
+                EvalVisibility::Private,
+                Some(EvalExpr::Const(EvalConst::Int(3)))
+            )],
+            vec![EvalClassMethod::with_visibility_and_modifiers(
+                "reveal",
+                EvalVisibility::Protected,
+                false,
+                false,
+                Vec::new(),
+                vec![EvalStmt::Return(Some(EvalExpr::PropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: "secret".to_string(),
+                }))]
+            )]
+        ))]
+    );
+}
 /// Verifies abstract and final class modifiers lower into dynamic class metadata.
 #[test]
 fn parse_fragment_accepts_abstract_and_final_class_members() {

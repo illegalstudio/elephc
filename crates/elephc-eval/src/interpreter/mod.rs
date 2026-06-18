@@ -33,6 +33,7 @@ use crate::eval_ir::{
     EvalArrayElement, EvalBinOp, EvalCallArg, EvalCatch, EvalClass, EvalClassMethod,
     EvalClassProperty, EvalConst, EvalExpr, EvalFunction, EvalInterface, EvalInterfaceMethod,
     EvalMagicConst, EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase, EvalTrait, EvalUnaryOp,
+    EvalVisibility,
 };
 use crate::json_validate::{self, JsonParseError, JsonParseErrorKind, JsonValue};
 use crate::parser::parse_fragment;
