@@ -60,6 +60,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::Throw(inner) => lower_throw_expr(ctx, inner, expr),
         ExprKind::ErrorSuppress(inner) => lower_error_suppress(ctx, inner, expr),
         ExprKind::Print(inner) => lower_print(ctx, inner, expr),
+        ExprKind::Clone(inner) => lower_clone(ctx, inner, expr),
         ExprKind::NullCoalesce { value, default } => {
             lower_null_coalesce(ctx, value, default, expr)
         }
@@ -640,7 +641,8 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::NewScopedObject { .. }
         | ExprKind::Pipe { .. }
         | ExprKind::Yield { .. }
-        | ExprKind::YieldFrom(_) => true,
+        | ExprKind::YieldFrom(_)
+        | ExprKind::Clone(_) => true,
         ExprKind::BinaryOp { left, right, .. } => {
             expr_can_reset_concat_storage(left) || expr_can_reset_concat_storage(right)
         }
@@ -7324,6 +7326,29 @@ fn lower_new_object(ctx: &mut LoweringContext<'_, '_>, class_name: &Name, args: 
         Some(Immediate::Data(data)),
         php_type,
         Op::ObjectNew.default_effects(),
+        Some(expr.span),
+    )
+}
+
+/// Lowers PHP `clone $expr` into the EIR object-clone opcode.
+///
+/// The operand is lowered first (preserving source-order side effects), and its
+/// inferred PHP type is reused as the result type: cloning an `Object(Foo)`
+/// yields another `Object(Foo)` (a raw object pointer), while cloning a
+/// `Mixed`/union/iterable value yields the same boxed representation so
+/// downstream code keeps treating it as a Mixed cell. The codegen backend
+/// dispatches to `__rt_object_clone`, which shallow-copies the object payload,
+/// retains refcounted/string properties, copies any dynamic-properties hash, and
+/// invokes the class's `__clone()` on the new instance when declared.
+fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
+    let operand = lower_expr(ctx, inner);
+    let result_type = ctx.builder.value_php_type(operand.value);
+    ctx.emit_value(
+        Op::ObjectClone,
+        vec![operand.value],
+        None,
+        result_type,
+        Op::ObjectClone.default_effects(),
         Some(expr.span),
     )
 }

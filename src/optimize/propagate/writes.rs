@@ -317,7 +317,8 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. } => expr_local_writes(inner),
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Clone(inner) => expr_local_writes(inner),
         ExprKind::BinaryOp { left, right, .. } => merge_write_sets([
             expr_local_writes(left)?,
             expr_local_writes(right)?,

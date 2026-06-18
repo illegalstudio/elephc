@@ -124,6 +124,10 @@ pub fn emit_expr(
         ExprKind::Print(inner) => {
             emit_print_expr(inner, emitter, ctx, data)
         }
+        // `clone` is an EIR-only construct; the frozen direct AST backend never lowers it.
+        ExprKind::Clone(_) => {
+            unreachable!("clone expressions are only lowered by the EIR backend")
+        }
         ExprKind::NullCoalesce { value, default } => {
             compare::emit_null_coalesce(value, default, emitter, ctx, data)
         }

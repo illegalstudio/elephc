@@ -46,6 +46,11 @@ pub enum ExprKind {
     Throw(Box<Expr>),
     ErrorSuppress(Box<Expr>),
     Print(Box<Expr>),
+    /// PHP `clone $expr`: shallow-copies the object held by `expr` and, if the runtime
+    /// class (or an ancestor) declares `__clone()`, invokes it on the new object with no
+    /// arguments. The operand must evaluate to an object. Binds tighter than `**` and
+    /// looser than postfix `->`/`[]`/`()`, matching PHP's `clone new` precedence tier.
+    Clone(Box<Expr>),
     NullCoalesce {
         value: Box<Expr>,
         default: Box<Expr>,

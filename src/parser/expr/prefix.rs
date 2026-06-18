@@ -234,6 +234,11 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
+        // `clone <expr>` — PHP prefix operator on the `clone new` precedence tier (binds
+        // tighter than `**`, looser than postfix `->`/`[]`/()`). Operand bp 38 sits just
+        // above `**`'s lhs bp (37) so `clone $a ** 2` parses as `(clone $a) ** 2`, while the
+        // unconditional postfix loop still folds `clone $a->b` into `clone ($a->b)`.
+        Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 38),
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
         Token::Yield => parse_yield(tokens, pos, span),
         // `require`/`include` (optionally `_once`) in expression position, e.g.

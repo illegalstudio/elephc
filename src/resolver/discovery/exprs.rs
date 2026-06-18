@@ -72,6 +72,7 @@ pub(super) fn discover_expr(
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Spread(value)
+        | ExprKind::Clone(value)
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::BufferNew { len: value, .. } => {
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;

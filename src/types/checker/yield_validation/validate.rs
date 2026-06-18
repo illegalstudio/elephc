@@ -286,6 +286,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         | ExprKind::Throw(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. } => visit_expr(inner, st),
         ExprKind::NullCoalesce { value, default } => {

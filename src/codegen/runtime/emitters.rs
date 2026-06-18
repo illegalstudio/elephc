@@ -315,6 +315,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     objects::emit_mixed_array_set(emitter);
     objects::emit_new_by_name(emitter);
     objects::emit_call_object_destructor(emitter);
+    objects::emit_object_clone(emitter);
     objects::emit_json_encode_stdclass(emitter);
 
     // Buffer runtime functions

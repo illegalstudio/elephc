@@ -92,6 +92,25 @@ struct ConstructorCallTarget {
     ref_params: Vec<bool>,
 }
 
+/// Lowers PHP `clone $expr` to a call to the `__rt_object_clone` runtime helper.
+///
+/// The operand (a raw object pointer for an `Object`-typed value, or a boxed
+/// Mixed-cell pointer for a `Mixed`/union/iterable value) is materialized into
+/// the first integer argument register, then `__rt_object_clone` shallow-copies
+/// the payload, retains refcounted/string properties, clones any dynamic-property
+/// hash, and dispatches the class's `__clone()` on the new instance. The helper
+/// returns the new object pointer (for an `Object` operand) or a fresh Mixed box
+/// wrapping it (for a boxed operand) in the integer result register, which
+/// `store_call_result` spills to the result local using the instruction's result
+/// type so the codegen representation matches the operand's.
+pub(super) fn lower_object_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let operand = expect_operand(inst, 0)?;
+    load_value_to_first_int_arg(ctx, operand)?;
+    abi::emit_call_label(ctx.emitter, "__rt_object_clone");
+    let result_ty = inst.result_php_type.codegen_repr();
+    store_call_result(ctx, inst, &result_ty)
+}
+
 /// Lowers fixed-class object allocation and optional constructor invocation.
 pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let class_name = class_name_immediate(ctx, inst)?.to_string();

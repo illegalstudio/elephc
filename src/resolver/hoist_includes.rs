@@ -362,6 +362,7 @@ fn rewrite_expr_includes(expr: Expr, always: bool, ctx: &mut HoistCtx) -> Result
         ExprKind::Not(inner) => ExprKind::Not(Box::new(rewrite_expr_includes(*inner, always, ctx)?)),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(rewrite_expr_includes(*inner, always, ctx)?)),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(rewrite_expr_includes(*inner, always, ctx)?)),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(rewrite_expr_includes(*inner, always, ctx)?)),
         ExprKind::ErrorSuppress(inner) => {
             ExprKind::ErrorSuppress(Box::new(rewrite_expr_includes(*inner, always, ctx)?))
         }

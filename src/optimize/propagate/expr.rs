@@ -68,6 +68,9 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             ExprKind::ErrorSuppress(Box::new(propagate_expr(*inner, env)))
         }
         ExprKind::Print(inner) => ExprKind::Print(Box::new(propagate_expr(*inner, env))),
+        // `clone` reads its operand (an object) and is impure, so constant propagation only
+        // descends into the operand; the clone node itself is preserved verbatim.
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(propagate_expr(*inner, env))),
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(propagate_expr(*value, env)),
             default: Box::new(propagate_expr(*default, env)),

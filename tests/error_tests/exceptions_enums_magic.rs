@@ -417,3 +417,31 @@ fn test_error_enum_method_undefined_variable() {
         "Undefined variable: $missing",
     );
 }
+
+/// Verifies that `clone` on a definite non-object scalar is rejected at compile time,
+/// matching PHP's "clone expects an object" runtime error (deferred here to the checker
+/// for statically-known non-object operands).
+#[test]
+fn test_error_clone_non_object() {
+    expect_error("<?php $b = clone 42;", "clone expects an object");
+}
+
+/// Verifies that a static `__clone` method is rejected: PHP invokes `__clone` on the
+/// freshly copied instance, so it must be non-static.
+#[test]
+fn test_error_clone_must_be_non_static() {
+    expect_error(
+        "<?php class P { public static function __clone() {} }",
+        "Magic method must be non-static: P::__clone",
+    );
+}
+
+/// Verifies that `__clone` with parameters is rejected: PHP calls `__clone` with no
+/// arguments on the cloned instance.
+#[test]
+fn test_error_clone_must_take_zero_arguments() {
+    expect_error(
+        "<?php class P { public function __clone($x) {} }",
+        "Magic method must take 0 arguments: P::__clone",
+    );
+}

@@ -897,6 +897,52 @@ Rules and notes:
   the object is still freed once the destructor returns. Avoid retaining `$this`
   past the end of `__destruct`.
 
+## Cloning objects (`clone`, `__clone`)
+
+The `clone` expression produces a shallow copy of an object: a fresh instance
+of the same class whose properties start out equal to the original's. Scalar
+and string properties are independent on the copy; object and array properties
+are shared by reference (the canonical PHP shallow-clone contract).
+
+```php
+<?php
+class Car {
+    public string $model;
+    public Engine $engine;   // object property: shared by the shallow clone
+    public function __clone() {
+        // Deep-copy the engine so the clone owns an independent part.
+        $this->engine = clone $this->engine;
+    }
+}
+$original = new Car("Roadster", new Engine(200));
+$copy = clone $original;     // shallow copy, then __clone() runs on $copy
+```
+
+After the shallow copy, PHP invokes `__clone()` on the **new** object (not the
+original) if the class — or an ancestor — declares it. This is where a class
+deep-copies properties that must not be shared (nested objects, in particular).
+A class without `__clone` (and with none inherited) simply gets the shallow
+copy.
+
+Rules and notes:
+
+- `__clone` must be non-static and take no arguments. Any visibility is
+  allowed (PHP invokes it on the freshly copied instance regardless), so it may
+  be `public`, `protected`, or `private`.
+- A subclass without its own `__clone` inherits its parent's.
+- `clone` is a prefix expression. It binds tighter than `**` and looser than
+  postfix `->`/`[]`/`()`, so `clone $a ** 2` is `(clone $a) ** 2`,
+  `clone $a->x` is `clone ($a->x)`, and `clone new Foo()` is `clone (new Foo())`.
+- Cloning a statically-known non-object (e.g. `clone 42`) is a compile error,
+  matching PHP's runtime `TypeError`. `clone` of a `mixed`/union/nullable
+  operand is allowed and deferred to the runtime helper, which clones an object
+  payload, returns `null` for a non-object payload, and unboxes/reboxes a
+  boxed `Mixed` cell — this is the shape used when cloning objects read out of
+  untyped arrays (`clone $prototypes[$class]`).
+- Dynamic properties (`#[\AllowDynamicProperties]`) are cloned into an
+  independent container, so reassigning one on the copy does not touch the
+  original.
+
 ## Attributes
 
 PHP 8.0 attributes (`#[Name]`) decorate declarations. elephc parses attributes at every site PHP allows: classes, interfaces, traits, enums, enum cases, top-level functions, methods, properties, function/method/closure parameters (incl. promoted constructor params), closures, and arrow functions. Class, method, and property attributes have limited runtime reflection through the helpers below; attributes on other declaration sites are currently validated for syntax and kept only in the AST.

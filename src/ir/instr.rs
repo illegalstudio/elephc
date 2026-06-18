@@ -273,6 +273,7 @@ pub enum Op {
     IteratorMethodCall,
     SplRuntimeCall,
     ObjectNew,
+    ObjectClone,
     DynamicObjectNew,
     DynamicObjectNewMixed,
     PropGet,
@@ -387,6 +388,11 @@ impl Op {
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
                 E::ALLOC_HEAP
             }
+            // `clone` reads the operand's heap-backed properties, allocates a fresh
+            // object (and a fresh Mixed cell when the operand is boxed), retains
+            // refcounted/string property payloads, and may invoke a user `__clone()`
+            // that throws or emits output — so it is conservatively may-throw.
+            ObjectClone => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW,
             MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGet | HashGet
             | BufferGet | BufferLen | PackedFieldGet | PtrRead | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
@@ -571,6 +577,7 @@ impl Op {
             IteratorMethodCall => "iterator_method_call",
             SplRuntimeCall => "spl_runtime_call",
             ObjectNew => "object_new",
+            ObjectClone => "object_clone",
             DynamicObjectNew => "dynamic_object_new",
             DynamicObjectNewMixed => "dynamic_object_new_mixed",
             PropGet => "prop_get",

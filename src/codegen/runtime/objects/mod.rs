@@ -9,12 +9,14 @@
 //! - Helper names are consumed directly by codegen paths for `stdClass` and JSON-decoded `Mixed` values.
 
 mod call_destructor;
+mod clone;
 mod mixed_array_get;
 mod mixed_array_set;
 mod new_by_name;
 mod stdclass;
 
 pub(crate) use call_destructor::emit_call_object_destructor;
+pub(crate) use clone::emit_object_clone;
 pub(crate) use mixed_array_get::emit_mixed_array_get;
 pub(crate) use mixed_array_set::emit_mixed_array_set;
 pub(crate) use new_by_name::emit_new_by_name;

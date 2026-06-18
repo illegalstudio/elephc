@@ -203,6 +203,7 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::PtrCast { expr: inner, .. } => expr_uses_variable(inner, needle),
         ExprKind::NullCoalesce { value, default } => {
             expr_uses_variable(value, needle) || expr_uses_variable(default, needle)

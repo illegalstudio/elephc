@@ -226,6 +226,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             expr_effect(value).combine(instanceof_target_effect(target))
         }
         ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
+        // `clone $obj` allocates a new object (heap write), shallow-copies properties, and may
+        // dispatch a user `__clone()` that reads/writes properties and throws. Conservative.
+        ExprKind::Clone(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
         ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
         ExprKind::Pipe { value, callable } => expr_effect(value)
             .combine(expr_effect(callable))

@@ -72,6 +72,7 @@ pub(crate) fn bareword_name_from_token(token: &Token) -> Option<String> {
         Token::Class => Some("class".to_string()),
         Token::Enum => Some("enum".to_string()),
         Token::New => Some("new".to_string()),
+        Token::Clone => Some("clone".to_string()),
         Token::Public => Some("public".to_string()),
         Token::Protected => Some("protected".to_string()),
         Token::Private => Some("private".to_string()),

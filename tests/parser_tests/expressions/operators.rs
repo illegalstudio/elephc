@@ -231,4 +231,48 @@ fn test_expr_call_parses() {
     }
 }
 
+// --- clone expression precedence ---
+
+/// Verifies `clone` parses as a unary prefix expression wrapping its operand.
+#[test]
+fn test_clone_parses_unary() {
+    let stmts = parse_source("<?php echo clone $a;");
+    assert_eq!(echoed_expr(&stmts), &ExprKind::Clone(Box::new(Expr::var("a"))));
+}
+
+/// Verifies `clone` binds tighter than `**` (pow), matching PHP: `clone $a ** 2`
+/// parses as `(clone $a) ** 2`, so the cloned object is the pow left operand.
+#[test]
+fn test_clone_binds_tighter_than_pow() {
+    let stmts = parse_source("<?php echo clone $a ** 2;");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::BinaryOp { op: BinOp::Pow, left, right }
+            if matches!(left.kind, ExprKind::Clone(_))
+                && matches!(right.kind, ExprKind::IntLiteral(2))
+    ));
+}
+
+/// Verifies postfix property access binds tighter than `clone`, matching PHP:
+/// `clone $a->n` parses as `clone ($a->n)`, so the cloned value is the property.
+#[test]
+fn test_clone_operand_takes_postfix_property() {
+    let stmts = parse_source("<?php echo clone $a->n;");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::Clone(inner) if matches!(inner.kind, ExprKind::PropertyAccess { .. })
+    ));
+}
+
+/// Verifies `clone new P()` parses as `clone (new P())` — the `new` expression is
+/// the cloned operand, matching PHP's evaluation order.
+#[test]
+fn test_clone_new_object() {
+    let stmts = parse_source("<?php echo clone new P();");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::Clone(inner) if matches!(inner.kind, ExprKind::NewObject { .. })
+    ));
+}
+
 // --- Null coalescing precedence ---

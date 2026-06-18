@@ -62,8 +62,9 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
 }
 
 /// Validates that user-declared magic methods (`__toString`, `__get`, `__set`,
-/// `__isset`, `__unset`, `__call`, `__callStatic`, `__invoke`, `__destruct`)
-/// conform to PHP's static/non-static, visibility, arity, and return-type rules.
+/// `__isset`, `__unset`, `__call`, `__callStatic`, `__invoke`, `__destruct`,
+/// `__clone`) conform to PHP's static/non-static, visibility, arity, and
+/// return-type rules.
 ///
 /// Returns `Ok(())` if all declared magic methods are contract-compliant.
 /// Returns `Err(CompileError)` with all violations collected if any class fails.
@@ -215,6 +216,30 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                             method.span,
                             &format!(
                                 "Magic method must take 0 arguments: {}::__destruct",
+                                class_name
+                            ),
+                        ));
+                    }
+                }
+                "__clone" => {
+                    // PHP permits any visibility for __clone (the engine invokes
+                    // it on the freshly copied instance regardless), so only the
+                    // non-static and zero-argument rules are enforced here.
+                    if method.is_static {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!(
+                                "Magic method must be non-static: {}::__clone",
+                                class_name
+                            ),
+                        ));
+                        continue;
+                    }
+                    if !method.params.is_empty() || method.variadic.is_some() {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!(
+                                "Magic method must take 0 arguments: {}::__clone",
                                 class_name
                             ),
                         ));
