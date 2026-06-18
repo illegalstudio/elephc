@@ -568,6 +568,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "tempnam" => eval_builtin_tempnam(args, context, scope, values),
         "time" => eval_builtin_time(args, values),
         "touch" => eval_builtin_touch(args, context, scope, values),
+        "stream_is_local" | "stream_supports_lock" => {
+            eval_builtin_stream_bool_predicate(name, args, context, scope, values)
+        }
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => {
             eval_builtin_stream_introspection(name, args, values)
         }

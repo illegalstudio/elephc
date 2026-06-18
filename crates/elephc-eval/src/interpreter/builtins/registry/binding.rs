@@ -242,6 +242,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "spl_object_id" | "spl_object_hash" => Some(&["object"]),
         "sscanf" => Some(&["string", "format", "vars"]),
         "sprintf" | "printf" => Some(&["format", "values"]),
+        "stream_is_local" | "stream_supports_lock" => Some(&["stream"]),
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),

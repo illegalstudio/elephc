@@ -85,3 +85,36 @@ pub(in crate::interpreter) fn eval_stream_introspection_result(
     };
     eval_static_string_array_result(items, values)
 }
+
+/// Evaluates PHP stream boolean-introspection builtins over one eval expression.
+pub(in crate::interpreter) fn eval_builtin_stream_bool_predicate(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [stream] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let stream = eval_expr(stream, context, scope, values)?;
+    eval_stream_bool_predicate_result(name, stream, values)
+}
+
+/// Returns elephc's fixed stream-locality and lock-support predicate values.
+pub(in crate::interpreter) fn eval_stream_bool_predicate_result(
+    name: &str,
+    stream: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match name {
+        "stream_is_local" => values.bool_value(true),
+        "stream_supports_lock" => {
+            if values.type_tag(stream)? != EVAL_TAG_RESOURCE {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            values.bool_value(true)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}

@@ -168,6 +168,28 @@ return function_exists("stream_get_filters");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval stream predicate stubs match elephc's fixed stream metadata behavior.
+#[test]
+fn execute_program_dispatches_stream_predicate_builtins() {
+    let program = parse_fragment(
+        br#"echo stream_is_local("php://memory") ? "local" : "bad"; echo ":";
+echo stream_supports_lock($handle) ? "lock" : "bad"; echo ":";
+echo call_user_func("stream_is_local", "file://tmp") ? "call" : "bad"; echo ":";
+echo call_user_func_array("stream_supports_lock", ["stream" => $handle]) ? "spread" : "bad"; echo ":";
+echo function_exists("stream_is_local");
+return function_exists("stream_supports_lock");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let handle = values.alloc(FakeValue::Resource(6));
+    scope.set("handle", handle, ScopeCellOwnership::Borrowed);
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "local:lock:call:spread:1");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval `spl_classes()` returns the native-compatible SPL type snapshot.
 #[test]
 fn execute_program_dispatches_spl_classes_builtin() {
