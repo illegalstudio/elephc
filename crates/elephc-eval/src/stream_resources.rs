@@ -23,6 +23,7 @@ use crate::value::RuntimeCellHandle;
 /// Eval-owned table of local file streams keyed by runtime resource payload.
 #[derive(Default)]
 pub(crate) struct EvalStreamResources {
+    chunk_sizes: HashMap<i64, i64>,
     default_stream_context: Option<i64>,
     next_id: i64,
     directories: HashMap<i64, EvalDirectoryStream>,
@@ -192,6 +193,57 @@ impl EvalStreamResources {
         self.streams
             .get_mut(&id)
             .is_some_and(|stream| stream.file.flush().is_ok())
+    }
+
+    /// Returns whether a stream's file descriptor is attached to a terminal.
+    pub(crate) fn isatty(&self, id: i64) -> Option<bool> {
+        let stream = self.streams.get(&id)?;
+        let result = unsafe {
+            // libc only reads the descriptor value during the terminal probe.
+            libc::isatty(stream.file.as_raw_fd())
+        };
+        Some(result == 1)
+    }
+
+    /// Toggles blocking mode on a stream's file descriptor.
+    pub(crate) fn set_blocking(&self, id: i64, enable: bool) -> Option<bool> {
+        let stream = self.streams.get(&id)?;
+        let fd = stream.file.as_raw_fd();
+        let flags = unsafe {
+            // fcntl reads the current descriptor flags without taking ownership.
+            libc::fcntl(fd, libc::F_GETFL)
+        };
+        if flags < 0 {
+            return Some(false);
+        }
+        let flags = if enable {
+            flags & !libc::O_NONBLOCK
+        } else {
+            flags | libc::O_NONBLOCK
+        };
+        let result = unsafe {
+            // fcntl updates the descriptor flags in place.
+            libc::fcntl(fd, libc::F_SETFL, flags)
+        };
+        Some(result == 0)
+    }
+
+    /// Reports timeout-setting support for local file streams.
+    pub(crate) fn set_timeout(&self, id: i64, _seconds: i64, _microseconds: i64) -> Option<bool> {
+        self.streams.get(&id).map(|_| false)
+    }
+
+    /// Stores a per-stream chunk size and returns the previous size.
+    pub(crate) fn set_chunk_size(&mut self, id: i64, size: i64) -> Option<i64> {
+        if !self.streams.contains_key(&id) || size <= 0 {
+            return None;
+        }
+        Some(self.chunk_sizes.insert(id, size).unwrap_or(8192))
+    }
+
+    /// Accepts read/write buffer settings for local file streams.
+    pub(crate) fn set_buffer(&self, id: i64, _size: i64) -> Option<i64> {
+        self.streams.get(&id).map(|_| 0)
     }
 
     /// Applies an advisory lock operation to a stream's backing file descriptor.

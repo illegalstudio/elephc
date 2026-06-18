@@ -269,7 +269,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "spl_object_id" | "spl_object_hash" => Some(&["object"]),
         "sscanf" => Some(&["string", "format", "vars"]),
         "sprintf" | "printf" => Some(&["format", "values"]),
-        "stream_is_local" | "stream_supports_lock" => Some(&["stream"]),
+        "stream_is_local" | "stream_isatty" | "stream_supports_lock" => Some(&["stream"]),
         "stream_copy_to_stream" => Some(&["from", "to", "length", "offset"]),
         "stream_context_create" => Some(&["options", "params"]),
         "stream_context_get_default" => Some(&["options"]),
@@ -282,6 +282,11 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "stream_get_contents" => Some(&["stream", "length", "offset"]),
         "stream_get_line" => Some(&["stream", "length", "ending"]),
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
+        "stream_set_blocking" => Some(&["stream", "enable"]),
+        "stream_set_chunk_size" | "stream_set_read_buffer" | "stream_set_write_buffer" => {
+            Some(&["stream", "size"])
+        }
+        "stream_set_timeout" => Some(&["stream", "seconds", "microseconds"]),
         "strcasecmp" | "strcmp" => Some(&["string1", "string2"]),
         "str_contains" | "str_ends_with" | "str_starts_with" => Some(&["haystack", "needle"]),
         "strtotime" => Some(&["datetime"]),
