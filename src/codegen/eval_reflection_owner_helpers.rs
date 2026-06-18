@@ -26,6 +26,10 @@ struct ReflectionOwnerLayout {
     property_count: usize,
     name_lo: Option<usize>,
     name_hi: Option<usize>,
+    short_name_lo: Option<usize>,
+    short_name_hi: Option<usize>,
+    namespace_name_lo: Option<usize>,
+    namespace_name_hi: Option<usize>,
     attrs_lo: usize,
     attrs_hi: usize,
     is_final_lo: Option<usize>,
@@ -38,6 +42,8 @@ struct ReflectionOwnerLayout {
     is_trait_hi: Option<usize>,
     is_enum_lo: Option<usize>,
     is_enum_hi: Option<usize>,
+    in_namespace_lo: Option<usize>,
+    in_namespace_hi: Option<usize>,
 }
 
 /// Layouts for the Reflection owner classes eval can materialize.
@@ -123,16 +129,23 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let name_lo = has_name
         .then(|| reflection_property_offset(info, "__name"))
         .flatten();
+    let short_name_lo = reflection_property_offset(info, "__short_name");
+    let namespace_name_lo = reflection_property_offset(info, "__namespace_name");
     let is_final_lo = reflection_property_offset(info, "__is_final");
     let is_abstract_lo = reflection_property_offset(info, "__is_abstract");
     let is_interface_lo = reflection_property_offset(info, "__is_interface");
     let is_trait_lo = reflection_property_offset(info, "__is_trait");
     let is_enum_lo = reflection_property_offset(info, "__is_enum");
+    let in_namespace_lo = reflection_property_offset(info, "__in_namespace");
     Some(ReflectionOwnerLayout {
         class_id: info.class_id,
         property_count: info.properties.len(),
         name_lo,
         name_hi: name_lo.map(|offset| offset + 8),
+        short_name_lo,
+        short_name_hi: short_name_lo.map(|offset| offset + 8),
+        namespace_name_lo,
+        namespace_name_hi: namespace_name_lo.map(|offset| offset + 8),
         attrs_lo,
         attrs_hi: attrs_lo + 8,
         is_final_lo,
@@ -145,6 +158,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         is_trait_hi: is_trait_lo.map(|offset| offset + 8),
         is_enum_lo,
         is_enum_hi: is_enum_lo.map(|offset| offset + 8),
+        in_namespace_lo,
+        in_namespace_hi: in_namespace_lo.map(|offset| offset + 8),
     })
 }
 
@@ -274,7 +289,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let enum_backed_case_label = "__elephc_eval_reflection_owner_new_enum_backed_case_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 64");                                         // reserve slots for inputs, object, and unboxed attrs
+    emitter.instruction("sub rsp, 96");                                         // reserve slots for inputs, object, unboxed attrs, and name parts
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the Reflection owner kind
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the reflected-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the reflected-name length
@@ -447,6 +462,67 @@ fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &Reflecti
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", name_hi);
+    let (
+        Some(short_name_lo),
+        Some(short_name_hi),
+        Some(namespace_name_lo),
+        Some(namespace_name_hi),
+        Some(in_namespace_lo),
+        Some(in_namespace_hi),
+    ) = (
+        layout.short_name_lo,
+        layout.short_name_hi,
+        layout.namespace_name_lo,
+        layout.namespace_name_hi,
+        layout.in_namespace_lo,
+        layout.in_namespace_hi,
+    )
+    else {
+        return;
+    };
+    let scan_loop_label = "__elephc_eval_reflection_owner_name_scan_loop";
+    let found_label = "__elephc_eval_reflection_owner_name_scan_found";
+    let no_namespace_label = "__elephc_eval_reflection_owner_name_scan_none";
+    let store_parts_label = "__elephc_eval_reflection_owner_name_store_parts";
+    emitter.instruction("ldr x3, [sp, #8]");                                    // reload the original reflected-name pointer for splitting
+    emitter.instruction("ldr x4, [sp, #16]");                                   // reload the original reflected-name length for splitting
+    emitter.instruction("mov x5, x4");                                          // start scanning from one byte past the final name byte
+    emitter.instruction(&format!("cbz x5, {}", no_namespace_label));            // empty names have no namespace component
+    emitter.label(scan_loop_label);
+    emitter.instruction("sub x5, x5, #1");                                      // move the scan cursor to the previous byte
+    emitter.instruction("ldrb w6, [x3, x5]");                                   // read one reflected-name byte from the scan cursor
+    emitter.instruction("cmp w6, #92");                                         // compare against PHP namespace separator '\\'
+    emitter.instruction(&format!("b.eq {}", found_label));                      // split at the final namespace separator
+    emitter.instruction(&format!("cbnz x5, {}", scan_loop_label));              // keep scanning until the first byte has been checked
+    emitter.label(no_namespace_label);
+    emitter.instruction("str x3, [sp, #56]");                                   // short-name pointer is the original name pointer
+    emitter.instruction("str x4, [sp, #64]");                                   // short-name length is the full name length
+    emitter.instruction("str xzr, [sp, #72]");                                  // namespace length is zero for global names
+    emitter.instruction(&format!("b {}", store_parts_label));                   // skip the namespaced split path
+    emitter.label(found_label);
+    emitter.instruction("add x6, x5, #1");                                      // compute the short-name byte offset after the separator
+    emitter.instruction("add x7, x3, x6");                                      // compute the short-name pointer
+    emitter.instruction("sub x8, x4, x6");                                      // compute the short-name length
+    emitter.instruction("str x7, [sp, #56]");                                   // save the short-name pointer across persistence calls
+    emitter.instruction("str x8, [sp, #64]");                                   // save the short-name length across persistence calls
+    emitter.instruction("str x5, [sp, #72]");                                   // namespace length is the separator offset
+    emitter.label(store_parts_label);
+    emitter.instruction("ldr x1, [sp, #8]");                                    // use the original name pointer for namespace persistence
+    emitter.instruction("ldr x2, [sp, #72]");                                   // reload the namespace byte length
+    emitter.instruction("bl __rt_str_persist");                                 // copy the namespace bytes for ReflectionClass storage
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", namespace_name_lo);
+    abi::emit_store_to_address(emitter, "x2", "x9", namespace_name_hi);
+    emitter.instruction("cmp x2, #0");                                          // detect whether a namespace component was present
+    emitter.instruction("cset x10, ne");                                        // materialize ReflectionClass::inNamespace()
+    abi::emit_store_to_address(emitter, "x10", "x9", in_namespace_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", in_namespace_hi);
+    emitter.instruction("ldr x1, [sp, #56]");                                   // reload the short-name pointer
+    emitter.instruction("ldr x2, [sp, #64]");                                   // reload the short-name byte length
+    emitter.instruction("bl __rt_str_persist");                                 // copy the short-name bytes for ReflectionClass storage
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", short_name_lo);
+    abi::emit_store_to_address(emitter, "x2", "x9", short_name_hi);
 }
 
 /// Stores the incoming x86_64 reflected class name into ReflectionClass.
@@ -463,6 +539,71 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", name_hi);
+    let (
+        Some(short_name_lo),
+        Some(short_name_hi),
+        Some(namespace_name_lo),
+        Some(namespace_name_hi),
+        Some(in_namespace_lo),
+        Some(in_namespace_hi),
+    ) = (
+        layout.short_name_lo,
+        layout.short_name_hi,
+        layout.namespace_name_lo,
+        layout.namespace_name_hi,
+        layout.in_namespace_lo,
+        layout.in_namespace_hi,
+    )
+    else {
+        return;
+    };
+    let scan_loop_label = "__elephc_eval_reflection_owner_name_scan_loop_x";
+    let found_label = "__elephc_eval_reflection_owner_name_scan_found_x";
+    let no_namespace_label = "__elephc_eval_reflection_owner_name_scan_none_x";
+    let store_parts_label = "__elephc_eval_reflection_owner_name_store_parts_x";
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the original reflected-name pointer for splitting
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the original reflected-name length for splitting
+    emitter.instruction("mov r11, r9");                                         // start scanning from one byte past the final name byte
+    emitter.instruction("test r11, r11");                                       // check whether the reflected name is empty
+    emitter.instruction(&format!("jz {}", no_namespace_label));                 // empty names have no namespace component
+    emitter.label(scan_loop_label);
+    emitter.instruction("sub r11, 1");                                          // move the scan cursor to the previous byte
+    emitter.instruction("movzx eax, BYTE PTR [r8 + r11]");                      // read one reflected-name byte from the scan cursor
+    emitter.instruction("cmp eax, 92");                                         // compare against PHP namespace separator '\\'
+    emitter.instruction(&format!("je {}", found_label));                        // split at the final namespace separator
+    emitter.instruction("test r11, r11");                                       // check whether the first byte has been examined
+    emitter.instruction(&format!("jnz {}", scan_loop_label));                   // keep scanning until the first byte has been checked
+    emitter.label(no_namespace_label);
+    emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // short-name pointer is the original name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // short-name length is the full name length
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // namespace length is zero for global names
+    emitter.instruction(&format!("jmp {}", store_parts_label));                 // skip the namespaced split path
+    emitter.label(found_label);
+    emitter.instruction("lea rax, [r11 + 1]");                                  // compute the short-name byte offset after the separator
+    emitter.instruction("lea r10, [r8 + rax]");                                 // compute the short-name pointer
+    emitter.instruction("mov rcx, r9");                                         // copy the full name length before subtracting the prefix
+    emitter.instruction("sub rcx, rax");                                        // compute the short-name length
+    emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the short-name pointer across persistence calls
+    emitter.instruction("mov QWORD PTR [rbp - 72], rcx");                       // save the short-name length across persistence calls
+    emitter.instruction("mov QWORD PTR [rbp - 80], r11");                       // namespace length is the separator offset
+    emitter.label(store_parts_label);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // use the original name pointer for namespace persistence
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // reload the namespace byte length
+    emitter.instruction("call __rt_str_persist");                               // copy the namespace bytes for ReflectionClass storage
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "rax", "r10", namespace_name_lo);
+    abi::emit_store_to_address(emitter, "rdx", "r10", namespace_name_hi);
+    emitter.instruction("test rdx, rdx");                                       // detect whether a namespace component was present
+    emitter.instruction("setne al");                                            // materialize ReflectionClass::inNamespace()
+    emitter.instruction("movzx eax, al");                                       // widen the namespace boolean to a full word
+    abi::emit_store_to_address(emitter, "rax", "r10", in_namespace_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", in_namespace_hi);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the short-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // reload the short-name byte length
+    emitter.instruction("call __rt_str_persist");                               // copy the short-name bytes for ReflectionClass storage
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "rax", "r10", short_name_lo);
+    abi::emit_store_to_address(emitter, "rdx", "r10", short_name_hi);
 }
 
 /// Stores incoming ARM64 ReflectionClass boolean modifier flags.

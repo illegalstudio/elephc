@@ -5540,6 +5540,28 @@ echo $propertyAttrs[0]->getArguments()[0] . ":" . $propertyAttrs[0]->newInstance
     );
 }
 
+/// Verifies eval ReflectionClass exposes namespace-derived class-name parts.
+#[test]
+fn test_eval_reflection_class_name_parts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('namespace Eval\Ns;
+class Thing {}
+$ref = new \ReflectionClass(Thing::class);
+echo $ref->getName() . ":";
+echo $ref->getShortName() . ":";
+echo $ref->getNamespaceName() . ":";
+echo $ref->inNamespace() ? "Y" : "N";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Eval\\Ns\\Thing:Thing:Eval\\Ns:Y");
+}
+
 /// Verifies eval ReflectionClass reports class-like final and abstract flags.
 #[test]
 fn test_eval_reflection_class_modifier_flags() {

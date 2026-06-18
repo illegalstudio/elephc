@@ -202,6 +202,29 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass exposes eval class namespace-derived name parts.
+#[test]
+fn execute_program_reflects_eval_class_name_parts() {
+    let program = parse_fragment(
+        br#"namespace Eval\Ns;
+class Thing {}
+$ref = new \ReflectionClass("Eval\\Ns\\Thing");
+echo $ref->getName(); echo ":";
+echo $ref->getShortName(); echo ":";
+echo $ref->getNamespaceName(); echo ":";
+echo $ref->inNamespace() ? "Y" : "N";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Eval\\Ns\\Thing:Thing:Eval\\Ns:Y");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes eval class-like final and abstract flags.
 #[test]
 fn execute_program_reflects_eval_class_modifier_flags() {

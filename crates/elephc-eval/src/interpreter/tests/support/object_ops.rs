@@ -102,6 +102,18 @@ impl FakeOps {
             (FakeValue::Object(properties), "getname") if args.is_empty() => {
                 Self::object_property(&properties, "__name").map_or_else(|| self.string(""), Ok)
             }
+            (FakeValue::Object(properties), "getshortname") if args.is_empty() => {
+                Self::object_property(&properties, "__short_name")
+                    .map_or_else(|| self.string(""), Ok)
+            }
+            (FakeValue::Object(properties), "getnamespacename") if args.is_empty() => {
+                Self::object_property(&properties, "__namespace_name")
+                    .map_or_else(|| self.string(""), Ok)
+            }
+            (FakeValue::Object(properties), "innamespace") if args.is_empty() => {
+                Self::object_property(&properties, "__in_namespace")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "isfinal") if args.is_empty() => {
                 Self::object_property(&properties, "__is_final")
                     .map_or_else(|| self.bool_value(false), Ok)
@@ -256,11 +268,19 @@ impl FakeOps {
         let is_enum = self.bool_value((flags & 16) != 0)?;
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
         if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
+            let (namespace_name, short_name) = reflection_name_parts(reflected_name);
+            let has_namespace = !namespace_name.is_empty();
+            let namespace_name = self.string(namespace_name)?;
+            let short_name = self.string(short_name)?;
+            let in_namespace = self.bool_value(has_namespace)?;
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__is_abstract".to_string(), is_abstract));
             properties.push(("__is_interface".to_string(), is_interface));
             properties.push(("__is_trait".to_string(), is_trait));
             properties.push(("__is_enum".to_string(), is_enum));
+            properties.push(("__short_name".to_string(), short_name));
+            properties.push(("__namespace_name".to_string(), namespace_name));
+            properties.push(("__in_namespace".to_string(), in_namespace));
         }
         let object = self.alloc(FakeValue::Object(properties));
         self.object_classes
@@ -407,6 +427,17 @@ fn fake_runtime_exception_like_class(class_name: &str) -> bool {
     ["Exception", "JsonException", "Error", "ValueError"]
         .iter()
         .any(|known| class_name.eq_ignore_ascii_case(known))
+}
+
+/// Splits one PHP class-like name into namespace and short-name parts.
+fn reflection_name_parts(reflected_name: &str) -> (&str, &str) {
+    match reflected_name.rfind('\\') {
+        Some(separator) => (
+            &reflected_name[..separator],
+            &reflected_name[separator + 1..],
+        ),
+        None => ("", reflected_name),
+    }
 }
 
 /// Checks the small fake Throwable inheritance graph used by eval interpreter tests.

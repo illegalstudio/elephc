@@ -1081,6 +1081,9 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | Reflection method | Supported constructor | Description |
 |---|---|---|
 | `ReflectionClass::getName()` | `new ReflectionClass($class_name)` | Return the resolved class-like name |
+| `ReflectionClass::getShortName()` | `new ReflectionClass($class_name)` | Return the class-like name after the final namespace separator |
+| `ReflectionClass::getNamespaceName()` | `new ReflectionClass($class_name)` | Return the namespace portion of the reflected class-like name |
+| `ReflectionClass::inNamespace()` | `new ReflectionClass($class_name)` | Return whether the reflected class-like symbol is namespaced |
 | `ReflectionClass::isFinal()` | `new ReflectionClass($class_name)` | Return whether the reflected class-like symbol is final |
 | `ReflectionClass::isAbstract()` | `new ReflectionClass($class_name)` | Return whether the reflected class-like symbol is abstract |
 | `ReflectionClass::isInterface()` | `new ReflectionClass($class_name)` | Return whether the reflected class-like symbol is an interface |
@@ -1149,7 +1152,7 @@ Limitations today:
 - A symbolic reference that elephc cannot resolve — for example a built-in class constant such as `Attribute::TARGET_CLASS`, which is not registered — is treated as unsupported metadata: the attribute still parses and compiles and `class_attribute_names()` still lists it, but its arguments are not reflectable through `getAttributes()`/`class_get_attributes()`/`class_attribute_args()`.
 - The flat `class_attribute_args()` helper returns a positional array of scalars only; it rejects attributes whose arguments are keyed (named arguments or associative arrays, at any depth) or contain a symbolic reference. Use `ReflectionClass::getAttributes()->getArguments()` for those.
 - When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
-- `ReflectionClass` supports `getName()`, `getAttributes()`, `isFinal()`, `isAbstract()`, `isInterface()`, `isTrait()`, and `isEnum()`. `ReflectionMethod` and `ReflectionProperty` currently support `getName()` and `getAttributes()` only; broader APIs such as `getProperties()`, `getMethods()`, and object construction through `ReflectionClass::newInstance()` are not yet available.
+- `ReflectionClass` supports `getName()`, `getShortName()`, `getNamespaceName()`, `inNamespace()`, `getAttributes()`, `isFinal()`, `isAbstract()`, `isInterface()`, `isTrait()`, and `isEnum()`. `ReflectionMethod` and `ReflectionProperty` currently support `getName()` and `getAttributes()` only; broader APIs such as `getProperties()`, `getMethods()`, and object construction through `ReflectionClass::newInstance()` are not yet available.
 - `ReflectionFunction`/`ReflectionParameter` reflect named functions only (the constructor argument must be a compile-time function-name string). `ReflectionParameter::getType()` resolves a single named type (including a nullable `?T`); union and intersection parameter types, default-value reflection (`getDefaultValue()`), and per-parameter attribute reflection are not yet available. An explicit `mixed` hint is reported as untyped.
 
 ### Class constants

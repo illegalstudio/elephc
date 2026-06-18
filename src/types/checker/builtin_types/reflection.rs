@@ -579,6 +579,24 @@ fn builtin_reflection_class() -> FlattenedClass {
                 Some(bool_type()),
                 false_bool(),
             ),
+            builtin_property(
+                "__short_name",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__namespace_name",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
+                "__in_namespace",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
@@ -587,7 +605,10 @@ fn builtin_reflection_class() -> FlattenedClass {
                 None,
                 false,
             )]),
-            builtin_reflection_class_get_name_method(),
+            builtin_reflection_class_string_method("getName", "__name"),
+            builtin_reflection_class_string_method("getShortName", "__short_name"),
+            builtin_reflection_class_string_method("getNamespaceName", "__namespace_name"),
+            builtin_reflection_class_bool_method("inNamespace", "__in_namespace"),
             builtin_reflection_class_bool_method("isFinal", "__is_final"),
             builtin_reflection_class_bool_method("isAbstract", "__is_abstract"),
             builtin_reflection_class_bool_method("isInterface", "__is_interface"),
@@ -601,12 +622,11 @@ fn builtin_reflection_class() -> FlattenedClass {
     }
 }
 
-/// Returns a public `ReflectionClass::getName()` method that returns the
-/// resolved reflected class name from the private `__name` slot.
-fn builtin_reflection_class_get_name_method() -> ClassMethod {
+/// Returns a public `ReflectionClass` string method backed by one private slot.
+fn builtin_reflection_class_string_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
-        name: "getName".to_string(),
+        name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
         is_abstract: false,
@@ -621,7 +641,7 @@ fn builtin_reflection_class_get_name_method() -> ClassMethod {
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
                     object: Box::new(Expr::new(ExprKind::This, dummy_span)),
-                    property: "__name".to_string(),
+                    property: property.to_string(),
                 },
                 dummy_span,
             ))),
@@ -681,7 +701,7 @@ fn builtin_reflection_owner_class(
             Some(TypeExpr::Str),
             empty_string(),
         ));
-        methods.push(builtin_reflection_class_get_name_method());
+        methods.push(builtin_reflection_class_string_method("getName", "__name"));
     }
     properties.push(builtin_property(
         "__attrs",
