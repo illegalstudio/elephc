@@ -377,12 +377,15 @@ fn collect_declared_trait_names(program: &Program) -> Vec<String> {
     names
 }
 
-/// Collects direct trait-use declarations keyed by the declaring trait name.
+/// Collects direct trait-use declarations keyed by the declaring trait or enum name.
 fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>> {
     let mut uses = HashMap::new();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
+                name, trait_uses, ..
+            }
+            | StmtKind::EnumDecl {
                 name, trait_uses, ..
             } => {
                 uses.insert(

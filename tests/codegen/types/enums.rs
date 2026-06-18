@@ -130,6 +130,59 @@ fn test_enum_case_name_property_and_method() {
     assert_eq!(out, "Hearts|Clubs");
 }
 
+/// Verifies enum methods can be imported from traits and run with `$this` bound to the case.
+#[test]
+fn test_enum_uses_trait_method() {
+    let out = compile_and_run(
+        "<?php
+        trait HasEnumLabel {
+            public function label(): string {
+                return $this->name;
+            }
+        }
+        enum Suit {
+            use HasEnumLabel;
+            case Hearts;
+            case Clubs;
+        }
+        echo Suit::Hearts->label();
+        echo '|';
+        echo Suit::Clubs->label();
+        ",
+    );
+    assert_eq!(out, "Hearts|Clubs");
+}
+
+/// Verifies enum trait adaptations support `insteadof` conflict resolution and aliases.
+#[test]
+fn test_enum_trait_insteadof_and_alias() {
+    let out = compile_and_run(
+        "<?php
+        trait PrimaryEnumLabel {
+            public function label(): string {
+                return 'P:' . $this->name;
+            }
+        }
+        trait SecondaryEnumLabel {
+            public function label(): string {
+                return 'S:' . $this->name;
+            }
+        }
+        enum Mode {
+            use PrimaryEnumLabel, SecondaryEnumLabel {
+                PrimaryEnumLabel::label insteadof SecondaryEnumLabel;
+                SecondaryEnumLabel::label as secondaryLabel;
+            }
+            case Active;
+        }
+        echo Mode::Active->label();
+        echo '|';
+        echo Mode::Active->secondaryLabel();
+        ",
+    );
+    assert_eq!(out, "P:Active|S:Active");
+}
+
 /// Verifies that `Color::from(99)` throws a catchable `ValueError` with PHP's
 /// invalid backing-value message.
 #[test]

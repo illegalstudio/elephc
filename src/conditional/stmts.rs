@@ -315,12 +315,14 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             backing_type,
             cases,
             implements,
+            trait_uses,
             methods,
             constants,
         } => StmtKind::EnumDecl {
             name,
             backing_type,
             implements,
+            trait_uses,
             methods,
             constants,
             cases: cases

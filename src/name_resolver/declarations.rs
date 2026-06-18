@@ -108,9 +108,14 @@ pub(super) fn resolve_decl_stmt(
             backing_type,
             cases,
             implements,
+            trait_uses,
             methods,
             constants,
         } => {
+            let trait_uses = trait_uses
+                .iter()
+                .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
+                .collect::<Result<Vec<_>, CompileError>>()?;
             let resolved_cases = cases
                 .iter()
                 .map(|case| crate::parser::ast::EnumCaseDecl {
@@ -140,6 +145,7 @@ pub(super) fn resolve_decl_stmt(
                             resolved_name(resolved_class_name(name, namespace, imports, symbols))
                         })
                         .collect(),
+                    trait_uses,
                     methods: resolved_methods,
                     constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },

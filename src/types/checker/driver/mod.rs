@@ -75,13 +75,14 @@ pub(super) fn check_types_impl(
 
     checker.collect_function_decls(program, &mut errors);
 
-    let (mut flattened_classes, flatten_errors) = flatten_classes(program);
+    let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
     // Resolve the relative class types `self`/`static`/`parent` in every member type annotation
     // now that inheritance and trait flattening have settled the concrete enclosing class. This
     // single pass feeds the schema signatures, the body-check pass, and codegen (which all read
     // the flattened method/property declarations), so no later stage sees a symbolic `self`.
     substitute_relative_class_types_in_flattened(&mut flattened_classes);
+    substitute_relative_class_types_in_flattened_enums(&mut flattened_enums);
     let declared_traits = collect_declared_trait_names(program);
     let mut seen_classes = HashSet::new();
     let mut class_map = HashMap::new();
@@ -231,14 +232,19 @@ pub(super) fn check_types_impl(
             implements,
             methods,
             constants,
+            ..
         } = &stmt.kind
         {
+            let enum_methods = flattened_enums
+                .get(name)
+                .map(|flattened| flattened.methods.as_slice())
+                .unwrap_or(methods.as_slice());
             if let Err(error) = build_enum_info(
                 name,
                 backing_type.as_ref(),
                 cases,
                 implements,
-                methods,
+                enum_methods,
                 constants,
                 stmt.span,
                 &mut checker,
@@ -276,7 +282,7 @@ pub(super) fn check_types_impl(
     // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
     // into method-checkable units here — their signatures already live in `checker.classes`.
     let mut methods_to_check = flattened_classes.clone();
-    methods_to_check.extend(flatten_enum_methods(program));
+    methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
     checker.type_check_methods_until_stable(&methods_to_check, &global_env, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
@@ -324,19 +330,15 @@ fn collect_declared_trait_names_into(program: &Program, names: &mut HashSet<Stri
     }
 }
 
-/// Resolves the relative class types `self`/`static`/`parent` to concrete class names across
-/// every flattened class's method parameter, method return, and property type annotations.
-///
-/// `self`/`static` resolve to the flattened class itself and `parent` to its `extends` target.
-/// Because trait methods are already merged into the using class at this point, a trait method's
-/// `self` correctly resolves to the using class rather than the trait. Annotations with no
-/// relative type are left untouched.
 /// Builds method-checkable `FlattenedClass` units for every `enum` in the program so their method
 /// bodies go through the same validation as class methods. Enum signatures are already registered
 /// in `checker.classes` by the enum schema pass; these units only carry the names and method
 /// bodies the method-check pass needs. The relative types `self`/`static` resolve to the enum
 /// itself (enums have no parent).
-fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
+fn flatten_enum_methods(
+    program: &[Stmt],
+    flattened_enums: &HashMap<String, FlattenedClass>,
+) -> Vec<FlattenedClass> {
     let mut units = Vec::new();
     for stmt in program {
         if let StmtKind::EnumDecl {
@@ -347,6 +349,10 @@ fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
             ..
         } = &stmt.kind
         {
+            if let Some(flattened) = flattened_enums.get(name) {
+                units.push(flattened.clone());
+                continue;
+            }
             let mut flattened = FlattenedClass {
                 name: name.clone(),
                 extends: None,
@@ -370,7 +376,13 @@ fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
     units
 }
 
-/// Rewrites `self`/`static`/`parent` annotations across flattened class metadata.
+/// Resolves the relative class types `self`/`static`/`parent` to concrete class names across
+/// every flattened class's method parameter, method return, and property type annotations.
+///
+/// `self`/`static` resolve to the flattened class itself and `parent` to its `extends` target.
+/// Because trait methods are already merged into the using class at this point, a trait method's
+/// `self` correctly resolves to the using class rather than the trait. Annotations with no
+/// relative type are left untouched.
 fn substitute_relative_class_types_in_flattened(classes: &mut [FlattenedClass]) {
     for class in classes.iter_mut() {
         let self_class = class.name.clone();
@@ -385,11 +397,20 @@ fn substitute_relative_class_types_in_flattened(classes: &mut [FlattenedClass]) 
     }
 }
 
+/// Resolves relative class types inside flattened enum methods.
+fn substitute_relative_class_types_in_flattened_enums(
+    enums: &mut HashMap<String, FlattenedClass>,
+) {
+    for enum_unit in enums.values_mut() {
+        let self_class = enum_unit.name.clone();
+        substitute_relative_class_types_in_methods(&mut enum_unit.methods, &self_class, None);
+    }
+}
+
 /// Rewrites `self`/`static`/`parent` type annotations on a slice of methods by delegating to
-/// `ClassMethod::substitute_relative_class_types`. Used for:
-/// - user classes (after trait/inheritance flattening)
-/// - interfaces
-/// - enums (to prepare method bodies for checking)
+/// `ClassMethod::substitute_relative_class_types`.
+///
+/// Used for user classes after trait/inheritance flattening, interfaces, and enums.
 fn substitute_relative_class_types_in_methods(
     methods: &mut [ClassMethod],
     self_class: &str,

@@ -488,12 +488,14 @@ pub(super) fn resolve_stmt_exprs(
             backing_type,
             cases,
             implements,
+            trait_uses,
             methods,
             constants,
         } => StmtKind::EnumDecl {
             name,
             backing_type,
             implements,
+            trait_uses,
             methods: resolve_method_exprs(
                 methods,
                 base_dir,

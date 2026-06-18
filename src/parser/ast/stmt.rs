@@ -227,6 +227,8 @@ pub enum StmtKind {
         cases: Vec<EnumCaseDecl>,
         /// Interfaces the enum implements (`enum E implements Foo, Bar`).
         implements: Vec<Name>,
+        /// Trait-use declarations flattened into enum method metadata by the checker.
+        trait_uses: Vec<TraitUse>,
         /// User-declared enum methods (instance and static). Enums dispatch instance methods on
         /// the case singleton, like a class.
         methods: Vec<ClassMethod>,
