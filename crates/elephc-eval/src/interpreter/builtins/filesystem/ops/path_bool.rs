@@ -8,6 +8,8 @@
 //! - Paths are coerced through the shared filesystem path helper before host
 //!   filesystem operations are attempted.
 
+use std::ffi::CString;
+
 use super::super::super::super::*;
 use super::super::super::*;
 use super::super::*;
@@ -103,4 +105,118 @@ pub(in crate::interpreter) fn eval_chmod_result(
     let mode = eval_int_value(permissions, values)? as u32;
     let permissions = std::fs::Permissions::from_mode(mode);
     values.bool_value(std::fs::set_permissions(path, permissions).is_ok())
+}
+
+/// Evaluates PHP ownership/group path mutation builtins over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_chown_like(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename, principal] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    let principal = eval_expr(principal, context, scope, values)?;
+    eval_chown_like_result(name, filename, principal, values)
+}
+
+/// Changes one local path owner or group and returns whether the operation succeeded.
+pub(in crate::interpreter) fn eval_chown_like_result(
+    name: &str,
+    filename: RuntimeCellHandle,
+    principal: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let path = eval_path_string(filename, values)?;
+    let Some(path) = eval_c_string(&path) else {
+        return values.bool_value(false);
+    };
+    let Some((uid, gid)) = eval_chown_principal_ids(name, principal, values)? else {
+        return values.bool_value(false);
+    };
+    let status = unsafe {
+        match name {
+            "chown" | "chgrp" => libc::chown(path.as_ptr(), uid, gid),
+            "lchown" | "lchgrp" => libc::lchown(path.as_ptr(), uid, gid),
+            _ => return Err(EvalStatus::RuntimeFatal),
+        }
+    };
+    values.bool_value(status == 0)
+}
+
+/// Resolves one PHP owner/group argument into libc uid/gid slots.
+fn eval_chown_principal_ids(
+    name: &str,
+    principal: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(libc::uid_t, libc::gid_t)>, EvalStatus> {
+    match (name, values.type_tag(principal)?) {
+        ("chown" | "lchown", EVAL_TAG_INT) => {
+            Ok(Some((
+                eval_int_value(principal, values)? as libc::uid_t,
+                !0 as libc::gid_t,
+            )))
+        }
+        ("chgrp" | "lchgrp", EVAL_TAG_INT) => {
+            Ok(Some((
+                !0 as libc::uid_t,
+                eval_int_value(principal, values)? as libc::gid_t,
+            )))
+        }
+        ("chown" | "lchown", EVAL_TAG_STRING) => {
+            Ok(eval_owner_name_id(principal, values)?.map(|uid| (uid, !0 as libc::gid_t)))
+        }
+        ("chgrp" | "lchgrp", EVAL_TAG_STRING) => {
+            Ok(eval_group_name_id(principal, values)?.map(|gid| (!0 as libc::uid_t, gid)))
+        }
+        ("chown" | "chgrp" | "lchown" | "lchgrp", _) => Err(EvalStatus::RuntimeFatal),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Resolves a PHP user-name cell to a libc uid.
+fn eval_owner_name_id(
+    principal: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<libc::uid_t>, EvalStatus> {
+    let name = values.string_bytes(principal)?;
+    let Some(name) = eval_c_bytes(&name) else {
+        return Ok(None);
+    };
+    let passwd = unsafe { libc::getpwnam(name.as_ptr()) };
+    if passwd.is_null() {
+        Ok(None)
+    } else {
+        Ok(Some(unsafe { (*passwd).pw_uid }))
+    }
+}
+
+/// Resolves a PHP group-name cell to a libc gid.
+fn eval_group_name_id(
+    principal: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<libc::gid_t>, EvalStatus> {
+    let name = values.string_bytes(principal)?;
+    let Some(name) = eval_c_bytes(&name) else {
+        return Ok(None);
+    };
+    let group = unsafe { libc::getgrnam(name.as_ptr()) };
+    if group.is_null() {
+        Ok(None)
+    } else {
+        Ok(Some(unsafe { (*group).gr_gid }))
+    }
+}
+
+/// Converts a Rust path string into a C string, rejecting embedded NUL bytes.
+fn eval_c_string(value: &str) -> Option<CString> {
+    CString::new(value).ok()
+}
+
+/// Converts raw PHP bytes into a C string, rejecting embedded NUL bytes.
+fn eval_c_bytes(value: &[u8]) -> Option<CString> {
+    CString::new(value).ok()
 }

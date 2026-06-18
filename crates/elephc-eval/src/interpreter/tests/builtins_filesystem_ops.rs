@@ -238,6 +238,49 @@ return true;"#
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval ownership builtins mutate local files and dispatch dynamically.
+#[test]
+fn execute_program_dispatches_file_ownership_builtins() {
+    let pid = std::process::id();
+    let filename = format!("elephc_eval_ownership_{pid}.txt");
+    let link = format!("elephc_eval_ownership_link_{pid}.txt");
+    let missing = format!("elephc_eval_ownership_missing_{pid}.txt");
+    let uid = unsafe { libc::geteuid() };
+    let gid = unsafe { libc::getegid() };
+    let source = format!(
+        r#"file_put_contents("{filename}", "x");
+echo symlink("{filename}", "{link}") ? "symlink" : "bad"; echo ":";
+echo chown("{filename}", {uid}) ? "chown" : "bad"; echo ":";
+echo chgrp(filename: "{filename}", group: {gid}) ? "chgrp" : "bad"; echo ":";
+echo lchown("{link}", {uid}) ? "lchown" : "bad"; echo ":";
+echo lchgrp(filename: "{link}", group: {gid}) ? "lchgrp" : "bad"; echo ":";
+echo chown("{missing}", {uid}) ? "bad" : "missing"; echo ":";
+echo chown("{filename}", "__elephc_eval_missing_user__") ? "bad" : "user-false"; echo ":";
+echo chgrp("{filename}", "__elephc_eval_missing_group__") ? "bad" : "group-false"; echo ":";
+echo call_user_func("chgrp", "{filename}", {gid}) ? "callchgrp" : "bad"; echo ":";
+echo call_user_func_array("lchown", ["filename" => "{link}", "user" => {uid}]) ? "arraylchown" : "bad"; echo ":";
+echo unlink("{link}") && unlink("{filename}") ? "cleanup" : "bad"; echo ":";
+echo function_exists("chown"); echo function_exists("chgrp"); echo function_exists("lchown");
+return function_exists("lchgrp");"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let _ = std::fs::remove_file(&link);
+    let _ = std::fs::remove_file(&filename);
+    let _ = std::fs::remove_file(&missing);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    let _ = std::fs::remove_file(&link);
+    let _ = std::fs::remove_file(&filename);
+    let _ = std::fs::remove_file(&missing);
+    assert_eq!(
+        values.output,
+        "symlink:chown:chgrp:lchown:lchgrp:missing:user-false:group-false:callchgrp:arraylchown:cleanup:111"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval `touch()` creates files, stamps mtimes, and dispatches dynamically.
 #[test]
 fn execute_program_dispatches_touch_builtin() {
