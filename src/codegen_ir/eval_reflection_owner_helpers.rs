@@ -32,6 +32,12 @@ struct ReflectionOwnerLayout {
     is_final_hi: Option<usize>,
     is_abstract_lo: Option<usize>,
     is_abstract_hi: Option<usize>,
+    is_interface_lo: Option<usize>,
+    is_interface_hi: Option<usize>,
+    is_trait_lo: Option<usize>,
+    is_trait_hi: Option<usize>,
+    is_enum_lo: Option<usize>,
+    is_enum_hi: Option<usize>,
 }
 
 /// Layouts for the Reflection owner classes eval can materialize.
@@ -112,14 +118,16 @@ fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
 }
 
 /// Returns one Reflection owner layout from class metadata.
-fn reflection_owner_layout(
-    info: &ClassInfo,
-    has_name: bool,
-) -> Option<ReflectionOwnerLayout> {
+fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<ReflectionOwnerLayout> {
     let attrs_lo = reflection_property_offset(info, "__attrs")?;
-    let name_lo = has_name.then(|| reflection_property_offset(info, "__name")).flatten();
+    let name_lo = has_name
+        .then(|| reflection_property_offset(info, "__name"))
+        .flatten();
     let is_final_lo = reflection_property_offset(info, "__is_final");
     let is_abstract_lo = reflection_property_offset(info, "__is_abstract");
+    let is_interface_lo = reflection_property_offset(info, "__is_interface");
+    let is_trait_lo = reflection_property_offset(info, "__is_trait");
+    let is_enum_lo = reflection_property_offset(info, "__is_enum");
     Some(ReflectionOwnerLayout {
         class_id: info.class_id,
         property_count: info.properties.len(),
@@ -131,6 +139,12 @@ fn reflection_owner_layout(
         is_final_hi: is_final_lo.map(|offset| offset + 8),
         is_abstract_lo,
         is_abstract_hi: is_abstract_lo.map(|offset| offset + 8),
+        is_interface_lo,
+        is_interface_hi: is_interface_lo.map(|offset| offset + 8),
+        is_trait_lo,
+        is_trait_hi: is_trait_lo.map(|offset| offset + 8),
+        is_enum_lo,
+        is_enum_hi: is_enum_lo.map(|offset| offset + 8),
     })
 }
 
@@ -185,12 +199,54 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("cmp x0, #5");                                          // owner kind 5 means ReflectionEnumBackedCase
     emitter.instruction(&format!("b.eq {}", enum_backed_case_label));           // allocate a ReflectionEnumBackedCase owner
     emitter.instruction(&format!("b {}", fail_label));                          // reject unknown owner kinds
-    emit_aarch64_owner_kind_body(emitter, class_label, &layouts.class, true, fail_label, box_label);
-    emit_aarch64_owner_kind_body(emitter, method_label, &layouts.method, true, fail_label, box_label);
-    emit_aarch64_owner_kind_body(emitter, property_label, &layouts.property, true, fail_label, box_label);
-    emit_aarch64_owner_kind_body(emitter, class_constant_label, &layouts.class_constant, true, fail_label, box_label);
-    emit_aarch64_owner_kind_body(emitter, enum_unit_case_label, &layouts.enum_unit_case, true, fail_label, box_label);
-    emit_aarch64_owner_kind_body(emitter, enum_backed_case_label, &layouts.enum_backed_case, true, fail_label, box_label);
+    emit_aarch64_owner_kind_body(
+        emitter,
+        class_label,
+        &layouts.class,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_aarch64_owner_kind_body(
+        emitter,
+        method_label,
+        &layouts.method,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_aarch64_owner_kind_body(
+        emitter,
+        property_label,
+        &layouts.property,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_aarch64_owner_kind_body(
+        emitter,
+        class_constant_label,
+        &layouts.class_constant,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_aarch64_owner_kind_body(
+        emitter,
+        enum_unit_case_label,
+        &layouts.enum_unit_case,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_aarch64_owner_kind_body(
+        emitter,
+        enum_backed_case_label,
+        &layouts.enum_backed_case,
+        true,
+        fail_label,
+        box_label,
+    );
     emitter.label(box_label);
     emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
     emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
@@ -237,12 +293,54 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("cmp rdi, 5");                                          // owner kind 5 means ReflectionEnumBackedCase
     emitter.instruction(&format!("je {}", enum_backed_case_label));             // allocate a ReflectionEnumBackedCase owner
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject unknown owner kinds
-    emit_x86_64_owner_kind_body(emitter, class_label, &layouts.class, true, fail_label, box_label);
-    emit_x86_64_owner_kind_body(emitter, method_label, &layouts.method, true, fail_label, box_label);
-    emit_x86_64_owner_kind_body(emitter, property_label, &layouts.property, true, fail_label, box_label);
-    emit_x86_64_owner_kind_body(emitter, class_constant_label, &layouts.class_constant, true, fail_label, box_label);
-    emit_x86_64_owner_kind_body(emitter, enum_unit_case_label, &layouts.enum_unit_case, true, fail_label, box_label);
-    emit_x86_64_owner_kind_body(emitter, enum_backed_case_label, &layouts.enum_backed_case, true, fail_label, box_label);
+    emit_x86_64_owner_kind_body(
+        emitter,
+        class_label,
+        &layouts.class,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_x86_64_owner_kind_body(
+        emitter,
+        method_label,
+        &layouts.method,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_x86_64_owner_kind_body(
+        emitter,
+        property_label,
+        &layouts.property,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_x86_64_owner_kind_body(
+        emitter,
+        class_constant_label,
+        &layouts.class_constant,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_x86_64_owner_kind_body(
+        emitter,
+        enum_unit_case_label,
+        &layouts.enum_unit_case,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_x86_64_owner_kind_body(
+        emitter,
+        enum_backed_case_label,
+        &layouts.enum_backed_case,
+        true,
+        fail_label,
+        box_label,
+    );
     emitter.label(box_label);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // move the Reflection owner object pointer into the Mixed payload
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
@@ -384,6 +482,24 @@ fn emit_set_owner_class_flags_property_aarch64(
     let Some(is_abstract_hi) = layout.is_abstract_hi else {
         return;
     };
+    let Some(is_interface_lo) = layout.is_interface_lo else {
+        return;
+    };
+    let Some(is_interface_hi) = layout.is_interface_hi else {
+        return;
+    };
+    let Some(is_trait_lo) = layout.is_trait_lo else {
+        return;
+    };
+    let Some(is_trait_hi) = layout.is_trait_hi else {
+        return;
+    };
+    let Some(is_enum_lo) = layout.is_enum_lo else {
+        return;
+    };
+    let Some(is_enum_hi) = layout.is_enum_hi else {
+        return;
+    };
     emitter.instruction("ldr x11, [sp, #48]");                                  // reload ReflectionClass modifier flags
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     emitter.instruction("and x10, x11, #1");                                    // extract the final-class flag as a boolean
@@ -393,6 +509,18 @@ fn emit_set_owner_class_flags_property_aarch64(
     emitter.instruction("and x10, x10, #1");                                    // extract the abstract-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_abstract_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_abstract_hi);
+    emitter.instruction("lsr x10, x11, #2");                                    // move the interface bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the interface flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_interface_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_interface_hi);
+    emitter.instruction("lsr x10, x11, #3");                                    // move the trait bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the trait flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_trait_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_trait_hi);
+    emitter.instruction("lsr x10, x11, #4");                                    // move the enum bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the enum flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_enum_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_enum_hi);
 }
 
 /// Stores incoming x86_64 ReflectionClass boolean modifier flags.
@@ -412,6 +540,24 @@ fn emit_set_owner_class_flags_property_x86_64(
     let Some(is_abstract_hi) = layout.is_abstract_hi else {
         return;
     };
+    let Some(is_interface_lo) = layout.is_interface_lo else {
+        return;
+    };
+    let Some(is_interface_hi) = layout.is_interface_hi else {
+        return;
+    };
+    let Some(is_trait_lo) = layout.is_trait_lo else {
+        return;
+    };
+    let Some(is_trait_hi) = layout.is_trait_hi else {
+        return;
+    };
+    let Some(is_enum_lo) = layout.is_enum_lo else {
+        return;
+    };
+    let Some(is_enum_hi) = layout.is_enum_hi else {
+        return;
+    };
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload ReflectionClass modifier flags
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     emitter.instruction("mov rax, r11");                                        // copy flags before extracting the final bit
@@ -423,6 +569,21 @@ fn emit_set_owner_class_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the abstract-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_abstract_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_abstract_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the interface bit
+    emitter.instruction("shr rax, 2");                                          // move the interface bit into position
+    emitter.instruction("and rax, 1");                                          // extract the interface flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_interface_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_interface_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the trait bit
+    emitter.instruction("shr rax, 3");                                          // move the trait bit into position
+    emitter.instruction("and rax, 1");                                          // extract the trait flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_trait_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_trait_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the enum bit
+    emitter.instruction("shr rax, 4");                                          // move the enum bit into position
+    emitter.instruction("and rax, 1");                                          // extract the enum flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_enum_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_enum_hi);
 }
 
 /// Stores a retained ARM64 attribute-array payload into the owner private slot.

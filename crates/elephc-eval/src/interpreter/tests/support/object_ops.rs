@@ -110,6 +110,18 @@ impl FakeOps {
                 Self::object_property(&properties, "__is_abstract")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "isinterface") if args.is_empty() => {
+                Self::object_property(&properties, "__is_interface")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "istrait") if args.is_empty() => {
+                Self::object_property(&properties, "__is_trait")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "isenum") if args.is_empty() => {
+                Self::object_property(&properties, "__is_enum")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "getarguments") if args.is_empty() => {
                 Self::object_property(&properties, "__args")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
@@ -239,10 +251,16 @@ impl FakeOps {
         let name = self.string(reflected_name)?;
         let is_final = self.bool_value((flags & 1) != 0)?;
         let is_abstract = self.bool_value((flags & 2) != 0)?;
+        let is_interface = self.bool_value((flags & 4) != 0)?;
+        let is_trait = self.bool_value((flags & 8) != 0)?;
+        let is_enum = self.bool_value((flags & 16) != 0)?;
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
         if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__is_abstract".to_string(), is_abstract));
+            properties.push(("__is_interface".to_string(), is_interface));
+            properties.push(("__is_trait".to_string(), is_trait));
+            properties.push(("__is_enum".to_string(), is_enum));
         }
         let object = self.alloc(FakeValue::Object(properties));
         self.object_classes

@@ -352,6 +352,24 @@ fn builtin_reflection_class() -> FlattenedClass {
                 Some(bool_type()),
                 false_bool(),
             ),
+            builtin_property(
+                "__is_interface",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_trait",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_enum",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
@@ -363,6 +381,9 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_get_name_method(),
             builtin_reflection_class_bool_method("isFinal", "__is_final"),
             builtin_reflection_class_bool_method("isAbstract", "__is_abstract"),
+            builtin_reflection_class_bool_method("isInterface", "__is_interface"),
+            builtin_reflection_class_bool_method("isTrait", "__is_trait"),
+            builtin_reflection_class_bool_method("isEnum", "__is_enum"),
             builtin_reflection_owner_get_attributes_method(),
         ],
         attributes: Vec::new(),

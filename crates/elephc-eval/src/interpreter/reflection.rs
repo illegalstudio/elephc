@@ -14,6 +14,9 @@ use super::*;
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
+const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
+const EVAL_REFLECTION_CLASS_FLAG_TRAIT: u64 = 8;
+const EVAL_REFLECTION_CLASS_FLAG_ENUM: u64 = 16;
 
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.
 pub(in crate::interpreter) fn eval_reflection_owner_new_object(
@@ -219,6 +222,9 @@ fn eval_reflection_class_like_attributes(
         if class.is_abstract() {
             flags |= EVAL_REFLECTION_CLASS_FLAG_ABSTRACT;
         }
+        if context.has_enum(class.name()) {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_ENUM;
+        }
         return Some((
             class.name().trim_start_matches('\\').to_string(),
             class.attributes().to_vec(),
@@ -229,21 +235,21 @@ fn eval_reflection_class_like_attributes(
         return Some((
             interface.name().trim_start_matches('\\').to_string(),
             interface.attributes().to_vec(),
-            0,
+            EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
         ));
     }
     if let Some(trait_decl) = context.trait_decl(name) {
         return Some((
             trait_decl.name().trim_start_matches('\\').to_string(),
             trait_decl.attributes().to_vec(),
-            0,
+            EVAL_REFLECTION_CLASS_FLAG_TRAIT,
         ));
     }
     context.enum_decl(name).map(|enum_decl| {
         (
             enum_decl.name().trim_start_matches('\\').to_string(),
             enum_decl.attributes().to_vec(),
-            EVAL_REFLECTION_CLASS_FLAG_FINAL,
+            EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM,
         )
     })
 }

@@ -944,25 +944,43 @@ trait StaticTraitReflect {}
 enum StaticEnumReflect { case Ready; }
 echo (new ReflectionClass(StaticAbstractReflect::class))->isAbstract() ? "A" : "a";
 echo (new ReflectionClass(StaticAbstractReflect::class))->isFinal() ? "F" : "f";
+echo (new ReflectionClass(StaticAbstractReflect::class))->isInterface() ? "I" : "i";
+echo (new ReflectionClass(StaticAbstractReflect::class))->isTrait() ? "T" : "t";
+echo (new ReflectionClass(StaticAbstractReflect::class))->isEnum() ? "E" : "e";
 echo ":";
 echo (new ReflectionClass(StaticFinalReflect::class))->isAbstract() ? "A" : "a";
 echo (new ReflectionClass(StaticFinalReflect::class))->isFinal() ? "F" : "f";
+echo (new ReflectionClass(StaticFinalReflect::class))->isInterface() ? "I" : "i";
+echo (new ReflectionClass(StaticFinalReflect::class))->isTrait() ? "T" : "t";
+echo (new ReflectionClass(StaticFinalReflect::class))->isEnum() ? "E" : "e";
 echo ":";
 echo (new ReflectionClass(StaticEnumReflect::class))->isAbstract() ? "A" : "a";
 echo (new ReflectionClass(StaticEnumReflect::class))->isFinal() ? "F" : "f";
+echo (new ReflectionClass(StaticEnumReflect::class))->isInterface() ? "I" : "i";
+echo (new ReflectionClass(StaticEnumReflect::class))->isTrait() ? "T" : "t";
+echo (new ReflectionClass(StaticEnumReflect::class))->isEnum() ? "E" : "e";
 echo ":";
 $iface = new ReflectionClass("staticifacereflect");
 echo $iface->getName() . "/";
 echo $iface->isAbstract() ? "A" : "a";
 echo $iface->isFinal() ? "F" : "f";
+echo $iface->isInterface() ? "I" : "i";
+echo $iface->isTrait() ? "T" : "t";
+echo $iface->isEnum() ? "E" : "e";
 echo ":";
 $trait = new ReflectionClass("STATICTRAITREFLECT");
 echo $trait->getName() . "/";
 echo $trait->isAbstract() ? "A" : "a";
 echo $trait->isFinal() ? "F" : "f";
+echo $trait->isInterface() ? "I" : "i";
+echo $trait->isTrait() ? "T" : "t";
+echo $trait->isEnum() ? "E" : "e";
 "#,
     );
-    assert_eq!(out, "Af:aF:aF:StaticIfaceReflect/af:StaticTraitReflect/af");
+    assert_eq!(
+        out,
+        "Afite:aFite:aFitE:StaticIfaceReflect/afIte:StaticTraitReflect/afiTe"
+    );
 }
 
 /// Verifies that `ReflectionClass::getName()` returns the canonical declared

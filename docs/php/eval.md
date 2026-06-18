@@ -152,10 +152,11 @@ syntax, but requesting those arguments is a runtime fatal.
 `ReflectionProperty::getAttributes()` expose eval-retained class, method, and
 property attributes for eval-declared class-like symbols when their arguments
 fit the same literal subset, and `getName()` returns the reflected class or
-member name for those owners. `ReflectionClass::isFinal()` and
-`ReflectionClass::isAbstract()` report eval class-like modifier metadata,
-including PHP-compatible enum finality and false values for eval interfaces and
-traits. `ReflectionClassConstant::getAttributes()`,
+member name for those owners. `ReflectionClass::isFinal()`,
+`ReflectionClass::isAbstract()`, `ReflectionClass::isInterface()`,
+`ReflectionClass::isTrait()`, and `ReflectionClass::isEnum()` report eval
+class-like metadata, including PHP-compatible enum finality and class-like kind
+checks for eval interfaces, traits, and enums. `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant
 and enum-case attributes through the same materialized `ReflectionAttribute`

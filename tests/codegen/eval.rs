@@ -5551,15 +5551,30 @@ interface EvalIfaceReflect {}
 trait EvalTraitReflect {}
 enum EvalEnumReflect { case Ready; }
 echo (new ReflectionClass("EvalAbstractReflect"))->isAbstract() ? "A" : "a";
-echo (new ReflectionClass("EvalAbstractReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalAbstractReflect"))->isFinal() ? "F" : "f";
+echo (new ReflectionClass("EvalAbstractReflect"))->isInterface() ? "I" : "i";
+echo (new ReflectionClass("EvalAbstractReflect"))->isTrait() ? "T" : "t";
+echo (new ReflectionClass("EvalAbstractReflect"))->isEnum() ? "E" : "e"; echo ":";
 echo (new ReflectionClass("EvalFinalReflect"))->isAbstract() ? "A" : "a";
-echo (new ReflectionClass("EvalFinalReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalFinalReflect"))->isFinal() ? "F" : "f";
+echo (new ReflectionClass("EvalFinalReflect"))->isInterface() ? "I" : "i";
+echo (new ReflectionClass("EvalFinalReflect"))->isTrait() ? "T" : "t";
+echo (new ReflectionClass("EvalFinalReflect"))->isEnum() ? "E" : "e"; echo ":";
 echo (new ReflectionClass("EvalEnumReflect"))->isAbstract() ? "A" : "a";
-echo (new ReflectionClass("EvalEnumReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalEnumReflect"))->isFinal() ? "F" : "f";
+echo (new ReflectionClass("EvalEnumReflect"))->isInterface() ? "I" : "i";
+echo (new ReflectionClass("EvalEnumReflect"))->isTrait() ? "T" : "t";
+echo (new ReflectionClass("EvalEnumReflect"))->isEnum() ? "E" : "e"; echo ":";
 echo (new ReflectionClass("EvalIfaceReflect"))->isAbstract() ? "A" : "a";
-echo (new ReflectionClass("EvalIfaceReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalIfaceReflect"))->isFinal() ? "F" : "f";
+echo (new ReflectionClass("EvalIfaceReflect"))->isInterface() ? "I" : "i";
+echo (new ReflectionClass("EvalIfaceReflect"))->isTrait() ? "T" : "t";
+echo (new ReflectionClass("EvalIfaceReflect"))->isEnum() ? "E" : "e"; echo ":";
 echo (new ReflectionClass("EvalTraitReflect"))->isAbstract() ? "A" : "a";
-echo (new ReflectionClass("EvalTraitReflect"))->isFinal() ? "F" : "f";');
+echo (new ReflectionClass("EvalTraitReflect"))->isFinal() ? "F" : "f";
+echo (new ReflectionClass("EvalTraitReflect"))->isInterface() ? "I" : "i";
+echo (new ReflectionClass("EvalTraitReflect"))->isTrait() ? "T" : "t";
+echo (new ReflectionClass("EvalTraitReflect"))->isEnum() ? "E" : "e";');
 "#,
     );
     assert!(
@@ -5567,7 +5582,7 @@ echo (new ReflectionClass("EvalTraitReflect"))->isFinal() ? "F" : "f";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "Af:aF:aF:af:af");
+    assert_eq!(out.stdout, "Afite:aFite:aFitE:afIte:afiTe");
 }
 
 /// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.

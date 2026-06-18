@@ -212,15 +212,30 @@ interface EvalIfaceReflect {}
 trait EvalTraitReflect {}
 enum EvalEnumReflect { case Ready; }
 echo (new ReflectionClass("EvalAbstractReflect"))->isAbstract() ? "A" : "a";
-echo (new ReflectionClass("EvalAbstractReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalAbstractReflect"))->isFinal() ? "F" : "f";
+echo (new ReflectionClass("EvalAbstractReflect"))->isInterface() ? "I" : "i";
+echo (new ReflectionClass("EvalAbstractReflect"))->isTrait() ? "T" : "t";
+echo (new ReflectionClass("EvalAbstractReflect"))->isEnum() ? "E" : "e"; echo ":";
 echo (new ReflectionClass("EvalFinalReflect"))->isAbstract() ? "A" : "a";
-echo (new ReflectionClass("EvalFinalReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalFinalReflect"))->isFinal() ? "F" : "f";
+echo (new ReflectionClass("EvalFinalReflect"))->isInterface() ? "I" : "i";
+echo (new ReflectionClass("EvalFinalReflect"))->isTrait() ? "T" : "t";
+echo (new ReflectionClass("EvalFinalReflect"))->isEnum() ? "E" : "e"; echo ":";
 echo (new ReflectionClass("EvalEnumReflect"))->isAbstract() ? "A" : "a";
-echo (new ReflectionClass("EvalEnumReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalEnumReflect"))->isFinal() ? "F" : "f";
+echo (new ReflectionClass("EvalEnumReflect"))->isInterface() ? "I" : "i";
+echo (new ReflectionClass("EvalEnumReflect"))->isTrait() ? "T" : "t";
+echo (new ReflectionClass("EvalEnumReflect"))->isEnum() ? "E" : "e"; echo ":";
 echo (new ReflectionClass("EvalIfaceReflect"))->isAbstract() ? "A" : "a";
-echo (new ReflectionClass("EvalIfaceReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalIfaceReflect"))->isFinal() ? "F" : "f";
+echo (new ReflectionClass("EvalIfaceReflect"))->isInterface() ? "I" : "i";
+echo (new ReflectionClass("EvalIfaceReflect"))->isTrait() ? "T" : "t";
+echo (new ReflectionClass("EvalIfaceReflect"))->isEnum() ? "E" : "e"; echo ":";
 echo (new ReflectionClass("EvalTraitReflect"))->isAbstract() ? "A" : "a";
 echo (new ReflectionClass("EvalTraitReflect"))->isFinal() ? "F" : "f";
+echo (new ReflectionClass("EvalTraitReflect"))->isInterface() ? "I" : "i";
+echo (new ReflectionClass("EvalTraitReflect"))->isTrait() ? "T" : "t";
+echo (new ReflectionClass("EvalTraitReflect"))->isEnum() ? "E" : "e";
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -229,7 +244,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "Af:aF:aF:af:af");
+    assert_eq!(values.output, "Afite:aFite:aFitE:afIte:afiTe");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
