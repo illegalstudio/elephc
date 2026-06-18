@@ -571,6 +571,9 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => {
             eval_builtin_stream_introspection(name, args, values)
         }
+        "stream_resolve_include_path" => {
+            eval_builtin_stream_resolve_include_path(args, context, scope, values)
+        }
         "strtotime" => eval_builtin_strtotime(args, context, scope, values),
         "unlink" => eval_builtin_unlink(args, context, scope, values),
         "strrev" => eval_builtin_strrev(args, context, scope, values),

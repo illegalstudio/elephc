@@ -213,6 +213,28 @@ pub(in crate::interpreter) fn eval_realpath_result(
     values.string(canonical.as_ref())
 }
 
+/// Evaluates PHP `stream_resolve_include_path($filename)` over one eval expression.
+pub(in crate::interpreter) fn eval_builtin_stream_resolve_include_path(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [filename] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let filename = eval_expr(filename, context, scope, values)?;
+    eval_stream_resolve_include_path_result(filename, values)
+}
+
+/// Resolves one filename using elephc's realpath-equivalent include-path semantics.
+pub(in crate::interpreter) fn eval_stream_resolve_include_path_result(
+    filename: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_realpath_result(filename, values)
+}
+
 /// Evaluates PHP `pathinfo($path, $flags = PATHINFO_ALL)` over one eval expression.
 pub(in crate::interpreter) fn eval_builtin_pathinfo(
     args: &[EvalExpr],
