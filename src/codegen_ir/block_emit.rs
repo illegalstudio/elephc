@@ -25,7 +25,7 @@ use crate::names::{
     static_method_symbol, static_property_symbol,
 };
 use crate::parser::ast::ExprKind;
-use crate::types::{EnumCaseInfo, EnumCaseValue, FunctionSig, PhpType};
+use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, FunctionSig, PhpType};
 
 use super::context::FunctionContext;
 use super::fibers;
@@ -373,8 +373,7 @@ fn emit_enum_singleton_initializers(ctx: &mut FunctionContext<'_>) {
             emit_enum_singleton_initializer(
                 ctx,
                 enum_name,
-                class_info.class_id,
-                class_info.properties.len(),
+                class_info,
                 case,
             );
         }
@@ -385,14 +384,14 @@ fn emit_enum_singleton_initializers(ctx: &mut FunctionContext<'_>) {
 fn emit_enum_singleton_initializer(
     ctx: &mut FunctionContext<'_>,
     enum_name: &str,
-    class_id: u64,
-    property_count: usize,
+    class_info: &ClassInfo,
     case: &EnumCaseInfo,
 ) {
     ctx.emitter.comment(&format!("initialize enum singleton {}::{}", enum_name, case.name));
-    emit_enum_object_allocation(ctx, class_id, property_count);
+    emit_enum_object_allocation(ctx, class_info.class_id, class_info.properties.len());
+    emit_enum_name_property(ctx, class_info, &case.name);
     if let Some(case_value) = &case.value {
-        emit_enum_backing_value(ctx, case_value);
+        emit_enum_backing_value(ctx, class_info, case_value);
     }
     let symbol = enum_case_symbol(enum_name, &case.name);
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
@@ -427,23 +426,46 @@ fn emit_enum_object_allocation(ctx: &mut FunctionContext<'_>, class_id: u64, pro
     }
 }
 
-/// Writes a backed enum case value into the singleton's first property slot.
-fn emit_enum_backing_value(ctx: &mut FunctionContext<'_>, case_value: &EnumCaseValue) {
+/// Writes the enum case name into the singleton's synthetic `name` slot.
+fn emit_enum_name_property(ctx: &mut FunctionContext<'_>, class_info: &ClassInfo, case_name: &str) {
     let object_reg = abi::int_result_reg(ctx.emitter);
     let temp_reg = abi::temp_int_reg(ctx.emitter.target);
+    let offset = *class_info
+        .property_offsets
+        .get("name")
+        .expect("enum class metadata declares name property");
+    let (label, len) = ctx.data.add_string(case_name.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, temp_reg, &label);
+    abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, offset);
+    abi::emit_load_int_immediate(ctx.emitter, temp_reg, len as i64);
+    abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, offset + 8);
+}
+
+/// Writes a backed enum case value into the singleton's synthetic `value` slot.
+fn emit_enum_backing_value(
+    ctx: &mut FunctionContext<'_>,
+    class_info: &ClassInfo,
+    case_value: &EnumCaseValue,
+) {
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    let temp_reg = abi::temp_int_reg(ctx.emitter.target);
+    let offset = *class_info
+        .property_offsets
+        .get("value")
+        .expect("backed enum class metadata declares value property");
     match case_value {
         EnumCaseValue::Int(value) => {
             abi::emit_load_int_immediate(ctx.emitter, temp_reg, *value);
-            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, 8);
-            abi::emit_store_zero_to_address(ctx.emitter, object_reg, 16);
+            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, offset);
+            abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
         }
         EnumCaseValue::Str(value) => {
             let bytes = crate::string_bytes::literal_bytes(value);
             let (label, len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(ctx.emitter, temp_reg, &label);
-            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, 8);
+            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, offset);
             abi::emit_load_int_immediate(ctx.emitter, temp_reg, len as i64);
-            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, 16);
+            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, offset + 8);
         }
     }
 }

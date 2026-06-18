@@ -157,28 +157,80 @@ pub(super) fn emit_enum_singleton_initializers(
                 abi::emit_store_zero_to_address(emitter, object_reg, offset + 8); // zero-initialize the high property word
             }
 
+            abi::emit_load_temporary_stack_slot(emitter, object_reg, 0);        // reload enum singleton pointer for case-name initialization
+            emit_enum_name_property(
+                emitter,
+                data,
+                class_info,
+                &case.name,
+                object_reg,
+                temp_reg,
+            );
             if let Some(case_value) = &case.value {
                 abi::emit_load_temporary_stack_slot(emitter, object_reg, 0);    // reload enum singleton pointer for backing-value initialization
-                match case_value {
-                    crate::types::EnumCaseValue::Int(value) => {
-                        load_immediate(emitter, temp_reg, *value);              // materialize the enum int backing value
-                        abi::emit_store_to_address(emitter, temp_reg, object_reg, 8); // store the int backing value in the first property slot
-                        abi::emit_store_zero_to_address(emitter, object_reg, 16); // clear the metadata/high word for the int property
-                    }
-                    crate::types::EnumCaseValue::Str(value) => {
-                        let bytes = crate::string_bytes::literal_bytes(value);
-                        let (label, len) = data.add_string(&bytes);
-                        abi::emit_symbol_address(emitter, temp_reg, &label);    // materialize the enum string backing literal address
-                        abi::emit_store_to_address(emitter, temp_reg, object_reg, 8); // store the string backing pointer in the first property slot
-                        abi::emit_load_int_immediate(emitter, temp_reg, len as i64); // materialize the enum string backing length
-                        abi::emit_store_to_address(emitter, temp_reg, object_reg, 16); // store the string backing length in the second property word
-                    }
-                }
+                emit_enum_backing_value(
+                    emitter,
+                    data,
+                    class_info,
+                    case_value,
+                    object_reg,
+                    temp_reg,
+                );
             }
 
             abi::emit_pop_reg(emitter, result_reg);                             // pop initialized enum singleton pointer into the active integer result register
             let slot_label = crate::names::enum_case_symbol(enum_name, &case.name);
             abi::emit_store_reg_to_symbol(emitter, result_reg, &slot_label, 0); // publish the enum singleton pointer in its global slot
+        }
+    }
+}
+
+/// Writes a static enum case name into the singleton's synthetic `name` slot.
+fn emit_enum_name_property(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    class_info: &ClassInfo,
+    case_name: &str,
+    object_reg: &str,
+    temp_reg: &str,
+) {
+    let offset = *class_info
+        .property_offsets
+        .get("name")
+        .expect("enum class metadata declares name property");
+    let (label, len) = data.add_string(case_name.as_bytes());
+    abi::emit_symbol_address(emitter, temp_reg, &label);                       // materialize the enum case-name literal address
+    abi::emit_store_to_address(emitter, temp_reg, object_reg, offset);          // store the enum case-name pointer in the synthetic property slot
+    abi::emit_load_int_immediate(emitter, temp_reg, len as i64);                // materialize the enum case-name byte length
+    abi::emit_store_to_address(emitter, temp_reg, object_reg, offset + 8);      // store the enum case-name length in the synthetic property slot
+}
+
+/// Writes a backed enum case value into the singleton's synthetic `value` slot.
+fn emit_enum_backing_value(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    class_info: &ClassInfo,
+    case_value: &crate::types::EnumCaseValue,
+    object_reg: &str,
+    temp_reg: &str,
+) {
+    let offset = *class_info
+        .property_offsets
+        .get("value")
+        .expect("backed enum class metadata declares value property");
+    match case_value {
+        crate::types::EnumCaseValue::Int(value) => {
+            load_immediate(emitter, temp_reg, *value);                          // materialize the enum int backing value
+            abi::emit_store_to_address(emitter, temp_reg, object_reg, offset);  // store the enum int backing value in its property slot
+            abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);   // clear the metadata/high word for the int property
+        }
+        crate::types::EnumCaseValue::Str(value) => {
+            let bytes = crate::string_bytes::literal_bytes(value);
+            let (label, len) = data.add_string(&bytes);
+            abi::emit_symbol_address(emitter, temp_reg, &label);                // materialize the enum string backing literal address
+            abi::emit_store_to_address(emitter, temp_reg, object_reg, offset);  // store the enum string backing pointer in its property slot
+            abi::emit_load_int_immediate(emitter, temp_reg, len as i64);        // materialize the enum string backing length
+            abi::emit_store_to_address(emitter, temp_reg, object_reg, offset + 8); // store the enum string backing length in its property slot
         }
     }
 }

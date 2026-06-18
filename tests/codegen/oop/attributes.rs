@@ -1098,10 +1098,11 @@ echo $pure->hasProperty("value") ? "V" : "v";
 echo ":";
 $backed = new ReflectionClass(StaticMemberBackedEnum::class);
 echo $backed->hasMethod("tryfrom") ? "B" : "b";
+echo $backed->hasProperty("name") ? "N" : "n";
 echo $backed->hasProperty("value") ? "Y" : "y";
 "#,
     );
-    assert_eq!(out, "MPSx:ChTw:IJK:RU:ELNv:BY");
+    assert_eq!(out, "MPSx:ChTw:IJK:RU:ELNv:BNY");
 }
 
 /// Verifies that `ReflectionClass` reports implemented interface and used trait names.

@@ -87,6 +87,26 @@ fn test_pure_enum_cases_identity() {
     assert_eq!(out, "2\n1");
 }
 
+/// Verifies enum case objects expose PHP's readonly `name` property directly and inside methods.
+#[test]
+fn test_enum_case_name_property_and_method() {
+    let out = compile_and_run(
+        "<?php
+        enum Suit {
+            case Hearts;
+            case Clubs;
+            public function label(): string {
+                return $this->name;
+            }
+        }
+        echo Suit::Hearts->name;
+        echo '|';
+        echo Suit::Clubs->label();
+        ",
+    );
+    assert_eq!(out, "Hearts|Clubs");
+}
+
 /// Verifies that `Color::from(99)` throws a catchable `ValueError` with PHP's
 /// invalid backing-value message.
 #[test]
@@ -367,12 +387,12 @@ fn test_enum_method_reads_backing_value() {
         enum Power: int {
             case Low = 1;
             case High = 10;
-            public function doubled(): int { return $this->value * 2; }
+            public function label(): string { return $this->name . ':' . ($this->value * 2); }
         }
-        echo Power::High->doubled();
+        echo Power::High->label();
         ",
     );
-    assert_eq!(out, "20");
+    assert_eq!(out, "High:20");
 }
 
 /// Verifies that a static enum method (a factory) dispatches and returns a case.
