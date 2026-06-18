@@ -1,0 +1,132 @@
+//! Purpose:
+//! Implements the eval-supported `strtotime()` date-string subset.
+//!
+//! Called from:
+//! - `crate::interpreter::builtins::time` re-exports.
+//!
+//! Key details:
+//! - Supported strings are fixed-width ISO date/datetime forms normalized through
+//!   the same local `mktime` path as explicit date components.
+
+use super::super::super::*;
+use super::*;
+
+/// Evaluates PHP `strtotime(datetime)` for eval's supported date-string subset.
+pub(in crate::interpreter) fn eval_builtin_strtotime(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [datetime] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let datetime = eval_expr(datetime, context, scope, values)?;
+    eval_strtotime_result(datetime, values)
+}
+
+/// Parses one eval `strtotime()` input and boxes the resulting timestamp.
+pub(in crate::interpreter) fn eval_strtotime_result(
+    datetime: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bytes = values.string_bytes(datetime)?;
+    let timestamp = eval_strtotime_bytes(&bytes)?;
+    values.int(timestamp)
+}
+
+/// Parses eval's supported `strtotime()` strings into local Unix timestamps.
+pub(in crate::interpreter) fn eval_strtotime_bytes(bytes: &[u8]) -> Result<i64, EvalStatus> {
+    let bytes = eval_trim_ascii_whitespace(bytes);
+    if bytes.eq_ignore_ascii_case(b"now") {
+        return eval_current_unix_timestamp();
+    }
+    let Some((year, month, day, hour, minute, second)) = eval_parse_iso_datetime(bytes) else {
+        return Ok(-1);
+    };
+    eval_mktime_timestamp(hour, minute, second, month, day, year)
+}
+
+/// Trims ASCII whitespace from both ends of one byte slice.
+pub(in crate::interpreter) fn eval_trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let mut start = 0;
+    let mut end = bytes.len();
+    while start < end && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    while end > start && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    &bytes[start..end]
+}
+
+/// Parses fixed-width ISO date and datetime forms supported by eval `strtotime()`.
+pub(in crate::interpreter) fn eval_parse_iso_datetime(
+    bytes: &[u8],
+) -> Option<(
+    libc::c_int,
+    libc::c_int,
+    libc::c_int,
+    libc::c_int,
+    libc::c_int,
+    libc::c_int,
+)> {
+    if bytes.len() != 10 && bytes.len() != 16 && bytes.len() != 19 {
+        return None;
+    }
+    if bytes.get(4) != Some(&b'-') || bytes.get(7) != Some(&b'-') {
+        return None;
+    }
+    let year = eval_parse_fixed_digits(bytes, 0, 4)?;
+    let month = eval_parse_fixed_digits(bytes, 5, 2)?;
+    let day = eval_parse_fixed_digits(bytes, 8, 2)?;
+    let (hour, minute, second) = if bytes.len() == 10 {
+        (0, 0, 0)
+    } else {
+        if !matches!(bytes.get(10), Some(b' ') | Some(b'T') | Some(b't')) {
+            return None;
+        }
+        if bytes.get(13) != Some(&b':') {
+            return None;
+        }
+        let hour = eval_parse_fixed_digits(bytes, 11, 2)?;
+        let minute = eval_parse_fixed_digits(bytes, 14, 2)?;
+        let second = if bytes.len() == 19 {
+            if bytes.get(16) != Some(&b':') {
+                return None;
+            }
+            eval_parse_fixed_digits(bytes, 17, 2)?
+        } else {
+            0
+        };
+        (hour, minute, second)
+    };
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=59).contains(&second)
+    {
+        return None;
+    }
+    Some((year, month, day, hour, minute, second))
+}
+
+/// Parses a fixed-width decimal field as a libc-compatible integer.
+pub(in crate::interpreter) fn eval_parse_fixed_digits(
+    bytes: &[u8],
+    start: usize,
+    len: usize,
+) -> Option<libc::c_int> {
+    let end = start.checked_add(len)?;
+    let field = bytes.get(start..end)?;
+    let mut value: libc::c_int = 0;
+    for byte in field {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?;
+        value = value.checked_add(libc::c_int::from(byte - b'0'))?;
+    }
+    Some(value)
+}
