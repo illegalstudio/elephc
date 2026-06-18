@@ -72,6 +72,9 @@ pub(super) fn lower_reflection_owner_new(
     )?;
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_string_property(ctx, reflected_name, 8, 16);
+        if class_name == "ReflectionClass" {
+            emit_reflection_class_name_parts(ctx, reflected_name)?;
+        }
     }
     emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
     if class_name == "ReflectionClass" {
@@ -85,6 +88,29 @@ pub(super) fn lower_reflection_owner_new(
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Stores namespace-aware name parts for a statically materialized ReflectionClass.
+fn emit_reflection_class_name_parts(
+    ctx: &mut FunctionContext<'_>,
+    reflected_name: &str,
+) -> Result<()> {
+    let (namespace_name, short_name) = reflection_name_parts(reflected_name);
+    emit_reflection_string_property_by_name(ctx, "__short_name", short_name)?;
+    emit_reflection_string_property_by_name(ctx, "__namespace_name", namespace_name)?;
+    emit_reflection_bool_property(ctx, "__in_namespace", !namespace_name.is_empty())?;
+    Ok(())
+}
+
+/// Splits a canonical PHP class-like name into namespace and short-name parts.
+fn reflection_name_parts(reflected_name: &str) -> (&str, &str) {
+    match reflected_name.rfind('\\') {
+        Some(separator) => (
+            &reflected_name[..separator],
+            &reflected_name[separator + 1..],
+        ),
+        None => ("", reflected_name),
+    }
 }
 
 /// Resolves Reflection constructor operands to captured class/member metadata.
@@ -491,6 +517,22 @@ fn emit_reflection_string_property(
     }
     abi::emit_push_reg(ctx.emitter, object_reg);
     abi::emit_pop_reg(ctx.emitter, result_reg);
+}
+
+/// Writes a heap-persisted string into a named ReflectionClass property slot.
+fn emit_reflection_string_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    property_name: &str,
+    value: &str,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    emit_reflection_string_property(ctx, value, low_offset, low_offset + 8);
+    Ok(())
 }
 
 /// Replaces the Reflection object's default `__attrs` array with populated metadata.

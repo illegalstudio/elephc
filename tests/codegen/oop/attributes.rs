@@ -926,10 +926,13 @@ fn test_reflection_class_get_name_returns_class_name() {
         r#"<?php
 class Plain {}
 $ref = new ReflectionClass('Plain');
-echo $ref->getName();
+echo $ref->getName() . ":";
+echo $ref->getShortName() . ":";
+echo $ref->getNamespaceName() . ":";
+echo $ref->inNamespace() ? "Y" : "N";
 "#,
     );
-    assert_eq!(out, "Plain");
+    assert_eq!(out, "Plain:Plain::N");
 }
 
 /// Verifies that `ReflectionClass` reports final and abstract flags for static metadata.
@@ -992,10 +995,13 @@ fn test_reflection_class_get_name_uses_resolved_class_case() {
 namespace Demo;
 class Thing {}
 $ref = new \ReflectionClass('demo\thing');
-echo $ref->getName();
+echo $ref->getName() . ":";
+echo $ref->getShortName() . ":";
+echo $ref->getNamespaceName() . ":";
+echo $ref->inNamespace() ? "Y" : "N";
 "#,
     );
-    assert_eq!(out, "Demo\\Thing");
+    assert_eq!(out, "Demo\\Thing:Thing:Demo:Y");
 }
 
 /// Verifies that `ReflectionClass::getName()` works for a class discovered
