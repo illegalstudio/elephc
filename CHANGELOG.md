@@ -3,6 +3,11 @@
 All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
+## [Unreleased]
+- PHP date/time, timezone, and calendar parity (EIR backend): `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, and `DatePeriod`, plus the procedural `getdate`/`localtime`/`mktime`/`gmmktime`/`checkdate`/`microtime`/`hrtime`/`strtotime`, `date`/`gmdate` format tokens, and calendar functions — backed by a bundled timezone database (`elephc-tz` crate).
+- Date/time correctness fixes: `getdate()`/`localtime()` default to UTC like PHP, `gmdate("T")` reports `GMT` on every target, `createFromTimestamp()` keeps fractional-second microseconds, `DateInterval` requires a leading `P`, `diff()` and `DatePeriod::createFromISO8601String()` match PHP signatures (`$targetObject`, `$specification` + `$options`).
+- General fixes surfaced by the date/time work: `var_dump` renders heterogeneous indexed-array bodies, `array_fill` terminates on a negative count on ARM64, and user-declared functions/classes are no longer hijacked when their name collides with a procedural date alias.
+
 ## [0.24.3] - 2026-06-17
 - EIR peephole optimization pass: box/unbox cancellation, scalar load/store forwarding, paired acquire/release cancellation, string-literal concat folding, and redundant move/borrow cleanup.
 
@@ -377,6 +382,7 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.24.3...HEAD
 [0.24.3]: https://github.com/illegalstudio/elephc/compare/v0.24.2...v0.24.3
 [0.24.2]: https://github.com/illegalstudio/elephc/compare/v0.24.1...v0.24.2
 [0.24.1]: https://github.com/illegalstudio/elephc/compare/v0.24.0...v0.24.1
