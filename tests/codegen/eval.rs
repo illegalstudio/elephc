@@ -4545,6 +4545,28 @@ echo is_a(EvalDynColor::Red, "EvalDynLabel") ? "I" : "i";');
     assert_eq!(out, "EC2Gcolor:Green:gFNI");
 }
 
+/// Verifies eval enum `from()` misses throw catchable `ValueError` objects.
+#[test]
+fn test_eval_fragment_enum_from_miss_throws_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+eval('enum EvalDynStatus: string {
+    case Draft = "draft";
+}
+try {
+    EvalDynStatus::from("live");
+    echo "bad";
+} catch (ValueError $e) {
+    echo get_class($e), ":", $e->getMessage();
+}');
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError:\"live\" is not a valid backing value for enum EvalDynStatus"
+    );
+}
+
 /// Verifies eval `is_a()` and `is_subclass_of()` use generated AOT relation metadata.
 #[test]
 fn test_eval_fragment_is_a_relation_probes_aot_metadata() {

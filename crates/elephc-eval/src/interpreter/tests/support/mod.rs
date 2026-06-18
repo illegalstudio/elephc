@@ -53,6 +53,7 @@ pub(super) enum FakeValue {
 pub(super) struct FakeOps {
     pub(super) next_id: usize,
     pub(super) values: HashMap<usize, FakeValue>,
+    pub(super) object_classes: HashMap<usize, String>,
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
     pub(super) warnings: Vec<String>,

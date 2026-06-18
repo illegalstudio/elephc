@@ -15,8 +15,8 @@ use std::collections::BTreeMap;
 
 use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
-use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::emit::Emitter;
+use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::ir::{Function, LocalKind, Module};
 use crate::names::method_symbol;
@@ -35,6 +35,29 @@ struct EvalMethodSlot {
 }
 
 const MAX_EVAL_METHOD_ARGS: usize = 2;
+const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
+    "Error",
+    "TypeError",
+    "ValueError",
+    "Exception",
+    "LogicException",
+    "BadFunctionCallException",
+    "BadMethodCallException",
+    "DomainException",
+    "InvalidArgumentException",
+    "LengthException",
+    "OutOfRangeException",
+    "RuntimeException",
+    "OutOfBoundsException",
+    "OverflowException",
+    "RangeException",
+    "UnderflowException",
+    "UnexpectedValueException",
+    "JsonException",
+    "FiberError",
+];
+const BUILTIN_THROWABLE_GET_MESSAGE_LABEL: &str = "__elephc_eval_builtin_throwable_getmessage";
+const BUILTIN_THROWABLE_GET_CODE_LABEL: &str = "__elephc_eval_builtin_throwable_getcode";
 
 /// Emits eval method-call helpers when any lowered function owns an eval context.
 pub(super) fn emit_eval_method_helpers(
@@ -46,7 +69,8 @@ pub(super) fn emit_eval_method_helpers(
         return;
     }
     let slots = collect_eval_method_slots(module);
-    emit_method_call_helper(module, emitter, data, &slots);
+    let builtin_throwable_class_ids = collect_builtin_throwable_method_class_ids(module);
+    emit_method_call_helper(module, emitter, data, &slots, &builtin_throwable_class_ids);
 }
 
 /// Returns true when the EIR module contains a function that can call eval.
@@ -69,15 +93,12 @@ fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
 
 /// Returns true when a function has hidden eval state locals.
 fn function_uses_eval(function: &Function) -> bool {
-    function
-        .locals
-        .iter()
-        .any(|local| {
-            matches!(
-                local.kind,
-                LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-            )
-        })
+    function.locals.iter().any(|local| {
+        matches!(
+            local.kind,
+            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
+        )
+    })
 }
 
 /// Collects public bridge-supported instance methods backed by emitted EIR symbols.
@@ -90,6 +111,18 @@ fn collect_eval_method_slots(module: &Module) -> Vec<EvalMethodSlot> {
         collect_class_method_slots(class_name, class_info, &emitted_methods, &mut slots);
     }
     slots
+}
+
+/// Collects compact builtin Throwable class ids that eval can inspect directly.
+fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
+    let mut class_ids = BUILTIN_THROWABLE_METHOD_CLASSES
+        .iter()
+        .filter_map(|class_name| module.class_infos.get(*class_name))
+        .map(|class_info| class_info.class_id)
+        .collect::<Vec<_>>();
+    class_ids.sort_unstable();
+    class_ids.dedup();
+    class_ids
 }
 
 /// Adds bridge-supported public methods for one class.
@@ -121,11 +154,7 @@ fn collect_class_method_slots(
             class_name: class_name.to_string(),
             method: method.clone(),
             impl_class: impl_class.to_string(),
-            params: sig
-                .params
-                .iter()
-                .map(|(_, ty)| ty.codegen_repr())
-                .collect(),
+            params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
             return_ty: sig.return_type.codegen_repr(),
         });
     }
@@ -144,10 +173,7 @@ fn method_signature_supported(sig: &crate::types::FunctionSig) -> bool {
     sig.params.len() <= MAX_EVAL_METHOD_ARGS
         && sig.variadic.is_none()
         && sig.ref_params.iter().all(|is_ref| !*is_ref)
-        && sig
-            .params
-            .iter()
-            .all(|(_, ty)| method_param_supported(ty))
+        && sig.params.iter().all(|(_, ty)| method_param_supported(ty))
 }
 
 /// Returns true for an eval-supplied method argument type supported by this bridge.
@@ -181,13 +207,18 @@ fn emit_method_call_helper(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalMethodSlot],
+    builtin_throwable_class_ids: &[u64],
 ) {
     emitter.blank();
     emitter.comment("--- eval bridge: user method call ---");
     label_c_global(module, emitter, "__elephc_eval_value_method_call");
     match module.target.arch {
-        Arch::AArch64 => emit_method_call_aarch64(module, emitter, data, slots),
-        Arch::X86_64 => emit_method_call_x86_64(module, emitter, data, slots),
+        Arch::AArch64 => {
+            emit_method_call_aarch64(module, emitter, data, slots, builtin_throwable_class_ids)
+        }
+        Arch::X86_64 => {
+            emit_method_call_x86_64(module, emitter, data, slots, builtin_throwable_class_ids)
+        }
     }
 }
 
@@ -197,6 +228,7 @@ fn emit_method_call_aarch64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalMethodSlot],
+    builtin_throwable_class_ids: &[u64],
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail";
     let done_label = "__elephc_eval_value_method_call_done";
@@ -211,8 +243,15 @@ fn emit_method_call_aarch64(
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("b.ne {}", fail_label));                       // non-object receivers cannot dispatch instance methods
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for method calls
+    emit_aarch64_builtin_throwable_method_dispatch(
+        module,
+        emitter,
+        data,
+        builtin_throwable_class_ids,
+    );
     emit_aarch64_method_dispatch(module, emitter, data, slots);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported public method matched the request
+    emit_aarch64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
     emit_aarch64_method_bodies(module, emitter, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
@@ -228,6 +267,7 @@ fn emit_method_call_x86_64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalMethodSlot],
+    builtin_throwable_class_ids: &[u64],
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail_x";
     let done_label = "__elephc_eval_value_method_call_done_x";
@@ -244,8 +284,15 @@ fn emit_method_call_x86_64(
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the Mixed receiver is an object
     emitter.instruction(&format!("jne {}", fail_label));                        // non-object receivers cannot dispatch instance methods
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for method calls
+    emit_x86_64_builtin_throwable_method_dispatch(
+        module,
+        emitter,
+        data,
+        builtin_throwable_class_ids,
+    );
     emit_x86_64_method_dispatch(module, emitter, data, slots);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported public method matched the request
+    emit_x86_64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
     emit_x86_64_method_bodies(module, emitter, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
@@ -297,6 +344,105 @@ fn emit_x86_64_method_dispatch(
     }
 }
 
+/// Emits ARM64 class-id and method-name dispatch for compact Throwable methods.
+fn emit_aarch64_builtin_throwable_method_dispatch(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    class_ids: &[u64],
+) {
+    for class_id in class_ids {
+        let next_label = format!("__elephc_eval_builtin_throwable_method_next_{}", class_id);
+        emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this builtin Throwable test
+        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for builtin Throwable dispatch
+        abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
+        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this builtin Throwable class
+        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next builtin Throwable class when ids differ
+        emit_aarch64_builtin_throwable_method_name_branch(
+            module,
+            emitter,
+            data,
+            "getmessage",
+            BUILTIN_THROWABLE_GET_MESSAGE_LABEL,
+        );
+        emit_aarch64_builtin_throwable_method_name_branch(
+            module,
+            emitter,
+            data,
+            "getcode",
+            BUILTIN_THROWABLE_GET_CODE_LABEL,
+        );
+        emitter.label(&next_label);
+    }
+}
+
+/// Emits x86_64 class-id and method-name dispatch for compact Throwable methods.
+fn emit_x86_64_builtin_throwable_method_dispatch(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    class_ids: &[u64],
+) {
+    for class_id in class_ids {
+        let next_label = format!("__elephc_eval_builtin_throwable_method_next_{}_x", class_id);
+        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this builtin Throwable test
+        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for builtin Throwable dispatch
+        abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
+        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this builtin Throwable class
+        emitter.instruction(&format!("jne {}", next_label));                    // try the next builtin Throwable class when ids differ
+        emit_x86_64_builtin_throwable_method_name_branch(
+            module,
+            emitter,
+            data,
+            "getmessage",
+            BUILTIN_THROWABLE_GET_MESSAGE_LABEL,
+        );
+        emit_x86_64_builtin_throwable_method_name_branch(
+            module,
+            emitter,
+            data,
+            "getcode",
+            BUILTIN_THROWABLE_GET_CODE_LABEL,
+        );
+        emitter.label(&next_label);
+    }
+}
+
+/// Emits one ARM64 method-name comparison for a compact Throwable method.
+fn emit_aarch64_builtin_throwable_method_name_branch(
+    _module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    method_key: &str,
+    target_label: &str,
+) {
+    let (label, len) = data.add_string(method_key.as_bytes());
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload requested method-name pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested method-name length
+    abi::emit_symbol_address(emitter, "x3", &label);
+    abi::emit_load_int_immediate(emitter, "x4", len as i64);
+    emitter.instruction("bl __rt_str_eq");                                      // compare requested method name with this Throwable method
+    emitter.instruction(&format!("cbnz x0, {}", target_label));                 // dispatch to the compact Throwable method when names match
+}
+
+/// Emits one x86_64 method-name comparison for a compact Throwable method.
+fn emit_x86_64_builtin_throwable_method_name_branch(
+    _module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    method_key: &str,
+    target_label: &str,
+) {
+    let (label, len) = data.add_string(method_key.as_bytes());
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload requested method-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload requested method-name length
+    abi::emit_symbol_address(emitter, "rdx", &label);
+    abi::emit_load_int_immediate(emitter, "rcx", len as i64);
+    emitter.instruction("call __rt_str_eq");                                    // compare requested method name with this Throwable method
+    emitter.instruction("test rax, rax");                                       // check whether the method names matched
+    emitter.instruction(&format!("jne {}", target_label));                      // dispatch to the compact Throwable method when names match
+}
+
 /// Emits one ARM64 method-name comparison and branch to the matching body.
 fn emit_aarch64_method_name_compare(
     module: &Module,
@@ -310,7 +456,8 @@ fn emit_aarch64_method_name_compare(
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
     emitter.instruction("bl __rt_str_eq");                                      // compare requested method name with this public method
-    emitter.instruction(&format!("cbnz x0, {}", method_body_label(module, slot))); // dispatch to the method body when the names match
+    emitter.instruction(&format!("cbnz x0, {}", method_body_label(module, slot)));
+    // dispatch to the method body when the names match
 }
 
 /// Emits one x86_64 method-name comparison and branch to the matching body.
@@ -328,6 +475,84 @@ fn emit_x86_64_method_name_compare(
     emitter.instruction("call __rt_str_eq");                                    // compare requested method name with this public method
     emitter.instruction("test rax, rax");                                       // check whether the method names matched
     emitter.instruction(&format!("jne {}", method_body_label(module, slot)));   // dispatch to the method body when the names match
+}
+
+/// Emits ARM64 bodies for compact Throwable methods used by eval.
+fn emit_aarch64_builtin_throwable_method_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    done_label: &str,
+    fail_label: &str,
+) {
+    emitter.label(BUILTIN_THROWABLE_GET_MESSAGE_LABEL);
+    emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for getMessage()
+    emitter.instruction("ldr x1, [x9, #8]");                                    // load Throwable message pointer
+    emitter.instruction("ldr x2, [x9, #16]");                                   // load Throwable message length
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable message as a Mixed string
+    emitter.instruction(&format!("b {}", done_label));                          // return the boxed Throwable method result
+
+    emitter.label(BUILTIN_THROWABLE_GET_CODE_LABEL);
+    emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for getCode()
+    emitter.instruction("ldr x1, [x9, #24]");                                   // load Throwable integer code
+    emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
+    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable code as a Mixed integer
+    emitter.instruction(&format!("b {}", done_label));                          // return the boxed Throwable method result
+}
+
+/// Emits x86_64 bodies for compact Throwable methods used by eval.
+fn emit_x86_64_builtin_throwable_method_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    done_label: &str,
+    fail_label: &str,
+) {
+    emitter.label(BUILTIN_THROWABLE_GET_MESSAGE_LABEL);
+    emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for getMessage()
+    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // load Throwable message pointer
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // load Throwable message length
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable message as a Mixed string
+    emitter.instruction(&format!("jmp {}", done_label));                        // return the boxed Throwable method result
+
+    emitter.label(BUILTIN_THROWABLE_GET_CODE_LABEL);
+    emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for getCode()
+    emitter.instruction("mov rdi, QWORD PTR [r10 + 24]");                       // load Throwable integer code
+    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
+    emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer
+    emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable code as a Mixed integer
+    emitter.instruction(&format!("jmp {}", done_label));                        // return the boxed Throwable method result
+}
+
+/// Emits ARM64 zero-argument validation for compact Throwable eval methods.
+fn emit_aarch64_validate_builtin_throwable_method_arg_count(
+    module: &Module,
+    emitter: &mut Emitter,
+    fail_label: &str,
+) {
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for Throwable method arity validation
+    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    abi::emit_call_label(emitter, &array_len_symbol);
+    emitter.instruction("cmp x0, #0");                                          // compact Throwable methods accept no eval arguments
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject unsupported Throwable method arguments from eval
+}
+
+/// Emits x86_64 zero-argument validation for compact Throwable eval methods.
+fn emit_x86_64_validate_builtin_throwable_method_arg_count(
+    module: &Module,
+    emitter: &mut Emitter,
+    fail_label: &str,
+) {
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the eval argument array for Throwable method arity validation
+    let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
+    abi::emit_call_label(emitter, &array_len_symbol);
+    emitter.instruction("test rax, rax");                                       // compact Throwable methods accept no eval arguments
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject unsupported Throwable method arguments from eval
 }
 
 /// Emits ARM64 method-call bodies for every bridge-supported method.
@@ -532,7 +757,10 @@ fn emit_box_method_result(module: &Module, emitter: &mut Emitter, slot: &EvalMet
 fn grouped_slots(slots: &[EvalMethodSlot]) -> BTreeMap<u64, Vec<&EvalMethodSlot>> {
     let mut grouped = BTreeMap::new();
     for slot in slots {
-        grouped.entry(slot.class_id).or_insert_with(Vec::new).push(slot);
+        grouped
+            .entry(slot.class_id)
+            .or_insert_with(Vec::new)
+            .push(slot);
     }
     grouped
 }

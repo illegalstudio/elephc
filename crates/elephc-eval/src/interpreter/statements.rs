@@ -1411,15 +1411,14 @@ fn eval_enum_from_result(
     enum_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
     nullable_miss: bool,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let enum_decl = context
         .enum_decl(enum_name)
         .ok_or(EvalStatus::RuntimeFatal)?;
-    if enum_decl.backing_type().is_none() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    let backing_type = enum_decl.backing_type().ok_or(EvalStatus::RuntimeFatal)?;
+    let enum_display_name = enum_decl.name().trim_start_matches('\\').to_string();
     let case_names = enum_decl
         .cases()
         .iter()
@@ -1441,8 +1440,47 @@ fn eval_enum_from_result(
     if nullable_miss {
         values.null()
     } else {
-        Err(EvalStatus::RuntimeFatal)
+        let message = eval_enum_invalid_backing_value_message(
+            &enum_display_name,
+            backing_type,
+            value,
+            values,
+        )?;
+        eval_throw_value_error(&message, context, values)
     }
+}
+
+/// Builds PHP's backed-enum `ValueError` message for an unmatched enum value.
+fn eval_enum_invalid_backing_value_message(
+    enum_name: &str,
+    backing_type: EvalEnumBackingType,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    let value = String::from_utf8_lossy(&bytes);
+    let value = match backing_type {
+        EvalEnumBackingType::Int => value.into_owned(),
+        EvalEnumBackingType::String => format!("\"{}\"", value),
+    };
+    Ok(format!(
+        "{} is not a valid backing value for enum {}",
+        value, enum_name
+    ))
+}
+
+/// Creates and schedules a `ValueError` through eval's normal Throwable channel.
+fn eval_throw_value_error(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let exception = values.new_object("ValueError")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
 }
 
 /// Resolves a static method using private-method scope rules.
