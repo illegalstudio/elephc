@@ -49,7 +49,7 @@ such a local alias removes the alias without unsetting the global value.
 | Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, and `continue` are supported. |
 | Exceptions | `throw`, `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
 | Functions | Eval fragments can declare functions. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
-| Classes | Eval fragments can declare classes with public properties, public methods, and `__construct()`. Duplicate eval class names are rejected. |
+| Classes | Eval fragments can declare classes with properties, methods, `__construct()`, inheritance, visibility, abstract/final modifiers, simple trait uses, interface implementations, static members, and class constants. Duplicate eval class-like names are rejected. |
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
 
@@ -69,7 +69,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Expression area | Support |
 |---|---|
 | Scalars | `null`, booleans, integers, floats, and strings. |
-| Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, and eval object property access through the bridge. |
+| Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, eval object property access, static property access, and class constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, and string-key reads/writes. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
 | Object construction | `new ClassName(...)` for eval-declared classes, `stdClass`, and emitted AOT classes visible through runtime metadata. |
@@ -125,17 +125,24 @@ containers to eval-declared functions.
 
 ## Classes and objects
 
-Eval-declared classes support public properties, public methods, and
-`__construct()`. Eval object construction can allocate eval-declared classes,
-`stdClass`, and emitted AOT classes visible through runtime class metadata.
-Missing class names during eval object construction fail with an eval runtime
-fatal diagnostic.
+Eval-declared classes support inheritance, public/protected/private properties
+and methods, `__construct()`, abstract classes and methods, final classes and
+methods, simple `use Trait;` composition, interface implementation checks,
+static properties, static methods, and class constants. Member visibility is
+checked at runtime for eval-declared objects and static/class-constant
+accesses. `self::`, `parent::`, and late-bound `static::` work for supported
+static members and class constants.
+
+Eval object construction can allocate eval-declared classes, `stdClass`, and
+emitted AOT classes visible through runtime class metadata. Missing class names
+during eval object construction fail with an eval runtime fatal diagnostic.
 
 AOT and eval-declared class-name probes are visible through `class_exists()`.
 Eval object relation probes through `is_a()` and `is_subclass_of()` use
 generated AOT class/interface metadata and eval-created object metadata.
 `interface_exists()`, `trait_exists()`, and `enum_exists()` can probe generated
-AOT metadata.
+AOT metadata. Eval-declared classes, interfaces, traits, and class aliases are
+visible through the corresponding eval and post-barrier native metadata probes.
 
 Public declared property reads/writes through `$this->property` from native
 methods are bridged to eval. Public zero-, one-, or two-scalar-argument method
@@ -258,11 +265,12 @@ static-method callable arrays are still outside eval fragments. Object method
 calls through eval support positional arguments and numeric array unpacking;
 named method arguments remain unsupported.
 
-Eval class support is intentionally smaller than the full static class system:
-public properties, public methods, constructors, `stdClass`, AOT object
-construction, public property bridge access, and basic public method bridge
-calls are supported, but broader class-system features require future EvalIR and
-dynamic symbol-table expansion.
+Eval class support is still smaller than the full static class system. The main
+remaining class-system gaps are eval-declared enums, trait conflict adaptations
+(`insteadof` / `as`), trait and interface constants, `ClassName::class` /
+`self::class` / `static::class`, property hooks, attributes/reflection metadata,
+readonly semantics, dynamic static callables, and advanced method-call forms
+such as named method arguments.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`
