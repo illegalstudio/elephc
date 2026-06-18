@@ -15,7 +15,9 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 
 use crate::abi::ABI_VERSION;
-use crate::eval_ir::{EvalClass, EvalClassMethod, EvalFunction};
+use crate::eval_ir::{
+    EvalClass, EvalClassMethod, EvalFunction, EvalInterface, EvalInterfaceMethod,
+};
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
@@ -90,6 +92,8 @@ pub struct ElephcEvalContext {
     classes: HashMap<String, EvalClass>,
     class_aliases: HashMap<String, String>,
     declared_class_names: Vec<String>,
+    interfaces: HashMap<String, EvalInterface>,
+    declared_interface_names: Vec<String>,
     constants: HashMap<String, RuntimeCellHandle>,
     functions: HashMap<String, EvalFunction>,
     native_functions: HashMap<String, NativeFunction>,
@@ -117,6 +121,8 @@ impl ElephcEvalContext {
             classes: HashMap::new(),
             class_aliases: HashMap::new(),
             declared_class_names: Vec::new(),
+            interfaces: HashMap::new(),
+            declared_interface_names: Vec::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
@@ -145,6 +151,8 @@ impl ElephcEvalContext {
             classes: HashMap::new(),
             class_aliases: HashMap::new(),
             declared_class_names: Vec::new(),
+            interfaces: HashMap::new(),
+            declared_interface_names: Vec::new(),
             constants: HashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
@@ -173,7 +181,10 @@ impl ElephcEvalContext {
     /// Defines an eval-declared class, failing if this context already has it.
     pub fn define_class(&mut self, class: EvalClass) -> bool {
         let key = normalize_class_name(class.name());
-        if self.classes.contains_key(&key) || self.class_aliases.contains_key(&key) {
+        if self.classes.contains_key(&key)
+            || self.class_aliases.contains_key(&key)
+            || self.interfaces.contains_key(&key)
+        {
             return false;
         }
         self.declared_class_names.push(class.name().to_string());
@@ -220,6 +231,7 @@ impl ElephcEvalContext {
         let alias_key = normalize_class_name(alias);
         if alias_key.is_empty()
             || self.classes.contains_key(&alias_key)
+            || self.interfaces.contains_key(&alias_key)
             || self.class_aliases.contains_key(&alias_key)
         {
             return false;
@@ -234,6 +246,36 @@ impl ElephcEvalContext {
     /// Returns class names declared or aliased through eval in PHP-visible order.
     pub fn declared_class_names(&self) -> &[String] {
         &self.declared_class_names
+    }
+
+    /// Defines an eval-declared interface, failing if this context already has the name.
+    pub fn define_interface(&mut self, interface: EvalInterface) -> bool {
+        let key = normalize_class_name(interface.name());
+        if self.interfaces.contains_key(&key)
+            || self.classes.contains_key(&key)
+            || self.class_aliases.contains_key(&key)
+        {
+            return false;
+        }
+        self.declared_interface_names
+            .push(interface.name().to_string());
+        self.interfaces.insert(key, interface);
+        true
+    }
+
+    /// Returns true when this eval context has a dynamic interface with the requested name.
+    pub fn has_interface(&self, name: &str) -> bool {
+        self.interfaces.contains_key(&normalize_class_name(name))
+    }
+
+    /// Returns a dynamic eval interface by PHP case-insensitive interface name.
+    pub fn interface(&self, name: &str) -> Option<&EvalInterface> {
+        self.interfaces.get(&normalize_class_name(name))
+    }
+
+    /// Returns interface names declared through eval in PHP-visible order.
+    pub fn declared_interface_names(&self) -> &[String] {
+        &self.declared_interface_names
     }
 
     /// Records that one runtime object handle was created for an eval-declared class.
@@ -327,9 +369,82 @@ impl ElephcEvalContext {
         for class in self.class_chain(class_name) {
             for interface in class.interfaces() {
                 push_unique_class_name(interface, &mut interfaces, &mut seen);
+                self.collect_interface_parent_names(interface, &mut interfaces, &mut seen);
             }
         }
         interfaces
+    }
+
+    /// Returns parent interface names for an eval-declared interface.
+    pub fn interface_parent_names(&self, interface_name: &str) -> Vec<String> {
+        let mut parents = Vec::new();
+        let mut seen = HashSet::new();
+        self.collect_interface_parent_names(interface_name, &mut parents, &mut seen);
+        parents
+    }
+
+    /// Collects eval-declared interface parents without following cycles.
+    fn collect_interface_parent_names(
+        &self,
+        interface_name: &str,
+        names: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+    ) {
+        let Some(interface) = self.interface(interface_name) else {
+            return;
+        };
+        for parent in interface.parents() {
+            push_unique_class_name(parent, names, seen);
+            self.collect_interface_parent_names(parent, names, seen);
+        }
+    }
+
+    /// Returns direct and inherited method requirements for an eval interface.
+    pub fn interface_method_requirements(
+        &self,
+        interface_name: &str,
+    ) -> Vec<EvalInterfaceMethod> {
+        let mut methods = Vec::new();
+        let mut seen_interfaces = HashSet::new();
+        let mut seen_methods = HashSet::new();
+        self.collect_interface_method_requirements(
+            interface_name,
+            &mut methods,
+            &mut seen_interfaces,
+            &mut seen_methods,
+        );
+        methods
+    }
+
+    /// Collects eval interface methods without duplicating inherited method names.
+    fn collect_interface_method_requirements(
+        &self,
+        interface_name: &str,
+        methods: &mut Vec<EvalInterfaceMethod>,
+        seen_interfaces: &mut HashSet<String>,
+        seen_methods: &mut HashSet<String>,
+    ) {
+        let key = normalize_class_name(interface_name);
+        if !seen_interfaces.insert(key) {
+            return;
+        }
+        let Some(interface) = self.interface(interface_name) else {
+            return;
+        };
+        for parent in interface.parents() {
+            self.collect_interface_method_requirements(
+                parent,
+                methods,
+                seen_interfaces,
+                seen_methods,
+            );
+        }
+        for method in interface.methods() {
+            let key = method.name().to_ascii_lowercase();
+            if seen_methods.insert(key) {
+                methods.push(method.clone());
+            }
+        }
     }
 
     /// Returns whether an eval-declared class satisfies one class/interface target.

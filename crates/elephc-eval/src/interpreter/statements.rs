@@ -110,6 +110,10 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_class_decl_stmt(class, context, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::InterfaceDecl(interface) => {
+            execute_interface_decl_stmt(interface, context, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::Foreach {
             array,
             key_name,
@@ -288,7 +292,7 @@ pub(in crate::interpreter) fn execute_matching_catch(
 ) -> Result<EvalControl, EvalStatus> {
     let mut matched = None;
     for catch in catches {
-        if catch_types_match_thrown(thrown, &catch.class_names, values)? {
+        if catch_types_match_thrown(thrown, &catch.class_names, context, values)? {
             matched = Some(catch);
             break;
         }
@@ -316,12 +320,19 @@ pub(in crate::interpreter) fn execute_matching_catch(
 pub(in crate::interpreter) fn catch_types_match_thrown(
     thrown: RuntimeCellHandle,
     class_names: &[String],
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     for class_name in class_names {
         let class_name = class_name.trim_start_matches('\\');
         if class_name.eq_ignore_ascii_case("Throwable") {
             return Ok(true);
+        }
+        if let Some(matched) = dynamic_object_is_a(thrown, class_name, false, context, values)? {
+            if matched {
+                return Ok(true);
+            }
+            continue;
         }
         if values.object_is_a(thrown, class_name, false)? {
             return Ok(true);
@@ -337,7 +348,11 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let name = class.name().trim_start_matches('\\');
-    if context.has_class(name) || values.class_exists(name)? {
+    if context.has_class(name)
+        || context.has_interface(name)
+        || values.class_exists(name)?
+        || values.interface_exists(name)?
+    {
         return Err(EvalStatus::RuntimeFatal);
     }
     if let Some(parent) = class.parent() {
@@ -346,7 +361,9 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         }
     }
     for interface in class.interfaces() {
-        if !values.interface_exists(interface)? {
+        if context.has_interface(interface) {
+            validate_class_implements_eval_interface(class, interface, context)?;
+        } else if !values.interface_exists(interface)? {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -355,6 +372,67 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Registers an eval-declared interface in the dynamic interface table.
+pub(in crate::interpreter) fn execute_interface_decl_stmt(
+    interface: &EvalInterface,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let name = interface.name().trim_start_matches('\\');
+    if context.has_interface(name)
+        || context.has_class(name)
+        || values.interface_exists(name)?
+        || values.class_exists(name)?
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    for parent in interface.parents() {
+        if context.interface_parent_names(parent)
+            .iter()
+            .any(|ancestor| ancestor.eq_ignore_ascii_case(name))
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if !context.has_interface(parent) && !values.interface_exists(parent)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    if context.define_interface(interface.clone()) {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Validates that one eval class provides methods required by one eval interface.
+fn validate_class_implements_eval_interface(
+    class: &EvalClass,
+    interface_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    for requirement in context.interface_method_requirements(interface_name) {
+        if !class_has_interface_method(class, &requirement, context) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
+/// Returns whether a class or its eval parents satisfy one interface method signature.
+fn class_has_interface_method(
+    class: &EvalClass,
+    requirement: &EvalInterfaceMethod,
+    context: &ElephcEvalContext,
+) -> bool {
+    if let Some(method) = class.method(requirement.name()) {
+        return method.params().len() == requirement.params().len();
+    }
+    class
+        .parent()
+        .and_then(|parent| context.class_method(parent, requirement.name()))
+        .is_some_and(|(_, method)| method.params().len() == requirement.params().len())
 }
 
 /// Creates a backing object for an eval-declared class and runs its constructor.

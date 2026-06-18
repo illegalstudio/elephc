@@ -258,7 +258,10 @@ pub(in crate::interpreter) fn eval_get_declared_symbols_result(
         "get_declared_classes" => {
             eval_dynamic_string_array_result(context.declared_class_names(), values)
         }
-        "get_declared_interfaces" | "get_declared_traits" => {
+        "get_declared_interfaces" => {
+            eval_dynamic_string_array_result(context.declared_interface_names(), values)
+        }
+        "get_declared_traits" => {
             eval_dynamic_string_array_result(&[], values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
@@ -296,31 +299,34 @@ pub(in crate::interpreter) fn eval_builtin_interface_exists(
         }
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    let exists = eval_interface_exists_name(name, values)?;
+    let exists = eval_interface_exists_name(name, context, values)?;
     values.bool_value(exists)
 }
 
 /// Evaluates `interface_exists(...)` from already materialized call arguments.
 pub(in crate::interpreter) fn eval_interface_exists_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let exists = match evaluated_args {
-        [name] => eval_interface_exists_name(*name, values)?,
-        [name, _autoload] => eval_interface_exists_name(*name, values)?,
+        [name] => eval_interface_exists_name(*name, context, values)?,
+        [name, _autoload] => eval_interface_exists_name(*name, context, values)?,
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     values.bool_value(exists)
 }
 
-/// Normalizes a PHP interface-name cell and probes generated interface metadata.
+/// Normalizes a PHP interface-name cell and probes eval and generated interface metadata.
 pub(in crate::interpreter) fn eval_interface_exists_name(
     name: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let name = values.string_bytes(name)?;
     let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
-    values.interface_exists(name.trim_start_matches('\\'))
+    let name = name.trim_start_matches('\\');
+    Ok(context.has_interface(name) || values.interface_exists(name)?)
 }
 
 /// Evaluates `trait_exists(...)` and `enum_exists(...)` against generated metadata.
@@ -427,6 +433,14 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
             || values.object_is_a(object_or_class, &resolved_target_class, exclude_self),
             Ok,
         )?
+    } else if allow_string && values.type_tag(object_or_class)? == EVAL_TAG_STRING {
+        let source_class = values.string_bytes(object_or_class)?;
+        let source_class = String::from_utf8(source_class).map_err(|_| EvalStatus::RuntimeFatal)?;
+        if context.class(&source_class).is_some() {
+            context.class_is_a(&source_class, &resolved_target_class, exclude_self)
+        } else {
+            values.object_is_a(object_or_class, &resolved_target_class, exclude_self)?
+        }
     } else if allow_string {
         values.object_is_a(object_or_class, &resolved_target_class, exclude_self)?
     } else {

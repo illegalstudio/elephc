@@ -40,6 +40,28 @@ fn parse_fragment_accepts_class_extends_and_implements_source() {
         ))]
     );
 }
+/// Verifies eval interface declarations lower to dynamic interface metadata.
+#[test]
+fn parse_fragment_accepts_interface_declaration_source() {
+    let program = parse_fragment(
+        br#"interface DynEvalIface extends ParentIface, \Root\Iface {
+    public function read($value);
+    function label();
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::InterfaceDecl(EvalInterface::new(
+            "DynEvalIface",
+            vec!["ParentIface".to_string(), "Root\\Iface".to_string()],
+            vec![
+                EvalInterfaceMethod::new("read", vec!["value".to_string()]),
+                EvalInterfaceMethod::new("label", Vec::new()),
+            ],
+        ))]
+    );
+}
 /// Verifies public property and method class members lower into dynamic class metadata.
 #[test]
 fn parse_fragment_accepts_public_class_members() {

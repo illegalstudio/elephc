@@ -130,6 +130,34 @@ fn execute_program_catches_specific_exception_inside_eval() {
     assert_eq!(values.type_tag(caught), Ok(EVAL_TAG_OBJECT));
     assert_eq!(values.get(result), FakeValue::Int(42));
 }
+/// Verifies eval `catch` clauses can match eval-declared interfaces.
+#[test]
+fn execute_program_catches_eval_declared_interface_inside_eval() {
+    let program = parse_fragment(
+        br#"interface EvalCatchable {
+    function value();
+}
+class EvalThrownBox implements EvalCatchable {
+    public function value() { return 42; }
+}
+try {
+    throw new EvalThrownBox();
+} catch (EvalCatchable $caught) {
+    return $caught->value();
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    let caught = scope
+        .visible_cell("caught")
+        .expect("scope should contain catch variable");
+
+    assert_eq!(values.type_tag(caught), Ok(EVAL_TAG_OBJECT));
+    assert_eq!(values.get(result), FakeValue::Int(42));
+}
 /// Verifies eval catch clauses keep source order and skip non-matching types.
 #[test]
 fn execute_program_skips_non_matching_specific_catch_inside_eval() {

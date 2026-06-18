@@ -12,7 +12,8 @@ use super::cursor::*;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalCatch, EvalClass, EvalClassMethod, EvalClassProperty, EvalExpr, EvalStmt, EvalSwitchCase,
+    EvalCatch, EvalClass, EvalClassMethod, EvalClassProperty, EvalExpr, EvalInterface,
+    EvalInterfaceMethod, EvalStmt, EvalSwitchCase,
 };
 use crate::lexer::TokenKind;
 
@@ -46,6 +47,9 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_function_decl_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "global") => self.parse_global_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "if") => self.parse_if_stmt(),
+            TokenKind::Ident(name) if ident_eq(name, "interface") => {
+                self.parse_interface_decl_stmt()
+            }
             TokenKind::Ident(name) if ident_eq(name, "namespace") => self.parse_namespace_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "return") => {
                 self.advance();
@@ -302,6 +306,71 @@ impl Parser {
         };
         self.expect_semicolon()?;
         Ok(EvalClassProperty::new(name, default))
+    }
+
+    /// Parses `interface Name [extends Parent, ...] { function name(...); }`.
+    pub(super) fn parse_interface_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let name = self.qualify_name_in_current_namespace(name);
+        self.advance();
+        let parents = self.parse_interface_parent_clause()?;
+        self.expect(TokenKind::LBrace)?;
+        let mut methods = Vec::new();
+        while !self.consume(TokenKind::RBrace) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            methods.push(self.parse_interface_method_decl()?);
+        }
+        self.consume_semicolon();
+        Ok(vec![EvalStmt::InterfaceDecl(EvalInterface::new(
+            name, parents, methods,
+        ))])
+    }
+
+    /// Parses an optional `extends Parent, ...` interface declaration clause.
+    pub(super) fn parse_interface_parent_clause(&mut self) -> Result<Vec<String>, EvalParseError> {
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "extends")) {
+            return Ok(Vec::new());
+        }
+        self.advance();
+        let mut parents = Vec::new();
+        loop {
+            let parent = self.parse_qualified_name()?;
+            parents.push(self.resolve_class_name(parent));
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+        }
+        Ok(parents)
+    }
+
+    /// Parses one eval interface method signature.
+    pub(super) fn parse_interface_method_decl(
+        &mut self,
+    ) -> Result<EvalInterfaceMethod, EvalParseError> {
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "public")) {
+            self.advance();
+        } else if matches!(self.current(), TokenKind::Ident(name) if is_unsupported_class_member_modifier(name))
+        {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        self.advance();
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let name = name.clone();
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let params = self.parse_function_params()?;
+        self.expect_semicolon()?;
+        Ok(EvalInterfaceMethod::new(name, params))
     }
 
     /// Consumes a simple declared property type before the `$property` token.

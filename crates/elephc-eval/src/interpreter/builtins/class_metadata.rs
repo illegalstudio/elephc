@@ -72,6 +72,15 @@ pub(in crate::interpreter) fn eval_class_relation_target_result(
             _ => Err(EvalStatus::RuntimeFatal),
         };
     }
+    if context.interface(&target).is_some() {
+        return match name {
+            "class_implements" => {
+                eval_class_relation_names_result(context.interface_parent_names(&target), values)
+            }
+            "class_parents" | "class_uses" => values.assoc_new(0),
+            _ => Err(EvalStatus::RuntimeFatal),
+        };
+    }
     values.assoc_new(0)
 }
 
@@ -138,6 +147,7 @@ fn eval_class_relation_name_exists(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     if context.has_class(name)
+        || context.has_interface(name)
         || values.class_exists(name)?
         || values.interface_exists(name)?
         || values.trait_exists(name)?

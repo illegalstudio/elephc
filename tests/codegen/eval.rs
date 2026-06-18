@@ -4583,6 +4583,44 @@ echo count($implements) . ":" . $implements["EvalDynIface"];');
     );
 }
 
+/// Verifies eval-declared interfaces are usable by eval-declared classes.
+#[test]
+fn test_eval_declared_interface_metadata_and_implementation() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalDynReader {
+    function read($n);
+}
+interface EvalDynNamedReader extends EvalDynReader {
+    function label();
+}
+class EvalDynReaderBox implements EvalDynNamedReader {
+    public function read($n) { return $n + 1; }
+    public function label() { return "box"; }
+}
+$box = new EvalDynReaderBox();
+echo interface_exists("EvalDynReader") ? "iface" : "bad"; echo ":";
+echo class_exists("EvalDynReader") ? "bad" : "notclass"; echo ":";
+echo count(get_declared_interfaces()) . ":";
+echo $box->read(4) . ":";
+echo $box->label() . ":";
+echo is_a($box, "EvalDynNamedReader") ? "isa" : "bad"; echo ":";
+echo is_subclass_of("EvalDynReaderBox", "EvalDynReader") ? "str" : "bad"; echo ":";
+$implements = class_implements($box);
+echo count($implements) . ":" . $implements["EvalDynNamedReader"] . ":" . $implements["EvalDynReader"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "iface:notclass:2:5:box:isa:str:2:EvalDynNamedReader:EvalDynReader"
+    );
+}
+
 /// Verifies duplicate eval-declared functions fail through the runtime bridge.
 #[test]
 fn test_eval_duplicate_declared_function_fails() {
