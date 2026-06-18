@@ -907,6 +907,18 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
 
     // -- format: T (timezone abbreviation from tm_zone, e.g. CEST/CET/UTC) --
     emitter.label("__rt_date_fmt_T_linux_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // load the UTC-vs-local flag (1 = gmdate)
+    emitter.instruction("test rax, rax");                                       // gmdate path?
+    emitter.instruction("jz __rt_date_T_local_linux_x86_64");                   // date() → read libc tm_zone
+    // gmdate() always reports "GMT" regardless of libc's tm_zone (some libcs yield "UTC").
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the live output cursor
+    emitter.instruction("mov BYTE PTR [r9], 71");                               // 'G'
+    emitter.instruction("mov BYTE PTR [r9 + 1], 77");                           // 'M'
+    emitter.instruction("mov BYTE PTR [r9 + 2], 84");                           // 'T'
+    emitter.instruction("add r9, 3");                                           // advance the output cursor past "GMT"
+    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // publish the advanced output cursor
+    emitter.instruction("jmp __rt_date_T_done_linux_x86_64");                   // continue with the next format byte
+    emitter.label("__rt_date_T_local_linux_x86_64");
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // reload the struct tm pointer
     emitter.instruction("mov rsi, QWORD PTR [r8 + 48]");                        // load tm_zone (char* abbreviation, offset 48)
     emitter.instruction("test rsi, rsi");                                       // no abbreviation available?
