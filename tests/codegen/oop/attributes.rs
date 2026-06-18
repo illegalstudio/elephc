@@ -1417,6 +1417,70 @@ foreach ($properties as $property) {
     assert_eq!(out.stdout, "2:2:F1SR:V1PTR");
 }
 
+/// Verifies that `ReflectionClass::getConstructor()` returns a ReflectionMethod
+/// for direct, inherited, interface, and trait constructors, and null otherwise.
+#[test]
+fn test_reflection_class_get_constructor_returns_method_or_null() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectCtorBase {
+    public function __construct() {}
+}
+class ReflectCtorChild extends ReflectCtorBase {}
+class ReflectCtorPlain {}
+interface ReflectCtorInterface {
+    public function __construct();
+}
+trait ReflectCtorTrait {
+    public function __construct() {}
+}
+
+$base = (new ReflectionClass(ReflectCtorBase::class))->getConstructor();
+if ($base instanceof ReflectionMethod) {
+    echo $base->getName();
+} else {
+    echo "null";
+}
+echo ":";
+
+$child = (new ReflectionClass(ReflectCtorChild::class))->getConstructor();
+if ($child instanceof ReflectionMethod) {
+    echo $child->getName();
+} else {
+    echo "null";
+}
+echo ":";
+
+$plain = (new ReflectionClass(ReflectCtorPlain::class))->getConstructor();
+if ($plain instanceof ReflectionMethod) {
+    echo $plain->getName();
+} else {
+    echo "null";
+}
+echo ":";
+
+$interface = (new ReflectionClass(ReflectCtorInterface::class))->getConstructor();
+if ($interface instanceof ReflectionMethod) {
+    echo $interface->getName();
+} else {
+    echo "null";
+}
+echo ":";
+
+$trait = (new ReflectionClass(ReflectCtorTrait::class))->getConstructor();
+if ($trait instanceof ReflectionMethod) {
+    echo $trait->getName();
+} else {
+    echo "null";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "__construct:__construct:null:__construct:__construct"
+    );
+}
+
 /// Verifies that `ReflectionClass::newInstance()` constructs reflected classes
 /// and forwards direct and statically-unpacked constructor arguments.
 #[test]
