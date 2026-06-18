@@ -40,6 +40,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Operators](php/operators.md) — arithmetic, comparison, `instanceof`, logical, bitwise, string, assignment, ternary, null coalescing, error control
 - [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, multi-level break/continue, try/catch/finally
 - [Functions](php/functions.md) — declarations, closures, arrow functions, named arguments, variadic, spread, pass-by-reference, first-class callables, static variables
+- [Eval](php/eval.md) — runtime PHP fragment evaluation, scope synchronization, dynamic declarations, supported builtins, and limitations
 - [Strings](php/strings.md) — escape sequences, interpolation, heredoc/nowdoc, 70+ built-in string functions
 - [Regex](php/regex.md) — PCRE2-backed `preg_*` functions, SPL regex iterators, and native PCRE2 build requirements
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions

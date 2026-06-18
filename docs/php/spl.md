@@ -2,7 +2,7 @@
 title: "SPL"
 description: "Standard PHP Library interfaces, exceptions, and runtime-backed container classes."
 sidebar:
-  order: 10
+  order: 11
 ---
 
 elephc ships the SPL pieces that are needed by supported PHP code today:
