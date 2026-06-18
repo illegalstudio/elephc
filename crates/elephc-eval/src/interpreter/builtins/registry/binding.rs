@@ -271,6 +271,14 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "sprintf" | "printf" => Some(&["format", "values"]),
         "stream_is_local" | "stream_supports_lock" => Some(&["stream"]),
         "stream_copy_to_stream" => Some(&["from", "to", "length", "offset"]),
+        "stream_context_create" => Some(&["options", "params"]),
+        "stream_context_get_default" => Some(&["options"]),
+        "stream_context_get_options" | "stream_context_get_params" => Some(&["context"]),
+        "stream_context_set_default" => Some(&["options"]),
+        "stream_context_set_option" => {
+            Some(&["context", "wrapper_or_options", "option_name", "value"])
+        }
+        "stream_context_set_params" => Some(&["context", "params"]),
         "stream_get_contents" => Some(&["stream", "length", "offset"]),
         "stream_get_line" => Some(&["stream", "length", "ending"]),
         "stream_get_filters" | "stream_get_transports" | "stream_get_wrappers" => Some(&[]),
