@@ -202,6 +202,37 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass exposes eval class-like final and abstract flags.
+#[test]
+fn execute_program_reflects_eval_class_modifier_flags() {
+    let program = parse_fragment(
+        br#"abstract class EvalAbstractReflect {}
+final class EvalFinalReflect {}
+interface EvalIfaceReflect {}
+trait EvalTraitReflect {}
+enum EvalEnumReflect { case Ready; }
+echo (new ReflectionClass("EvalAbstractReflect"))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass("EvalAbstractReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalFinalReflect"))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass("EvalFinalReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalEnumReflect"))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass("EvalEnumReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalIfaceReflect"))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass("EvalIfaceReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalTraitReflect"))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass("EvalTraitReflect"))->isFinal() ? "F" : "f";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Af:aF:aF:af:af");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClassConstant/EnumCase expose eval-declared attribute metadata.
 #[test]
 fn execute_program_reflects_eval_constant_and_enum_case_attributes() {

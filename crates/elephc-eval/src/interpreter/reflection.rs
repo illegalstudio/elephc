@@ -12,6 +12,9 @@
 
 use super::*;
 
+const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
+const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
+
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.
 pub(in crate::interpreter) fn eval_reflection_owner_new_object(
     class_name: &str,
@@ -57,7 +60,7 @@ fn eval_reflection_class_new(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("class_name")], evaluated_args)?;
     let class_name = eval_reflection_string_arg(args[0], values)?;
-    let Some((resolved_name, attributes)) =
+    let Some((resolved_name, attributes, flags)) =
         eval_reflection_class_like_attributes(&class_name, context)
     else {
         return Ok(None);
@@ -66,6 +69,7 @@ fn eval_reflection_class_new(
         EVAL_REFLECTION_OWNER_CLASS,
         &resolved_name,
         &attributes,
+        flags,
         context,
         values,
     )
@@ -93,6 +97,7 @@ fn eval_reflection_method_new(
         EVAL_REFLECTION_OWNER_METHOD,
         &method_name,
         &attributes,
+        0,
         context,
         values,
     )
@@ -120,6 +125,7 @@ fn eval_reflection_property_new(
         EVAL_REFLECTION_OWNER_PROPERTY,
         &property_name,
         &attributes,
+        0,
         context,
         values,
     )
@@ -148,6 +154,7 @@ fn eval_reflection_class_constant_new(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
         &constant_name,
         &attributes,
+        0,
         context,
         values,
     )
@@ -181,7 +188,7 @@ fn eval_reflection_enum_case_new(
         .case(&case_name)
         .map(|case| case.attributes().to_vec())
         .ok_or(EvalStatus::RuntimeFatal)?;
-    eval_reflection_owner_object(owner_kind, &case_name, &attributes, context, values).map(Some)
+    eval_reflection_owner_object(owner_kind, &case_name, &attributes, 0, context, values).map(Some)
 }
 
 /// Materializes one Reflection owner object and transfers the temporary attribute array.
@@ -189,11 +196,12 @@ fn eval_reflection_owner_object(
     owner_kind: u64,
     reflected_name: &str,
     attributes: &[EvalAttribute],
+    flags: u64,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let attrs = eval_reflection_attribute_array_result(attributes, context, values)?;
-    let object = values.reflection_owner_new(owner_kind, reflected_name, attrs)?;
+    let object = values.reflection_owner_new(owner_kind, reflected_name, attrs, flags)?;
     values.release(attrs)?;
     Ok(object)
 }
@@ -202,29 +210,40 @@ fn eval_reflection_owner_object(
 fn eval_reflection_class_like_attributes(
     name: &str,
     context: &ElephcEvalContext,
-) -> Option<(String, Vec<EvalAttribute>)> {
+) -> Option<(String, Vec<EvalAttribute>, u64)> {
     if let Some(class) = context.class(name) {
+        let mut flags = 0;
+        if class.is_final() {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL;
+        }
+        if class.is_abstract() {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_ABSTRACT;
+        }
         return Some((
             class.name().trim_start_matches('\\').to_string(),
             class.attributes().to_vec(),
+            flags,
         ));
     }
     if let Some(interface) = context.interface(name) {
         return Some((
             interface.name().trim_start_matches('\\').to_string(),
             interface.attributes().to_vec(),
+            0,
         ));
     }
     if let Some(trait_decl) = context.trait_decl(name) {
         return Some((
             trait_decl.name().trim_start_matches('\\').to_string(),
             trait_decl.attributes().to_vec(),
+            0,
         ));
     }
     context.enum_decl(name).map(|enum_decl| {
         (
             enum_decl.name().trim_start_matches('\\').to_string(),
             enum_decl.attributes().to_vec(),
+            EVAL_REFLECTION_CLASS_FLAG_FINAL,
         )
     })
 }

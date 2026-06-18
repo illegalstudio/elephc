@@ -102,6 +102,14 @@ impl FakeOps {
             (FakeValue::Object(properties), "getname") if args.is_empty() => {
                 Self::object_property(&properties, "__name").map_or_else(|| self.string(""), Ok)
             }
+            (FakeValue::Object(properties), "isfinal") if args.is_empty() => {
+                Self::object_property(&properties, "__is_final")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "isabstract") if args.is_empty() => {
+                Self::object_property(&properties, "__is_abstract")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "getarguments") if args.is_empty() => {
                 Self::object_property(&properties, "__args")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
@@ -217,6 +225,7 @@ impl FakeOps {
         owner_kind: u64,
         reflected_name: &str,
         attrs: RuntimeCellHandle,
+        flags: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let class_name = match owner_kind {
             EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
@@ -228,10 +237,14 @@ impl FakeOps {
             _ => return Err(EvalStatus::RuntimeFatal),
         };
         let name = self.string(reflected_name)?;
-        let object = self.alloc(FakeValue::Object(vec![
-            ("__name".to_string(), name),
-            ("__attrs".to_string(), attrs),
-        ]));
+        let is_final = self.bool_value((flags & 1) != 0)?;
+        let is_abstract = self.bool_value((flags & 2) != 0)?;
+        let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
+        if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
+            properties.push(("__is_final".to_string(), is_final));
+            properties.push(("__is_abstract".to_string(), is_abstract));
+        }
+        let object = self.alloc(FakeValue::Object(properties));
         self.object_classes
             .insert(object.as_ptr() as usize, class_name.to_string());
         Ok(object)

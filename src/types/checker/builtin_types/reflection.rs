@@ -181,6 +181,14 @@ fn empty_array() -> Option<Expr> {
     ))
 }
 
+/// Returns a `BoolLiteral(false)` expression.
+fn false_bool() -> Option<Expr> {
+    Some(Expr::new(
+        ExprKind::BoolLiteral(false),
+        crate::span::Span::dummy(),
+    ))
+}
+
 /// Returns an `IntLiteral` expression with the given value.
 fn int_lit(value: i64) -> Option<Expr> {
     Some(Expr::new(
@@ -197,6 +205,11 @@ fn array_type() -> TypeExpr {
 /// Returns a `TypeExpr` for the unqualified name `mixed`.
 fn mixed_type() -> TypeExpr {
     TypeExpr::Named(crate::names::Name::unqualified("mixed"))
+}
+
+/// Returns a `TypeExpr` for PHP's builtin boolean type.
+fn bool_type() -> TypeExpr {
+    TypeExpr::Bool
 }
 
 /// Returns a private parameterless `__construct` method for `ReflectionAttribute`.
@@ -327,6 +340,18 @@ fn builtin_reflection_class() -> FlattenedClass {
                 Some(array_type()),
                 empty_array(),
             ),
+            builtin_property(
+                "__is_final",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
+                "__is_abstract",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
@@ -336,6 +361,8 @@ fn builtin_reflection_class() -> FlattenedClass {
                 false,
             )]),
             builtin_reflection_class_get_name_method(),
+            builtin_reflection_class_bool_method("isFinal", "__is_final"),
+            builtin_reflection_class_bool_method("isAbstract", "__is_abstract"),
             builtin_reflection_owner_get_attributes_method(),
         ],
         attributes: Vec::new(),
@@ -364,6 +391,35 @@ fn builtin_reflection_class_get_name_method() -> ClassMethod {
                 ExprKind::PropertyAccess {
                     object: Box::new(Expr::new(ExprKind::This, dummy_span)),
                     property: "__name".to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass` boolean method backed by one private slot.
+fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
                 },
                 dummy_span,
             ))),
@@ -518,6 +574,13 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             ) {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getName")) {
                     sig.return_type = PhpType::Str;
+                }
+            }
+            if class_name == "ReflectionClass" {
+                for method_name in ["isfinal", "isabstract"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
                 }
             }
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getAttributes")) {
