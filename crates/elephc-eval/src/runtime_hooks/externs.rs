@@ -73,6 +73,8 @@ unsafe extern "C" {
         name_ptr: *const u8,
         name_len: u64,
         attrs: *mut RuntimeCell,
+        interface_names: *mut RuntimeCell,
+        trait_names: *mut RuntimeCell,
         flags: u64,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_new_object(

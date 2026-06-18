@@ -977,6 +977,8 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionClass::isInterface()` | `new ReflectionClass($class_name)` | Return whether the reflected class-like symbol is an interface |
 | `ReflectionClass::isTrait()` | `new ReflectionClass($class_name)` | Return whether the reflected class-like symbol is a trait |
 | `ReflectionClass::isEnum()` | `new ReflectionClass($class_name)` | Return whether the reflected class-like symbol is an enum |
+| `ReflectionClass::getInterfaceNames()` | `new ReflectionClass($class_name)` | Return implemented interface names for classes or parent interface names for interfaces |
+| `ReflectionClass::getTraitNames()` | `new ReflectionClass($class_name)` | Return trait names used directly by classes or traits |
 | `ReflectionClass::getAttributes()` | `new ReflectionClass($class_name)` | Return `ReflectionAttribute` objects for class attributes |
 | `ReflectionMethod::getName()` | `new ReflectionMethod($class_name, $method_name)` | Return the reflected method name |
 | `ReflectionMethod::getAttributes()` | `new ReflectionMethod($class_name, $method_name)` | Return `ReflectionAttribute` objects for method attributes |
@@ -988,7 +990,7 @@ Limitations today:
 - All arguments to `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and `new ReflectionClass/Method/Property(...)` must be compile-time class/member strings. `ClassName::class` is accepted for the class-name argument of `new ReflectionClass/Method/Property(...)`, and normal named-argument / static associative-spread normalization runs before the literal-string check. `ReflectionClass` can resolve statically known classes, enums, interfaces, and traits; class-attribute materialization is currently backed by class/enum metadata. Dynamic class, method, property, or attribute names require a runtime name→id lookup table that is not yet implemented.
 - Only **literal** positional arguments are materialized by reflection helpers today (string, int, bool, null, plus `-N` for negative ints). Other legal PHP attribute arguments can still be parsed and compiled, and `class_attribute_names()` can still list the attribute name, but `class_attribute_args()`, `class_get_attributes()`, and Reflection `getAttributes()` report an error if they would need unsupported argument metadata.
 - When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
-- `ReflectionClass` supports `getName()`, `getShortName()`, `getNamespaceName()`, `inNamespace()`, `getAttributes()`, `isFinal()`, `isAbstract()`, `isInterface()`, `isTrait()`, and `isEnum()`. `ReflectionMethod` and `ReflectionProperty` currently support `getName()` and `getAttributes()` only; broader APIs such as `getProperties()`, `getMethods()`, and object construction through `ReflectionClass::newInstance()` are not yet available.
+- `ReflectionClass` supports `getName()`, `getShortName()`, `getNamespaceName()`, `inNamespace()`, `getAttributes()`, `isFinal()`, `isAbstract()`, `isInterface()`, `isTrait()`, `isEnum()`, `getInterfaceNames()`, and `getTraitNames()`. `ReflectionMethod` and `ReflectionProperty` currently support `getName()` and `getAttributes()` only; broader APIs such as `getProperties()`, `getMethods()`, and object construction through `ReflectionClass::newInstance()` are not yet available.
 
 ### Class constants
 

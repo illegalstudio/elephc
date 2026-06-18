@@ -18,6 +18,15 @@ const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
 const EVAL_REFLECTION_CLASS_FLAG_TRAIT: u64 = 8;
 const EVAL_REFLECTION_CLASS_FLAG_ENUM: u64 = 16;
 
+/// Eval metadata needed to materialize one `ReflectionClass` owner object.
+struct EvalReflectionClassMetadata {
+    resolved_name: String,
+    attributes: Vec<EvalAttribute>,
+    flags: u64,
+    interface_names: Vec<String>,
+    trait_names: Vec<String>,
+}
+
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.
 pub(in crate::interpreter) fn eval_reflection_owner_new_object(
     class_name: &str,
@@ -63,16 +72,16 @@ fn eval_reflection_class_new(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("class_name")], evaluated_args)?;
     let class_name = eval_reflection_string_arg(args[0], values)?;
-    let Some((resolved_name, attributes, flags)) =
-        eval_reflection_class_like_attributes(&class_name, context)
-    else {
+    let Some(metadata) = eval_reflection_class_like_attributes(&class_name, context) else {
         return Ok(None);
     };
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS,
-        &resolved_name,
-        &attributes,
-        flags,
+        &metadata.resolved_name,
+        &metadata.attributes,
+        &metadata.interface_names,
+        &metadata.trait_names,
+        metadata.flags,
         context,
         values,
     )
@@ -100,6 +109,8 @@ fn eval_reflection_method_new(
         EVAL_REFLECTION_OWNER_METHOD,
         &method_name,
         &attributes,
+        &[],
+        &[],
         0,
         context,
         values,
@@ -128,6 +139,8 @@ fn eval_reflection_property_new(
         EVAL_REFLECTION_OWNER_PROPERTY,
         &property_name,
         &attributes,
+        &[],
+        &[],
         0,
         context,
         values,
@@ -157,6 +170,8 @@ fn eval_reflection_class_constant_new(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
         &constant_name,
         &attributes,
+        &[],
+        &[],
         0,
         context,
         values,
@@ -191,7 +206,17 @@ fn eval_reflection_enum_case_new(
         .case(&case_name)
         .map(|case| case.attributes().to_vec())
         .ok_or(EvalStatus::RuntimeFatal)?;
-    eval_reflection_owner_object(owner_kind, &case_name, &attributes, 0, context, values).map(Some)
+    eval_reflection_owner_object(
+        owner_kind,
+        &case_name,
+        &attributes,
+        &[],
+        &[],
+        0,
+        context,
+        values,
+    )
+    .map(Some)
 }
 
 /// Materializes one Reflection owner object and transfers the temporary attribute array.
@@ -199,21 +224,49 @@ fn eval_reflection_owner_object(
     owner_kind: u64,
     reflected_name: &str,
     attributes: &[EvalAttribute],
+    interface_names: &[String],
+    trait_names: &[String],
     flags: u64,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let attrs = eval_reflection_attribute_array_result(attributes, context, values)?;
-    let object = values.reflection_owner_new(owner_kind, reflected_name, attrs, flags)?;
+    let interface_names = eval_reflection_string_array_result(interface_names, values)?;
+    let trait_names = eval_reflection_string_array_result(trait_names, values)?;
+    let object = values.reflection_owner_new(
+        owner_kind,
+        reflected_name,
+        attrs,
+        interface_names,
+        trait_names,
+        flags,
+    )?;
     values.release(attrs)?;
+    values.release(interface_names)?;
+    values.release(trait_names)?;
     Ok(object)
+}
+
+/// Builds an indexed PHP string array for ReflectionClass relation metadata.
+fn eval_reflection_string_array_result(
+    names: &[String],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(names.len())?;
+    for (index, name) in names.iter().enumerate() {
+        let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let key = values.int(index)?;
+        let value = values.string(name)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }
 
 /// Returns the eval-retained class-like attributes plus canonical reflected name.
 fn eval_reflection_class_like_attributes(
     name: &str,
     context: &ElephcEvalContext,
-) -> Option<(String, Vec<EvalAttribute>, u64)> {
+) -> Option<EvalReflectionClassMetadata> {
     if let Some(class) = context.class(name) {
         let mut flags = 0;
         if class.is_final() {
@@ -225,33 +278,41 @@ fn eval_reflection_class_like_attributes(
         if context.has_enum(class.name()) {
             flags |= EVAL_REFLECTION_CLASS_FLAG_ENUM;
         }
-        return Some((
-            class.name().trim_start_matches('\\').to_string(),
-            class.attributes().to_vec(),
+        return Some(EvalReflectionClassMetadata {
+            resolved_name: class.name().trim_start_matches('\\').to_string(),
+            attributes: class.attributes().to_vec(),
+            interface_names: context.class_interface_names(class.name()),
+            trait_names: context.class_trait_names(class.name()),
             flags,
-        ));
+        });
     }
     if let Some(interface) = context.interface(name) {
-        return Some((
-            interface.name().trim_start_matches('\\').to_string(),
-            interface.attributes().to_vec(),
-            EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
-        ));
+        return Some(EvalReflectionClassMetadata {
+            resolved_name: interface.name().trim_start_matches('\\').to_string(),
+            attributes: interface.attributes().to_vec(),
+            interface_names: context.interface_parent_names(interface.name()),
+            trait_names: Vec::new(),
+            flags: EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
+        });
     }
     if let Some(trait_decl) = context.trait_decl(name) {
-        return Some((
-            trait_decl.name().trim_start_matches('\\').to_string(),
-            trait_decl.attributes().to_vec(),
-            EVAL_REFLECTION_CLASS_FLAG_TRAIT,
-        ));
+        return Some(EvalReflectionClassMetadata {
+            resolved_name: trait_decl.name().trim_start_matches('\\').to_string(),
+            attributes: trait_decl.attributes().to_vec(),
+            interface_names: Vec::new(),
+            trait_names: Vec::new(),
+            flags: EVAL_REFLECTION_CLASS_FLAG_TRAIT,
+        });
     }
-    context.enum_decl(name).map(|enum_decl| {
-        (
-            enum_decl.name().trim_start_matches('\\').to_string(),
-            enum_decl.attributes().to_vec(),
-            EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM,
-        )
-    })
+    context
+        .enum_decl(name)
+        .map(|enum_decl| EvalReflectionClassMetadata {
+            resolved_name: enum_decl.name().trim_start_matches('\\').to_string(),
+            attributes: enum_decl.attributes().to_vec(),
+            interface_names: context.class_interface_names(enum_decl.name()),
+            trait_names: Vec::new(),
+            flags: EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM,
+        })
 }
 
 /// Returns attributes attached to an eval class constant or enum case.

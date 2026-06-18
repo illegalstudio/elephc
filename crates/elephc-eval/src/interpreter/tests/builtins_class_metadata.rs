@@ -225,6 +225,39 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass exposes eval interface and trait relation names.
+#[test]
+fn execute_program_reflects_eval_class_relation_names() {
+    let program = parse_fragment(
+        br#"interface EvalRelationIface {}
+trait EvalRelationTrait {}
+class EvalRelationTarget implements EvalRelationIface {
+    use EvalRelationTrait;
+}
+interface EvalRelationParent {}
+interface EvalRelationChild extends EvalRelationParent {}
+$ref = new ReflectionClass("EvalRelationTarget");
+$interfaces = $ref->getInterfaceNames();
+$traits = $ref->getTraitNames();
+echo count($interfaces); echo ":"; echo $interfaces[0]; echo ":";
+echo count($traits); echo ":"; echo $traits[0]; echo ":";
+$parentInterfaces = (new ReflectionClass("EvalRelationChild"))->getInterfaceNames();
+echo count($parentInterfaces); echo ":"; echo $parentInterfaces[0];
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "1:EvalRelationIface:1:EvalRelationTrait:1:EvalRelationParent"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes eval class-like final and abstract flags.
 #[test]
 fn execute_program_reflects_eval_class_modifier_flags() {

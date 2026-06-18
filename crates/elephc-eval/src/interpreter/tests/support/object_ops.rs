@@ -134,6 +134,14 @@ impl FakeOps {
                 Self::object_property(&properties, "__is_enum")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "getinterfacenames") if args.is_empty() => {
+                Self::object_property(&properties, "__interface_names")
+                    .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
+            (FakeValue::Object(properties), "gettraitnames") if args.is_empty() => {
+                Self::object_property(&properties, "__trait_names")
+                    .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
             (FakeValue::Object(properties), "getarguments") if args.is_empty() => {
                 Self::object_property(&properties, "__args")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
@@ -249,6 +257,8 @@ impl FakeOps {
         owner_kind: u64,
         reflected_name: &str,
         attrs: RuntimeCellHandle,
+        interface_names: RuntimeCellHandle,
+        trait_names: RuntimeCellHandle,
         flags: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let class_name = match owner_kind {
@@ -281,6 +291,8 @@ impl FakeOps {
             properties.push(("__short_name".to_string(), short_name));
             properties.push(("__namespace_name".to_string(), namespace_name));
             properties.push(("__in_namespace".to_string(), in_namespace));
+            properties.push(("__interface_names".to_string(), interface_names));
+            properties.push(("__trait_names".to_string(), trait_names));
         }
         let object = self.alloc(FakeValue::Object(properties));
         self.object_classes

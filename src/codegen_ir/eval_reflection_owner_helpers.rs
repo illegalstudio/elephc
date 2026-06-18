@@ -8,9 +8,9 @@
 //! - `crate::codegen_ir::finalize_user_asm()` when an EIR module uses eval.
 //!
 //! Key details:
-//! - Reflection owner objects store `__attrs`; owners with public `getName()`
-//!   also store `__name`; both slots are private implementation details.
-//! - The helper retains the supplied attribute array payload for object ownership.
+//! - Reflection owner objects store private metadata slots such as `__attrs`,
+//!   `__name`, and the ReflectionClass relation-name arrays.
+//! - The helper retains supplied array payloads for object ownership.
 
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
@@ -30,6 +30,10 @@ struct ReflectionOwnerLayout {
     short_name_hi: Option<usize>,
     namespace_name_lo: Option<usize>,
     namespace_name_hi: Option<usize>,
+    interface_names_lo: Option<usize>,
+    interface_names_hi: Option<usize>,
+    trait_names_lo: Option<usize>,
+    trait_names_hi: Option<usize>,
     attrs_lo: usize,
     attrs_hi: usize,
     is_final_lo: Option<usize>,
@@ -131,6 +135,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         .flatten();
     let short_name_lo = reflection_property_offset(info, "__short_name");
     let namespace_name_lo = reflection_property_offset(info, "__namespace_name");
+    let interface_names_lo = reflection_property_offset(info, "__interface_names");
+    let trait_names_lo = reflection_property_offset(info, "__trait_names");
     let is_final_lo = reflection_property_offset(info, "__is_final");
     let is_abstract_lo = reflection_property_offset(info, "__is_abstract");
     let is_interface_lo = reflection_property_offset(info, "__is_interface");
@@ -146,6 +152,10 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         short_name_hi: short_name_lo.map(|offset| offset + 8),
         namespace_name_lo,
         namespace_name_hi: namespace_name_lo.map(|offset| offset + 8),
+        interface_names_lo,
+        interface_names_hi: interface_names_lo.map(|offset| offset + 8),
+        trait_names_lo,
+        trait_names_hi: trait_names_lo.map(|offset| offset + 8),
         attrs_lo,
         attrs_hi: attrs_lo + 8,
         is_final_lo,
@@ -193,14 +203,16 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     let class_constant_label = "__elephc_eval_reflection_owner_new_class_constant";
     let enum_unit_case_label = "__elephc_eval_reflection_owner_new_enum_unit_case";
     let enum_backed_case_label = "__elephc_eval_reflection_owner_new_enum_backed_case";
-    emitter.instruction("sub sp, sp, #96");                                     // reserve helper frame for inputs, object, scratch, and fp/lr
-    emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve the Rust caller frame across runtime calls
-    emitter.instruction("add x29, sp, #80");                                    // establish a stable helper frame pointer
+    emitter.instruction("sub sp, sp, #128");                                    // reserve helper frame for inputs, object, arrays, scratch, and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #112]");                            // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #112");                                   // establish a stable helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the Reflection owner kind
     emitter.instruction("str x1, [sp, #8]");                                    // save the reflected-name pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save the reflected-name length
     emitter.instruction("str x3, [sp, #24]");                                   // save the boxed ReflectionAttribute array
-    emitter.instruction("str x4, [sp, #48]");                                   // save ReflectionClass modifier flags
+    emitter.instruction("str x4, [sp, #80]");                                   // save the boxed ReflectionClass interface-name array
+    emitter.instruction("str x5, [sp, #88]");                                   // save the boxed ReflectionClass trait-name array
+    emitter.instruction("str x6, [sp, #48]");                                   // save ReflectionClass modifier flags
     emitter.instruction("cmp x0, #0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("b.eq {}", class_label));                      // allocate a ReflectionClass owner
     emitter.instruction("cmp x0, #1");                                          // owner kind 1 means ReflectionMethod
@@ -271,8 +283,8 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #96");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #128");                                    // release the helper frame
     emitter.instruction("ret");                                                 // return the boxed reflection owner to Rust
 }
 
@@ -289,12 +301,15 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let enum_backed_case_label = "__elephc_eval_reflection_owner_new_enum_backed_case_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 96");                                         // reserve slots for inputs, object, unboxed attrs, and name parts
+    emitter.instruction("sub rsp, 112");                                        // reserve slots for inputs, object, relation arrays, and name parts
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the Reflection owner kind
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the reflected-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the reflected-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed ReflectionAttribute array
-    emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // save ReflectionClass modifier flags
+    emitter.instruction("mov QWORD PTR [rbp - 88], r8");                        // save the boxed ReflectionClass interface-name array
+    emitter.instruction("mov QWORD PTR [rbp - 96], r9");                        // save the boxed ReflectionClass trait-name array
+    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load ReflectionClass modifier flags from the first stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save ReflectionClass modifier flags
     emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
     emitter.instruction("cmp rdi, 1");                                          // owner kind 1 means ReflectionMethod
@@ -386,6 +401,7 @@ fn emit_aarch64_owner_kind_body(
         emit_set_owner_name_property_aarch64(emitter, layout);
     }
     emit_set_owner_class_flags_property_aarch64(emitter, layout);
+    emit_set_owner_relation_arrays_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_aarch64(emitter, layout, fail_label);
     emitter.instruction(&format!("b {}", box_label));                           // box this populated Reflection owner object
 }
@@ -406,6 +422,7 @@ fn emit_x86_64_owner_kind_body(
         emit_set_owner_name_property_x86_64(emitter, layout);
     }
     emit_set_owner_class_flags_property_x86_64(emitter, layout);
+    emit_set_owner_relation_arrays_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_x86_64(emitter, layout, fail_label);
     emitter.instruction(&format!("jmp {}", box_label));                         // box this populated Reflection owner object
 }
@@ -725,6 +742,130 @@ fn emit_set_owner_class_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the enum flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_enum_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_enum_hi);
+}
+
+/// Stores incoming ARM64 ReflectionClass interface and trait name arrays.
+fn emit_set_owner_relation_arrays_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (
+        Some(interface_names_lo),
+        Some(interface_names_hi),
+        Some(trait_names_lo),
+        Some(trait_names_hi),
+    ) = (
+        layout.interface_names_lo,
+        layout.interface_names_hi,
+        layout.trait_names_lo,
+        layout.trait_names_hi,
+    )
+    else {
+        return;
+    };
+    emit_set_owner_relation_array_slot_aarch64(
+        emitter,
+        80,
+        interface_names_lo,
+        interface_names_hi,
+        fail_label,
+    );
+    emit_set_owner_relation_array_slot_aarch64(
+        emitter,
+        88,
+        trait_names_lo,
+        trait_names_hi,
+        fail_label,
+    );
+}
+
+/// Stores one retained ARM64 boxed relation-name array into a ReflectionClass slot.
+fn emit_set_owner_relation_array_slot_aarch64(
+    emitter: &mut Emitter,
+    boxed_slot: usize,
+    low_offset: usize,
+    high_offset: usize,
+    fail_label: &str,
+) {
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", boxed_slot));             // reload the boxed ReflectionClass relation-name array
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null relation-name arrays
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the relation-name array tag and payload pointer
+    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array relation-name metadata
+    emitter.instruction("str x1, [sp, #40]");                                   // save the unboxed relation-name array across incref
+    emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
+    emitter.instruction("bl __rt_incref");                                      // retain the relation-name array for ReflectionClass storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained relation-name array payload
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", low_offset);
+    abi::emit_load_int_immediate(emitter, "x10", 4);
+    abi::emit_store_to_address(emitter, "x10", "x9", high_offset);
+}
+
+/// Stores incoming x86_64 ReflectionClass interface and trait name arrays.
+fn emit_set_owner_relation_arrays_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (
+        Some(interface_names_lo),
+        Some(interface_names_hi),
+        Some(trait_names_lo),
+        Some(trait_names_hi),
+    ) = (
+        layout.interface_names_lo,
+        layout.interface_names_hi,
+        layout.trait_names_lo,
+        layout.trait_names_hi,
+    )
+    else {
+        return;
+    };
+    emit_set_owner_relation_array_slot_x86_64(
+        emitter,
+        -88,
+        interface_names_lo,
+        interface_names_hi,
+        fail_label,
+    );
+    emit_set_owner_relation_array_slot_x86_64(
+        emitter,
+        -96,
+        trait_names_lo,
+        trait_names_hi,
+        fail_label,
+    );
+}
+
+/// Stores one retained x86_64 boxed relation-name array into a ReflectionClass slot.
+fn emit_set_owner_relation_array_slot_x86_64(
+    emitter: &mut Emitter,
+    boxed_slot: isize,
+    low_offset: usize,
+    high_offset: usize,
+    fail_label: &str,
+) {
+    let boxed_slot = if boxed_slot < 0 {
+        format!("- {}", -boxed_slot)
+    } else {
+        format!("+ {}", boxed_slot)
+    };
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp {}]", boxed_slot));   // reload the boxed ReflectionClass relation-name array
+    emitter.instruction("test rax, rax");                                       // check whether the boxed relation-name array is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null relation-name arrays
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the relation-name array tag and payload pointer
+    emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array relation-name metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the unboxed relation-name array across incref
+    emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
+    emitter.instruction("call __rt_incref");                                    // retain the relation-name array for ReflectionClass storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained relation-name array payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "rdi", "r10", low_offset);
+    abi::emit_load_int_immediate(emitter, "r11", 4);
+    abi::emit_store_to_address(emitter, "r11", "r10", high_offset);
 }
 
 /// Stores a retained ARM64 attribute-array payload into the owner private slot.

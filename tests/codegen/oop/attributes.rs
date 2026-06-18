@@ -986,6 +986,33 @@ echo $trait->isEnum() ? "E" : "e";
     );
 }
 
+/// Verifies that `ReflectionClass` reports implemented interface and used trait names.
+#[test]
+fn test_reflection_class_reports_relation_names() {
+    let out = compile_and_run(
+        r#"<?php
+interface StaticRelationIface {}
+trait StaticRelationTrait {}
+class StaticRelationTarget implements StaticRelationIface {
+    use StaticRelationTrait;
+}
+interface StaticRelationParent {}
+interface StaticRelationChild extends StaticRelationParent {}
+$ref = new ReflectionClass(StaticRelationTarget::class);
+$interfaces = $ref->getInterfaceNames();
+$traits = $ref->getTraitNames();
+echo count($interfaces) . ":" . $interfaces[0] . ":";
+echo count($traits) . ":" . $traits[0] . ":";
+$parentInterfaces = (new ReflectionClass(StaticRelationChild::class))->getInterfaceNames();
+echo count($parentInterfaces) . ":" . $parentInterfaces[0];
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:StaticRelationIface:1:StaticRelationTrait:1:StaticRelationParent"
+    );
+}
+
 /// Verifies that `ReflectionClass::getName()` returns the canonical declared
 /// name after case-insensitive class-string construction.
 #[test]

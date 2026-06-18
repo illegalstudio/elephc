@@ -25,6 +25,8 @@ struct ReflectionOwnerMetadata {
     reflected_name: Option<String>,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
+    interface_names: Vec<String>,
+    trait_names: Vec<String>,
     is_final: bool,
     is_abstract: bool,
     is_interface: bool,
@@ -74,6 +76,16 @@ pub(super) fn lower_reflection_owner_new(
         emit_reflection_string_property(ctx, reflected_name, 8, 16);
         if class_name == "ReflectionClass" {
             emit_reflection_class_name_parts(ctx, reflected_name)?;
+            emit_reflection_string_array_property_by_name(
+                ctx,
+                "__interface_names",
+                &metadata.interface_names,
+            )?;
+            emit_reflection_string_array_property_by_name(
+                ctx,
+                "__trait_names",
+                &metadata.trait_names,
+            )?;
         }
     }
     emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
@@ -145,6 +157,8 @@ fn reflection_class_metadata(
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
             attr_args: info.attribute_args.clone(),
+            interface_names: info.interfaces.clone(),
+            trait_names: info.used_traits.clone(),
             is_final: info.is_final,
             is_abstract: info.is_abstract,
             is_interface: false,
@@ -155,14 +169,27 @@ fn reflection_class_metadata(
     if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
         return Ok(class_like_reflection_metadata(
             interface_name,
+            reflection_interface_parent_names(ctx, interface_name),
+            Vec::new(),
             true,
             false,
             false,
         ));
     }
     if let Some(trait_name) = resolve_reflection_trait(ctx, &reflected_class) {
+        let trait_names = ctx
+            .module
+            .declared_trait_uses
+            .get(trait_name)
+            .cloned()
+            .unwrap_or_default();
         return Ok(class_like_reflection_metadata(
-            trait_name, false, true, false,
+            trait_name,
+            Vec::new(),
+            trait_names,
+            false,
+            true,
+            false,
         ));
     }
     Ok(empty_reflection_metadata())
@@ -188,6 +215,8 @@ fn reflection_method_metadata(
                 reflected_name: Some(method_name.clone()),
                 attr_names: info.method_attribute_names.get(&method_key)?.clone(),
                 attr_args: info.method_attribute_args.get(&method_key)?.clone(),
+                interface_names: Vec::new(),
+                trait_names: Vec::new(),
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -217,6 +246,8 @@ fn reflection_property_metadata(
                 reflected_name: Some(property_name.clone()),
                 attr_names: info.property_attribute_names.get(&property_name)?.clone(),
                 attr_args: info.property_attribute_args.get(&property_name)?.clone(),
+                interface_names: Vec::new(),
+                trait_names: Vec::new(),
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -247,6 +278,8 @@ fn reflection_class_constant_metadata(
             reflected_name: Some(constant_name.clone()),
             attr_names: case.attribute_names.clone(),
             attr_args: case.attribute_args.clone(),
+            interface_names: Vec::new(),
+            trait_names: Vec::new(),
             is_final: false,
             is_abstract: false,
             is_interface: false,
@@ -271,6 +304,8 @@ fn reflection_class_constant_metadata(
                     reflected_name: Some(constant_name),
                     attr_names,
                     attr_args,
+                    interface_names: Vec::new(),
+                    trait_names: Vec::new(),
                     is_final: false,
                     is_abstract: false,
                     is_interface: false,
@@ -302,6 +337,8 @@ fn reflection_enum_case_metadata(
                 reflected_name: Some(case_name.clone()),
                 attr_names: case.attribute_names.clone(),
                 attr_args: case.attribute_args.clone(),
+                interface_names: Vec::new(),
+                trait_names: Vec::new(),
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -358,9 +395,44 @@ fn is_reflection_enum(ctx: &FunctionContext<'_>, enum_name: &str) -> bool {
         .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == enum_key)
 }
 
+/// Collects direct and inherited parent interfaces for a reflected interface.
+fn reflection_interface_parent_names(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_reflection_interface_parent_names(ctx, interface_name, &mut names);
+    names
+}
+
+/// Recursively collects interface parents without duplicating case-insensitive names.
+fn collect_reflection_interface_parent_names(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+    names: &mut Vec<String>,
+) {
+    let Some(interface) = ctx.module.interface_infos.get(interface_name) else {
+        return;
+    };
+    for parent in &interface.parents {
+        let parent_name = resolve_reflection_interface(ctx, parent)
+            .map(str::to_string)
+            .unwrap_or_else(|| parent.clone());
+        if !names
+            .iter()
+            .any(|name| php_symbol_key(name) == php_symbol_key(&parent_name))
+        {
+            names.push(parent_name.clone());
+            collect_reflection_interface_parent_names(ctx, &parent_name, names);
+        }
+    }
+}
+
 /// Builds empty ReflectionClass metadata for class-like symbols without stored attributes.
 fn class_like_reflection_metadata(
     class_like_name: &str,
+    interface_names: Vec<String>,
+    trait_names: Vec<String>,
     is_interface: bool,
     is_trait: bool,
     is_enum: bool,
@@ -369,6 +441,8 @@ fn class_like_reflection_metadata(
         reflected_name: Some(class_like_name.to_string()),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
+        interface_names,
+        trait_names,
         is_final: false,
         is_abstract: false,
         is_interface,
@@ -411,6 +485,8 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         reflected_name: None,
         attr_names: Vec::new(),
         attr_args: Vec::new(),
+        interface_names: Vec::new(),
+        trait_names: Vec::new(),
         is_final: false,
         is_abstract: false,
         is_interface: false,
@@ -564,6 +640,93 @@ fn emit_reflection_attrs_property(
     abi::emit_push_reg(ctx.emitter, object_reg);
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
+}
+
+/// Replaces a ReflectionClass private array slot with an indexed string array.
+fn emit_reflection_string_array_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    property_name: &str,
+    names: &[String],
+) -> Result<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    emit_reflection_string_array(ctx, names)?;
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_load_int_immediate(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter), 4);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        object_reg,
+        high_offset,
+    );
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    Ok(())
+}
+
+/// Allocates an indexed string array containing ReflectionClass relation names.
+fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", names.len() as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", 16);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", names.len() as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 16);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_reflection_string_array_fill_aarch64(ctx, names),
+        Arch::X86_64 => emit_reflection_string_array_fill_x86_64(ctx, names),
+    }
+    Ok(())
+}
+
+/// Appends ReflectionClass relation names to the current ARM64 result array.
+fn emit_reflection_string_array_fill_aarch64(ctx: &mut FunctionContext<'_>, names: &[String]) {
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the relation-name array while appending strings
+    for name in names {
+        let (label, len) = ctx.data.add_string(name.as_bytes());
+        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the relation-name array for this append
+        abi::emit_symbol_address(ctx.emitter, "x1", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown relation-name array
+    }
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final relation-name array as the result
+}
+
+/// Appends ReflectionClass relation names to the current x86_64 result array.
+fn emit_reflection_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]) {
+    ctx.emitter.instruction("push rax");                                        // park the relation-name array while appending strings
+    ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across append helper calls
+    for name in names {
+        let (label, len) = ctx.data.add_string(name.as_bytes());
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the relation-name array for this append
+        abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown relation-name array
+    }
+    ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
+    ctx.emitter.instruction("pop rax");                                         // restore the final relation-name array as the result
 }
 
 /// Stores one boolean property on the current ReflectionClass object result.

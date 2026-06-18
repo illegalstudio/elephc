@@ -108,6 +108,8 @@ pub trait RuntimeValueOps {
         owner_kind: u64,
         reflected_name: &str,
         attrs: RuntimeCellHandle,
+        interface_names: RuntimeCellHandle,
+        trait_names: RuntimeCellHandle,
         flags: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 

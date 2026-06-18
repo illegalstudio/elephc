@@ -5562,6 +5562,38 @@ echo $ref->inNamespace() ? "Y" : "N";');
     assert_eq!(out.stdout, "Eval\\Ns\\Thing:Thing:Eval\\Ns:Y");
 }
 
+/// Verifies eval ReflectionClass exposes implemented interface and used trait names.
+#[test]
+fn test_eval_reflection_class_relation_names() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalRelationIface {}
+trait EvalRelationTrait {}
+class EvalRelationTarget implements EvalRelationIface {
+    use EvalRelationTrait;
+}
+interface EvalRelationParent {}
+interface EvalRelationChild extends EvalRelationParent {}
+$ref = new ReflectionClass("EvalRelationTarget");
+$interfaces = $ref->getInterfaceNames();
+$traits = $ref->getTraitNames();
+echo count($interfaces) . ":" . $interfaces[0] . ":";
+echo count($traits) . ":" . $traits[0] . ":";
+$parentInterfaces = (new ReflectionClass("EvalRelationChild"))->getInterfaceNames();
+echo count($parentInterfaces) . ":" . $parentInterfaces[0];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "1:EvalRelationIface:1:EvalRelationTrait:1:EvalRelationParent"
+    );
+}
+
 /// Verifies eval ReflectionClass reports class-like final and abstract flags.
 #[test]
 fn test_eval_reflection_class_modifier_flags() {

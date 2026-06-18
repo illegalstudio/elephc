@@ -202,6 +202,11 @@ fn array_type() -> TypeExpr {
     TypeExpr::Named(crate::names::Name::unqualified("array"))
 }
 
+/// Returns a `TypeExpr` for an indexed array of strings.
+fn string_array_type() -> TypeExpr {
+    TypeExpr::Array(Box::new(TypeExpr::Str))
+}
+
 /// Returns a `TypeExpr` for the unqualified name `mixed`.
 fn mixed_type() -> TypeExpr {
     TypeExpr::Named(crate::names::Name::unqualified("mixed"))
@@ -388,6 +393,18 @@ fn builtin_reflection_class() -> FlattenedClass {
                 Some(bool_type()),
                 false_bool(),
             ),
+            builtin_property(
+                "__interface_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__trait_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
@@ -400,6 +417,8 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_string_method("getShortName", "__short_name"),
             builtin_reflection_class_string_method("getNamespaceName", "__namespace_name"),
             builtin_reflection_class_bool_method("inNamespace", "__in_namespace"),
+            builtin_reflection_class_array_method("getInterfaceNames", "__interface_names"),
+            builtin_reflection_class_array_method("getTraitNames", "__trait_names"),
             builtin_reflection_class_bool_method("isFinal", "__is_final"),
             builtin_reflection_class_bool_method("isAbstract", "__is_abstract"),
             builtin_reflection_class_bool_method("isInterface", "__is_interface"),
@@ -427,6 +446,35 @@ fn builtin_reflection_class_string_method(method_name: &str, property: &str) -> 
         variadic: None,
         variadic_type: None,
         return_type: Some(TypeExpr::Str),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass` array method backed by one private slot.
+fn builtin_reflection_class_array_method(method_name: &str, property: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(string_array_type()),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -621,6 +669,11 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 for method_name in ["isfinal", "isabstract"] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
+                    }
+                }
+                for method_name in ["getinterfacenames", "gettraitnames"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Array(Box::new(PhpType::Str));
                     }
                 }
             }
