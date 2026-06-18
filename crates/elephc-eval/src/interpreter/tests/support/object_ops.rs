@@ -99,6 +99,14 @@ impl FakeOps {
                 self.null()
             }
             (FakeValue::Object(_), "answer") if args.is_empty() => self.int(42),
+            (FakeValue::Object(properties), "getname") if args.is_empty() => {
+                Self::object_property(&properties, "__name").map_or_else(|| self.string(""), Ok)
+            }
+            (FakeValue::Object(properties), "getarguments") if args.is_empty() => {
+                Self::object_property(&properties, "__args")
+                    .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
+            (FakeValue::Object(_), "newinstance") if args.is_empty() => self.null(),
             (FakeValue::Object(properties), "getmessage") if args.is_empty() => {
                 Self::object_property(&properties, "message").map_or_else(|| self.string(""), Ok)
             }
@@ -181,6 +189,23 @@ impl FakeOps {
             }
             _ => Err(EvalStatus::UnsupportedConstruct),
         }
+    }
+    /// Materializes one fake populated `ReflectionAttribute` object.
+    pub(super) fn runtime_reflection_attribute_new(
+        &mut self,
+        name: &str,
+        args: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let name = self.string(name)?;
+        let factory = self.int(0)?;
+        let object = self.alloc(FakeValue::Object(vec![
+            ("__name".to_string(), name),
+            ("__args".to_string(), args),
+            ("__factory".to_string(), factory),
+        ]));
+        self.object_classes
+            .insert(object.as_ptr() as usize, "ReflectionAttribute".to_string());
+        Ok(object)
     }
     /// Creates one fake object for eval `new` unit tests.
     pub(super) fn runtime_new_object(

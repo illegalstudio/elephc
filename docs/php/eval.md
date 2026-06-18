@@ -301,11 +301,10 @@ fallback from eval remains positional, so named method arguments are supported
 for eval-declared methods but not for every generated native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
-remaining class-system gaps are ReflectionAttribute object materialization,
-Reflection exposure for member-level attributes, and broader generated/AOT
-method bridge signatures beyond the current public scalar zero-to-two-argument
-slice. `class_get_attributes()` is recognized in eval but does not yet
-materialize `ReflectionAttribute` objects for eval-declared attributes.
+remaining class-system gaps are ReflectionAttribute `newInstance()` factories
+for eval-declared attribute classes, Reflection exposure for member-level
+attributes, and broader generated/AOT method bridge signatures beyond the
+current public scalar zero-to-two-argument slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

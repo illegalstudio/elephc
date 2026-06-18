@@ -91,7 +91,13 @@ echo $tag[0]; echo ":";
 $missing = class_attribute_args("EvalAttrMeta", "Missing");
 echo count($missing); echo ":";
 $attrs = class_get_attributes("EvalAttrMeta");
-echo count($attrs); echo ":";
+echo count($attrs); echo ":"; echo $attrs[0]->getName(); echo ":";
+$attr_args = $attrs[0]->getArguments();
+echo count($attr_args); echo ":"; echo $attr_args[0]; echo ":"; echo $attr_args[1]; echo ":";
+echo $attr_args[2] ? "T" : "F"; echo ":"; echo is_null($attr_args[3]) ? "N" : "bad"; echo ":";
+$tag_attr_args = $attrs[1]->getArguments();
+echo $attrs[1]->getName(); echo ":"; echo $tag_attr_args[0]; echo ":";
+echo is_null($attrs[0]->newInstance()) ? "N" : "bad"; echo ":";
 $call_names = call_user_func("class_attribute_names", "EvalAttrMeta");
 echo $call_names[0]; echo ":";
 $call_args = call_user_func_array(
@@ -111,7 +117,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "3:Route:Tag:Tag:4:/home:-1:T:N:first:0:0:Route:/home:111"
+        "3:Route:Tag:Tag:4:/home:-1:T:N:first:0:3:Route:4:/home:-1:T:N:Tag:first:N:Route:/home:111"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

@@ -14,6 +14,7 @@ pub(crate) mod context;
 mod eval_constructor_helpers;
 mod eval_method_helpers;
 mod eval_property_helpers;
+mod eval_reflection_helpers;
 mod fibers;
 mod frame;
 mod function_variants;
@@ -197,6 +198,7 @@ fn finalize_user_asm(
     eval_property_helpers::emit_eval_property_helpers(module, &mut emitter, &mut data);
     eval_constructor_helpers::emit_eval_constructor_helpers(module, &mut emitter);
     eval_method_helpers::emit_eval_method_helpers(module, &mut emitter, &mut data);
+    eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
     let data_output = data.emit();
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
