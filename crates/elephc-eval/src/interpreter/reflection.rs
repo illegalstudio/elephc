@@ -91,7 +91,7 @@ fn eval_reflection_method_new(
         .ok_or(EvalStatus::RuntimeFatal)?;
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_METHOD,
-        "",
+        &method_name,
         &attributes,
         context,
         values,
@@ -118,7 +118,7 @@ fn eval_reflection_property_new(
         .ok_or(EvalStatus::RuntimeFatal)?;
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_PROPERTY,
-        "",
+        &property_name,
         &attributes,
         context,
         values,

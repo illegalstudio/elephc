@@ -5374,10 +5374,12 @@ $classAttrs = (new ReflectionClass("EvalReflectTarget"))->getAttributes();
 echo count($classAttrs) . ":" . (new ReflectionClass("EvalReflectTarget"))->getName() . ":";
 echo $classAttrs[0]->getName() . ":" . $classAttrs[0]->newInstance()->label() . ":";
 $methodAttrs = (new ReflectionMethod("EvalReflectTarget", "handle"))->getAttributes();
-echo count($methodAttrs) . ":" . $methodAttrs[0]->getName() . ":";
+echo count($methodAttrs) . ":" . (new ReflectionMethod("EvalReflectTarget", "handle"))->getName() . ":";
+echo $methodAttrs[0]->getName() . ":";
 echo $methodAttrs[0]->getArguments()[0] . ":" . $methodAttrs[0]->newInstance()->label() . ":";
 $propertyAttrs = (new ReflectionProperty("EvalReflectTarget", "id"))->getAttributes();
-echo count($propertyAttrs) . ":" . $propertyAttrs[0]->getName() . ":";
+echo count($propertyAttrs) . ":" . (new ReflectionProperty("EvalReflectTarget", "id"))->getName() . ":";
+echo $propertyAttrs[0]->getName() . ":";
 echo $propertyAttrs[0]->getArguments()[0] . ":" . $propertyAttrs[0]->newInstance()->label();');
 "#,
     );
@@ -5388,7 +5390,7 @@ echo $propertyAttrs[0]->getArguments()[0] . ":" . $propertyAttrs[0]->newInstance
     );
     assert_eq!(
         out.stdout,
-        "1:EvalReflectTarget:EvalMarker:class:1:EvalMarker:method:method:1:EvalMarker:property:property"
+        "1:EvalReflectTarget:EvalMarker:class:1:handle:EvalMarker:method:method:1:id:EvalMarker:property:property"
     );
 }
 

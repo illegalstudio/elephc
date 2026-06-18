@@ -150,11 +150,12 @@ syntax, but requesting those arguments is a runtime fatal.
 `ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`, and
 `ReflectionProperty::getAttributes()` expose eval-retained class, method, and
 property attributes for eval-declared class-like symbols when their arguments
-fit the same literal subset. `ReflectionClassConstant::getAttributes()`,
+fit the same literal subset, and `getName()` returns the reflected class or
+member name for those owners. `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant
 and enum-case attributes through the same materialized `ReflectionAttribute`
-shape.
+shape; their `getName()` methods return the reflected constant or case name.
 Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the

@@ -104,7 +104,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionMethod".to_string(),
         builtin_reflection_owner_class(
             "ReflectionMethod",
-            false,
+            true,
             vec![
                 ("class_name", Some(TypeExpr::Str), None, false),
                 ("method_name", Some(TypeExpr::Str), None, false),
@@ -115,7 +115,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionProperty".to_string(),
         builtin_reflection_owner_class(
             "ReflectionProperty",
-            false,
+            true,
             vec![
                 ("class_name", Some(TypeExpr::Str), None, false),
                 ("property_name", Some(TypeExpr::Str), None, false),
@@ -727,6 +727,8 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             if matches!(
                 class_name,
                 "ReflectionClass"
+                    | "ReflectionMethod"
+                    | "ReflectionProperty"
                     | "ReflectionClassConstant"
                     | "ReflectionEnumUnitCase"
                     | "ReflectionEnumBackedCase"

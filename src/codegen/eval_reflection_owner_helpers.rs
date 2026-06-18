@@ -90,8 +90,8 @@ fn function_uses_eval(function: &Function) -> bool {
 fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
     Some(ReflectionOwnerLayouts {
         class: reflection_owner_layout(module.class_infos.get("ReflectionClass")?, true)?,
-        method: reflection_owner_layout(module.class_infos.get("ReflectionMethod")?, false)?,
-        property: reflection_owner_layout(module.class_infos.get("ReflectionProperty")?, false)?,
+        method: reflection_owner_layout(module.class_infos.get("ReflectionMethod")?, true)?,
+        property: reflection_owner_layout(module.class_infos.get("ReflectionProperty")?, true)?,
         class_constant: reflection_owner_layout(
             module.class_infos.get("ReflectionClassConstant")?,
             true,
@@ -175,8 +175,8 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction(&format!("b.eq {}", enum_backed_case_label));           // allocate a ReflectionEnumBackedCase owner
     emitter.instruction(&format!("b {}", fail_label));                          // reject unknown owner kinds
     emit_aarch64_owner_kind_body(emitter, class_label, &layouts.class, true, fail_label, box_label);
-    emit_aarch64_owner_kind_body(emitter, method_label, &layouts.method, false, fail_label, box_label);
-    emit_aarch64_owner_kind_body(emitter, property_label, &layouts.property, false, fail_label, box_label);
+    emit_aarch64_owner_kind_body(emitter, method_label, &layouts.method, true, fail_label, box_label);
+    emit_aarch64_owner_kind_body(emitter, property_label, &layouts.property, true, fail_label, box_label);
     emit_aarch64_owner_kind_body(emitter, class_constant_label, &layouts.class_constant, true, fail_label, box_label);
     emit_aarch64_owner_kind_body(emitter, enum_unit_case_label, &layouts.enum_unit_case, true, fail_label, box_label);
     emit_aarch64_owner_kind_body(emitter, enum_backed_case_label, &layouts.enum_backed_case, true, fail_label, box_label);
@@ -226,8 +226,8 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction(&format!("je {}", enum_backed_case_label));             // allocate a ReflectionEnumBackedCase owner
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject unknown owner kinds
     emit_x86_64_owner_kind_body(emitter, class_label, &layouts.class, true, fail_label, box_label);
-    emit_x86_64_owner_kind_body(emitter, method_label, &layouts.method, false, fail_label, box_label);
-    emit_x86_64_owner_kind_body(emitter, property_label, &layouts.property, false, fail_label, box_label);
+    emit_x86_64_owner_kind_body(emitter, method_label, &layouts.method, true, fail_label, box_label);
+    emit_x86_64_owner_kind_body(emitter, property_label, &layouts.property, true, fail_label, box_label);
     emit_x86_64_owner_kind_body(emitter, class_constant_label, &layouts.class_constant, true, fail_label, box_label);
     emit_x86_64_owner_kind_body(emitter, enum_unit_case_label, &layouts.enum_unit_case, true, fail_label, box_label);
     emit_x86_64_owner_kind_body(emitter, enum_backed_case_label, &layouts.enum_backed_case, true, fail_label, box_label);

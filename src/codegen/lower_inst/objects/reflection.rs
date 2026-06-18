@@ -499,7 +499,7 @@ fn reflection_method_metadata(
     Ok(resolve_reflection_class(ctx, &reflected_class)
         .and_then(|(_, info)| {
             Some(ReflectionOwnerMetadata {
-                reflected_name: None,
+                reflected_name: Some(method_name.clone()),
                 attr_names: info.method_attribute_names.get(&method_key)?.clone(),
                 attr_args: info.method_attribute_args.get(&method_key)?.clone(),
             })
@@ -523,7 +523,7 @@ fn reflection_property_metadata(
     Ok(resolve_reflection_class(ctx, &reflected_class)
         .and_then(|(_, info)| {
             Some(ReflectionOwnerMetadata {
-                reflected_name: None,
+                reflected_name: Some(property_name.clone()),
                 attr_names: info.property_attribute_names.get(&property_name)?.clone(),
                 attr_args: info.property_attribute_args.get(&property_name)?.clone(),
             })
@@ -792,6 +792,8 @@ fn reflection_owner_has_name(class_name: &str) -> bool {
     matches!(
         class_name,
         "ReflectionClass"
+            | "ReflectionMethod"
+            | "ReflectionProperty"
             | "ReflectionClassConstant"
             | "ReflectionEnumUnitCase"
             | "ReflectionEnumBackedCase"
