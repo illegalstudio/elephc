@@ -49,7 +49,7 @@ such a local alias removes the alias without unsetting the global value.
 | Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, and `continue` are supported. |
 | Exceptions | `throw`, `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
 | Functions | Eval fragments can declare functions. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
-| Classes | Eval fragments can declare classes with properties, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations, interface implementations, static members, and class constants. Duplicate eval class-like names are rejected. |
+| Classes | Eval fragments can declare classes with properties, concrete property get/set hooks, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations, interface implementations, static members, and class constants. Duplicate eval class-like names are rejected. |
 | Enums | Eval fragments can declare pure and `int` / `string` backed enums with cases, constants, methods, interface implementations, `::cases()`, `::from()`, `::tryFrom()`, `->name`, and backed `->value`. |
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
@@ -130,18 +130,20 @@ containers to eval-declared functions.
 ## Classes and objects
 
 Eval-declared classes support inheritance, public/protected/private properties
-and methods, property-level `readonly`, `readonly class`, `__construct()`,
-abstract classes and methods, final classes and methods, trait composition with
-`insteadof` conflict resolution and `as` aliases/visibility adaptations,
-interface implementation checks, static properties, static methods, class
-constants, interface constants, trait constants, and `ClassName::class`
-literals. Member visibility is checked at runtime for eval-declared objects and
-static/class-constant accesses. `readonly` eval properties may be assigned from
-the constructor of the declaring class and later writes fail as eval runtime
-fatals. A `readonly class` makes instance properties readonly implicitly while
-leaving static properties mutable. `self::`, `parent::`, and late-bound
-`static::` work for supported static members, class constants, and class-name
-literals.
+and methods, concrete property `get` / `set` hooks, property-level `readonly`,
+`readonly class`, `__construct()`, abstract classes and methods, final classes
+and methods, trait composition with `insteadof` conflict resolution and `as`
+aliases/visibility adaptations, interface implementation checks, static
+properties, static methods, class constants, interface constants, trait
+constants, and `ClassName::class` literals. Member visibility is checked at
+runtime for eval-declared objects and static/class-constant accesses.
+Concrete property hooks are lowered to eval accessor methods; reads and writes
+route through inherited hooks, while access from the accessor itself uses the
+raw backing slot. `readonly` eval properties may be assigned from the
+constructor of the declaring class and later writes fail as eval runtime fatals.
+A `readonly class` makes instance properties readonly implicitly while leaving
+static properties mutable. `self::`, `parent::`, and late-bound `static::` work
+for supported static members, class constants, and class-name literals.
 
 Eval object construction can allocate eval-declared classes, `stdClass`, and
 emitted AOT classes visible through runtime class metadata. Missing class names
@@ -289,9 +291,9 @@ arguments are supported for eval-declared methods but not for every generated
 native method bridge.
 
 Eval class support is still smaller than the full static class system. The main
-remaining class-system gaps are enum trait-use declarations, property hooks,
-attributes/reflection metadata, and generated/AOT dynamic static-method call
-forms.
+remaining class-system gaps are enum trait-use declarations, abstract/interface
+property-hook contracts, attributes/reflection metadata, and generated/AOT
+dynamic static-method call forms.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

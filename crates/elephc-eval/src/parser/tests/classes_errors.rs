@@ -178,6 +178,46 @@ fn parse_fragment_accepts_readonly_class_modifier() {
     );
 }
 
+/// Verifies concrete property hooks lower to property metadata plus accessor methods.
+#[test]
+fn parse_fragment_accepts_concrete_class_property_hooks() {
+    let program = parse_fragment(
+        br#"class DynEvalHooked {
+    public int $value {
+        get => 7;
+        set { return; }
+    }
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::new(
+            "DynEvalHooked",
+            vec![EvalClassProperty::with_visibility_static_and_readonly(
+                "value",
+                EvalVisibility::Public,
+                false,
+                false,
+                None
+            )
+            .with_hooks(true, true)],
+            vec![
+                EvalClassMethod::new(
+                    "__propget_value",
+                    Vec::new(),
+                    vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(7))))]
+                ),
+                EvalClassMethod::new(
+                    "__propset_value",
+                    vec!["value".to_string()],
+                    vec![EvalStmt::Return(None)]
+                )
+            ]
+        ))]
+    );
+}
+
 /// Verifies eval rejects readonly property forms that PHP does not allow.
 #[test]
 fn parse_fragment_rejects_invalid_readonly_class_properties() {
@@ -187,6 +227,17 @@ fn parse_fragment_rejects_invalid_readonly_class_properties() {
         .expect_err("static properties cannot be readonly in eval");
     parse_fragment(b"readonly class DynEvalReadonlyClassDefault { public int $id = 1; }")
         .expect_err("readonly class instance properties cannot have defaults in eval");
+}
+
+/// Verifies eval rejects property hook forms that need broader class contracts.
+#[test]
+fn parse_fragment_rejects_invalid_property_hooks() {
+    parse_fragment(b"class DynEvalHookDefault { public int $id = 1 { get => $this->id; } }")
+        .expect_err("hooked properties cannot have defaults in eval");
+    parse_fragment(b"class DynEvalHookStatic { public static int $id { get => 1; } }")
+        .expect_err("static properties cannot have hooks in eval");
+    parse_fragment(b"class DynEvalHookAbstract { public int $id { get; } }")
+        .expect_err("abstract property hooks are not supported in eval classes");
 }
 
 /// Verifies abstract and final class modifiers lower into dynamic class metadata.
