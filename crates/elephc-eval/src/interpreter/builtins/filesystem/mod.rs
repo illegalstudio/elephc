@@ -18,6 +18,7 @@ mod readline;
 mod stream_extensions;
 mod stream_context;
 mod stream_settings;
+mod stream_sockets;
 mod streams;
 
 pub(in crate::interpreter) use directories::*;
@@ -30,4 +31,5 @@ pub(in crate::interpreter) use readline::*;
 pub(in crate::interpreter) use stream_extensions::*;
 pub(in crate::interpreter) use stream_context::*;
 pub(in crate::interpreter) use stream_settings::*;
+pub(in crate::interpreter) use stream_sockets::*;
 pub(in crate::interpreter) use streams::*;

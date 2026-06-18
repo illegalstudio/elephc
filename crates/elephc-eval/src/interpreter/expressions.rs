@@ -494,6 +494,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "fputcsv" => eval_builtin_fputcsv(args, context, scope, values),
         "fprintf" => eval_builtin_fprintf(args, context, scope, values),
         "fread" => eval_builtin_fread(args, context, scope, values),
+        "fsockopen" | "pfsockopen" => eval_builtin_fsockopen(args, context, scope, values),
         "fscanf" => eval_builtin_fscanf(args, context, scope, values),
         "fseek" => eval_builtin_fseek(args, context, scope, values),
         "ftruncate" => eval_builtin_ftruncate(args, context, scope, values),
@@ -675,6 +676,26 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "stream_bucket_append" | "stream_bucket_prepend" => {
             eval_builtin_stream_bucket_push(name, args, context, scope, values)
         }
+        "stream_select" => eval_builtin_stream_select(args, context, scope, values),
+        "stream_socket_server" => eval_builtin_stream_socket_server(args, context, scope, values),
+        "stream_socket_client" => eval_builtin_stream_socket_client(args, context, scope, values),
+        "stream_socket_accept" => eval_builtin_stream_socket_accept(args, context, scope, values),
+        "stream_socket_get_name" => {
+            eval_builtin_stream_socket_get_name(args, context, scope, values)
+        }
+        "stream_socket_shutdown" => {
+            eval_builtin_stream_socket_shutdown(args, context, scope, values)
+        }
+        "stream_socket_enable_crypto" => {
+            eval_builtin_stream_socket_enable_crypto(args, context, scope, values)
+        }
+        "stream_socket_sendto" => {
+            eval_builtin_stream_socket_sendto(args, context, scope, values)
+        }
+        "stream_socket_recvfrom" => {
+            eval_builtin_stream_socket_recvfrom(args, context, scope, values)
+        }
+        "stream_socket_pair" => eval_builtin_stream_socket_pair(args, context, scope, values),
         "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
         "stream_get_line" => eval_builtin_stream_get_line(args, context, scope, values),
         "stream_isatty" => eval_builtin_stream_isatty(args, context, scope, values),
