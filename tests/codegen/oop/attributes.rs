@@ -1102,6 +1102,27 @@ echo $ref->getName();
     assert_eq!(out, "Plain");
 }
 
+/// Verifies that `ReflectionClass` reports final and abstract flags for static metadata.
+#[test]
+fn test_reflection_class_reports_modifier_flags() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class StaticAbstractReflect {}
+final class StaticFinalReflect {}
+enum StaticEnumReflect { case Ready; }
+echo (new ReflectionClass(StaticAbstractReflect::class))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass(StaticAbstractReflect::class))->isFinal() ? "F" : "f";
+echo ":";
+echo (new ReflectionClass(StaticFinalReflect::class))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass(StaticFinalReflect::class))->isFinal() ? "F" : "f";
+echo ":";
+echo (new ReflectionClass(StaticEnumReflect::class))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass(StaticEnumReflect::class))->isFinal() ? "F" : "f";
+"#,
+    );
+    assert_eq!(out, "Af:aF:aF");
+}
+
 /// Verifies that `ReflectionClass::getName()` returns the canonical declared
 /// name after case-insensitive class-string construction.
 #[test]

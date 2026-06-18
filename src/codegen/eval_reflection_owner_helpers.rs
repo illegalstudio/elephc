@@ -28,6 +28,10 @@ struct ReflectionOwnerLayout {
     name_hi: Option<usize>,
     attrs_lo: usize,
     attrs_hi: usize,
+    is_final_lo: Option<usize>,
+    is_final_hi: Option<usize>,
+    is_abstract_lo: Option<usize>,
+    is_abstract_hi: Option<usize>,
 }
 
 /// Layouts for the Reflection owner classes eval can materialize.
@@ -114,6 +118,8 @@ fn reflection_owner_layout(
 ) -> Option<ReflectionOwnerLayout> {
     let attrs_lo = reflection_property_offset(info, "__attrs")?;
     let name_lo = has_name.then(|| reflection_property_offset(info, "__name")).flatten();
+    let is_final_lo = reflection_property_offset(info, "__is_final");
+    let is_abstract_lo = reflection_property_offset(info, "__is_abstract");
     Some(ReflectionOwnerLayout {
         class_id: info.class_id,
         property_count: info.properties.len(),
@@ -121,6 +127,10 @@ fn reflection_owner_layout(
         name_hi: name_lo.map(|offset| offset + 8),
         attrs_lo,
         attrs_hi: attrs_lo + 8,
+        is_final_lo,
+        is_final_hi: is_final_lo.map(|offset| offset + 8),
+        is_abstract_lo,
+        is_abstract_hi: is_abstract_lo.map(|offset| offset + 8),
     })
 }
 
@@ -161,6 +171,7 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("str x1, [sp, #8]");                                    // save the reflected-name pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save the reflected-name length
     emitter.instruction("str x3, [sp, #24]");                                   // save the boxed ReflectionAttribute array
+    emitter.instruction("str x4, [sp, #48]");                                   // save ReflectionClass modifier flags
     emitter.instruction("cmp x0, #0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("b.eq {}", class_label));                      // allocate a ReflectionClass owner
     emitter.instruction("cmp x0, #1");                                          // owner kind 1 means ReflectionMethod
@@ -212,6 +223,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the reflected-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the reflected-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed ReflectionAttribute array
+    emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // save ReflectionClass modifier flags
     emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
     emitter.instruction("cmp rdi, 1");                                          // owner kind 1 means ReflectionMethod
@@ -260,6 +272,7 @@ fn emit_aarch64_owner_kind_body(
     if set_name {
         emit_set_owner_name_property_aarch64(emitter, layout);
     }
+    emit_set_owner_class_flags_property_aarch64(emitter, layout);
     emit_set_owner_attrs_property_aarch64(emitter, layout, fail_label);
     emitter.instruction(&format!("b {}", box_label));                           // box this populated Reflection owner object
 }
@@ -279,6 +292,7 @@ fn emit_x86_64_owner_kind_body(
     if set_name {
         emit_set_owner_name_property_x86_64(emitter, layout);
     }
+    emit_set_owner_class_flags_property_x86_64(emitter, layout);
     emit_set_owner_attrs_property_x86_64(emitter, layout, fail_label);
     emitter.instruction(&format!("jmp {}", box_label));                         // box this populated Reflection owner object
 }
@@ -351,6 +365,64 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", name_hi);
+}
+
+/// Stores incoming ARM64 ReflectionClass boolean modifier flags.
+fn emit_set_owner_class_flags_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let Some(is_final_lo) = layout.is_final_lo else {
+        return;
+    };
+    let Some(is_final_hi) = layout.is_final_hi else {
+        return;
+    };
+    let Some(is_abstract_lo) = layout.is_abstract_lo else {
+        return;
+    };
+    let Some(is_abstract_hi) = layout.is_abstract_hi else {
+        return;
+    };
+    emitter.instruction("ldr x11, [sp, #48]");                                  // reload ReflectionClass modifier flags
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    emitter.instruction("and x10, x11, #1");                                    // extract the final-class flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_final_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_final_hi);
+    emitter.instruction("lsr x10, x11, #1");                                    // move the abstract-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the abstract-class flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_abstract_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_abstract_hi);
+}
+
+/// Stores incoming x86_64 ReflectionClass boolean modifier flags.
+fn emit_set_owner_class_flags_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let Some(is_final_lo) = layout.is_final_lo else {
+        return;
+    };
+    let Some(is_final_hi) = layout.is_final_hi else {
+        return;
+    };
+    let Some(is_abstract_lo) = layout.is_abstract_lo else {
+        return;
+    };
+    let Some(is_abstract_hi) = layout.is_abstract_hi else {
+        return;
+    };
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload ReflectionClass modifier flags
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the final bit
+    emitter.instruction("and rax, 1");                                          // extract the final-class flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_final_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_final_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the abstract bit
+    emitter.instruction("shr rax, 1");                                          // move the abstract-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the abstract-class flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_abstract_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_abstract_hi);
 }
 
 /// Stores a retained ARM64 attribute-array payload into the owner private slot.

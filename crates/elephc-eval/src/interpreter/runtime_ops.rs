@@ -108,6 +108,7 @@ pub trait RuntimeValueOps {
         owner_kind: u64,
         reflected_name: &str,
         attrs: RuntimeCellHandle,
+        flags: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Creates a named runtime object without constructor arguments.

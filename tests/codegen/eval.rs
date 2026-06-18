@@ -5394,6 +5394,36 @@ echo $propertyAttrs[0]->getArguments()[0] . ":" . $propertyAttrs[0]->newInstance
     );
 }
 
+/// Verifies eval ReflectionClass reports class-like final and abstract flags.
+#[test]
+fn test_eval_reflection_class_modifier_flags() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('abstract class EvalAbstractReflect {}
+final class EvalFinalReflect {}
+interface EvalIfaceReflect {}
+trait EvalTraitReflect {}
+enum EvalEnumReflect { case Ready; }
+echo (new ReflectionClass("EvalAbstractReflect"))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass("EvalAbstractReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalFinalReflect"))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass("EvalFinalReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalEnumReflect"))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass("EvalEnumReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalIfaceReflect"))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass("EvalIfaceReflect"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClass("EvalTraitReflect"))->isAbstract() ? "A" : "a";
+echo (new ReflectionClass("EvalTraitReflect"))->isFinal() ? "F" : "f";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Af:aF:aF:af:af");
+}
+
 /// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.
 #[test]
 fn test_eval_reflection_constant_and_enum_case_attributes() {

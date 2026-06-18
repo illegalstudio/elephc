@@ -184,6 +184,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         owner_kind: u64,
         reflected_name: &str,
         attrs: RuntimeCellHandle,
+        flags: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe {
             __elephc_eval_reflection_owner_new(
@@ -191,6 +192,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 reflected_name.as_ptr(),
                 reflected_name.len() as u64,
                 attrs.as_ptr(),
+                flags,
             )
         })
     }

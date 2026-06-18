@@ -25,6 +25,8 @@ struct ReflectionOwnerMetadata {
     reflected_name: Option<String>,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgEntry>>>,
+    is_final: bool,
+    is_abstract: bool,
 }
 
 /// Returns true for reflection owner classes that need metadata-aware construction.
@@ -76,6 +78,10 @@ pub(super) fn lower_reflection_owner_new(
         &metadata.attr_names,
         &metadata.attr_args,
     )?;
+    if class_name == "ReflectionClass" {
+        emit_reflection_bool_property(ctx, "__is_final", metadata.is_final)?;
+        emit_reflection_bool_property(ctx, "__is_abstract", metadata.is_abstract)?;
+    }
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
@@ -478,6 +484,8 @@ fn reflection_class_metadata(
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
             attr_args: info.attribute_args.clone(),
+            is_final: info.is_final,
+            is_abstract: info.is_abstract,
         })
         .unwrap_or_else(empty_reflection_metadata))
 }
@@ -502,6 +510,8 @@ fn reflection_method_metadata(
                 reflected_name: Some(method_name.clone()),
                 attr_names: info.method_attribute_names.get(&method_key)?.clone(),
                 attr_args: info.method_attribute_args.get(&method_key)?.clone(),
+                is_final: false,
+                is_abstract: false,
             })
         })
         .unwrap_or_else(empty_reflection_metadata))
@@ -526,6 +536,8 @@ fn reflection_property_metadata(
                 reflected_name: Some(property_name.clone()),
                 attr_names: info.property_attribute_names.get(&property_name)?.clone(),
                 attr_args: info.property_attribute_args.get(&property_name)?.clone(),
+                is_final: false,
+                is_abstract: false,
             })
         })
         .unwrap_or_else(empty_reflection_metadata))
@@ -551,6 +563,8 @@ fn reflection_class_constant_metadata(
             reflected_name: Some(constant_name),
             attr_names: case.attribute_names.clone(),
             attr_args: case.attribute_args.clone(),
+            is_final: false,
+            is_abstract: false,
         });
     }
     Ok(resolve_reflection_class_constant(ctx, &reflected_class, &constant_name)
@@ -569,6 +583,8 @@ fn reflection_class_constant_metadata(
                 reflected_name: Some(constant_name),
                 attr_names,
                 attr_args,
+                is_final: false,
+                is_abstract: false,
             }
         })
         .unwrap_or_else(empty_reflection_metadata))
@@ -593,6 +609,8 @@ fn reflection_enum_case_metadata(
             reflected_name: Some(case_name),
             attr_names: case.attribute_names.clone(),
             attr_args: case.attribute_args.clone(),
+            is_final: false,
+            is_abstract: false,
         })
         .unwrap_or_else(empty_reflection_metadata))
 }
@@ -644,6 +662,8 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         reflected_name: None,
         attr_names: Vec::new(),
         attr_args: Vec::new(),
+        is_final: false,
+        is_abstract: false,
     }
 }
 
@@ -776,6 +796,32 @@ fn emit_reflection_attrs_property(
     abi::emit_push_reg(ctx.emitter, object_reg);
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
+}
+
+/// Stores one boolean property on the current ReflectionClass object result.
+fn emit_reflection_bool_property(
+    ctx: &mut FunctionContext<'_>,
+    property_name: &str,
+    value: bool,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    emit_reflection_int_property(ctx, i64::from(value), low_offset, low_offset + 8);
+    Ok(())
+}
+
+/// Returns one declared property offset from a synthetic Reflection class layout.
+fn reflection_property_offset(info: &crate::types::ClassInfo, property: &str) -> Result<usize> {
+    info.property_offsets.get(property).copied().ok_or_else(|| {
+        CodegenIrError::invalid_module(format!(
+            "Reflection owner missing property offset for ${}",
+            property
+        ))
+    })
 }
 
 /// Returns the low/high object offsets for the private `__attrs` slot.
