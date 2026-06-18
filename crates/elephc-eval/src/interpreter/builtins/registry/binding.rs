@@ -162,6 +162,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "defined" => Some(&["constant_name"]),
         "dirname" => Some(&["path", "levels"]),
         "disk_free_space" | "disk_total_space" => Some(&["directory"]),
+        "exec" | "shell_exec" | "system" | "passthru" => Some(&["command"]),
         "explode" => Some(&["separator", "string"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "fnmatch" => Some(&["pattern", "filename", "flags"]),
