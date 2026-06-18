@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -86,6 +86,7 @@ impl Checker {
             declared_classes: HashSet::new(),
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),
+            declared_traits: HashSet::new(),
             current_class: None,
             current_method: None,
             current_method_is_static: false,

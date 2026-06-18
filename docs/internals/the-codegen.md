@@ -942,7 +942,7 @@ The result is the object pointer in `x0`.
 
 ### Attribute reflection objects
 
-`new ReflectionClass(...)`, `new ReflectionMethod(...)`, and `new ReflectionProperty(...)` are intercepted by `src/codegen/expr/objects/reflection.rs` instead of relying on ordinary user-defined constructor bodies. The type checker has already forced their class/member arguments to compile-time strings after normal call-argument planning, so codegen can look up the target `ClassInfo` directly and populate the private `__attrs` slot with a freshly built `array<ReflectionAttribute>`.
+`new ReflectionClass(...)`, `new ReflectionMethod(...)`, and `new ReflectionProperty(...)` are intercepted by `src/codegen_ir/lower_inst/objects/reflection.rs` instead of relying on ordinary user-defined constructor bodies. The type checker has already forced their class/member arguments to compile-time strings after normal call-argument planning, so codegen can look up the target metadata directly and populate private Reflection owner slots. Class and enum reflection use `ClassInfo`; interface and trait `ReflectionClass` lookups use the module interface/trait metadata for resolved names and modifier flags.
 
 `src/codegen/reflection.rs` owns the shared materialization path. It allocates each synthetic `ReflectionAttribute`, writes the resolved `__name`, builds the `array<mixed>` `__args` payload from supported literal attribute arguments, and stores a deterministic `__factory` id. `ReflectionAttribute::newInstance()` is then generated in `src/codegen/class_methods.rs` as a branch table over those factory ids; each branch constructs the real attribute class with the captured literal args, and the fallback returns `null` when no defined attribute class can be materialized.
 

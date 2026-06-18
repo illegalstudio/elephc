@@ -388,11 +388,13 @@ impl Checker {
     /// Looks up a class name by PHP case-insensitive symbol key.
     ///
     /// Strips leading backslashes and uses `php_symbol_key` for comparison.
-    /// Returns the canonical class name string if found.
+    /// Returns the canonical class-like name string if found.
     fn resolve_reflection_class_name<'a>(&'a self, class_name: &str) -> Option<&'a str> {
         let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
         self.classes
             .keys()
+            .chain(self.interfaces.keys())
+            .chain(self.declared_traits.iter())
             .find(|existing| php_symbol_key(existing) == class_key)
             .map(String::as_str)
     }

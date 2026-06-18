@@ -27,21 +27,24 @@ impl Checker {
         class_name: &str,
         expr: &Expr,
     ) -> Result<(), CompileError> {
-        let Some(class_info) = self.classes.get(class_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionClass::__construct(): undefined class '{}'",
-                    class_name
-                ),
-            ));
-        };
-        self.validate_reflection_attribute_metadata(
-            &class_info.attribute_names,
-            &class_info.attribute_args,
-            expr,
-            "ReflectionClass::getAttributes(): class has attribute argument metadata that is not supported yet",
-        )
+        if let Some(class_info) = self.classes.get(class_name) {
+            return self.validate_reflection_attribute_metadata(
+                &class_info.attribute_names,
+                &class_info.attribute_args,
+                expr,
+                "ReflectionClass::getAttributes(): class has attribute argument metadata that is not supported yet",
+            );
+        }
+        if self.interfaces.contains_key(class_name) || self.declared_traits.contains(class_name) {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            expr.span,
+            &format!(
+                "ReflectionClass::__construct(): undefined class '{}'",
+                class_name
+            ),
+        ))
     }
 
     /// Validates method-level attributes for `ReflectionMethod`.

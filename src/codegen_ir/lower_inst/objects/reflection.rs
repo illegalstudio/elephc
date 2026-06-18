@@ -108,15 +108,22 @@ fn reflection_class_metadata(
         return Ok(empty_reflection_metadata());
     };
     let reflected_class = const_string_or_class_operand(ctx, class_operand, "ReflectionClass")?;
-    Ok(resolve_reflection_class(ctx, &reflected_class)
-        .map(|(class_name, info)| ReflectionOwnerMetadata {
+    if let Some((class_name, info)) = resolve_reflection_class(ctx, &reflected_class) {
+        return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
             attr_args: info.attribute_args.clone(),
             is_final: info.is_final,
             is_abstract: info.is_abstract,
-        })
-        .unwrap_or_else(empty_reflection_metadata))
+        });
+    }
+    if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
+        return Ok(class_like_reflection_metadata(interface_name));
+    }
+    if let Some(trait_name) = resolve_reflection_trait(ctx, &reflected_class) {
+        return Ok(class_like_reflection_metadata(trait_name));
+    }
+    Ok(empty_reflection_metadata())
 }
 
 /// Resolves `ReflectionMethod(class, method)` metadata.
@@ -259,6 +266,41 @@ fn resolve_reflection_class<'a>(
         .iter()
         .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
         .map(|(name, info)| (name.as_str(), info))
+}
+
+/// Looks up interface metadata by PHP-style case-insensitive name.
+fn resolve_reflection_interface<'a>(
+    ctx: &'a FunctionContext<'_>,
+    interface_name: &str,
+) -> Option<&'a str> {
+    let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    ctx.module
+        .interface_infos
+        .keys()
+        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == interface_key)
+        .map(String::as_str)
+}
+
+/// Looks up a declared trait by PHP-style case-insensitive name.
+fn resolve_reflection_trait<'a>(ctx: &'a FunctionContext<'_>, trait_name: &str) -> Option<&'a str> {
+    let trait_key = php_symbol_key(trait_name.trim_start_matches('\\'));
+    ctx.module
+        .trait_table
+        .names
+        .iter()
+        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == trait_key)
+        .map(String::as_str)
+}
+
+/// Builds empty ReflectionClass metadata for class-like symbols without stored attributes.
+fn class_like_reflection_metadata(class_like_name: &str) -> ReflectionOwnerMetadata {
+    ReflectionOwnerMetadata {
+        reflected_name: Some(class_like_name.to_string()),
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        is_final: false,
+        is_abstract: false,
+    }
 }
 
 /// Looks up class-constant metadata by PHP-style class name and case-sensitive constant name.
