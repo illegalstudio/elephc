@@ -1,6 +1,6 @@
 //! Purpose:
-//! Owns eval-local stream resource storage backed by host file handles.
-//! Builtin implementations use this table while runtime Mixed cells only carry
+//! Owns eval-local resource storage backed by host file handles, directory
+//! snapshots, stream contexts, and hash contexts. Runtime Mixed cells only carry
 //! a numeric resource id.
 //!
 //! Called from:
@@ -9,7 +9,7 @@
 //!
 //! Key details:
 //! - Resource ids are zero-based runtime payloads; PHP display ids are payload + 1.
-//! - File handles are process-local to eval and are not visible across the C ABI.
+//! - Resource handles are process-local to eval and are not visible across the C ABI.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -18,12 +18,16 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
+use crate::value::RuntimeCellHandle;
+
 /// Eval-owned table of local file streams keyed by runtime resource payload.
 #[derive(Default)]
 pub(crate) struct EvalStreamResources {
+    default_stream_context: Option<i64>,
     next_id: i64,
     directories: HashMap<i64, EvalDirectoryStream>,
     hash_contexts: HashMap<i64, EvalHashContext>,
+    stream_contexts: HashMap<i64, EvalStreamContext>,
     streams: HashMap<i64, EvalFileStream>,
 }
 
@@ -71,6 +75,21 @@ impl EvalStreamResources {
         Some(self.insert_hash_context(EvalHashContext { handle }))
     }
 
+    /// Opens a stream context resource with optional persisted options.
+    pub(crate) fn open_stream_context(&mut self, options: Option<RuntimeCellHandle>) -> i64 {
+        self.insert_stream_context(EvalStreamContext { options })
+    }
+
+    /// Returns the default stream context resource id, creating it if needed.
+    pub(crate) fn default_stream_context(&mut self) -> i64 {
+        if let Some(id) = self.default_stream_context {
+            return id;
+        }
+        let id = self.open_stream_context(None);
+        self.default_stream_context = Some(id);
+        id
+    }
+
     /// Removes a stream resource from the table, closing its file handle.
     pub(crate) fn close(&mut self, id: i64) -> bool {
         self.streams.remove(&id).is_some()
@@ -106,6 +125,24 @@ impl EvalStreamResources {
             // crypto call exclusive access for the duration of the update.
             elephc_crypto::elephc_crypto_update(context.handle, data.as_ptr(), data.len());
         }
+        true
+    }
+
+    /// Returns the persisted options for a stream context resource.
+    pub(crate) fn stream_context_options(&self, id: i64) -> Option<RuntimeCellHandle> {
+        self.stream_contexts.get(&id).and_then(|context| context.options)
+    }
+
+    /// Replaces persisted options for a stream context resource.
+    pub(crate) fn set_stream_context_options(
+        &mut self,
+        id: i64,
+        options: Option<RuntimeCellHandle>,
+    ) -> bool {
+        let Some(context) = self.stream_contexts.get_mut(&id) else {
+            return false;
+        };
+        context.options = options;
         true
     }
 
@@ -330,6 +367,14 @@ impl EvalStreamResources {
         self.hash_contexts.insert(id, context);
         id
     }
+
+    /// Inserts a stream context and returns the assigned zero-based resource payload.
+    fn insert_stream_context(&mut self, context: EvalStreamContext) -> i64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.stream_contexts.insert(id, context);
+        id
+    }
 }
 
 impl Drop for EvalStreamResources {
@@ -437,6 +482,11 @@ impl EvalDirectoryStream {
 /// Opaque elephc-crypto incremental hash context resource.
 struct EvalHashContext {
     handle: *mut c_void,
+}
+
+/// Stream context metadata tracked by eval.
+struct EvalStreamContext {
+    options: Option<RuntimeCellHandle>,
 }
 
 /// Parsed PHP fopen mode used to configure `OpenOptions`.

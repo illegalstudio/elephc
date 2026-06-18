@@ -298,6 +298,64 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             )?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
+        "stream_context_create" => match evaluated_args {
+            [] => eval_stream_context_create_result(None, context, values)?,
+            [options] => eval_stream_context_create_result(Some(*options), context, values)?,
+            [options, _params] => {
+                eval_stream_context_create_result(Some(*options), context, values)?
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "stream_context_get_default" => {
+            if evaluated_args.len() > 1 {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_stream_context_get_default_result(context, values)?
+        }
+        "stream_context_get_options" => {
+            let [stream_context] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_stream_context_get_options_result(*stream_context, context, values)?
+        }
+        "stream_context_get_params" => {
+            let [stream_context] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            if values.type_tag(*stream_context)? != EVAL_TAG_RESOURCE {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            values.assoc_new(0)?
+        }
+        "stream_context_set_default" => {
+            let [_options] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_stream_context_get_default_result(context, values)?
+        }
+        "stream_context_set_option" => match evaluated_args {
+            [stream_context, options] => {
+                eval_stream_context_set_options_result(*stream_context, *options, context, values)?
+            }
+            [stream_context, wrapper, option, value] => eval_stream_context_set_option_result(
+                *stream_context,
+                *wrapper,
+                *option,
+                *value,
+                context,
+                values,
+            )?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        },
+        "stream_context_set_params" => {
+            let [stream_context, _params] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            if values.type_tag(*stream_context)? != EVAL_TAG_RESOURCE {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            values.bool_value(true)?
+        }
         "stream_get_contents" => match evaluated_args {
             [stream] => eval_stream_get_contents_result(*stream, None, None, context, values)?,
             [stream, length] => {

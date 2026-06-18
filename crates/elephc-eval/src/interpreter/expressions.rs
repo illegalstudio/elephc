@@ -611,6 +611,27 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
             eval_builtin_stream_resolve_include_path(args, context, scope, values)
         }
         "stream_copy_to_stream" => eval_builtin_stream_copy_to_stream(args, context, scope, values),
+        "stream_context_create" => {
+            eval_builtin_stream_context_create(args, context, scope, values)
+        }
+        "stream_context_get_default" => {
+            eval_builtin_stream_context_get_default(args, context, scope, values)
+        }
+        "stream_context_get_options" => {
+            eval_builtin_stream_context_get_options(args, context, scope, values)
+        }
+        "stream_context_get_params" => {
+            eval_builtin_stream_context_get_params(args, context, scope, values)
+        }
+        "stream_context_set_default" => {
+            eval_builtin_stream_context_set_default(args, context, scope, values)
+        }
+        "stream_context_set_option" => {
+            eval_builtin_stream_context_set_option(args, context, scope, values)
+        }
+        "stream_context_set_params" => {
+            eval_builtin_stream_context_set_params(args, context, scope, values)
+        }
         "stream_get_contents" => eval_builtin_stream_get_contents(args, context, scope, values),
         "stream_get_line" => eval_builtin_stream_get_line(args, context, scope, values),
         "strtotime" => eval_builtin_strtotime(args, context, scope, values),
