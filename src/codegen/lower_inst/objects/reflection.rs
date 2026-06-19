@@ -41,6 +41,7 @@ struct ReflectionOwnerMetadata {
     property_names: Vec<String>,
     constant_names: Vec<String>,
     constant_members: Vec<ReflectionConstantMember>,
+    default_property_members: Vec<ReflectionDefaultPropertyMember>,
     constant_reflection_members: Vec<ReflectionListedMember>,
     method_members: Vec<ReflectionListedMember>,
     property_members: Vec<ReflectionListedMember>,
@@ -173,6 +174,13 @@ struct ReflectionConstantMember {
     value: ReflectionConstantValue,
 }
 
+/// Metadata for one property entry returned by `ReflectionClass::getDefaultProperties()`.
+#[derive(Clone)]
+struct ReflectionDefaultPropertyMember {
+    name: String,
+    value: ReflectionParameterDefaultValue,
+}
+
 /// Compile-time value forms supported by Reflection constant metadata emission.
 #[derive(Clone)]
 enum ReflectionConstantValue {
@@ -298,6 +306,11 @@ fn emit_reflection_owner_object(
                 ctx,
                 "__constants",
                 &metadata.constant_members,
+            )?;
+            emit_reflection_default_property_array_property_by_name(
+                ctx,
+                "__default_properties",
+                &metadata.default_property_members,
             )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
@@ -497,6 +510,8 @@ fn reflection_class_metadata_for_name(
         let property_names = reflection_class_property_names(ctx, class_name, info);
         let constant_names = reflection_class_constant_names(ctx, class_name, info);
         let constant_members = reflection_class_constant_members(ctx, class_name, info)?;
+        let default_property_members =
+            reflection_class_default_property_members(info, &property_names);
         let constant_reflection_members =
             reflection_class_constant_reflection_members(ctx, class_name, info)?;
         let method_members = reflection_class_method_members(info, &method_names);
@@ -516,6 +531,7 @@ fn reflection_class_metadata_for_name(
             property_names,
             constant_names,
             constant_members,
+            default_property_members,
             constant_reflection_members,
             method_members,
             property_members,
@@ -570,6 +586,7 @@ fn reflection_class_metadata_for_name(
             property_names,
             constant_names,
             constant_members,
+            default_property_members: Vec::new(),
             constant_reflection_members,
             method_members,
             property_members,
@@ -625,6 +642,7 @@ fn reflection_class_metadata_for_name(
             property_names,
             constant_names,
             constant_members,
+            default_property_members: Vec::new(),
             constant_reflection_members,
             method_members,
             property_members,
@@ -759,6 +777,7 @@ fn reflection_method_owner_metadata(
         property_names: Vec::new(),
         constant_names: Vec::new(),
         constant_members: Vec::new(),
+        default_property_members: Vec::new(),
         constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
@@ -811,6 +830,7 @@ fn reflection_property_metadata(
                 property_names: Vec::new(),
                 constant_names: Vec::new(),
                 constant_members: Vec::new(),
+                default_property_members: Vec::new(),
                 constant_reflection_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
@@ -986,6 +1006,7 @@ fn reflection_class_constant_metadata(
             property_names: Vec::new(),
             constant_names: Vec::new(),
             constant_members: Vec::new(),
+            default_property_members: Vec::new(),
             constant_reflection_members: Vec::new(),
             method_members: Vec::new(),
             property_members: Vec::new(),
@@ -1046,6 +1067,7 @@ fn reflection_enum_case_metadata(
                 property_names: Vec::new(),
                 constant_names: Vec::new(),
                 constant_members: Vec::new(),
+                default_property_members: Vec::new(),
                 constant_reflection_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
@@ -1094,6 +1116,7 @@ fn reflection_class_constant_owner_metadata(
         property_names: Vec::new(),
         constant_names: Vec::new(),
         constant_members: Vec::new(),
+        default_property_members: Vec::new(),
         constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
@@ -1495,6 +1518,24 @@ fn reflection_class_constant_members(
         }
     }
     Ok(members)
+}
+
+/// Returns materializable property defaults for `ReflectionClass::getDefaultProperties()`.
+fn reflection_class_default_property_members(
+    info: &crate::types::ClassInfo,
+    property_names: &[String],
+) -> Vec<ReflectionDefaultPropertyMember> {
+    property_names
+        .iter()
+        .filter_map(|property_name| {
+            reflection_property_default_value(info, property_name).map(|value| {
+                ReflectionDefaultPropertyMember {
+                    name: property_name.clone(),
+                    value,
+                }
+            })
+        })
+        .collect()
 }
 
 /// Returns materializable interface constant values for ReflectionClass metadata.
@@ -2863,6 +2904,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         property_names: Vec::new(),
         constant_names: Vec::new(),
         constant_members: Vec::new(),
+        default_property_members: Vec::new(),
         constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
@@ -3146,6 +3188,39 @@ fn emit_reflection_constant_array_property_by_name(
     Ok(())
 }
 
+/// Replaces a ReflectionClass private slot with an associative default-property array.
+fn emit_reflection_default_property_array_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    property_name: &str,
+    members: &[ReflectionDefaultPropertyMember],
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    emit_reflection_default_property_array(ctx, members);
+    let assoc_type = PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Mixed),
+    };
+    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    Ok(())
+}
+
 /// Replaces a ReflectionClass private array slot with ReflectionMethod/Property objects.
 fn emit_reflection_member_array_property_by_name(
     ctx: &mut FunctionContext<'_>,
@@ -3380,6 +3455,19 @@ fn emit_reflection_constant_array(
     Ok(())
 }
 
+/// Allocates and populates the associative ReflectionClass default-property map.
+fn emit_reflection_default_property_array(
+    ctx: &mut FunctionContext<'_>,
+    members: &[ReflectionDefaultPropertyMember],
+) {
+    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    for member in members {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_reflection_default_value_as_mixed(ctx, &member.value);
+        emit_reflection_constant_hash_insert(ctx, &member.name);
+    }
+}
+
 /// Materializes one Reflection constant value as a boxed Mixed cell.
 fn emit_reflection_constant_value_as_mixed(
     ctx: &mut FunctionContext<'_>,
@@ -3406,6 +3494,28 @@ fn emit_reflection_constant_value_as_mixed(
             );
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(enum_name.clone()));
         }
+    }
+}
+
+/// Materializes one Reflection default-property value as a boxed Mixed cell.
+fn emit_reflection_default_value_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    value: &ReflectionParameterDefaultValue,
+) {
+    match value {
+        ReflectionParameterDefaultValue::Int(value) => {
+            emit_boxed_int_literal_to_result(ctx, *value)
+        }
+        ReflectionParameterDefaultValue::Bool(value) => {
+            emit_boxed_bool_literal_to_result(ctx, *value)
+        }
+        ReflectionParameterDefaultValue::Float(value) => {
+            emit_boxed_float_literal_to_result(ctx, *value)
+        }
+        ReflectionParameterDefaultValue::Str(value) => {
+            emit_boxed_string_literal_default_to_result(ctx, value)
+        }
+        ReflectionParameterDefaultValue::Null => emit_boxed_null_literal_to_result(ctx),
     }
 }
 

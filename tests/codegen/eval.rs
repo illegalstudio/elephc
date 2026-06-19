@@ -6908,6 +6908,45 @@ echo $listed->getDefaultValue() === null ? "null" : "bad";');
     );
 }
 
+/// Verifies eval ReflectionClass materializes property default metadata through the bridge.
+#[test]
+fn test_eval_reflection_class_get_default_properties_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectClassDefaultBase {
+    public int $base = 1;
+    protected string $prot = "p";
+    private int $shadow = 3;
+    public $implicit;
+    public int $typed;
+    public static string $baseStatic = "bs";
+}
+class EvalReflectClassDefaultChild extends EvalReflectClassDefaultBase {
+    public int $child = 5;
+    private int $shadow = 9;
+    public static int $childStatic = 7;
+    public ?int $nullable = null;
+}
+$defaults = (new ReflectionClass("EvalReflectClassDefaultChild"))->getDefaultProperties();
+echo $defaults["childStatic"] . ":";
+echo $defaults["baseStatic"] . ":";
+echo $defaults["child"] . ":";
+echo $defaults["shadow"] . ":";
+echo $defaults["base"] . ":";
+echo $defaults["prot"] . ":";
+echo array_key_exists("implicit", $defaults) && $defaults["implicit"] === null ? "I:" : "i:";
+echo array_key_exists("nullable", $defaults) && $defaults["nullable"] === null ? "N:" : "n:";
+echo array_key_exists("typed", $defaults) ? "T" : "t";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7:bs:5:9:1:p:I:N:t");
+}
+
 /// Verifies eval ReflectionParameter exposes the declaring class for method parameters.
 #[test]
 fn test_eval_reflection_parameter_reports_declaring_class() {

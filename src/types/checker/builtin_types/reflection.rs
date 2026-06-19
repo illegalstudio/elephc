@@ -16,8 +16,8 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::names::Name;
 use crate::parser::ast::{
-    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind,
-    TypeExpr, Visibility,
+    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, InstanceOfTarget, Stmt,
+    StmtKind, TypeExpr, Visibility,
 };
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
@@ -951,6 +951,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__default_properties",
+                Visibility::Private,
+                Some(mixed_type()),
+                empty_array(),
+            ),
+            builtin_property(
                 "__reflection_constants",
                 Visibility::Private,
                 Some(object_array_type("ReflectionClassConstant")),
@@ -1015,6 +1021,7 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_has_name_method("hasConstant", "__constant_names", false),
             builtin_reflection_class_get_constant_method(),
             builtin_reflection_class_mixed_method("getConstants", "__constants"),
+            builtin_reflection_class_mixed_method("getDefaultProperties", "__default_properties"),
             builtin_reflection_class_array_method(
                 "getReflectionConstants",
                 "__reflection_constants",
