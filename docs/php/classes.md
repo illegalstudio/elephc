@@ -771,6 +771,7 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__set($name, $value)` — writing undefined property
 - `__invoke(...$args)` — calling an object directly
 - `__call($name, $args)` — intercepting missing instance methods
+- `__callStatic($name, $args)` — intercepting missing static methods
 
 ## Destructors (`__destruct`)
 

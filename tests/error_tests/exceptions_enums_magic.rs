@@ -22,7 +22,9 @@ fn test_error_magic_method_contracts_collect_multiple_errors() {
     assert!(
         all.len() >= 2,
         "expected multiple magic method contract errors, got {:?}",
-        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+        all.iter()
+            .map(|error| error.message.clone())
+            .collect::<Vec<_>>(),
     );
 }
 
@@ -215,6 +217,36 @@ fn test_error_magic_call_must_be_public() {
     expect_error(
         "<?php class Proxy { private function __call($name, $args) { return 1; } }",
         "Magic method must be public: Proxy::__call",
+    );
+}
+
+/// Verifies that non-static `__callStatic` reports
+/// "Magic method must be static: Proxy::__callStatic".
+#[test]
+fn test_error_magic_call_static_must_be_static() {
+    expect_error(
+        "<?php class Proxy { public function __callStatic($name, $args) { return 1; } }",
+        "Magic method must be static: Proxy::__callStatic",
+    );
+}
+
+/// Verifies that `__callStatic` with only one parameter reports
+/// "Magic method must take 2 arguments: Proxy::__callStatic".
+#[test]
+fn test_error_magic_call_static_must_take_two_arguments() {
+    expect_error(
+        "<?php class Proxy { public static function __callStatic($name) { return 1; } }",
+        "Magic method must take 2 arguments: Proxy::__callStatic",
+    );
+}
+
+/// Verifies that a private `__callStatic` method reports
+/// "Magic method must be public: Proxy::__callStatic".
+#[test]
+fn test_error_magic_call_static_must_be_public() {
+    expect_error(
+        "<?php class Proxy { private static function __callStatic($name, $args) { return 1; } }",
+        "Magic method must be public: Proxy::__callStatic",
     );
 }
 

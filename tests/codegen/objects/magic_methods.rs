@@ -165,6 +165,28 @@ echo $p->doSomething(1, 2, 3);
     assert_eq!(out, "called:doSomething:1,2,3");
 }
 
+/// Verifies `__callStatic` is invoked for undefined static methods with method name and arguments.
+#[test]
+fn test_magic_call_static_handles_missing_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticProxy {
+    public static function present() {
+        return "present";
+    }
+
+    public static function __callStatic($method, $args) {
+        return "static:" . $method . ":" . implode(",", $args);
+    }
+}
+echo StaticProxy::present();
+echo ":";
+echo StaticProxy::doSomething(1, 2, 3);
+"#,
+    );
+    assert_eq!(out, "present:static:doSomething:1,2,3");
+}
+
 // =============================================================================
 // Non-class regression edge cases
 // =============================================================================

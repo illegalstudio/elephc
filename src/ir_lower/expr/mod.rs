@@ -9036,11 +9036,20 @@ fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let sig = static_method_implementation_signature(ctx, receiver, method)
-        .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
+    let magic_args;
+    let (dispatch_method, args) = if let Some(args) =
+        magic_static_call_dispatch_args(ctx, receiver, method, args, expr.span)
+    {
+        magic_args = args;
+        ("__callStatic", magic_args.as_slice())
+    } else {
+        (method, args)
+    };
+    let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
+        .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
-    let name = format!("{}::{}", receiver_name(receiver), method);
+    let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
     let data = ctx.intern_string(&name);
     let result_type = sig
         .as_ref()
@@ -9054,6 +9063,31 @@ fn lower_static_method_call(
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Builds synthetic `__callStatic` arguments when a class lacks the requested static method.
+fn magic_static_call_dispatch_args(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    args: &[Expr],
+    span: Span,
+) -> Option<Vec<Expr>> {
+    if static_method_implementation_signature(ctx, receiver, method).is_some()
+        || lexical_instance_static_call_signature(ctx, receiver, method).is_some()
+    {
+        return None;
+    }
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    if class_info.methods.contains_key(&php_symbol_key(method)) {
+        return None;
+    }
+    static_method_implementation_signature(ctx, receiver, "__callStatic")?;
+    Some(vec![
+        Expr::new(ExprKind::StringLiteral(method.to_string()), span),
+        Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span),
+    ])
 }
 
 /// Lowers a static-method callable-array call through a descriptor invoker.
