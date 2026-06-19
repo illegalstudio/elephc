@@ -7,8 +7,8 @@
 //! - `crate::interpreter::expressions::eval_expr()` for `new Reflection*`.
 //!
 //! Key details:
-//! - Only eval-declared classes/interfaces/traits/enums are handled here.
-//! - Non-eval targets fall back to the generated AOT runtime bridge.
+//! - Eval-declared classes/interfaces/traits/enums are materialized from dynamic metadata.
+//! - Generated/AOT targets use focused runtime hooks for supported point lookups.
 
 use super::*;
 
@@ -274,6 +274,36 @@ pub(in crate::interpreter) fn eval_reflection_class_is_instance_result(
     values.bool_value(result).map(Some)
 }
 
+/// Handles eval-backed `ReflectionClass::hasProperty()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_has_property_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("hasProperty") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
+    let property_name = eval_reflection_string_arg(args[0], values)?;
+    let exists = if let Some(metadata) =
+        eval_reflection_class_like_attributes(&reflected_name, context)
+    {
+        metadata.property_names.iter().any(|name| name == &property_name)
+    } else {
+        eval_reflection_aot_property_metadata_if_exists(&reflected_name, &property_name, values)?
+            .is_some()
+    };
+    values.bool_value(exists).map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::hasConstant()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_has_constant_result(
     identity: u64,
@@ -485,6 +515,24 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
     let Some(member_name) =
         eval_reflection_member_name(owner_kind, &reflected_name, &requested_name, context)
     else {
+        if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY
+            && !eval_reflection_class_like_exists(&reflected_name, context)
+        {
+            if let Some(member) = eval_reflection_aot_property_metadata_if_exists(
+                &reflected_name,
+                &requested_name,
+                values,
+            )? {
+                return eval_reflection_member_object_result(
+                    EVAL_REFLECTION_OWNER_PROPERTY,
+                    &requested_name,
+                    &member,
+                    context,
+                    values,
+                )
+                .map(Some);
+            }
+        }
         let message_name = eval_reflection_class_like_attributes(&reflected_name, context)
             .map(|metadata| metadata.resolved_name)
             .unwrap_or_else(|| reflected_name.clone());
@@ -613,31 +661,10 @@ fn eval_reflection_class_new(
     let args = bind_evaluated_function_args(&[String::from("class_name")], evaluated_args)?;
     let class_name = eval_reflection_string_arg(args[0], values)?;
     let Some(metadata) = eval_reflection_class_like_attributes(&class_name, context) else {
-        let is_class = values.class_exists(&class_name)?;
-        let is_interface = values.interface_exists(&class_name)?;
-        let is_trait = values.trait_exists(&class_name)?;
-        let is_enum = values.enum_exists(&class_name)?;
-        if !(is_class || is_interface || is_trait || is_enum) {
+        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(&class_name, values)?
+        else {
             return Ok(None);
-        }
-        let mut flags = 0;
-        if eval_reflection_class_like_is_internal(&class_name) {
-            flags |= EVAL_REFLECTION_CLASS_FLAG_INTERNAL;
-        } else {
-            flags |= EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED;
-        }
-        if is_interface {
-            flags |= EVAL_REFLECTION_CLASS_FLAG_INTERFACE;
-        }
-        if is_trait {
-            flags |= EVAL_REFLECTION_CLASS_FLAG_TRAIT;
-        }
-        if is_enum {
-            flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM;
-        }
-        if eval_reflection_builtin_class_is_iterable(&class_name) {
-            flags |= EVAL_REFLECTION_CLASS_FLAG_ITERABLE;
-        }
+        };
         return eval_reflection_owner_object(
             EVAL_REFLECTION_OWNER_CLASS,
             class_name.trim_start_matches('\\'),
@@ -651,7 +678,7 @@ fn eval_reflection_class_new(
             None,
             None,
             flags,
-            if is_enum { 32 } else { 0 },
+            modifiers,
             0,
             None,
             None,
@@ -681,6 +708,41 @@ fn eval_reflection_class_new(
         values,
     )
     .map(Some)
+}
+
+/// Returns generated/AOT class flags for synthetic ReflectionClass fallback objects.
+fn eval_reflection_aot_class_flags(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(u64, u64)>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let is_class = values.class_exists(runtime_class_name)?;
+    let is_interface = values.interface_exists(runtime_class_name)?;
+    let is_trait = values.trait_exists(runtime_class_name)?;
+    let is_enum = values.enum_exists(runtime_class_name)?;
+    if !(is_class || is_interface || is_trait || is_enum) {
+        return Ok(None);
+    }
+    let mut flags = 0;
+    if eval_reflection_class_like_is_internal(runtime_class_name) {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_INTERNAL;
+    } else {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED;
+    }
+    if is_interface {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_INTERFACE;
+    }
+    if is_trait {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_TRAIT;
+    }
+    if is_enum {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM;
+    }
+    if eval_reflection_builtin_class_is_iterable(runtime_class_name) {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_ITERABLE;
+    }
+    let modifiers = if is_enum { 32 } else { 0 };
+    Ok(Some((flags, modifiers)))
 }
 
 /// Builds an eval-backed `ReflectionMethod` object when the reflected method exists in eval.
@@ -723,10 +785,9 @@ fn eval_reflection_property_new(
     let class_name = eval_reflection_string_arg(args[0], values)?;
     if !eval_reflection_class_like_exists(&class_name, context) {
         let property_name = eval_reflection_string_arg(args[1], values)?;
-        let runtime_class_name = class_name.trim_start_matches('\\');
-        if let Some(flags) = values.reflection_property_flags(runtime_class_name, &property_name)? {
-            let property =
-                eval_reflection_aot_property_metadata(runtime_class_name, flags, &property_name);
+        if let Some(property) =
+            eval_reflection_aot_property_metadata_if_exists(&class_name, &property_name, values)?
+        {
             return eval_reflection_member_object_result(
                 EVAL_REFLECTION_OWNER_PROPERTY,
                 &property_name,
@@ -751,11 +812,26 @@ fn eval_reflection_property_new(
     .map(Some)
 }
 
+/// Returns generated AOT ReflectionProperty metadata when the runtime table has a matching row.
+fn eval_reflection_aot_property_metadata_if_exists(
+    class_name: &str,
+    property_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionMemberMetadata>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let Some(flags) = values.reflection_property_flags(runtime_class_name, property_name)? else {
+        return Ok(None);
+    };
+    Ok(Some(eval_reflection_aot_property_metadata(
+        runtime_class_name,
+        flags,
+    )))
+}
+
 /// Converts AOT property flag metadata into the eval ReflectionProperty shape.
 fn eval_reflection_aot_property_metadata(
     class_name: &str,
     flags: u64,
-    _property_name: &str,
 ) -> EvalReflectionMemberMetadata {
     let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
         EvalVisibility::Private
@@ -1135,7 +1211,30 @@ fn eval_reflection_shallow_class_object_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
-        return values.bool_value(false);
+        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(class_name, values)? else {
+            return values.bool_value(false);
+        };
+        return eval_reflection_owner_object_with_members(
+            EVAL_REFLECTION_OWNER_CLASS,
+            class_name.trim_start_matches('\\'),
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            None,
+            &[],
+            None,
+            None,
+            flags,
+            modifiers,
+            0,
+            None,
+            None,
+            false,
+            context,
+            values,
+        );
     };
     eval_reflection_owner_object_with_members(
         EVAL_REFLECTION_OWNER_CLASS,

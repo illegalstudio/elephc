@@ -2337,6 +2337,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     )? {
         return Ok(result);
     }
+    if let Some(result) = eval_reflection_class_has_property_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     if let Some(result) = eval_reflection_class_has_constant_result(
         identity,
         method_name,
