@@ -107,6 +107,7 @@ struct ReflectionParameterMember {
     is_optional: bool,
     is_variadic: bool,
     is_passed_by_reference: bool,
+    is_promoted: bool,
     has_type: bool,
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
@@ -746,6 +747,7 @@ fn reflection_function_metadata(
         signature,
         None,
         Some(declaring_function),
+        &[],
     );
     metadata.required_parameter_count = required_parameter_count;
     Ok(metadata)
@@ -953,6 +955,7 @@ fn reflection_function_parameter_metadata(
         signature,
         None,
         Some(declaring_function),
+        &[],
     );
     let Some(parameter) = reflection_parameter_member_for_selector(&parameters, selector) else {
         return Ok(empty_reflection_metadata());
@@ -2178,6 +2181,7 @@ fn reflection_class_method_member(
         sig,
         declaring_class_name.as_deref(),
         Some(declaring_function),
+        &reflection_promoted_constructor_parameter_names(info, &method_key),
     );
     Some(ReflectionListedMember {
         name: method_key.clone(),
@@ -2241,6 +2245,7 @@ fn reflection_interface_method_member(
         sig,
         Some(declaring_class_name.as_str()),
         Some(declaring_function),
+        &[],
     );
     Some(ReflectionListedMember {
         name: method_key,
@@ -2311,6 +2316,7 @@ fn reflection_trait_method_member(
             &info.signature,
             Some(trait_name),
             Some(declaring_function),
+            &[],
         ),
     })
 }
@@ -2514,16 +2520,30 @@ fn reflection_required_parameter_count(sig: &FunctionSig) -> i64 {
         .map_or(0, |index| index as i64 + 1)
 }
 
+/// Returns promoted constructor property names for ReflectionParameter metadata.
+fn reflection_promoted_constructor_parameter_names(
+    info: &crate::types::ClassInfo,
+    method_key: &str,
+) -> Vec<String> {
+    if method_key.eq_ignore_ascii_case("__construct") {
+        info.promoted_properties.iter().cloned().collect()
+    } else {
+        Vec::new()
+    }
+}
+
 /// Builds reflected parameter metadata and attaches declaring class metadata when present.
 fn reflection_parameter_members_with_declaring_class(
     sig: &FunctionSig,
     declaring_class_name: Option<&str>,
     declaring_function: Option<ReflectionDeclaringFunctionMember>,
+    promoted_parameter_names: &[String],
 ) -> Vec<ReflectionParameterMember> {
     reflection_parameter_members_with_declaring_function(
         sig,
         declaring_class_name,
         declaring_function,
+        promoted_parameter_names,
     )
 }
 
@@ -2532,6 +2552,7 @@ fn reflection_parameter_members_with_declaring_function(
     sig: &FunctionSig,
     declaring_class_name: Option<&str>,
     declaring_function: Option<ReflectionDeclaringFunctionMember>,
+    promoted_parameter_names: &[String],
 ) -> Vec<ReflectionParameterMember> {
     sig.params
         .iter()
@@ -2562,6 +2583,9 @@ fn reflection_parameter_members_with_declaring_function(
                         .unwrap_or(false),
                 is_variadic,
                 is_passed_by_reference: sig.ref_params.get(index).copied().unwrap_or(false),
+                is_promoted: promoted_parameter_names
+                    .iter()
+                    .any(|promoted_name| promoted_name == name),
                 has_type,
                 type_metadata: reflection_parameter_type_metadata(
                     sig.param_type_exprs.get(index).and_then(Option::as_ref),
@@ -3968,6 +3992,12 @@ fn emit_reflection_parameter_properties(
         "ReflectionParameter",
         "__is_passed_by_reference",
         parameter.is_passed_by_reference,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionParameter",
+        "__is_promoted",
+        parameter.is_promoted,
     )?;
     emit_reflection_owner_bool_property(
         ctx,

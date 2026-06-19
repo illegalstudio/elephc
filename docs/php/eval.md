@@ -265,8 +265,9 @@ non-spread constructor arguments. Late-bound `static::` defaults and unpacked
 constructor arguments in defaults are rejected like PHP constant expressions.
 Variadic eval method parameters bind extra positional and unknown named
 arguments into a PHP array and are reported through
-`ReflectionParameter::isVariadic()` and
-`ReflectionParameter::isOptional()`. By-reference eval method parameters accept
+`ReflectionParameter::isVariadic()` and `ReflectionParameter::isOptional()`.
+Constructor-promoted eval parameters are reported through
+`ReflectionParameter::isPromoted()`. By-reference eval method parameters accept
 direct variable, array-element, and object-property arguments, write back fixed
 parameters after method execution, write back mutated `&...$items` elements
 when the variadic container itself is not rebound, and are reported through

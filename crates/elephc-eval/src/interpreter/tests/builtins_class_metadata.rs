@@ -1226,6 +1226,31 @@ return true;"##,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionParameter reports eval constructor-promotion metadata.
+#[test]
+fn execute_program_reflection_parameter_reports_eval_promoted_metadata() {
+    let program = parse_fragment(
+        br#"class EvalReflectPromotedParamTarget {
+    public function __construct(public int $id, string $name = "Ada") {}
+    public function run(int $id) {}
+}
+$ctorParams = (new ReflectionMethod("EvalReflectPromotedParamTarget", "__construct"))->getParameters();
+$runParams = (new ReflectionMethod("EvalReflectPromotedParamTarget", "run"))->getParameters();
+echo $ctorParams[0]->isPromoted() ? "I" : "i";
+echo $ctorParams[1]->isPromoted() ? "N" : "n";
+echo $runParams[0]->isPromoted() ? "R" : "r";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Inr");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionProperty exposes eval property type metadata.
 #[test]
 fn execute_program_reflection_property_get_type_metadata() {

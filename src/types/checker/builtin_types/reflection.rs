@@ -588,6 +588,12 @@ fn builtin_reflection_parameter() -> FlattenedClass {
                 Some(TypeExpr::Bool),
                 bool_lit(false),
             ),
+            builtin_property(
+                "__is_promoted",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
             builtin_property("__has_type", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
             builtin_property("__type", Visibility::Private, Some(mixed_type()), null_lit()),
             builtin_property(
@@ -629,6 +635,7 @@ fn builtin_reflection_parameter() -> FlattenedClass {
                 "__is_passed_by_reference",
                 TypeExpr::Bool,
             ),
+            builtin_reflection_slot_getter("isPromoted", "__is_promoted", TypeExpr::Bool),
             builtin_reflection_slot_getter("hasType", "__has_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("getType", "__type", mixed_type()),
             builtin_reflection_owner_get_attributes_method(),
