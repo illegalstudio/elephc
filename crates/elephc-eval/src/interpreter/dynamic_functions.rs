@@ -349,7 +349,7 @@ fn bind_dynamic_positional_method_arg(
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
     ref_target: Option<EvaluatedCallRefTarget>,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if variadic_index.is_some_and(|index| *next_positional >= index) {
@@ -401,7 +401,7 @@ fn bind_dynamic_named_method_arg(
     value: RuntimeCellHandle,
     ref_target: Option<EvaluatedCallRefTarget>,
     variadic_named_args: &mut std::collections::HashSet<String>,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let Some(param_index) = regular_method_param_index(params, variadic_index, name) {
@@ -456,7 +456,7 @@ fn eval_variadic_method_parameter_value(
     parameter_types: &[Option<EvalParameterType>],
     variadic_index: Option<usize>,
     value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(param_type) =
@@ -501,7 +501,7 @@ fn bind_dynamic_variadic_arg(
 fn eval_method_parameter_value(
     param_type: &EvalParameterType,
     value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if eval_method_parameter_type_accepts_exact(param_type, value, context, values)? {
@@ -511,7 +511,9 @@ fn eval_method_parameter_value(
         return Err(EvalStatus::RuntimeFatal);
     }
     for variant in param_type.variants() {
-        if let Some(coerced) = eval_method_parameter_scalar_coercion(variant, value, values)? {
+        if let Some(coerced) =
+            eval_method_parameter_scalar_coercion(variant, value, context, values)?
+        {
             return Ok(coerced);
         }
     }
@@ -629,6 +631,7 @@ fn eval_method_parameter_runtime_class_name(
 fn eval_method_parameter_scalar_coercion(
     variant: &EvalParameterTypeVariant,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let tag = values.type_tag(value)?;
@@ -649,8 +652,67 @@ fn eval_method_parameter_scalar_coercion(
         EvalParameterTypeVariant::String if eval_method_scalar_coercible_tag(tag) => {
             values.cast_string(value).map(Some)
         }
+        EvalParameterTypeVariant::String if tag == EVAL_TAG_OBJECT => {
+            let coerced = eval_dynamic_object_string_context_value(value, context, values)?;
+            if values.type_tag(coerced)? == EVAL_TAG_STRING {
+                Ok(Some(coerced))
+            } else {
+                Ok(None)
+            }
+        }
         _ => Ok(None),
     }
+}
+
+/// Converts eval-declared objects in string contexts through `__toString()`.
+pub(in crate::interpreter) fn eval_string_context_value(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_OBJECT {
+        return Ok(value);
+    }
+    eval_dynamic_object_string_context_value(value, context, values)
+}
+
+/// Invokes `__toString()` for eval-created objects and rejects missing invalid hooks.
+fn eval_dynamic_object_string_context_value(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let identity = values.object_identity(value)?;
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return Ok(value);
+    };
+    let called_class_name = class.name().to_string();
+    let Some((declaring_class, method)) = context.class_method(&called_class_name, "__toString")
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if method.visibility() != EvalVisibility::Public
+        || method.is_static()
+        || method.is_abstract()
+        || !method.params().is_empty()
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let result = eval_dynamic_method_with_values(
+        &declaring_class,
+        &called_class_name,
+        &method,
+        value,
+        Vec::new(),
+        context,
+        values,
+    )?;
+    if values.type_tag(result)? == EVAL_TAG_STRING {
+        return Ok(result);
+    }
+    let coerced = values.cast_string(result)?;
+    values.release(result)?;
+    Ok(coerced)
 }
 
 /// Returns whether a runtime tag can be weakly coerced to string/bool parameters.

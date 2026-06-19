@@ -152,6 +152,10 @@ dispatch through `__isset()` and `__unset()` using PHP's `empty()` gate
 ordering. `instanceof` works with eval-declared classes and interfaces,
 generated/AOT runtime objects, dynamic string targets, dynamic object targets,
 and parenthesized target expressions.
+Eval-declared objects in string contexts dispatch through public
+parameterless `__toString()` for `echo`, `print`, concatenation, `strval()`,
+callable `strval()` dispatch, and weak `string` parameter coercion. Classes
+with a compatible `__toString()` satisfy `Stringable` implicitly.
 Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,

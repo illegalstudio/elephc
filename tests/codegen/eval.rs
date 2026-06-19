@@ -3176,6 +3176,37 @@ echo ":"; echo function_exists("boolval");');
     assert_eq!(out, "42:3.5:12:false:7:9:1");
 }
 
+/// Verifies eval-declared `__toString()` runs in string contexts through the bridge.
+#[test]
+fn test_eval_declared_tostring_string_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalStringableBox {
+    public string $name = "Ada";
+    public function __toString() {
+        return "box:" . $this->name;
+    }
+    public function accepts(string $value) {
+        return "typed:" . $value;
+    }
+}
+$box = new EvalStringableBox();
+echo $box; echo ":";
+print $box; echo ":";
+echo "pre" . $box; echo ":";
+echo strval($box); echo ":";
+echo call_user_func("strval", $box); echo ":";
+echo call_user_func_array("strval", [$box]); echo ":";
+echo $box instanceof Stringable ? "S" : "s"; echo ":";
+echo $box->accepts($box);');
+"#,
+    );
+    assert_eq!(
+        out,
+        "box:Ada:box:Ada:prebox:Ada:box:Ada:box:Ada:box:Ada:S:typed:box:Ada"
+    );
+}
+
 /// Verifies eval `settype()` mutates direct variables and supports named arguments.
 #[test]
 fn test_eval_dispatches_settype_builtin_call() {

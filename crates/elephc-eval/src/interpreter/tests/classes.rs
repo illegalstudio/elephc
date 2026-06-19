@@ -514,6 +514,60 @@ return $box->events;"#,
     );
 }
 
+/// Verifies eval objects stringify through public `__toString()` in PHP string contexts.
+#[test]
+fn execute_program_dispatches_eval_magic_tostring_for_string_contexts() {
+    let program = parse_fragment(
+        br#"class EvalStringableBox {
+    public string $name = "Ada";
+    public function __toString() {
+        return "box:" . $this->name;
+    }
+    public function accepts(string $value) {
+        return "typed:" . $value;
+    }
+}
+$box = new EvalStringableBox();
+echo $box; echo ":";
+print $box; echo ":";
+echo "pre" . $box; echo ":";
+echo strval($box); echo ":";
+echo call_user_func("strval", $box); echo ":";
+echo call_user_func_array("strval", [$box]); echo ":";
+echo $box instanceof Stringable ? "S" : "s"; echo ":";
+return $box->accepts($box);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "box:Ada:box:Ada:prebox:Ada:box:Ada:box:Ada:box:Ada:S:"
+    );
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("typed:box:Ada".to_string())
+    );
+}
+
+/// Verifies eval objects without `__toString()` fail in PHP string contexts.
+#[test]
+fn execute_program_rejects_eval_object_string_context_without_tostring() {
+    let program = parse_fragment(
+        br#"class EvalPlainStringContext {}
+$box = new EvalPlainStringContext();
+echo $box;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect_err("missing __toString should fail");
+}
+
 /// Verifies get-only property hooks reject writes outside a set accessor.
 #[test]
 fn execute_program_rejects_write_to_get_only_eval_property_hook() {

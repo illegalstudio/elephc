@@ -15,7 +15,7 @@ use super::super::super::*;
 pub(in crate::interpreter) fn eval_scalars_builtin_with_values(
     name: &str,
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
@@ -82,7 +82,7 @@ pub(in crate::interpreter) fn eval_scalars_builtin_with_values(
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_cast_result(name, *value, values)?
+            eval_cast_result(name, *value, context, values)?
         }
         "max" | "min" => eval_min_max_result(name, evaluated_args, values)?,
         "gettype" => {
