@@ -7350,6 +7350,35 @@ echo $second->label();');
     assert_eq!(out, "EF:GH");
 }
 
+/// Verifies eval ReflectionClass::newInstanceWithoutConstructor allocates without constructors.
+#[test]
+fn test_eval_reflection_class_new_instance_without_constructor_allocates_eval_class() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalReflectNoCtorTarget {
+    public $label = "default";
+    private $secret = "hidden";
+    public function __construct() {
+        $this->label = "ctor";
+    }
+    public function label() {
+        return $this->label;
+    }
+    public function secret() {
+        return $this->secret;
+    }
+}
+$ref = new ReflectionClass("EvalReflectNoCtorTarget");
+$without = $ref->newInstanceWithoutConstructor();
+echo $without->label() . ":";
+echo $without->secret() . ":";
+$with = $ref->newInstance();
+echo $with->label();');
+"#,
+    );
+    assert_eq!(out, "default:hidden:ctor");
+}
+
 /// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.
 #[test]
 fn test_eval_reflection_constant_and_enum_case_attributes() {

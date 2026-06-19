@@ -2227,6 +2227,33 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let object = eval_dynamic_class_allocate_object(class, context, caller_scope, values)?;
+    if let Some((constructor_class, constructor)) =
+        context.class_method(class.name(), "__construct")
+    {
+        validate_eval_member_access(&constructor_class, constructor.visibility(), context)?;
+        eval_dynamic_method_with_values(
+            &constructor_class,
+            class.name(),
+            &constructor,
+            object,
+            evaluated_args,
+            context,
+            values,
+        )?;
+    } else if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(object)
+}
+
+/// Creates a backing object for an eval-declared class without running its constructor.
+fn eval_dynamic_class_allocate_object(
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if class.is_abstract() || context.has_enum(class.name()) {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -2253,22 +2280,6 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
             let storage_name = eval_instance_property_storage_name(class.name(), property);
             values.property_set(object, &storage_name, value)?;
         }
-    }
-    if let Some((constructor_class, constructor)) =
-        context.class_method(class.name(), "__construct")
-    {
-        validate_eval_member_access(&constructor_class, constructor.visibility(), context)?;
-        eval_dynamic_method_with_values(
-            &constructor_class,
-            class.name(),
-            &constructor,
-            object,
-            evaluated_args,
-            context,
-            values,
-        )?;
-    } else if !evaluated_args.is_empty() {
-        return Err(EvalStatus::RuntimeFatal);
     }
     Ok(object)
 }
@@ -2463,6 +2474,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     )? {
         return Ok(instance);
     }
+    if let Some(instance) = eval_reflection_class_new_instance_without_constructor_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(instance);
+    }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = runtime_object_class_name(object, values)?;
         let evaluated_args = bind_native_callable_args(
@@ -2533,6 +2553,42 @@ fn eval_reflection_class_new_instance_result(
     let instance = values.new_object(&class_name)?;
     values.construct_object(instance, args)?;
     Ok(Some(instance))
+}
+
+/// Allocates the class named by a materialized eval `ReflectionClass` without running `__construct()`.
+fn eval_reflection_class_new_instance_without_constructor_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("newInstanceWithoutConstructor") {
+        return Ok(None);
+    }
+    if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    if let Some(class) = context.class(&reflected_name).cloned() {
+        let mut scope = ElephcEvalScope::new();
+        return eval_dynamic_class_allocate_object(&class, context, &mut scope, values).map(Some);
+    }
+    if context.has_interface(&reflected_name)
+        || context.has_trait(&reflected_name)
+        || context.has_enum(&reflected_name)
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let class_name = context
+        .resolve_class_name(&reflected_name)
+        .unwrap_or(reflected_name);
+    values.new_object(&class_name).map(Some)
 }
 
 /// Instantiates an eval-declared attribute class for `ReflectionAttribute::newInstance()`.
