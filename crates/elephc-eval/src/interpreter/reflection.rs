@@ -522,6 +522,56 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
     Ok(Some(result))
 }
 
+/// Handles eval-backed `ReflectionClass::getMethods()` and `getProperties()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let owner_kind = if method_name.eq_ignore_ascii_case("getMethods") {
+        EVAL_REFLECTION_OWNER_METHOD
+    } else if method_name.eq_ignore_ascii_case("getProperties") {
+        EVAL_REFLECTION_OWNER_PROPERTY
+    } else {
+        return Ok(None);
+    };
+    if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
+        let names = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+            metadata.method_names
+        } else {
+            metadata.property_names
+        };
+        return eval_reflection_member_object_array_result(
+            owner_kind,
+            &reflected_name,
+            &names,
+            context,
+            values,
+        )
+        .map(Some);
+    }
+    let names = eval_reflection_aot_member_names(owner_kind, &reflected_name, values)?;
+    eval_reflection_aot_member_object_array_result(
+        owner_kind,
+        &reflected_name,
+        &names,
+        context,
+        values,
+    )
+    .map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::getMethod()` and `getProperty()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
     identity: u64,
@@ -1760,6 +1810,76 @@ fn eval_reflection_member_object_array_result(
         let key = values.int(index)?;
         result = values.array_set(result, key, member_object)?;
         index += 1;
+    }
+    Ok(result)
+}
+
+/// Builds an indexed array of AOT ReflectionMethod or ReflectionProperty objects for a class.
+fn eval_reflection_aot_member_object_array_result(
+    owner_kind: u64,
+    class_name: &str,
+    names: &[String],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(names.len())?;
+    let mut index = 0;
+    for name in names {
+        let member = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+            eval_reflection_aot_method_metadata_if_exists(class_name, name, values)?
+        } else {
+            eval_reflection_aot_property_metadata_if_exists(class_name, name, values)?
+        };
+        let Some(member) = member else {
+            continue;
+        };
+        let reflected_name = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+            name.to_ascii_lowercase()
+        } else {
+            name.clone()
+        };
+        let member_object = eval_reflection_member_object_result(
+            owner_kind,
+            &reflected_name,
+            &member,
+            context,
+            values,
+        )?;
+        let key = values.int(index)?;
+        result = values.array_set(result, key, member_object)?;
+        index += 1;
+    }
+    Ok(result)
+}
+
+/// Returns generated AOT member names for one reflected class.
+fn eval_reflection_aot_member_names(
+    owner_kind: u64,
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let names_array = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        values.reflection_method_names(runtime_class_name)?
+    } else {
+        values.reflection_property_names(runtime_class_name)?
+    };
+    let names = eval_reflection_string_array_to_vec(names_array, values)?;
+    values.release(names_array)?;
+    Ok(names)
+}
+
+/// Copies a runtime string array into Rust-owned strings for reflection metadata assembly.
+fn eval_reflection_string_array_to_vec(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut result = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.int(position as i64)?;
+        let value = values.array_get(array, key)?;
+        result.push(eval_reflection_string_arg(value, values)?);
     }
     Ok(result)
 }

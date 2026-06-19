@@ -6606,6 +6606,20 @@ echo $listed->isPromoted() ? "G" : "g";
 echo $listed->getDeclaringClass()->getName();
 $rootClass = new ReflectionClass("\EvalAotPromotedBase");
 echo $rootClass->hasProperty("name") ? "N" : "n";
+$properties = $class->getProperties();
+echo ":" . count($properties);
+$listedId = false;
+$listedName = false;
+foreach ($properties as $property) {
+    if ($property->getName() === "id") {
+        $listedId = $property->isPromoted();
+    }
+    if ($property->getName() === "name") {
+        $listedName = $property->isPromoted();
+    }
+}
+echo $listedId ? "I" : "i";
+echo $listedName ? "N" : "n";
 try {
     $class->getProperty("missing");
     echo "bad";
@@ -6621,7 +6635,7 @@ try {
     );
     assert_eq!(
         out.stdout,
-        "IINCpsHmGEvalAotPromotedBaseN:Property EvalAotPromotedBase::$missing does not exist"
+        "IINCpsHmGEvalAotPromotedBaseN:2IN:Property EvalAotPromotedBase::$missing does not exist"
     );
 }
 
@@ -6656,6 +6670,25 @@ echo ":" . $locked->getName();
 echo $locked->isFinal() ? "F" : "f";
 echo $locked->isPublic() ? "U" : "u";
 echo $locked->getDeclaringClass()->getName();
+$methods = $class->getMethods();
+$seenRun = false;
+$seenBase = false;
+$seenLocked = false;
+foreach ($methods as $method) {
+    if (strtolower($method->getName()) === "run") {
+        $seenRun = $method->isPublic();
+    }
+    if (strtolower($method->getName()) === "basestatic") {
+        $seenBase = $method->isStatic();
+    }
+    if (strtolower($method->getName()) === "locked") {
+        $seenLocked = $method->isFinal();
+    }
+}
+echo ":" . count($methods);
+echo $seenRun ? "R" : "r";
+echo $seenBase ? "B" : "b";
+echo $seenLocked ? "L" : "l";
 try {
     $class->getMethod("missing");
     echo "bad";
@@ -6671,7 +6704,7 @@ try {
     );
     assert_eq!(
         out.stdout,
-        "RBm:runUsEvalAotReflectMethodChild:SP:lockedFUEvalAotReflectMethodBase:Method EvalAotReflectMethodChild::missing() does not exist"
+        "RBm:runUsEvalAotReflectMethodChild:SP:lockedFUEvalAotReflectMethodBase:4RBL:Method EvalAotReflectMethodChild::missing() does not exist"
     );
 }
 

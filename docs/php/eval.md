@@ -207,13 +207,14 @@ lookups return `false` when no constant or case is visible.
 `ReflectionClass::getMethods()` and `ReflectionClass::getProperties()` return
 materialized `ReflectionMethod` and `ReflectionProperty` objects for the same
 visible member metadata, including supported member attributes and predicate
-flags. For generated/AOT classes, `ReflectionClass::getMethod()` and
-`getProperty()` can materialize a single `ReflectionMethod` or
-`ReflectionProperty` from emitted predicate metadata, while full AOT
-`getMethods()` / `getProperties()` enumeration still depends on the member
-arrays materialized on the `ReflectionClass` object. `ReflectionMethod::getDeclaringClass()` and
+flags. For generated/AOT classes, `ReflectionClass::getMethod()` /
+`getProperty()` and no-filter `getMethods()` / `getProperties()` materialize
+reflection objects from emitted member-name and predicate metadata. AOT member
+reflection currently exposes names, declaring classes, and predicate flags, but
+does not expose full AOT parameter, attribute, property type, or property
+default-value metadata. `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
-`ReflectionClass` for the eval class-like symbol that declares the reflected
+`ReflectionClass` for the symbol that declares the reflected
 member. `ReflectionClass::getConstructor()` returns a materialized
 `ReflectionMethod` for direct, inherited, interface, and trait constructors, or
 `null` when no constructor is visible. `ReflectionClass::getParentClass()`
