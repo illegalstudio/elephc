@@ -858,6 +858,26 @@ impl FakeOps {
     pub(super) fn runtime_class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
         Ok(name.eq_ignore_ascii_case("KnownClass"))
     }
+    /// Reports fake generated AOT ReflectionMethod flags for eval metadata unit tests.
+    pub(super) fn runtime_reflection_method_flags(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Result<Option<u64>, EvalStatus> {
+        if !class_name.eq_ignore_ascii_case("KnownClass") {
+            return Ok(None);
+        }
+        match method_name.to_ascii_lowercase().as_str() {
+            "run" => Ok(Some(EVAL_REFLECTION_MEMBER_FLAG_PUBLIC)),
+            "helper" => Ok(Some(
+                EVAL_REFLECTION_MEMBER_FLAG_STATIC | EVAL_REFLECTION_MEMBER_FLAG_PROTECTED,
+            )),
+            "locked" => Ok(Some(
+                EVAL_REFLECTION_MEMBER_FLAG_PUBLIC | EVAL_REFLECTION_MEMBER_FLAG_FINAL,
+            )),
+            _ => Ok(None),
+        }
+    }
     /// Reports fake generated AOT ReflectionProperty flags for eval metadata unit tests.
     pub(super) fn runtime_reflection_property_flags(
         &mut self,

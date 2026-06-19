@@ -274,6 +274,39 @@ pub(in crate::interpreter) fn eval_reflection_class_is_instance_result(
     values.bool_value(result).map(Some)
 }
 
+/// Handles eval-backed `ReflectionClass::hasMethod()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("hasMethod") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
+    let requested_name = eval_reflection_string_arg(args[0], values)?;
+    let exists = if let Some(metadata) =
+        eval_reflection_class_like_attributes(&reflected_name, context)
+    {
+        metadata
+            .method_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&requested_name))
+    } else {
+        eval_reflection_aot_method_metadata_if_exists(&reflected_name, &requested_name, values)?
+            .is_some()
+    };
+    values.bool_value(exists).map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::hasProperty()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_has_property_result(
     identity: u64,
@@ -515,6 +548,26 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
     let Some(member_name) =
         eval_reflection_member_name(owner_kind, &reflected_name, &requested_name, context)
     else {
+        if owner_kind == EVAL_REFLECTION_OWNER_METHOD
+            && !eval_reflection_class_like_exists(&reflected_name, context)
+        {
+            if let Some(member) = eval_reflection_aot_method_metadata_if_exists(
+                &reflected_name,
+                &requested_name,
+                values,
+            )?
+            {
+                let member_name = requested_name.to_ascii_lowercase();
+                return eval_reflection_member_object_result(
+                    EVAL_REFLECTION_OWNER_METHOD,
+                    &member_name,
+                    &member,
+                    context,
+                    values,
+                )
+                .map(Some);
+            }
+        }
         if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY
             && !eval_reflection_class_like_exists(&reflected_name, context)
         {
@@ -757,6 +810,20 @@ fn eval_reflection_method_new(
     )?;
     let class_name = eval_reflection_string_arg(args[0], values)?;
     if !eval_reflection_class_like_exists(&class_name, context) {
+        let method_name = eval_reflection_string_arg(args[1], values)?;
+        if let Some(method) =
+            eval_reflection_aot_method_metadata_if_exists(&class_name, &method_name, values)?
+        {
+            let method_name = method_name.to_ascii_lowercase();
+            return eval_reflection_member_object_result(
+                EVAL_REFLECTION_OWNER_METHOD,
+                &method_name,
+                &method,
+                context,
+                values,
+            )
+            .map(Some);
+        }
         return Ok(None);
     }
     let method_name = eval_reflection_string_arg(args[1], values)?;
@@ -810,6 +877,51 @@ fn eval_reflection_property_new(
         values,
     )
     .map(Some)
+}
+
+/// Returns generated AOT ReflectionMethod metadata when the runtime table has a matching row.
+fn eval_reflection_aot_method_metadata_if_exists(
+    class_name: &str,
+    method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionMemberMetadata>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let Some(flags) = values.reflection_method_flags(runtime_class_name, method_name)? else {
+        return Ok(None);
+    };
+    Ok(Some(eval_reflection_aot_method_metadata(
+        runtime_class_name,
+        flags,
+    )))
+}
+
+/// Converts AOT method flag metadata into the eval ReflectionMethod shape.
+fn eval_reflection_aot_method_metadata(
+    class_name: &str,
+    flags: u64,
+) -> EvalReflectionMemberMetadata {
+    let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
+        EvalVisibility::Protected
+    } else {
+        EvalVisibility::Public
+    };
+    EvalReflectionMemberMetadata {
+        declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
+        attributes: Vec::new(),
+        visibility,
+        is_static: flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0,
+        is_final: flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0,
+        is_abstract: flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT != 0,
+        is_readonly: false,
+        is_promoted: false,
+        modifiers: eval_reflection_method_modifiers_from_flags(flags),
+        type_metadata: None,
+        default_value: None,
+        required_parameter_count: 0,
+        parameters: Vec::new(),
+    }
 }
 
 /// Returns generated AOT ReflectionProperty metadata when the runtime table has a matching row.
