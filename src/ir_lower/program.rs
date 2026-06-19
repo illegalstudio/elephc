@@ -852,9 +852,7 @@ fn lower_builtin_reflection_methods(
         "ReflectionNamedType",
         "ReflectionParameter",
         "ReflectionProperty",
-        "ReflectionFunction",
-        "ReflectionParameter",
-        "ReflectionNamedType",
+        "ReflectionUnionType",
     ] {
         lower_builtin_reflection_class_methods(class_name, module, check_result, constants, fiber_return_sigs);
     }

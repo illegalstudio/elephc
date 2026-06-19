@@ -289,6 +289,10 @@ impl FakeOps {
             (FakeValue::Object(properties), "gettype") if args.is_empty() => {
                 Self::object_property(&properties, "__type").map_or_else(|| self.null(), Ok)
             }
+            (FakeValue::Object(properties), "gettypes") if args.is_empty() => {
+                Self::object_property(&properties, "__types")
+                    .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
             (FakeValue::Object(properties), "getdefaultvalue") if args.is_empty() => {
                 Self::object_property(&properties, "__default_value")
                     .map_or_else(|| self.null(), Ok)
@@ -451,6 +455,7 @@ impl FakeOps {
             EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE => "ReflectionEnumBackedCase",
             EVAL_REFLECTION_OWNER_PARAMETER => "ReflectionParameter",
             EVAL_REFLECTION_OWNER_NAMED_TYPE => "ReflectionNamedType",
+            EVAL_REFLECTION_OWNER_UNION_TYPE => "ReflectionUnionType",
             _ => return Err(EvalStatus::RuntimeFatal),
         };
         let name = self.string(reflected_name)?;
@@ -545,6 +550,11 @@ impl FakeOps {
             let is_builtin = self.bool_value((flags & 2) != 0)?;
             properties.push(("__allows_null".to_string(), allows_null));
             properties.push(("__is_builtin".to_string(), is_builtin));
+        }
+        if owner_kind == EVAL_REFLECTION_OWNER_UNION_TYPE {
+            let allows_null = self.bool_value((flags & 1) != 0)?;
+            properties.push(("__types".to_string(), method_objects));
+            properties.push(("__allows_null".to_string(), allows_null));
         }
         let object = self.alloc(FakeValue::Object(properties));
         self.object_classes

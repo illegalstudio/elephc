@@ -199,10 +199,12 @@ eval/runtime class or interface names.
 `ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
 `getNumberOfRequiredParameters()` report eval-declared method parameter
 metadata. Eval currently exposes parameter names and zero-based positions there,
-declared-type presence, and simple named type metadata through
+declared-type presence, simple named type metadata through
 `ReflectionParameter::getType()` / `ReflectionNamedType::getName()`,
-`allowsNull()`, and `isBuiltin()`. Union/intersection parameter type objects are
-not yet materialized. Defaulted eval method parameters are bound when omitted and reported through
+`allowsNull()`, and `isBuiltin()`, and multi-member union metadata through
+`ReflectionUnionType::getTypes()` and `allowsNull()`. Intersection parameter
+type objects are not yet materialized. Defaulted eval method parameters are
+bound when omitted and reported through
 `ReflectionParameter::isOptional()`, `isDefaultValueAvailable()`, and
 `getDefaultValue()`. Supported default expressions include
 scalar literals, arrays whose keys and values are supported default
@@ -384,11 +386,11 @@ broader parameter/return ABI shapes are still outside that bridge.
 
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
-ReflectionClass/Method/Parameter/Property/NamedType/attribute slice,
-union/intersection Reflection type objects, broader parameter default-value
-objects beyond the eval-supported constant-expression subset, and broader generated/AOT method
-bridge signatures beyond the current public non-by-reference fixed scalar/Mixed
-slice.
+ReflectionClass/Method/Parameter/Property/NamedType/UnionType/attribute slice,
+ReflectionUnionType APIs beyond parameter metadata, intersection Reflection type
+objects, broader parameter default-value objects beyond the eval-supported
+constant-expression subset, and broader generated/AOT method bridge signatures
+beyond the current public non-by-reference fixed scalar/Mixed slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

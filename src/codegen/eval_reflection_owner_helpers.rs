@@ -106,6 +106,7 @@ struct ReflectionOwnerLayouts {
     enum_backed_case: ReflectionOwnerLayout,
     parameter: ReflectionOwnerLayout,
     named_type: ReflectionOwnerLayout,
+    union_type: ReflectionOwnerLayout,
 }
 
 /// Emits eval Reflection owner helpers when any lowered function owns an eval context.
@@ -174,6 +175,7 @@ fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
         )?,
         parameter: reflection_owner_layout(module.class_infos.get("ReflectionParameter")?, true)?,
         named_type: reflection_owner_layout(module.class_infos.get("ReflectionNamedType")?, true)?,
+        union_type: reflection_owner_layout(module.class_infos.get("ReflectionUnionType")?, false)?,
     })
 }
 
@@ -190,7 +192,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let method_names_lo = reflection_property_offset(info, "__method_names");
     let property_names_lo = reflection_property_offset(info, "__property_names");
     let method_objects_lo = reflection_property_offset(info, "__methods")
-        .or_else(|| reflection_property_offset(info, "__parameters"));
+        .or_else(|| reflection_property_offset(info, "__parameters"))
+        .or_else(|| reflection_property_offset(info, "__types"));
     let property_objects_lo = reflection_property_offset(info, "__properties");
     let parent_class_lo = reflection_property_offset(info, "__parent_class");
     let is_final_lo = reflection_property_offset(info, "__is_final");
@@ -328,6 +331,7 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     let enum_backed_case_label = "__elephc_eval_reflection_owner_new_enum_backed_case";
     let parameter_label = "__elephc_eval_reflection_owner_new_parameter";
     let named_type_label = "__elephc_eval_reflection_owner_new_named_type";
+    let union_type_label = "__elephc_eval_reflection_owner_new_union_type";
     emitter.instruction("sub sp, sp, #160");                                    // reserve helper frame for inputs, object, arrays, scratch, and fp/lr
     emitter.instruction("stp x29, x30, [sp, #144]");                            // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #144");                                   // establish a stable helper frame pointer
@@ -365,6 +369,8 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction(&format!("b.eq {}", parameter_label));                  // allocate a ReflectionParameter owner
     emitter.instruction("cmp x0, #7");                                          // owner kind 7 means ReflectionNamedType
     emitter.instruction(&format!("b.eq {}", named_type_label));                 // allocate a ReflectionNamedType owner
+    emitter.instruction("cmp x0, #8");                                          // owner kind 8 means ReflectionUnionType
+    emitter.instruction(&format!("b.eq {}", union_type_label));                 // allocate a ReflectionUnionType owner
     emitter.instruction(&format!("b {}", fail_label));                          // reject unknown owner kinds
     emit_aarch64_owner_kind_body(
         emitter,
@@ -430,6 +436,14 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
         fail_label,
         box_label,
     );
+    emit_aarch64_owner_kind_body(
+        emitter,
+        union_type_label,
+        &layouts.union_type,
+        false,
+        fail_label,
+        box_label,
+    );
     emitter.label(box_label);
     emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
     emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
@@ -457,6 +471,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let enum_backed_case_label = "__elephc_eval_reflection_owner_new_enum_backed_case_x";
     let parameter_label = "__elephc_eval_reflection_owner_new_parameter_x";
     let named_type_label = "__elephc_eval_reflection_owner_new_named_type_x";
+    let union_type_label = "__elephc_eval_reflection_owner_new_union_type_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction("sub rsp, 144");                                        // reserve slots for inputs, object, metadata arrays, and name parts
@@ -496,6 +511,8 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction(&format!("je {}", parameter_label));                    // allocate a ReflectionParameter owner
     emitter.instruction("cmp rdi, 7");                                          // owner kind 7 means ReflectionNamedType
     emitter.instruction(&format!("je {}", named_type_label));                   // allocate a ReflectionNamedType owner
+    emitter.instruction("cmp rdi, 8");                                          // owner kind 8 means ReflectionUnionType
+    emitter.instruction(&format!("je {}", union_type_label));                   // allocate a ReflectionUnionType owner
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject unknown owner kinds
     emit_x86_64_owner_kind_body(
         emitter,
@@ -558,6 +575,14 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
         named_type_label,
         &layouts.named_type,
         true,
+        fail_label,
+        box_label,
+    );
+    emit_x86_64_owner_kind_body(
+        emitter,
+        union_type_label,
+        &layouts.union_type,
+        false,
         fail_label,
         box_label,
     );
@@ -1261,17 +1286,8 @@ fn emit_set_owner_named_type_flags_property_aarch64(
     emitter: &mut Emitter,
     layout: &ReflectionOwnerLayout,
 ) {
-    let (
-        Some(allows_null_lo),
-        Some(allows_null_hi),
-        Some(is_builtin_lo),
-        Some(is_builtin_hi),
-    ) = (
-        layout.allows_null_lo,
-        layout.allows_null_hi,
-        layout.is_builtin_lo,
-        layout.is_builtin_hi,
-    )
+    let (Some(allows_null_lo), Some(allows_null_hi)) =
+        (layout.allows_null_lo, layout.allows_null_hi)
     else {
         return;
     };
@@ -1280,6 +1296,11 @@ fn emit_set_owner_named_type_flags_property_aarch64(
     emitter.instruction("and x10, x11, #1");                                    // extract the nullable-type flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", allows_null_lo);
     abi::emit_store_zero_to_address(emitter, "x9", allows_null_hi);
+    let (Some(is_builtin_lo), Some(is_builtin_hi)) =
+        (layout.is_builtin_lo, layout.is_builtin_hi)
+    else {
+        return;
+    };
     emitter.instruction("lsr x10, x11, #1");                                    // move the builtin-type bit into position
     emitter.instruction("and x10, x10, #1");                                    // extract the builtin-type flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_builtin_lo);
@@ -1399,17 +1420,8 @@ fn emit_set_owner_named_type_flags_property_x86_64(
     emitter: &mut Emitter,
     layout: &ReflectionOwnerLayout,
 ) {
-    let (
-        Some(allows_null_lo),
-        Some(allows_null_hi),
-        Some(is_builtin_lo),
-        Some(is_builtin_hi),
-    ) = (
-        layout.allows_null_lo,
-        layout.allows_null_hi,
-        layout.is_builtin_lo,
-        layout.is_builtin_hi,
-    )
+    let (Some(allows_null_lo), Some(allows_null_hi)) =
+        (layout.allows_null_lo, layout.allows_null_hi)
     else {
         return;
     };
@@ -1419,6 +1431,11 @@ fn emit_set_owner_named_type_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the nullable-type flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", allows_null_lo);
     abi::emit_store_zero_to_address(emitter, "r10", allows_null_hi);
+    let (Some(is_builtin_lo), Some(is_builtin_hi)) =
+        (layout.is_builtin_lo, layout.is_builtin_hi)
+    else {
+        return;
+    };
     emitter.instruction("mov rax, r11");                                        // copy flags before extracting the builtin bit
     emitter.instruction("shr rax, 1");                                          // move the builtin-type bit into position
     emitter.instruction("and rax, 1");                                          // extract the builtin-type flag as a boolean

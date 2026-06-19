@@ -6404,7 +6404,7 @@ fn test_eval_reflection_method_lists_parameters() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalReflectParamTarget {
-    public function run(int $first, \App\Name|null $second = null, ...$rest) {}
+    public function run(int $first, int|string $union, \App\Name|null $second = null, ...$rest) {}
 }
 $method = new ReflectionMethod("EvalReflectParamTarget", "run");
 echo $method->getNumberOfParameters() . "/";
@@ -6417,7 +6417,14 @@ foreach ($params as $param) {
     echo $param->isPassedByReference() ? "R" : "b";
     echo $param->hasType() ? "T" : "t";
     $type = $param->getType();
-    if ($type) {
+    if ($param->getName() == "union") {
+        echo ":union";
+        echo $type->allowsNull() ? "?" : "!";
+        foreach ($type->getTypes() as $memberType) {
+            echo ":" . $memberType->getName();
+            echo $memberType->isBuiltin() ? "B" : "C";
+        }
+    } elseif ($type) {
         echo ":" . $type->getName();
         echo $type->allowsNull() ? "?" : "!";
         echo $type->isBuiltin() ? "B" : "C";
@@ -6440,7 +6447,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "3/1:first@0rvbT:int!B:d|second@1OvbT:App\\Name?C:D=null|rest@2OVbt:null:d|"
+        "4/2:first@0rvbT:int!B:d|union@1rvbT:union!:intB:stringB:d|second@2OvbT:App\\Name?C:D=null|rest@3OVbt:null:d|"
     );
 }
 
