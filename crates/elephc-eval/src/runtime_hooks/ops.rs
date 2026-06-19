@@ -241,6 +241,23 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         })
     }
 
+    /// Returns generated AOT ReflectionMethod flags, or `None` when no row matches.
+    fn reflection_method_flags(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Result<Option<u64>, EvalStatus> {
+        let flags = unsafe {
+            __elephc_eval_reflection_method_flags(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                method_name.as_ptr(),
+                method_name.len() as u64,
+            )
+        };
+        Ok((flags != 0).then_some(flags))
+    }
+
     /// Returns generated AOT ReflectionProperty flags, or `None` when no row matches.
     fn reflection_property_flags(
         &mut self,

@@ -28,6 +28,12 @@ const EVAL_REFLECTION_PROPERTY_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_PROPERTY_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED: u64 = 512;
+const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
+const EVAL_REFLECTION_METHOD_FLAG_PUBLIC: u64 = 2;
+const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
+const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
+const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
+const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
 
 /// Emit the user-dependent data section — globals, statics, class metadata.
 /// This changes per program and cannot be cached.
@@ -415,6 +421,8 @@ pub(crate) fn emit_runtime_data_user(
     emit_static_callable_method_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
     emit_classes_by_name_table(&mut out, &sorted_classes);
+    out.push_str(".p2align 3\n");
+    emit_eval_reflection_method_lookup_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
     emit_eval_reflection_property_lookup_data(&mut out, &sorted_classes);
 
@@ -842,6 +850,122 @@ fn emit_name_lookup_data(
     for (idx, name) in sorted_names.iter().enumerate() {
         out.push_str(&format!("    .quad {}_{}\n", label_prefix, idx));
         out.push_str(&format!("    .quad {}\n", name.len()));
+    }
+}
+
+/// Emits AOT method flag rows consumed by eval ReflectionMethod metadata probes.
+fn emit_eval_reflection_method_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+) {
+    let mut entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        let mut methods = class_info.methods.keys().collect::<Vec<_>>();
+        methods.sort();
+        for method_name in methods {
+            let flags = eval_reflection_instance_method_flags(class_info, method_name);
+            let class_label = format!("_eval_reflection_method_class_{}", index);
+            let method_label = format!("_eval_reflection_method_name_{}", index);
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                class_label,
+                escaped_ascii(class_name)
+            ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                method_label,
+                escaped_ascii(method_name)
+            ));
+            entries.push((
+                class_label,
+                class_name.len(),
+                method_label,
+                method_name.len(),
+                flags,
+            ));
+            index += 1;
+        }
+
+        let mut static_methods = class_info.static_methods.keys().collect::<Vec<_>>();
+        static_methods.sort();
+        for method_name in static_methods {
+            let flags = eval_reflection_static_method_flags(class_info, method_name);
+            let class_label = format!("_eval_reflection_method_class_{}", index);
+            let method_label = format!("_eval_reflection_method_name_{}", index);
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                class_label,
+                escaped_ascii(class_name)
+            ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                method_label,
+                escaped_ascii(method_name)
+            ));
+            entries.push((
+                class_label,
+                class_name.len(),
+                method_label,
+                method_name.len(),
+                flags,
+            ));
+            index += 1;
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _eval_reflection_method_count\n_eval_reflection_method_count:\n");
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _eval_reflection_methods\n_eval_reflection_methods:\n");
+    for (class_label, class_len, method_label, method_len, flags) in entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", method_label));
+        out.push_str(&format!("    .quad {}\n", method_len));
+        out.push_str(&format!("    .quad {}\n", flags));
+    }
+}
+
+/// Returns eval ReflectionMethod bitflags for one instance method entry.
+fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &str) -> u64 {
+    let visibility = class_info
+        .method_visibilities
+        .get(method_name)
+        .unwrap_or(&Visibility::Public);
+    let mut flags = eval_reflection_method_visibility_flags(visibility);
+    if class_info.final_methods.contains(method_name) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_FINAL;
+    }
+    if !class_info.method_impl_classes.contains_key(method_name) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
+    }
+    flags
+}
+
+/// Returns eval ReflectionMethod bitflags for one static method entry.
+fn eval_reflection_static_method_flags(class_info: &ClassInfo, method_name: &str) -> u64 {
+    let visibility = class_info
+        .static_method_visibilities
+        .get(method_name)
+        .unwrap_or(&Visibility::Public);
+    let mut flags =
+        EVAL_REFLECTION_METHOD_FLAG_STATIC | eval_reflection_method_visibility_flags(visibility);
+    if class_info.final_static_methods.contains(method_name) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_FINAL;
+    }
+    if !class_info.static_method_impl_classes.contains_key(method_name) {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
+    }
+    flags
+}
+
+/// Converts method visibility metadata into eval ReflectionMethod flag bits.
+fn eval_reflection_method_visibility_flags(visibility: &Visibility) -> u64 {
+    match visibility {
+        Visibility::Public => EVAL_REFLECTION_METHOD_FLAG_PUBLIC,
+        Visibility::Protected => EVAL_REFLECTION_METHOD_FLAG_PROTECTED,
+        Visibility::Private => EVAL_REFLECTION_METHOD_FLAG_PRIVATE,
     }
 }
 

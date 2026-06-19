@@ -6625,6 +6625,56 @@ try {
     );
 }
 
+/// Verifies eval can probe generated/AOT method predicate metadata through
+/// `ReflectionClass::hasMethod()`, `getMethod()`, and direct `ReflectionMethod`.
+#[test]
+fn test_eval_reflection_method_for_aot_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectMethodBase {
+    protected static function baseStatic() {}
+    final public function locked() {}
+}
+class EvalAotReflectMethodChild extends EvalAotReflectMethodBase {
+    public function run() {}
+    private function hidden() {}
+}
+eval('$class = new ReflectionClass("EvalAotReflectMethodChild");
+echo $class->hasMethod("RUN") ? "R" : "r";
+echo $class->hasMethod("BASESTATIC") ? "B" : "b";
+echo $class->hasMethod("missing") ? "M" : "m";
+$run = $class->getMethod("RUN");
+echo ":" . $run->getName();
+echo $run->isPublic() ? "U" : "u";
+echo $run->isStatic() ? "S" : "s";
+echo $run->getDeclaringClass()->getName();
+$base = $class->getMethod("baseStatic");
+echo ":" . ($base->isStatic() ? "S" : "s");
+echo $base->isProtected() ? "P" : "p";
+$locked = new ReflectionMethod("EvalAotReflectMethodBase", "LOCKED");
+echo ":" . $locked->getName();
+echo $locked->isFinal() ? "F" : "f";
+echo $locked->isPublic() ? "U" : "u";
+echo $locked->getDeclaringClass()->getName();
+try {
+    $class->getMethod("missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "RBm:runUsEvalAotReflectMethodChild:SP:lockedFUEvalAotReflectMethodBase:Method EvalAotReflectMethodChild::missing() does not exist"
+    );
+}
+
 /// Verifies eval ReflectionMethod constructor/destructor predicates through the bridge.
 #[test]
 fn test_eval_reflection_method_reports_constructor_and_destructor() {
