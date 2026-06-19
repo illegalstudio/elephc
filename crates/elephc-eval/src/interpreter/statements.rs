@@ -1610,10 +1610,19 @@ pub(in crate::interpreter) fn eval_property_get_result(
     };
     let object_class_name = class.name().to_string();
     let mut storage_property_name = property_name.to_string();
+    let mut declared_property_found = false;
     if let Some((declaring_class, property)) =
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
-        validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+        declared_property_found = true;
+        if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
+            if let Some(result) =
+                eval_magic_property_get(object, &object_class_name, property_name, context, values)?
+            {
+                return Ok(result);
+            }
+            return Err(EvalStatus::RuntimeFatal);
+        }
         storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if property.has_get_hook()
             && !current_eval_property_hook_is(
@@ -1640,6 +1649,18 @@ pub(in crate::interpreter) fn eval_property_get_result(
             );
         }
     }
+    if !declared_property_found
+        && eval_object_public_property_exists(object, property_name, values)?
+    {
+        return values.property_get(object, property_name);
+    }
+    if !declared_property_found {
+        if let Some(result) =
+            eval_magic_property_get(object, &object_class_name, property_name, context, values)?
+        {
+            return Ok(result);
+        }
+    }
     values.property_get(object, &storage_property_name)
 }
 
@@ -1662,10 +1683,24 @@ pub(in crate::interpreter) fn eval_property_set_result(
         return Err(EvalStatus::RuntimeFatal);
     }
     let mut storage_property_name = property_name.to_string();
+    let mut declared_property_found = false;
     if let Some((declaring_class, property)) =
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
-        validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+        declared_property_found = true;
+        if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
+            if eval_magic_property_set(
+                object,
+                &object_class_name,
+                property_name,
+                value,
+                context,
+                values,
+            )? {
+                return Ok(());
+            }
+            return Err(EvalStatus::RuntimeFatal);
+        }
         validate_eval_readonly_property_write(&declaring_class, &property, context)?;
         storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if property.has_set_hook() {
@@ -1701,7 +1736,95 @@ pub(in crate::interpreter) fn eval_property_set_result(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
+    if !declared_property_found
+        && eval_magic_property_set(
+            object,
+            &object_class_name,
+            property_name,
+            value,
+            context,
+            values,
+        )?
+    {
+        return Ok(());
+    }
     values.property_set(object, &storage_property_name, value)
+}
+
+/// Dispatches an undefined or inaccessible eval property read through `__get()`.
+fn eval_magic_property_get(
+    object: RuntimeCellHandle,
+    object_class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some((declaring_class, method)) = context.class_method(object_class_name, "__get") else {
+        return Ok(None);
+    };
+    if method.is_static() || method.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
+    let property = values.string(property_name)?;
+    eval_dynamic_method_with_values(
+        &declaring_class,
+        object_class_name,
+        &method,
+        object,
+        positional_args(vec![property]),
+        context,
+        values,
+    )
+    .map(Some)
+}
+
+/// Dispatches an undefined or inaccessible eval property write through `__set()`.
+fn eval_magic_property_set(
+    object: RuntimeCellHandle,
+    object_class_name: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some((declaring_class, method)) = context.class_method(object_class_name, "__set") else {
+        return Ok(false);
+    };
+    if method.is_static() || method.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
+    let property = values.string(property_name)?;
+    let result = eval_dynamic_method_with_values(
+        &declaring_class,
+        object_class_name,
+        &method,
+        object,
+        positional_args(vec![property, value]),
+        context,
+        values,
+    )?;
+    values.release(result)?;
+    Ok(true)
+}
+
+/// Returns whether the object already has a public dynamic property with this exact name.
+fn eval_object_public_property_exists(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let property_count = values.object_property_len(object)?;
+    for position in 0..property_count {
+        let key = values.object_property_iter_key(object, position)?;
+        let key_bytes = values.string_bytes(key);
+        values.release(key)?;
+        if key_bytes? == property_name.as_bytes() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Validates that an object property may be used as a by-reference method argument.

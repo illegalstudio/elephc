@@ -369,6 +369,101 @@ return $name->value;"#,
     assert_eq!(values.get(result), FakeValue::String("Ada!".to_string()));
 }
 
+/// Verifies undefined eval property reads and writes dispatch through `__get` and `__set`.
+#[test]
+fn execute_program_dispatches_eval_magic_get_and_set() {
+    let program = parse_fragment(
+        br#"class EvalMagicPropertyBox {
+    public string $events = "";
+    public function __get($name) {
+        $this->events = $this->events . "get:" . $name . ";";
+        return "value:" . $name;
+    }
+    public function __set($name, $value) {
+        $this->events = $this->events . "set:" . $name . "=" . $value . ";";
+    }
+}
+$box = new EvalMagicPropertyBox();
+echo $box->missing; echo ":";
+$box->other = "B";
+$box->events = $box->events . "public;";
+return $box->events;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "value:missing:");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("get:missing;set:other=B;public;".to_string())
+    );
+}
+
+/// Verifies inaccessible eval properties dispatch through magic property methods.
+#[test]
+fn execute_program_dispatches_inaccessible_eval_properties_to_magic_methods() {
+    let program = parse_fragment(
+        br#"class EvalMagicPrivatePropertyBox {
+    private string $secret = "raw";
+    public string $events = "";
+    public function readOwn() { return $this->secret; }
+    public function __get($name) {
+        $this->events = $this->events . "get:" . $name . ";";
+        return "read:" . $name;
+    }
+    public function __set($name, $value) {
+        $this->events = $this->events . "set:" . $name . "=" . $value . ";";
+    }
+}
+$box = new EvalMagicPrivatePropertyBox();
+echo $box->readOwn(); echo ":";
+echo $box->secret; echo ":";
+$box->secret = "new";
+return $box->events;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "raw:read:secret:");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("get:secret;set:secret=new;".to_string())
+    );
+}
+
+/// Verifies dynamic properties created without `__set` are read directly even when `__get` exists.
+#[test]
+fn execute_program_reads_existing_dynamic_property_before_magic_get() {
+    let program = parse_fragment(
+        br#"class EvalMagicExistingDynamicBox {
+    public function __get($name) {
+        return "magic:" . $name;
+    }
+}
+$box = new EvalMagicExistingDynamicBox();
+$box->known = "plain";
+echo $box->known; echo ":";
+return $box->missing;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "plain:");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("magic:missing".to_string())
+    );
+}
+
 /// Verifies get-only property hooks reject writes outside a set accessor.
 #[test]
 fn execute_program_rejects_write_to_get_only_eval_property_hook() {

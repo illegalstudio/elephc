@@ -70,7 +70,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Expression area | Support |
 |---|---|
 | Scalars | `null`, booleans, integers, floats, and strings. |
-| Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, eval object property access, static property access, and class constant fetches through the bridge. |
+| Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, eval object property access including `__get()` / `__set()` fallback for missing or inaccessible eval properties, static property access, and class constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, and string-key reads/writes. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, invokable eval objects, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
 | Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking for supported public scalar/Mixed constructor signatures. |
@@ -145,8 +145,9 @@ properties, trait composition with `insteadof` conflict resolution and `as`
 aliases/visibility adaptations, interface implementation checks, static
 properties, static methods, static interface method contracts, class, interface,
 trait, and enum constants including `final` constants, class-level attributes,
-`ClassName::class` literals, and magic method fallback through `__call()` and
-`__callStatic()`. Member
+`ClassName::class` literals, magic method fallback through `__call()` and
+`__callStatic()`, and magic property fallback through `__get()` and `__set()`.
+Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,
 interfaces, traits, and enums are visible through `class_attribute_names()`,
@@ -485,7 +486,9 @@ constant-expression subset, by-reference promoted constructor parameters, and
 broader generated/AOT method bridge signatures beyond the current public
 non-by-reference fixed scalar/Mixed slice. Eval object cloning currently covers
 eval-declared and `stdClass` objects; cloning emitted AOT objects through the
-eval bridge is still outside that bridge slice.
+eval bridge is still outside that bridge slice. Magic property `__isset()` and
+`__unset()` dispatch still require the eval parser to accept property operands
+for those language constructs.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

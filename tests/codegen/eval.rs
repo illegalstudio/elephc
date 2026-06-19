@@ -5196,6 +5196,68 @@ $box->answer = 7;');
     );
 }
 
+/// Verifies eval-declared magic property methods handle missing and inaccessible properties.
+#[test]
+fn test_eval_declared_magic_property_methods() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalMagicPropertyBox {
+    private string $secret = "raw";
+    public string $events = "";
+    public function readOwn() { return $this->secret; }
+    public function __get($name) {
+        $this->events = $this->events . "get:" . $name . ";";
+        return "read:" . $name;
+    }
+    public function __set($name, $value) {
+        $this->events = $this->events . "set:" . $name . "=" . $value . ";";
+    }
+}
+$box = new EvalMagicPropertyBox();
+echo $box->readOwn() . ":";
+echo $box->secret . ":";
+echo $box->missing . ":";
+$box->secret = "new";
+$box->other = "B";
+$box->events = $box->events . "public;";
+echo $box->events;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "raw:read:secret:read:missing:get:secret;get:missing;set:secret=new;set:other=B;public;"
+    );
+}
+
+/// Verifies eval reads existing dynamic properties before falling back to `__get`.
+#[test]
+fn test_eval_declared_magic_get_preserves_existing_dynamic_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalMagicExistingDynamicBox {
+    public function __get($name) {
+        return "magic:" . $name;
+    }
+}
+$box = new EvalMagicExistingDynamicBox();
+$box->known = "plain";
+echo $box->known . ":";
+echo $box->missing;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "plain:magic:missing");
+}
+
 /// Verifies eval-declared interface property hook contracts validate class properties.
 #[test]
 fn test_eval_declared_interface_property_hook_contracts() {
