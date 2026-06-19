@@ -182,6 +182,34 @@ impl FakeOps {
             (FakeValue::Object(properties), "hasproperty") if args.len() == 1 => {
                 self.object_string_array_contains(&properties, "__property_names", args[0], false)
             }
+            (FakeValue::Object(properties), "implementsinterface") if args.len() == 1 => {
+                let direct = self.object_string_array_contains(
+                    &properties,
+                    "__interface_names",
+                    args[0],
+                    true,
+                )?;
+                if matches!(self.get(direct), FakeValue::Bool(true)) {
+                    return Ok(direct);
+                }
+                let Some(is_interface) = Self::object_property(&properties, "__is_interface")
+                else {
+                    return Ok(direct);
+                };
+                if !matches!(self.get(is_interface), FakeValue::Bool(true)) {
+                    return Ok(direct);
+                }
+                let Some(reflected_name) = Self::object_property(&properties, "__name") else {
+                    return Ok(direct);
+                };
+                let FakeValue::String(reflected_name) = self.get(reflected_name) else {
+                    return Ok(direct);
+                };
+                let FakeValue::String(interface_name) = self.get(args[0]) else {
+                    return Ok(direct);
+                };
+                self.bool_value(reflected_name.eq_ignore_ascii_case(&interface_name))
+            }
             (FakeValue::Object(properties), "getinterfacenames") if args.is_empty() => {
                 Self::object_property(&properties, "__interface_names")
                     .map_or_else(|| self.runtime_array_new(0), Ok)

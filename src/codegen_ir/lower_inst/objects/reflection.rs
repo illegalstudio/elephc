@@ -1395,9 +1395,6 @@ fn emit_reflection_string_array_property_by_name(
     property_name: &str,
     names: &[String],
 ) -> Result<()> {
-    if names.is_empty() {
-        return Ok(());
-    }
     let class_info = ctx
         .module
         .class_infos
@@ -1433,9 +1430,6 @@ fn emit_reflection_member_array_property_by_name(
     member_class_name: &str,
     members: &[ReflectionListedMember],
 ) -> Result<()> {
-    if members.is_empty() {
-        return Ok(());
-    }
     let class_info = ctx
         .module
         .class_infos
@@ -1765,11 +1759,11 @@ fn emit_append_reflection_member_object(ctx: &mut FunctionContext<'_>) {
 fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", names.len() as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "x0", names.len().max(1) as i64);
             abi::emit_load_int_immediate(ctx.emitter, "x1", 16);
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rdi", names.len() as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", names.len().max(1) as i64);
             abi::emit_load_int_immediate(ctx.emitter, "rsi", 16);
         }
     }

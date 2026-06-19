@@ -16,7 +16,8 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::names::Name;
 use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
+    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr,
+    Visibility,
 };
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
@@ -191,6 +192,14 @@ fn empty_array() -> Option<Expr> {
 fn false_bool() -> Option<Expr> {
     Some(Expr::new(
         ExprKind::BoolLiteral(false),
+        crate::span::Span::dummy(),
+    ))
+}
+
+/// Returns a `BoolLiteral(true)` expression.
+fn true_bool() -> Option<Expr> {
+    Some(Expr::new(
+        ExprKind::BoolLiteral(true),
         crate::span::Span::dummy(),
     ))
 }
@@ -557,6 +566,7 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_int_method("getModifiers", "__modifiers"),
             builtin_reflection_class_has_name_method("hasMethod", "__method_names", true),
             builtin_reflection_class_has_name_method("hasProperty", "__property_names", false),
+            builtin_reflection_class_implements_interface_method(),
             builtin_reflection_class_array_method(
                 "getMethods",
                 "__methods",
@@ -710,6 +720,108 @@ fn builtin_reflection_class_has_name_method(
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// Returns `ReflectionClass::implementsInterface()` backed by interface-name metadata.
+fn builtin_reflection_class_implements_interface_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let interface_var = Expr::new(ExprKind::Variable("interface".to_string()), dummy_span);
+    let candidate_var = Expr::new(ExprKind::Variable("interfaceName".to_string()), dummy_span);
+    let lowered_interface = strtolower_call(interface_var.clone(), dummy_span);
+    let lowered_candidate = strtolower_call(candidate_var, dummy_span);
+    let candidate_matches = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(lowered_candidate),
+            op: BinOp::Eq,
+            right: Box::new(lowered_interface.clone()),
+        },
+        dummy_span,
+    );
+    let reflected_name_matches = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(strtolower_call(
+                reflection_this_property("__name", dummy_span),
+                dummy_span,
+            )),
+            op: BinOp::Eq,
+            right: Box::new(lowered_interface),
+        },
+        dummy_span,
+    );
+    let interface_self_matches = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(reflection_this_property("__is_interface", dummy_span)),
+            op: BinOp::And,
+            right: Box::new(reflected_name_matches),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "implementsInterface".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("interface".to_string(), Some(TypeExpr::Str), None, false)],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property("__interface_names", dummy_span),
+                    key_var: None,
+                    value_var: "interfaceName".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: candidate_matches,
+                            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: interface_self_matches,
+                    then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(false_bool()), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `$this->{$property}` for synthetic ReflectionClass method bodies.
+fn reflection_this_property(property: &str, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(ExprKind::This, span)),
+            property: property.to_string(),
+        },
+        span,
+    )
+}
+
+/// Builds a `strtolower()` call around an expression for case-insensitive class names.
+fn strtolower_call(expr: Expr, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("strtolower"),
+            args: vec![expr],
+        },
+        span,
+    )
 }
 
 /// Returns a public `ReflectionClass` array method backed by one private slot.
@@ -1164,6 +1276,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "isinstantiable",
                     "hasmethod",
                     "hasproperty",
+                    "implementsinterface",
                 ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;

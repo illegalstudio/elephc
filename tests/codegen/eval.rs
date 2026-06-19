@@ -5769,6 +5769,33 @@ echo count($parentInterfaces) . ":" . $parentInterfaces[0];');
     );
 }
 
+/// Verifies eval ReflectionClass::implementsInterface reports class, enum, and
+/// interface metadata through the bridge.
+#[test]
+fn test_eval_reflection_class_implements_interface_predicate() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalImplBase {}
+interface EvalImplChild extends EvalImplBase {}
+class EvalImplTarget implements EvalImplChild {}
+enum EvalImplEnum implements EvalImplBase { case Ready; }
+trait EvalImplTrait {}
+echo (new ReflectionClass("EvalImplTarget"))->implementsInterface("EvalImplChild") ? "C" : "c";
+echo (new ReflectionClass("EvalImplTarget"))->implementsInterface("evalimplbase") ? "B" : "b";
+echo (new ReflectionClass("EvalImplEnum"))->implementsInterface("EvalImplBase") ? "E" : "e";
+echo (new ReflectionClass("EvalImplChild"))->implementsInterface("EvalImplChild") ? "I" : "i";
+echo (new ReflectionClass("EvalImplChild"))->implementsInterface("EvalImplBase") ? "P" : "p";
+echo (new ReflectionClass("EvalImplTrait"))->implementsInterface("EvalImplBase") ? "T" : "t";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "CBEIPt");
+}
+
 /// Verifies eval ReflectionClass::getParentClass crosses the generated runtime bridge.
 #[test]
 fn test_eval_reflection_class_get_parent_class() {

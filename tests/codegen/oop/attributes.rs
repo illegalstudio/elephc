@@ -1159,6 +1159,33 @@ echo count($parentInterfaces) . ":" . $parentInterfaces[0];
     );
 }
 
+/// Verifies that `ReflectionClass::implementsInterface()` reports class, enum,
+/// and interface metadata using case-insensitive interface names.
+#[test]
+fn test_reflection_class_implements_interface() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface StaticImplBase {}
+interface StaticImplChild extends StaticImplBase {}
+class StaticImplTarget implements StaticImplChild {}
+enum StaticImplEnum implements StaticImplBase { case Ready; }
+trait StaticImplTrait {}
+echo (new ReflectionClass(StaticImplTarget::class))->implementsInterface(StaticImplChild::class) ? "C" : "c";
+echo (new ReflectionClass(StaticImplTarget::class))->implementsInterface("staticimplbase") ? "B" : "b";
+echo (new ReflectionClass(StaticImplEnum::class))->implementsInterface(StaticImplBase::class) ? "E" : "e";
+echo (new ReflectionClass(StaticImplChild::class))->implementsInterface(StaticImplChild::class) ? "I" : "i";
+echo (new ReflectionClass(StaticImplChild::class))->implementsInterface(StaticImplBase::class) ? "P" : "p";
+echo (new ReflectionClass(StaticImplTrait::class))->implementsInterface(StaticImplBase::class) ? "T" : "t";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "CBEIPt");
+}
+
 /// Verifies that `ReflectionClass::getParentClass()` returns a ReflectionClass
 /// object for subclasses and `false` for parentless classes.
 #[test]

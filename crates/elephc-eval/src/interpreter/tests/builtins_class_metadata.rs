@@ -258,6 +258,34 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::implementsInterface reports eval class, enum, and
+/// interface metadata using case-insensitive interface names.
+#[test]
+fn execute_program_reflects_eval_class_implements_interface_predicate() {
+    let program = parse_fragment(
+        br#"interface EvalImplBase {}
+interface EvalImplChild extends EvalImplBase {}
+class EvalImplTarget implements EvalImplChild {}
+enum EvalImplEnum implements EvalImplBase { case Ready; }
+trait EvalImplTrait {}
+echo (new ReflectionClass("EvalImplTarget"))->implementsInterface("EvalImplChild") ? "C" : "c";
+echo (new ReflectionClass("EvalImplTarget"))->implementsInterface("evalimplbase") ? "B" : "b";
+echo (new ReflectionClass("EvalImplEnum"))->implementsInterface("EvalImplBase") ? "E" : "e";
+echo (new ReflectionClass("EvalImplChild"))->implementsInterface("EvalImplChild") ? "I" : "i";
+echo (new ReflectionClass("EvalImplChild"))->implementsInterface("EvalImplBase") ? "P" : "p";
+echo (new ReflectionClass("EvalImplTrait"))->implementsInterface("EvalImplBase") ? "T" : "t";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "CBEIPt");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes eval class-like final and abstract flags.
 #[test]
 fn execute_program_reflects_eval_class_modifier_flags() {
