@@ -568,6 +568,53 @@ echo $box;"#,
     execute_program(&program, &mut scope, &mut values).expect_err("missing __toString should fail");
 }
 
+/// Verifies eval rejects magic methods whose staticness, visibility, or arity is invalid.
+#[test]
+fn execute_program_rejects_invalid_eval_magic_method_contracts() {
+    let cases: Vec<(&[u8], &str)> = vec![
+        (
+            br#"class EvalBadToString { private function __toString() { return "x"; } }"#.as_slice(),
+            "private __toString",
+        ),
+        (
+            br#"class EvalBadGet { protected function __get($name) { return "x"; } }"#.as_slice(),
+            "protected __get",
+        ),
+        (
+            br#"class EvalBadCall { public function __call($name, ...$args) { return "x"; } }"#.as_slice(),
+            "variadic __call",
+        ),
+        (
+            br#"class EvalBadCallStatic { public function __callStatic($name, $args) { return "x"; } }"#.as_slice(),
+            "instance __callStatic",
+        ),
+        (
+            br#"class EvalBadInvoke { private function __invoke() { return 1; } }"#.as_slice(),
+            "private __invoke",
+        ),
+        (
+            br#"class EvalBadClone { public static function __clone() {} }"#.as_slice(),
+            "static __clone",
+        ),
+        (
+            br#"class EvalBadDestruct { public static function __destruct() {} }"#.as_slice(),
+            "static __destruct",
+        ),
+        (
+            br#"trait EvalBadMagicTrait { public static function __isset($name) { return true; } }"#.as_slice(),
+            "trait static __isset",
+        ),
+    ];
+
+    for (source, label) in cases {
+        let program = parse_fragment(source).expect(label);
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        execute_program(&program, &mut scope, &mut values).expect_err(label);
+    }
+}
+
 /// Verifies get-only property hooks reject writes outside a set accessor.
 #[test]
 fn execute_program_rejects_write_to_get_only_eval_property_hook() {
