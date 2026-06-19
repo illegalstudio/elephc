@@ -5032,6 +5032,36 @@ echo $box->readProtected(2);');
     assert_eq!(out.stdout, "7:7");
 }
 
+/// Verifies eval-declared private parent properties keep separate storage when a child shadows them.
+#[test]
+fn test_eval_declared_private_parent_property_shadowing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalShadowGrand {
+    private $value = 1;
+    public function grandValue() { return $this->value; }
+}
+class EvalShadowParent extends EvalShadowGrand {
+    public $value = 2;
+    public function parentValue() { return $this->value; }
+}
+class EvalShadowChild extends EvalShadowParent {
+    public $value = 3;
+}
+$box = new EvalShadowChild();
+echo $box->grandValue() . ":";
+echo $box->parentValue() . ":";
+echo $box->value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "1:3:3");
+}
+
 /// Verifies eval-declared readonly properties can be initialized only in constructors.
 #[test]
 fn test_eval_declared_readonly_property_rules() {

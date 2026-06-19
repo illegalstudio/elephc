@@ -165,6 +165,13 @@ pub struct ClassInfo {
     /// use their `property_visibilities` entry for writes too.
     pub property_set_visibilities: HashMap<String, Visibility>,
     pub declared_properties: HashSet<String>,
+    /// Per-layout-slot typed-declaration flags for instance properties.
+    ///
+    /// The name-keyed `declared_properties` map describes the property currently
+    /// visible by name in this class. This vector follows `properties` by index
+    /// so hidden private parent slots keep their typed-property initialization
+    /// metadata when a child declares a same-named property.
+    pub property_declared_slots: Vec<bool>,
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
     pub reference_properties: HashSet<String>,
@@ -175,6 +182,12 @@ pub struct ClassInfo {
     /// caller). The object allocates a cell per such property at construction and releases
     /// it on destruction.
     pub owned_reference_properties: HashSet<String>,
+    /// Per-layout-slot by-reference flags for instance properties.
+    ///
+    /// The name-keyed `reference_properties` map describes the currently
+    /// visible property by name. Runtime GC descriptors need the original slot
+    /// flag even when a private parent slot is shadowed by a child property.
+    pub property_reference_slots: Vec<bool>,
     pub abstract_properties: HashSet<String>,
     pub abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub static_properties: Vec<(String, PhpType)>,
@@ -207,6 +220,69 @@ pub struct ClassInfo {
     pub interfaces: Vec<String>,
     /// Maps constructor param index -> property name (for type propagation from new ClassName(args))
     pub constructor_param_to_prop: Vec<Option<String>>,
+}
+
+impl ClassInfo {
+    /// Resolves the layout index of the property visible by name on this class.
+    ///
+    /// The result follows `property_offsets` when present so private parent
+    /// slots shadowed by child declarations do not win merely because they occur
+    /// earlier in the physical object layout.
+    pub fn visible_property_index(&self, property: &str) -> Option<usize> {
+        self.property_offsets
+            .get(property)
+            .and_then(|offset| property_index_from_offset(*offset, self.properties.len()))
+            .or_else(|| {
+                self.properties
+                    .iter()
+                    .rposition(|(name, _)| name == property)
+            })
+    }
+
+    /// Returns the property tuple visible by name on this class.
+    pub fn visible_property(&self, property: &str) -> Option<(usize, &(String, PhpType))> {
+        let index = self.visible_property_index(property)?;
+        self.properties.get(index).map(|entry| (index, entry))
+    }
+
+    /// Returns whether one physical property slot has a declared PHP type.
+    pub fn property_slot_is_declared(&self, index: usize, property: &str) -> bool {
+        self.property_declared_slots
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| self.declared_properties.contains(property))
+    }
+
+    /// Returns whether the property visible by name has a declared PHP type.
+    pub fn visible_property_is_declared(&self, property: &str) -> bool {
+        self.visible_property(property)
+            .is_some_and(|(index, (name, _))| self.property_slot_is_declared(index, name))
+    }
+
+    /// Returns whether one physical property slot stores a by-reference cell.
+    pub fn property_slot_is_reference(&self, index: usize, property: &str) -> bool {
+        self.property_reference_slots
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| self.reference_properties.contains(property))
+    }
+
+    /// Returns whether the property visible by name stores a by-reference cell.
+    pub fn visible_property_is_reference(&self, property: &str) -> bool {
+        self.visible_property(property)
+            .is_some_and(|(index, (name, _))| self.property_slot_is_reference(index, name))
+    }
+}
+
+/// Converts a property offset into a `properties` vector index when it points
+/// at a normal object-property slot.
+fn property_index_from_offset(offset: usize, property_count: usize) -> Option<usize> {
+    let payload_offset = offset.checked_sub(8)?;
+    if payload_offset % 16 != 0 {
+        return None;
+    }
+    let index = payload_offset / 16;
+    (index < property_count).then_some(index)
 }
 
 /// Enum case value, either an integer or a string (PHP 8.1+ backed enums).

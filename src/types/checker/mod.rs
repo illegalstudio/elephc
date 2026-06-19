@@ -314,6 +314,11 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
             }
             info.reference_properties.insert(prop.clone());
             info.owned_reference_properties.insert(prop.clone());
+            if let Some(slot) = info.visible_property_index(&prop) {
+                if let Some(slot_reference) = info.property_reference_slots.get_mut(slot) {
+                    *slot_reference = true;
+                }
+            }
         }
     }
 }

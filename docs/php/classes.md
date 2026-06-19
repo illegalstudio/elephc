@@ -313,6 +313,12 @@ A child class may redeclare a property inherited from a non-private parent. The 
 - `final` parent properties cannot be redeclared.
 - The child shares the parent's slot, so reads of the property from inherited methods see the child's value.
 
+Private parent properties are different: they are not overridden. A child may
+declare a same-named property, and elephc keeps a separate storage slot for each
+declaring class. Methods declared on the parent keep reading/writing the private
+parent slot, while child methods and external public access use the child
+property.
+
 ```php
 <?php
 class Base {
@@ -1223,6 +1229,5 @@ Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfa
 ## Limitations
 - `readonly static` properties are rejected to match PHP. Static properties in a `readonly class` are still mutable.
 - Backed property hooks may read and write their own backing slot.
-- Shadowing a private parent property with a same-named child property is not yet supported (PHP gives them separate slots; elephc uses one slot per name)
 - Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
 - Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` APIs. Function and parameter signatures are exposed through `ReflectionFunction` and `ReflectionParameter` (including `getType()` for supported named types); method parameter names, counts, positions, optional/variadic/by-reference flags, and declared-type presence are exposed through the supported `ReflectionMethod`/`ReflectionParameter` APIs. Per-parameter attribute reflection is not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).

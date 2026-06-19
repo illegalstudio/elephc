@@ -668,6 +668,74 @@ return $box->read(2);"#,
 
     assert_eq!(values.get(result), FakeValue::Int(7));
 }
+
+/// Verifies eval child properties shadow private parent properties with a separate storage slot.
+#[test]
+fn execute_program_shadows_private_eval_parent_property_with_separate_slot() {
+    let program = parse_fragment(
+        br#"class EvalPrivateShadowBase {
+    private $value = 1;
+
+    public function parentValue() {
+        return $this->value;
+    }
+}
+class EvalPrivateShadowChild extends EvalPrivateShadowBase {
+    public $value = "child";
+
+    public function childValue() {
+        return $this->value;
+    }
+}
+$box = new EvalPrivateShadowChild();
+echo $box->parentValue(); echo ":";
+echo $box->childValue(); echo ":";
+echo $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:child:child");
+}
+
+/// Verifies eval later redeclarations update the visible slot while preserving a private grandparent slot.
+#[test]
+fn execute_program_keeps_eval_private_grandparent_slot_after_later_redeclaration() {
+    let program = parse_fragment(
+        br#"class EvalPrivateGrandBase {
+    private $value = 1;
+
+    public function grandValue() {
+        return $this->value;
+    }
+}
+class EvalPrivateGrandParent extends EvalPrivateGrandBase {
+    public $value = 2;
+
+    public function parentValue() {
+        return $this->value;
+    }
+}
+class EvalPrivateGrandChild extends EvalPrivateGrandParent {
+    public $value = 3;
+}
+$box = new EvalPrivateGrandChild();
+echo $box->grandValue(); echo ":";
+echo $box->parentValue(); echo ":";
+echo $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:3:3");
+}
+
 /// Verifies eval rejects private member access from global scope.
 #[test]
 fn execute_program_rejects_private_eval_member_access_from_global_scope() {

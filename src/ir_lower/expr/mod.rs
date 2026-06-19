@@ -9059,7 +9059,8 @@ fn property_get_result_type(
             property_ty
         };
     }
-    let Some((_, property_ty)) = class_info.properties.iter().find(|(name, _)| name == property) else {
+    let Some((_, (_, property_ty))) = class_info.visible_property(property)
+    else {
         if let Some(magic_ty) = magic_get_result_type(ctx, normalized) {
             return if nullable {
                 nullable_result_type(magic_ty)

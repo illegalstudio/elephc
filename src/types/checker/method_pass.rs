@@ -190,10 +190,10 @@ impl Checker {
                     continue;
                 }
                 if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
-                    if ci.declared_properties.contains(prop_name) {
+                    if ci.visible_property_is_declared(prop_name) {
                         continue;
                     }
-                    if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == prop_name) {
+                    if let Some((_, (_, ty))) = ci.visible_property(prop_name) {
                         method_env.insert(pname.clone(), ty.clone());
                         if let Some(ci_mut) = self.classes.get_mut(&class.name) {
                             if let Some(sig) = ci_mut.methods.get_mut("__construct") {

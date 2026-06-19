@@ -712,16 +712,6 @@ fn test_error_property_redeclaration_adds_type_to_untyped_parent() {
     );
 }
 
-/// Verifies the error diagnostic for property redeclaration shadows private parent property.
-#[test]
-fn test_error_property_redeclaration_shadows_private_parent_property() {
-    // private parent properties cannot be shadowed by a child; the feature is not yet supported.
-    expect_error(
-        "<?php class Base { private int $secret = 1; } class Child extends Base { public int $secret = 2; }",
-        "shadowing private parent properties is not yet supported",
-    );
-}
-
 /// Verifies the error diagnostic for property redeclaration changes by ref qualifier.
 #[test]
 fn test_error_property_redeclaration_changes_by_ref_qualifier() {

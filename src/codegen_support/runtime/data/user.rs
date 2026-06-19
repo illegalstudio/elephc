@@ -659,6 +659,11 @@ pub(crate) fn emit_runtime_data_user(
             .properties
             .iter()
             .enumerate()
+            .filter(|(prop_index, (name, _))| {
+                class_info
+                    .visible_property_index(name)
+                    .is_some_and(|visible_index| visible_index == *prop_index)
+            })
             .filter(|(_, (name, _))| {
                 class_info
                     .property_visibilities
@@ -698,7 +703,7 @@ pub(crate) fn emit_runtime_data_user(
         }
         out.push_str(&format!("    .quad {}\n", public_props.len()));
         for (prop_index, (prop_name, prop_ty)) in &public_props {
-            let tag = if class_info.reference_properties.contains(prop_name) {
+            let tag = if class_info.property_slot_is_reference(*prop_index, prop_name) {
                 0
             } else {
                 match prop_ty {
@@ -742,7 +747,7 @@ pub(crate) fn emit_runtime_data_user(
                     out.push_str(", ");
                 }
                 let prop_name = &class_info.properties[i].0;
-                let tag = if class_info.reference_properties.contains(prop_name) {
+                let tag = if class_info.property_slot_is_reference(i, prop_name) {
                     0
                 } else {
                     match prop_ty {
@@ -1405,10 +1410,12 @@ mod tests {
             property_visibilities: HashMap::new(),
             property_set_visibilities: HashMap::new(),
             declared_properties: HashSet::new(),
+            property_declared_slots: Vec::new(),
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
             owned_reference_properties: HashSet::new(),
+            property_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),
