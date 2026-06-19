@@ -2448,6 +2448,50 @@ echo ":" . $limit . $ifaceOpen;
     assert_eq!(out, "TraitConstTarget:F:Fo:InterfaceConstTarget:I:Ip");
 }
 
+/// Verifies interface constant reflection keeps the interface that declared each constant.
+#[test]
+fn test_reflection_interface_constant_declaring_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+interface InterfaceConstBase {
+    public const ROOT = 1;
+    public const SHARED = 2;
+    final public const LOCK = 5;
+}
+interface InterfaceConstChild extends InterfaceConstBase {
+    public const SHARED = 3;
+}
+class InterfaceConstImpl implements InterfaceConstChild {}
+$root = new ReflectionClassConstant(InterfaceConstChild::class, "ROOT");
+$shared = new ReflectionClassConstant(InterfaceConstChild::class, "SHARED");
+$implRoot = new ReflectionClassConstant(InterfaceConstImpl::class, "ROOT");
+$implShared = new ReflectionClassConstant(InterfaceConstImpl::class, "SHARED");
+$implLock = new ReflectionClassConstant(InterfaceConstImpl::class, "LOCK");
+echo $root->getDeclaringClass()->getName() . ":";
+echo $shared->getDeclaringClass()->getName() . ":";
+echo $implRoot->getDeclaringClass()->getName() . ":";
+echo $implShared->getDeclaringClass()->getName() . ":";
+echo $implLock->getDeclaringClass()->getName() . ":";
+echo $implLock->isFinal() ? "F" : "f";
+$all = (new ReflectionClass(InterfaceConstImpl::class))->getConstants();
+echo ":" . $all["ROOT"] . ":" . $all["SHARED"] . ":" . $all["LOCK"];
+$decls = ["ROOT" => "?", "SHARED" => "?", "LOCK" => "?"];
+$finals = ["ROOT" => "?", "SHARED" => "?", "LOCK" => "?"];
+foreach ((new ReflectionClass(InterfaceConstImpl::class))->getReflectionConstants() as $constant) {
+    $name = $constant->getName();
+    $decls[$name] = $constant->getDeclaringClass()->getName();
+    $finals[$name] = $constant->isFinal() ? "F" : "f";
+}
+echo ":" . $decls["ROOT"] . ":" . $decls["SHARED"] . ":" . $decls["LOCK"];
+echo ":" . $finals["ROOT"] . ":" . $finals["SHARED"] . ":" . $finals["LOCK"];
+"#,
+    );
+    assert_eq!(
+        out,
+        "InterfaceConstBase:InterfaceConstChild:InterfaceConstBase:InterfaceConstChild:InterfaceConstBase:F:1:3:5:InterfaceConstBase:InterfaceConstChild:InterfaceConstBase:f:f:F"
+    );
+}
+
 /// Verifies that `ReflectionClass` accepts `user::class` (lowercase class
 /// constant) for case-insensitive class resolution and `getAttributes()`
 /// returns the correct attribute data.

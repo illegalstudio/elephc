@@ -999,16 +999,20 @@ fn reflection_class_constant_lookup(
             is_final: info.final_constants.contains(constant_name),
         });
     }
-    if let Some(interface_name) = resolve_reflection_interface(ctx, class_name) {
-        if let Some(info) = ctx.module.interface_infos.get(interface_name) {
-            if info.constants.contains_key(constant_name) {
-                return Some(ReflectionClassConstantMetadata {
-                    declaring_class_name: interface_name.to_string(),
-                    attr_names: Vec::new(),
-                    attr_args: Vec::new(),
-                    is_final: info.final_constants.contains(constant_name),
-                });
+    if let Some((_, class_info)) = resolve_reflection_class(ctx, class_name) {
+        for interface_name in &class_info.interfaces {
+            if let Some(metadata) =
+                reflection_interface_class_constant_lookup(ctx, interface_name, constant_name)
+            {
+                return Some(metadata);
             }
+        }
+    }
+    if let Some(interface_name) = resolve_reflection_interface(ctx, class_name) {
+        if let Some(metadata) =
+            reflection_interface_class_constant_lookup(ctx, interface_name, constant_name)
+        {
+            return Some(metadata);
         }
     }
     if let Some(trait_name) = resolve_reflection_trait(ctx, class_name) {
@@ -1032,6 +1036,44 @@ fn reflection_class_constant_lookup(
         }
     }
     None
+}
+
+/// Resolves interface constant metadata with the original declaring interface preserved.
+fn reflection_interface_class_constant_lookup(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+    constant_name: &str,
+) -> Option<ReflectionClassConstantMetadata> {
+    let interface_name = resolve_reflection_interface(ctx, interface_name)?;
+    let info = ctx.module.interface_infos.get(interface_name)?;
+    if !info.constants.contains_key(constant_name) {
+        return None;
+    }
+    let declaring_interface =
+        interface_constant_declaring_interface(info, interface_name, constant_name);
+    let is_final = ctx
+        .module
+        .interface_infos
+        .get(declaring_interface)
+        .is_some_and(|info| info.final_constants.contains(constant_name));
+    Some(ReflectionClassConstantMetadata {
+        declaring_class_name: declaring_interface.to_string(),
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        is_final,
+    })
+}
+
+/// Returns the interface that originally declared a visible interface constant.
+fn interface_constant_declaring_interface<'a>(
+    info: &'a InterfaceInfo,
+    fallback_interface: &'a str,
+    constant_name: &str,
+) -> &'a str {
+    info.constant_declaring_interfaces
+        .get(constant_name)
+        .map(String::as_str)
+        .unwrap_or(fallback_interface)
 }
 
 /// Looks up class metadata by PHP-style case-insensitive name.
@@ -1275,7 +1317,7 @@ fn reflection_interface_constant_members(
     Ok(members)
 }
 
-/// Recursively appends interface constants, preserving inherited-interface precedence.
+/// Appends flattened interface constants while preserving their declaring interface.
 fn collect_interface_constant_members(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
@@ -1285,14 +1327,13 @@ fn collect_interface_constant_members(
     let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
         return Ok(());
     };
-    for parent in &interface_info.parents {
-        collect_interface_constant_members(ctx, parent, members, seen)?;
-    }
     for (constant_name, value_expr) in &interface_info.constants {
         if seen.contains(constant_name) {
             continue;
         }
-        let value = reflection_constant_value(ctx, interface_name, None, value_expr, 0)?;
+        let declaring_interface =
+            interface_constant_declaring_interface(interface_info, interface_name, constant_name);
+        let value = reflection_constant_value(ctx, declaring_interface, None, value_expr, 0)?;
         push_unique_constant_member(constant_name, value, members, seen);
     }
     Ok(())
@@ -1390,7 +1431,7 @@ fn reflection_interface_constant_reflection_members(
     members
 }
 
-/// Recursively appends interface constant-reflector objects.
+/// Appends flattened interface constant-reflector objects with declaring-interface metadata.
 fn collect_interface_constant_reflection_members(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
@@ -1400,16 +1441,20 @@ fn collect_interface_constant_reflection_members(
     let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
         return;
     };
-    for parent in &interface_info.parents {
-        collect_interface_constant_reflection_members(ctx, parent, members, seen);
-    }
     for constant_name in interface_info.constants.keys() {
+        let declaring_interface =
+            interface_constant_declaring_interface(interface_info, interface_name, constant_name);
+        let is_final = ctx
+            .module
+            .interface_infos
+            .get(declaring_interface)
+            .is_some_and(|info| info.final_constants.contains(constant_name));
         push_unique_constant_reflection_member(
             constant_name,
-            interface_name,
+            declaring_interface,
             Vec::new(),
             Vec::new(),
-            interface_info.final_constants.contains(constant_name),
+            is_final,
             members,
             seen,
         );

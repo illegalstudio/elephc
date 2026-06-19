@@ -328,10 +328,18 @@ impl Checker {
         interface_name: &str,
         constant_name: &str,
     ) -> Option<(Vec<String>, ReflectionAttributeArgs)> {
-        self.interfaces
-            .get(interface_name)
-            .filter(|info| info.constants.contains_key(constant_name))
-            .map(|_| (Vec::new(), Vec::new()))
+        if let Some(info) = self.interfaces.get(interface_name) {
+            if info.constants.contains_key(constant_name) {
+                return Some((Vec::new(), Vec::new()));
+            }
+        }
+        let class_info = self.classes.get(interface_name)?;
+        class_info.interfaces.iter().find_map(|implemented| {
+            self.interfaces
+                .get(implemented)
+                .filter(|info| info.constants.contains_key(constant_name))
+                .map(|_| (Vec::new(), Vec::new()))
+        })
     }
 
     /// Returns empty attribute metadata when a trait constant exists.
