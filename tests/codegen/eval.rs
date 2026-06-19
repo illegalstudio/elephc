@@ -7146,6 +7146,56 @@ echo array_key_exists("typed", $defaults) ? "T" : "t";');
     assert_eq!(out.stdout, "7:bs:5:9:1:p:I:N:t");
 }
 
+/// Verifies eval ReflectionProperty value APIs use current runtime object values.
+#[test]
+fn test_eval_reflection_property_gets_and_sets_values() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectValueBase {
+    private $secret = "base";
+    public static $count = 1;
+}
+class EvalReflectValueChild extends EvalReflectValueBase {
+    protected $name = "Ada";
+}
+class EvalReflectValueHook {
+    public $raw = 2;
+    public $doubled {
+        get => $this->raw * 2;
+        set { $this->raw = $value + 1; }
+    }
+}
+$child = new EvalReflectValueChild();
+$secret = new ReflectionProperty("EvalReflectValueBase", "secret");
+echo $secret->getValue($child) . ":";
+$secret->setValue($child, "changed");
+echo $secret->getValue(object: $child) . ":";
+$name = new ReflectionProperty("EvalReflectValueChild", "name");
+echo $name->getValue($child) . ":";
+$name->setValue(objectOrValue: $child, value: "Grace");
+echo $name->getValue($child) . ":";
+$count = new ReflectionProperty("EvalReflectValueBase", "count");
+echo $count->getValue() . ":";
+$count->setValue(5);
+echo EvalReflectValueChild::$count . ":";
+$count->setValue(null, 6);
+echo $count->getValue($child) . ":";
+$hook = new EvalReflectValueHook();
+$doubled = new ReflectionProperty("EvalReflectValueHook", "doubled");
+echo $doubled->getValue($hook) . ":";
+$doubled->setValue($hook, 4);
+echo $hook->raw . ":";
+echo $doubled->getValue($hook);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "base:changed:Ada:Grace:1:5:6:4:5:10");
+}
+
 /// Verifies eval ReflectionClass static-property APIs use current runtime values.
 #[test]
 fn test_eval_reflection_class_static_property_values() {

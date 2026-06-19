@@ -1711,7 +1711,7 @@ pub(in crate::interpreter) fn validate_property_ref_target(
 }
 
 /// Returns true while executing the named hook accessor for one property.
-fn current_eval_property_hook_is(
+pub(in crate::interpreter) fn current_eval_property_hook_is(
     declaring_class: &str,
     property_name: &str,
     hook_method: &str,
@@ -1735,12 +1735,12 @@ fn current_eval_property_hook_is(
 }
 
 /// Returns the synthetic get-hook method name for one property.
-fn property_hook_get_method(property_name: &str) -> String {
+pub(in crate::interpreter) fn property_hook_get_method(property_name: &str) -> String {
     format!("__propget_{property_name}")
 }
 
 /// Returns the synthetic set-hook method name for one property.
-fn property_hook_set_method(property_name: &str) -> String {
+pub(in crate::interpreter) fn property_hook_set_method(property_name: &str) -> String {
     format!("__propset_{property_name}")
 }
 
@@ -1796,7 +1796,7 @@ fn eval_dynamic_property_for_access(
 }
 
 /// Returns the physical storage name for an eval object property slot.
-fn eval_instance_property_storage_name(
+pub(in crate::interpreter) fn eval_instance_property_storage_name(
     declaring_class: &str,
     property: &EvalClassProperty,
 ) -> String {
@@ -2421,6 +2421,24 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return Ok(result);
     }
     if let Some(result) = eval_reflection_class_set_static_property_value_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_property_get_value_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_property_set_value_result(
         identity,
         method_name,
         evaluated_args.clone(),

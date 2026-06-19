@@ -587,6 +587,101 @@ pub(in crate::interpreter) fn eval_reflection_class_set_static_property_value_re
     values.null().map(Some)
 }
 
+/// Handles eval-backed `ReflectionProperty::getValue()` calls.
+pub(in crate::interpreter) fn eval_reflection_property_get_value_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getValue") {
+        return Ok(None);
+    }
+    let Some((declaring_class, property_name)) =
+        context
+            .eval_reflection_property(identity)
+            .map(|(declaring_class, property_name)| {
+                (declaring_class.to_string(), property_name.to_string())
+            })
+    else {
+        return Ok(None);
+    };
+    let object = eval_reflection_property_get_value_arg(evaluated_args)?;
+    let Some(member) = eval_reflection_property_metadata(&declaring_class, &property_name, context)
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if member.is_static {
+        return eval_reflection_static_property_value(
+            &declaring_class,
+            &property_name,
+            context,
+            values,
+        )?
+        .map(Some)
+        .ok_or(EvalStatus::RuntimeFatal);
+    }
+    let object = object.ok_or(EvalStatus::RuntimeFatal)?;
+    eval_reflection_instance_property_get_value(
+        &declaring_class,
+        &property_name,
+        object,
+        context,
+        values,
+    )
+    .map(Some)
+}
+
+/// Handles eval-backed `ReflectionProperty::setValue()` calls.
+pub(in crate::interpreter) fn eval_reflection_property_set_value_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("setValue") {
+        return Ok(None);
+    }
+    let Some((declaring_class, property_name)) =
+        context
+            .eval_reflection_property(identity)
+            .map(|(declaring_class, property_name)| {
+                (declaring_class.to_string(), property_name.to_string())
+            })
+    else {
+        return Ok(None);
+    };
+    let Some(member) = eval_reflection_property_metadata(&declaring_class, &property_name, context)
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let (object_or_value, value) = eval_reflection_property_set_value_args(evaluated_args)?;
+    if member.is_static {
+        let value = value.unwrap_or(object_or_value);
+        let declaring_class = member
+            .declaring_class_name
+            .as_deref()
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        if let Some(replaced) = context.set_static_property(declaring_class, &property_name, value)
+        {
+            values.release(replaced)?;
+        }
+        return values.null().map(Some);
+    }
+    let value = value.ok_or(EvalStatus::RuntimeFatal)?;
+    eval_reflection_instance_property_set_value(
+        &declaring_class,
+        &property_name,
+        object_or_value,
+        value,
+        context,
+        values,
+    )?;
+    values.null().map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::getReflectionConstant()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constant_result(
     identity: u64,
@@ -1414,6 +1509,17 @@ fn eval_reflection_owner_object_with_members(
     if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
         let identity = values.object_identity(object)?;
         context.register_eval_reflection_class(identity, reflected_name);
+    } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+        if let Some(declaring_class) = parent_class_name {
+            if context.has_class(declaring_class) {
+                let identity = values.object_identity(object)?;
+                context.register_eval_reflection_property(
+                    identity,
+                    declaring_class,
+                    reflected_name,
+                );
+            }
+        }
     }
     values.release(attrs)?;
     values.release(interface_names_array)?;
@@ -2936,6 +3042,198 @@ fn eval_reflection_static_property_value_args(
     }
     let property_name = bound_args[0].ok_or(EvalStatus::RuntimeFatal)?;
     Ok((property_name, bound_args[1]))
+}
+
+/// Binds the optional `ReflectionProperty::getValue()` object argument.
+fn eval_reflection_property_get_value_arg(
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let params = [String::from("object")];
+    let mut bound_arg = None;
+    for arg in evaluated_args {
+        if let Some(name) = arg.name {
+            if params.iter().all(|param| param != &name) || bound_arg.is_some() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            bound_arg = Some(arg.value);
+        } else if bound_arg.is_none() {
+            bound_arg = Some(arg.value);
+        } else {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(bound_arg)
+}
+
+/// Binds `ReflectionProperty::setValue()` arguments while allowing PHP's static shorthand.
+fn eval_reflection_property_set_value_args(
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Result<(RuntimeCellHandle, Option<RuntimeCellHandle>), EvalStatus> {
+    let params = [String::from("objectOrValue"), String::from("value")];
+    let mut bound_args = [None, None];
+    let mut next_positional = 0;
+    for arg in evaluated_args {
+        if let Some(name) = arg.name {
+            let Some(position) = params.iter().position(|param| param == &name) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            if bound_args[position].is_some() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            bound_args[position] = Some(arg.value);
+        } else {
+            while next_positional < bound_args.len() && bound_args[next_positional].is_some() {
+                next_positional += 1;
+            }
+            if next_positional >= bound_args.len() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            bound_args[next_positional] = Some(arg.value);
+            next_positional += 1;
+        }
+    }
+    let object_or_value = bound_args[0].ok_or(EvalStatus::RuntimeFatal)?;
+    Ok((object_or_value, bound_args[1]))
+}
+
+/// Reads one eval instance property through ReflectionProperty semantics.
+fn eval_reflection_instance_property_get_value(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (object_class_name, property) = eval_reflection_instance_property_target(
+        declaring_class,
+        property_name,
+        object,
+        context,
+        values,
+    )?;
+    if property.has_get_hook()
+        && !current_eval_property_hook_is(
+            declaring_class,
+            property.name(),
+            &property_hook_get_method(property.name()),
+            context,
+        )
+    {
+        let (hook_class, hook_method) = context
+            .class_method(
+                &object_class_name,
+                &property_hook_get_method(property.name()),
+            )
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        return eval_dynamic_method_with_values(
+            &hook_class,
+            &object_class_name,
+            &hook_method,
+            object,
+            Vec::new(),
+            context,
+            values,
+        );
+    }
+    let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
+    values.property_get(object, &storage_property_name)
+}
+
+/// Writes one eval instance property through ReflectionProperty semantics.
+fn eval_reflection_instance_property_set_value(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let (object_class_name, property) = eval_reflection_instance_property_target(
+        declaring_class,
+        property_name,
+        object,
+        context,
+        values,
+    )?;
+    validate_eval_reflection_property_write(declaring_class, &property, context)?;
+    if property.has_set_hook() {
+        if !current_eval_property_hook_is(
+            declaring_class,
+            property.name(),
+            &property_hook_set_method(property.name()),
+            context,
+        ) {
+            let (hook_class, hook_method) = context
+                .class_method(
+                    &object_class_name,
+                    &property_hook_set_method(property.name()),
+                )
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            let hook_result = eval_dynamic_method_with_values(
+                &hook_class,
+                &object_class_name,
+                &hook_method,
+                object,
+                vec![EvaluatedCallArg {
+                    name: None,
+                    value,
+                    ref_target: None,
+                }],
+                context,
+                values,
+            )?;
+            values.release(hook_result)?;
+            return Ok(());
+        }
+    } else if property.has_get_hook() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
+    values.property_set(object, &storage_property_name, value)
+}
+
+/// Resolves and validates the object/property pair targeted by ReflectionProperty.
+fn eval_reflection_instance_property_target(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(String, EvalClassProperty), EvalStatus> {
+    let identity = values.object_identity(object)?;
+    let object_class_name = context
+        .dynamic_object_class(identity)
+        .map(|class| class.name().to_string())
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    if !context.class_is_a(&object_class_name, declaring_class, false) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let (_, property) = context
+        .class_own_property(declaring_class, property_name)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    if property.is_static() || property.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok((object_class_name, property))
+}
+
+/// Rejects writes to eval properties ReflectionProperty is not allowed to mutate.
+fn validate_eval_reflection_property_write(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    if !property.is_readonly() {
+        return Ok(());
+    }
+    current_eval_property_hook_is(
+        declaring_class,
+        property.name(),
+        &property_hook_set_method(property.name()),
+        context,
+    )
+    .then_some(())
+    .ok_or(EvalStatus::RuntimeFatal)
 }
 
 /// Throws PHP's `ReflectionException` for invalid static-property writes.

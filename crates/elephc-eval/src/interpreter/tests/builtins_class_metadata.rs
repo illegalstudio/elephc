@@ -1384,6 +1384,57 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionProperty can read and write eval instance and static property values.
+#[test]
+fn execute_program_reflection_property_gets_and_sets_eval_values() {
+    let program = parse_fragment(
+        br#"class EvalReflectValueBase {
+    private $secret = "base";
+    public static $count = 1;
+}
+class EvalReflectValueChild extends EvalReflectValueBase {
+    protected $name = "Ada";
+}
+class EvalReflectValueHook {
+    public $raw = 2;
+    public $doubled {
+        get => $this->raw * 2;
+        set { $this->raw = $value + 1; }
+    }
+}
+$child = new EvalReflectValueChild();
+$secret = new ReflectionProperty("EvalReflectValueBase", "secret");
+echo $secret->getValue($child); echo ":";
+$secret->setValue($child, "changed");
+echo $secret->getValue(object: $child); echo ":";
+$name = new ReflectionProperty("EvalReflectValueChild", "name");
+echo $name->getValue($child); echo ":";
+$name->setValue(objectOrValue: $child, value: "Grace");
+echo $name->getValue($child); echo ":";
+$count = new ReflectionProperty("EvalReflectValueBase", "count");
+echo $count->getValue(); echo ":";
+$count->setValue(5);
+echo EvalReflectValueChild::$count; echo ":";
+$count->setValue(null, 6);
+echo $count->getValue($child); echo ":";
+$hook = new EvalReflectValueHook();
+$doubled = new ReflectionProperty("EvalReflectValueHook", "doubled");
+echo $doubled->getValue($hook); echo ":";
+$doubled->setValue($hook, 4);
+echo $hook->raw; echo ":";
+echo $doubled->getValue($hook);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "base:changed:Ada:Grace:1:5:6:4:5:10");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes and mutates eval static property values.
 #[test]
 fn execute_program_reflection_class_static_property_values() {
