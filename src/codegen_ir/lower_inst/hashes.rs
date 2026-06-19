@@ -17,7 +17,7 @@ use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+use super::{expect_local_slot, expect_operand, load_value_to_first_int_arg, store_if_result};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 /// Lowers associative-array allocation through the shared runtime constructor.
@@ -100,6 +100,182 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     ctx.store_result_value(hash)?;
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, hash)?;
+    }
+    Ok(())
+}
+
+/// Returns the REFCELL inner value tag for a scalar source/value, rejecting unsupported shapes.
+///
+/// M2 only supports plain scalar (int/bool) reference sources; richer payloads (strings, floats,
+/// arrays, objects) are gated in the type checker and lowered in a later milestone.
+fn scalar_refcell_tag(ty: &PhpType, role: &str) -> Result<i64> {
+    match ty {
+        PhpType::Int | PhpType::Bool => Ok(crate::codegen::runtime_value_tag(ty) as i64),
+        other => Err(CodegenIrError::unsupported(format!(
+            "reference assignment into an array element with a {:?} {} is not yet supported",
+            other, role
+        ))),
+    }
+}
+
+/// Lowers `$hash[$key] =& $source` for an associative-array target with a scalar local source.
+///
+/// Promotes the source local into a shared boxed REFCELL (heap kind 6), retains the cell for the
+/// new hash-slot owner, and stores it into the entry with per-entry `value_tag` 11. The hash table
+/// pointer (possibly reallocated by growth) is written back to the target local exactly like
+/// `lower_hash_set`.
+pub(super) fn lower_ref_assign_element(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let source_slot = expect_local_slot(inst)?;
+    let hash_ty = ctx.value_php_type(hash)?;
+    require_hash(hash_ty.clone(), inst)?;
+    let source_local = source_load_local_slot(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_ref_assign_element_aarch64(ctx, hash, key, source_slot)?,
+        Arch::X86_64 => lower_ref_assign_element_x86_64(ctx, hash, key, source_slot)?,
+    }
+    ctx.store_result_value(hash)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, hash)?;
+    }
+    Ok(())
+}
+
+/// AArch64 body of `lower_ref_assign_element`.
+fn lower_ref_assign_element_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    source_slot: LocalSlotId,
+) -> Result<()> {
+    promote_source_to_boxed_refcell_aarch64(ctx, source_slot)?;
+    abi::emit_push_reg(ctx.emitter, "x0");                                      // save the new reference cell pointer across key materialization
+    materialize_hash_key_aarch64(ctx, key)?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                          // preserve the materialized key across the table load
+    ctx.load_value_to_reg(hash, "x0")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                           // restore key_lo and key_hi
+    abi::emit_pop_reg(ctx.emitter, "x3");                                      // x3 = value_lo = the reference cell pointer (the hash becomes its sole owner)
+    ctx.emitter.instruction("mov x4, xzr");                                     // x4 = value_hi = 0 for a reference entry
+    abi::emit_load_int_immediate(ctx.emitter, "x5", 11);                      // x5 = per-entry value_tag 11 = reference
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");                       // store (tag 11, cell) into the entry; x0 = table
+    Ok(())
+}
+
+/// x86_64 body of `lower_ref_assign_element`.
+fn lower_ref_assign_element_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    source_slot: LocalSlotId,
+) -> Result<()> {
+    promote_source_to_boxed_refcell_x86_64(ctx, source_slot)?;
+    abi::emit_push_reg(ctx.emitter, "rax");                                     // save the new reference cell pointer across key materialization
+    materialize_hash_key_x86_64(ctx, key)?;
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");                        // preserve the materialized key across the table load
+    ctx.load_value_to_reg(hash, "rdi")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");                         // restore key_lo and key_hi
+    abi::emit_pop_reg(ctx.emitter, "rcx");                                     // rcx = value_lo = the reference cell pointer (the hash becomes its sole owner)
+    ctx.emitter.instruction("xor r8d, r8d");                                    // r8 = value_hi = 0 for a reference entry
+    abi::emit_load_int_immediate(ctx.emitter, "r9", 11);                      // r9 = per-entry value_tag 11 = reference
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");                       // store (tag 11, cell) into the entry; rax = table
+    Ok(())
+}
+
+/// Promotes a scalar source local into a boxed REFCELL on AArch64, leaving the cell pointer in x0.
+///
+/// Reads the local's current scalar value, allocates a reference cell holding it, writes the cell
+/// pointer back into the local slot, and marks the slot as a boxed reference alias so subsequent
+/// loads/stores of the variable dereference through `__rt_refcell_load`/`__rt_refcell_store`.
+fn promote_source_to_boxed_refcell_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let ty = ctx.local_php_type(slot)?.codegen_repr();
+    let tag = scalar_refcell_tag(&ty, "source")?;
+    let offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, "x1", offset);                            // x1 = value_lo = the current scalar value of the source local
+    abi::emit_load_int_immediate(ctx.emitter, "x0", tag);                     // x0 = inner value tag for refcell_alloc
+    ctx.emitter.instruction("mov x2, xzr");                                     // x2 = value_hi = 0 for a scalar payload
+    abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");                  // x0 = new reference cell (refcount 1)
+    abi::store_at_offset_scratch(ctx.emitter, "x0", offset, "x9");            // overwrite the source slot with the cell pointer
+    ctx.mark_boxed_refcell_slot(slot);
+    Ok(())
+}
+
+/// Promotes a scalar source local into a boxed REFCELL on x86_64, leaving the cell pointer in rax.
+fn promote_source_to_boxed_refcell_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let ty = ctx.local_php_type(slot)?.codegen_repr();
+    let tag = scalar_refcell_tag(&ty, "source")?;
+    let offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, "rdi", offset);                          // rdi = value_lo = the current scalar value of the source local
+    abi::emit_load_int_immediate(ctx.emitter, "rax", tag);                    // rax = inner value tag for refcell_alloc
+    ctx.emitter.instruction("xor esi, esi");                                    // rsi = value_hi = 0 for a scalar payload
+    abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");                  // rax = new reference cell (refcount 1)
+    abi::store_at_offset_scratch(ctx.emitter, "rax", offset, "r10");          // overwrite the source slot with the cell pointer
+    ctx.mark_boxed_refcell_slot(slot);
+    Ok(())
+}
+
+/// Loads a scalar value through a boxed REFCELL alias slot (the `Op::LoadRefCell` boxed path).
+pub(super) fn lower_load_boxed_refcell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;
+    let result_ty = ctx.value_php_type(result)?.codegen_repr();
+    scalar_refcell_tag(&result_ty, "loaded value")?;
+    let offset = ctx.local_offset(slot)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x0", offset);                    // x0 = the boxed reference cell pointer
+            abi::emit_call_label(ctx.emitter, "__rt_refcell_load");           // dereference: x0=tag, x1=lo, x2=hi
+            ctx.emitter.instruction("mov x0, x1");                              // the scalar result is the referenced value_lo
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "rax", offset);                   // rax = the boxed reference cell pointer
+            abi::emit_call_label(ctx.emitter, "__rt_refcell_load");           // dereference: rax=tag, rdi=lo, rdx=hi
+            ctx.emitter.instruction("mov rax, rdi");                            // the scalar result is the referenced value_lo
+        }
+    }
+    ctx.store_result_value(result)
+}
+
+/// Stores a scalar value through a boxed REFCELL alias slot (the `Op::StoreRefCell` boxed path).
+pub(super) fn lower_store_boxed_refcell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let value = expect_operand(inst, 0)?;
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let tag = scalar_refcell_tag(&value_ty, "stored value")?;
+    let offset = ctx.local_offset(slot)?;
+    ctx.load_value_to_result(value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x2, x0");                              // x2 = value_lo = the new scalar value
+            abi::emit_load_int_immediate(ctx.emitter, "x1", tag);             // x1 = the new value tag
+            ctx.emitter.instruction("mov x3, xzr");                             // x3 = value_hi = 0 for a scalar payload
+            abi::load_at_offset(ctx.emitter, "x0", offset);                    // x0 = the boxed reference cell pointer
+            abi::emit_call_label(ctx.emitter, "__rt_refcell_store");          // write the new value through the shared cell
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdx, rax");                            // rdx = value_lo = the new scalar value
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", tag);            // rsi = the new value tag
+            ctx.emitter.instruction("xor ecx, ecx");                            // rcx = value_hi = 0 for a scalar payload
+            abi::load_at_offset(ctx.emitter, "rdi", offset);                   // rdi = the boxed reference cell pointer
+            abi::emit_call_label(ctx.emitter, "__rt_refcell_store");          // write the new value through the shared cell
+        }
     }
     Ok(())
 }
@@ -950,12 +1126,20 @@ fn emit_hash_get_success_x86_64(
 
 /// Materializes a successful AArch64 Mixed hash lookup as a boxed Mixed result.
 fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
+    let ref_label = ctx.next_label("hash_get_ref");
     let box_label = ctx.next_label("hash_get_mixed_box");
     let done_label = ctx.next_label("hash_get_mixed_done");
+    ctx.emitter.instruction("cmp x3, #11");                                     // does the entry hold a shared reference cell?
+    ctx.emitter.instruction(&format!("b.eq {}", ref_label));                    // dereference reference cells before boxing the result
     ctx.emitter.instruction("cmp x3, #7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("b.ne {}", box_label));                    // box concrete per-entry payloads before returning them as Mixed
     ctx.emitter.instruction("mov x0, x1");                                      // return the boxed Mixed pointer stored in the hash entry
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip on-demand boxing for already boxed entries
+    ctx.emitter.label(&ref_label);
+    ctx.emitter.instruction("mov x0, x1");                                      // x0 = the referenced cell pointer stored in the entry
+    abi::emit_call_label(ctx.emitter, "__rt_refcell_load");                     // dereference the cell: x0=tag, x1=lo, x2=hi
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                 // box the dereferenced value (registers already in ABI order)
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // the dereferenced value is now a boxed Mixed result
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov x0, x3");                                      // pass the concrete entry tag to the Mixed boxing helper
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
@@ -964,12 +1148,21 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
 
 /// Materializes a successful x86_64 Mixed hash lookup as a boxed Mixed result.
 fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>) {
+    let ref_label = ctx.next_label("hash_get_ref");
     let box_label = ctx.next_label("hash_get_mixed_box");
     let done_label = ctx.next_label("hash_get_mixed_done");
+    ctx.emitter.instruction("cmp rcx, 11");                                     // does the entry hold a shared reference cell?
+    ctx.emitter.instruction(&format!("je {}", ref_label));                      // dereference reference cells before boxing the result
     ctx.emitter.instruction("cmp rcx, 7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("jne {}", box_label));                     // box concrete per-entry payloads before returning them as Mixed
     ctx.emitter.instruction("mov rax, rdi");                                    // return the boxed Mixed pointer stored in the hash entry
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip on-demand boxing for already boxed entries
+    ctx.emitter.label(&ref_label);
+    ctx.emitter.instruction("mov rax, rdi");                                    // rax = the referenced cell pointer stored in the entry
+    abi::emit_call_label(ctx.emitter, "__rt_refcell_load");                     // dereference the cell: rax=tag, rdi=lo, rdx=hi
+    ctx.emitter.instruction("mov rsi, rdx");                                    // mixed_from_value expects value_hi in rsi, not rdx
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                 // box the dereferenced value as a Mixed result
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // the dereferenced value is now a boxed Mixed result
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the concrete entry tag to the Mixed boxing helper
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");

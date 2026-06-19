@@ -244,3 +244,50 @@ pub(super) fn check_array_push(
     }
     Ok(())
 }
+
+/// Type-checks `$arr[$key] =& $source` (reference assignment into an array element).
+///
+/// M2 scope: only an associative-array element whose value type is already `Mixed`, with a scalar
+/// (`int`/`bool`) local source. Any other shape — indexed arrays, non-`Mixed` value types, property
+/// targets, or non-scalar/undefined sources — returns the same "not yet supported" diagnostic the
+/// M0 gate produced, so unimplemented forms fail cleanly instead of miscompiling.
+pub(super) fn check_ref_assign_target(
+    checker: &mut Checker,
+    target: &Expr,
+    source: &str,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let unsupported = || {
+        CompileError::new(
+            span,
+            "Reference assignment into an array element or object property is not yet supported",
+        )
+    };
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return Err(unsupported());
+    };
+    let ExprKind::Variable(array_name) = &array.kind else {
+        return Err(unsupported());
+    };
+    let source_ty = env
+        .get(source)
+        .cloned()
+        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", source)))?;
+    if !matches!(source_ty, PhpType::Int | PhpType::Bool) {
+        return Err(unsupported());
+    }
+    let array_ty = env
+        .get(array_name)
+        .cloned()
+        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array_name)))?;
+    let is_mixed_assoc = matches!(
+        &array_ty,
+        PhpType::AssocArray { value, .. } if matches!(value.as_ref(), PhpType::Mixed)
+    );
+    if !is_mixed_assoc {
+        return Err(unsupported());
+    }
+    checker.infer_type_with_assignment_effects(index, env)?;
+    Ok(())
+}

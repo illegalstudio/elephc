@@ -81,6 +81,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
+        Op::RefAssignElement => hashes::lower_ref_assign_element(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
@@ -5437,6 +5438,9 @@ fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
 /// Lowers an explicit local ref-cell load into the result register and SSA slot.
 fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
+    if ctx.is_boxed_refcell_slot(slot) {
+        return hashes::lower_load_boxed_refcell(ctx, inst);
+    }
     let result = inst.result.ok_or_else(|| {
         CodegenIrError::invalid_module("load_ref_cell missing result value")
     })?;
@@ -5624,6 +5628,9 @@ fn instruction_for_value<'a>(
 /// Lowers an explicit local ref-cell store through the pointer held in the slot.
 fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
+    if ctx.is_boxed_refcell_slot(slot) {
+        return hashes::lower_store_boxed_refcell(ctx, inst);
+    }
     let value = expect_operand(inst, 0)?;
     store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type)
 }

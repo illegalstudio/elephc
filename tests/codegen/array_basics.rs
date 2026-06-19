@@ -1039,3 +1039,26 @@ fn test_long_array_interops_with_short_form() {
     );
     assert_eq!(out, "4:1:4");
 }
+
+// --- References into array elements (#80, M2) ---
+
+/// Smallest end-to-end reference-into-array-element case: `$a['x'] =& $v` aliases a scalar local
+/// into a Mixed associative-array element, so a later write to the source local is observed through
+/// the element. The element and the source share one reference cell. Matches `php -r` output `5`.
+#[test]
+fn test_reference_into_assoc_element_shares_source_writes() {
+    let out = compile_and_run(
+        "<?php $a = ['k' => 's', 'n' => 1]; $v = 1; $a['x'] =& $v; $v = 5; echo $a['x'];",
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies the aliased source local and the shared element stay in sync: after `$a['x'] =& $v`,
+/// reading either `$a['x']` or `$v` reflects the latest write through the shared reference cell.
+#[test]
+fn test_reference_into_assoc_element_source_and_element_in_sync() {
+    let out = compile_and_run(
+        "<?php $a = ['k' => 's', 'n' => 1]; $v = 10; $a['x'] =& $v; $v = 7; echo $a['x'], '|', $v;",
+    );
+    assert_eq!(out, "7|7");
+}

@@ -49,6 +49,9 @@ impl Checker {
             StmtKind::RefAssign { target, source } => {
                 locals::check_ref_assign(self, target, source, stmt.span, env)
             }
+            StmtKind::RefAssignTarget { target, source } => {
+                arrays::check_ref_assign_target(self, target, source, stmt.span, env)
+            }
             StmtKind::ArrayAssign {
                 array,
                 index,

@@ -37,12 +37,8 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
         StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),
         StmtKind::RefAssign { target, source } => lower_ref_assign(ctx, target, source, stmt.span),
-        // Gated in the type checker until the REFCELL runtime lands (M2+); never reached in M0.
-        StmtKind::RefAssignTarget { .. } => {
-            unreachable!(
-                "RefAssignTarget reached EIR lowering but the type checker should have rejected \
-                 reference-into-element assignment until the REFCELL runtime is implemented"
-            )
+        StmtKind::RefAssignTarget { target, source } => {
+            lower_ref_assign_target(ctx, target, source, stmt.span)
         }
         StmtKind::If {
             condition,
@@ -345,6 +341,39 @@ fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &st
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(target, sig);
     }
+}
+
+/// Lowers `$arr[$key] =& $source` for an associative-array element target with a scalar local
+/// source (M2 scope; richer targets/sources are gated in the type checker).
+///
+/// Emits a `RefAssignElement` instruction whose codegen promotes the source local into a shared
+/// boxed REFCELL, retains it for the new hash-slot owner, and stores it into the entry with
+/// per-entry value_tag 11. The source is then marked a by-reference alias so its subsequent reads
+/// and writes dereference through the cell.
+fn lower_ref_assign_target(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    source: &str,
+    span: Span,
+) {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return;
+    };
+    let ExprKind::Variable(array_name) = &array.kind else {
+        return;
+    };
+    let array_value = ctx.load_local(array_name, Some(span));
+    let index_value = lower_expr(ctx, index);
+    let source_ty = ctx.local_type(source);
+    let source_slot = ctx.declare_local(source, source_ty);
+    ctx.emit_void(
+        Op::RefAssignElement,
+        vec![array_value.value, index_value.value],
+        Some(Immediate::LocalSlot(source_slot)),
+        Op::RefAssignElement.default_effects(),
+        Some(span),
+    );
+    ctx.mark_ref_bound_local(source);
 }
 
 /// Lowers an `if` / `elseif` / `else` chain and terminates unreachable merge blocks explicitly.
