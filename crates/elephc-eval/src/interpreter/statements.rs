@@ -1987,7 +1987,7 @@ fn eval_dynamic_static_method_for_call(
 }
 
 /// Resolves `self`, `parent`, and `static` for eval static member access.
-fn resolve_eval_static_class_name(
+pub(in crate::interpreter) fn resolve_eval_static_class_name(
     class_name: &str,
     context: &ElephcEvalContext,
 ) -> Result<String, EvalStatus> {

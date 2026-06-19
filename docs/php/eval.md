@@ -185,12 +185,16 @@ eval-declared method parameters. Eval currently exposes parameter names and
 zero-based positions there, plus declared-type presence for method parameter
 type hints. Defaulted eval method parameters are bound when omitted and reported
 through `ReflectionParameter::isOptional()`. Supported default expressions
-include scalar literals, signed numeric literals, predefined or eval-defined
-constant fetches, namespaced constant fallback, class/interface/trait/enum
-constant fetches, and `self::class` / `parent::class` / named class-like
-`::class` literals. Late-bound `static::` defaults are rejected like PHP
-compile-time constants. Variadic eval method parameters bind extra positional
-and unknown named arguments into a PHP array and are reported through
+include scalar literals, arrays whose keys and values are supported default
+expressions, magic constants, unary and binary operators supported by eval,
+ternary and null-coalescing expressions, predefined or eval-defined constant
+fetches, namespaced constant fallback, class/interface/trait/enum constant
+fetches, `self::class` / `parent::class` / named class-like `::class` literals,
+and `new ClassName(...)` / `new self(...)` / `new parent(...)` with supported
+non-spread constructor arguments. Late-bound `static::` defaults and unpacked
+constructor arguments in defaults are rejected like PHP constant expressions.
+Variadic eval method parameters bind extra positional and unknown named
+arguments into a PHP array and are reported through
 `ReflectionParameter::isVariadic()` and
 `ReflectionParameter::isOptional()`. By-reference eval method parameters accept
 direct variable, array-element, and object-property arguments, write back fixed
@@ -361,9 +365,8 @@ broader parameter/return ABI shapes are still outside that bridge.
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Method/Parameter/Property/attribute slice, richer
-ReflectionParameter type metadata beyond presence flags, broader default-value
-expression support beyond the supported literal and constant-expression forms,
-and broader generated/AOT method bridge signatures beyond the current public
+ReflectionParameter type metadata beyond presence flags, and broader
+generated/AOT method bridge signatures beyond the current public
 non-by-reference fixed scalar/Mixed slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after

@@ -5346,13 +5346,21 @@ class EvalDefaultConstBase {
 interface EvalDefaultConstIface {
     const WORD = "iface";
 }
+class EvalDefaultConstDep {
+    public function __construct($label = "dep") {
+        $this->label = $label;
+    }
+    public function read() {
+        return $this->label;
+    }
+}
 class EvalDefaultConstBox extends EvalDefaultConstBase {
     const LABEL = "box";
     public function __construct($label = self::LABEL) {
         $this->label = $label;
     }
-    public function read($global = EVAL_METHOD_DEFAULT_GLOBAL, $parent = parent::LABEL, $iface = EvalDefaultConstIface::WORD, $class = self::class, $parentClass = parent::class) {
-        return $this->label . ":" . $global . ":" . $parent . ":" . $iface . ":" . $class . ":" . $parentClass;
+    public function read($global = EVAL_METHOD_DEFAULT_GLOBAL, $parent = parent::LABEL, $iface = EvalDefaultConstIface::WORD, $class = self::class, $parentClass = parent::class, $items = [self::LABEL => 1 + 2, "fallback" => null ?? "fallback"], $method = __METHOD__, $dep = new EvalDefaultConstDep(label: "dep"), $clone = new self("inner")) {
+        return $this->label . ":" . $global . ":" . $parent . ":" . $iface . ":" . $class . ":" . $parentClass . ":" . $items[self::LABEL] . ":" . $items["fallback"] . ":" . $method . ":" . $dep->read() . ":" . $clone->label;
     }
     public static function join($label = self::LABEL, $parent = parent::LABEL) {
         return $label . "-" . $parent;
@@ -5370,7 +5378,7 @@ echo EvalDefaultConstBox::join();');
     );
     assert_eq!(
         out.stdout,
-        "box:G:base:iface:EvalDefaultConstBox:EvalDefaultConstBase:box-base"
+        "box:G:base:iface:EvalDefaultConstBox:EvalDefaultConstBase:3:fallback:EvalDefaultConstBox::read:dep:inner:box-base"
     );
 }
 

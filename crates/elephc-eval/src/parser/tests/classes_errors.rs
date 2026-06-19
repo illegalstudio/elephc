@@ -623,7 +623,7 @@ fn parse_fragment_accepts_method_parameter_constant_defaults() {
     let program = parse_fragment(
         br#"class DynEvalDefaultConstants {
     const LABEL = "box";
-    public function read($global = DYN_EVAL_DEFAULT_GLOBAL, $label = self::LABEL, $parent = parent::LABEL, $class = self::class) {}
+    public function read($global = DYN_EVAL_DEFAULT_GLOBAL, $label = self::LABEL, $parent = parent::LABEL, $class = self::class, $items = [self::LABEL => 1 + 2, "fallback" => null ?? "x"], $method = __METHOD__, $dep = new DynEvalDefaultDep(label: "dep")) {}
 }"#,
     )
     .expect("fragment should parse");
@@ -640,13 +640,19 @@ fn parse_fragment_accepts_method_parameter_constant_defaults() {
             Some(EvalExpr::ConstFetch(global)),
             Some(EvalExpr::ClassConstantFetch { class_name: self_name, constant: self_constant }),
             Some(EvalExpr::ClassConstantFetch { class_name: parent_name, constant: parent_constant }),
-            Some(EvalExpr::ClassNameFetch { class_name })
+            Some(EvalExpr::ClassNameFetch { class_name }),
+            Some(EvalExpr::Array(_)),
+            Some(EvalExpr::Magic(EvalMagicConst::Method)),
+            Some(EvalExpr::NewObject { class_name: dep_name, args })
         ] if global == "DYN_EVAL_DEFAULT_GLOBAL"
             && self_name == "self"
             && self_constant == "LABEL"
             && parent_name == "parent"
             && parent_constant == "LABEL"
             && class_name == "self"
+            && dep_name == "DynEvalDefaultDep"
+            && args.len() == 1
+            && args[0].name() == Some("label")
     ));
 }
 
@@ -661,6 +667,14 @@ fn parse_fragment_rejects_late_bound_static_method_parameter_defaults() {
         b"class DynEvalStaticClassDefault { public function read($class = static::class) {} }",
     )
     .expect_err("static class-name defaults are not PHP compile-time constants");
+    parse_fragment(
+        b"class DynEvalStaticNewDefault { public function read($dep = new static()) {} }",
+    )
+    .expect_err("static object defaults are not PHP compile-time constants");
+    parse_fragment(
+        b"class DynEvalSpreadNewDefault { public function read($dep = new DynEvalDep(...[\"x\"])) {} }",
+    )
+    .expect_err("argument unpacking is not supported in PHP constant expressions");
 }
 
 /// Verifies eval rejects invalid variadic method parameter forms.

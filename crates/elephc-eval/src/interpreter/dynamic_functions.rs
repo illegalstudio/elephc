@@ -667,38 +667,74 @@ fn eval_method_parameter_default(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match default {
-        EvalExpr::Const(value) => eval_const(value, values),
-        EvalExpr::ConstFetch(name) => eval_const_fetch(name, context, values),
-        EvalExpr::NamespacedConstFetch {
-            name,
-            fallback_name,
-        } => eval_namespaced_const_fetch(name, fallback_name, context, values),
-        EvalExpr::ClassConstantFetch {
-            class_name,
-            constant,
-        } => eval_class_constant_fetch_result(class_name, constant, context, values),
-        EvalExpr::ClassNameFetch { class_name } => {
-            eval_class_name_fetch_result(class_name, context, values)
-        }
-        EvalExpr::Unary {
-            op: EvalUnaryOp::Plus,
-            expr,
-        } => match expr.as_ref() {
-            EvalExpr::Const(EvalConst::Int(value)) => values.int(*value),
-            EvalExpr::Const(EvalConst::Float(value)) => values.float(*value),
-            _ => Err(EvalStatus::UnsupportedConstruct),
-        },
-        EvalExpr::Unary {
-            op: EvalUnaryOp::Negate,
-            expr,
-        } => match expr.as_ref() {
-            EvalExpr::Const(EvalConst::Int(value)) => values.int(value.wrapping_neg()),
-            EvalExpr::Const(EvalConst::Float(value)) => values.float(-*value),
-            _ => Err(EvalStatus::UnsupportedConstruct),
-        },
-        _ => Err(EvalStatus::UnsupportedConstruct),
+    if !eval_method_default_expr_is_supported(default) {
+        return Err(EvalStatus::UnsupportedConstruct);
     }
+    let mut default_scope = ElephcEvalScope::new();
+    eval_expr(default, context, &mut default_scope, values)
+}
+
+/// Returns whether an EvalIR expression can be safely evaluated as a method default.
+fn eval_method_default_expr_is_supported(expr: &EvalExpr) -> bool {
+    match expr {
+        EvalExpr::Array(elements) => elements
+            .iter()
+            .all(eval_method_default_array_element_is_supported),
+        EvalExpr::Const(_) | EvalExpr::Magic(_) => true,
+        EvalExpr::ConstFetch(_) | EvalExpr::NamespacedConstFetch { .. } => true,
+        EvalExpr::ClassConstantFetch { class_name, .. }
+        | EvalExpr::ClassNameFetch { class_name } => {
+            eval_method_default_class_receiver_is_supported(class_name)
+        }
+        EvalExpr::NewObject { class_name, args } => {
+            eval_method_default_class_receiver_is_supported(class_name)
+                && args.iter().all(eval_method_default_call_arg_is_supported)
+        }
+        EvalExpr::NullCoalesce { value, default } => {
+            eval_method_default_expr_is_supported(value)
+                && eval_method_default_expr_is_supported(default)
+        }
+        EvalExpr::Ternary {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            eval_method_default_expr_is_supported(condition)
+                && then_branch
+                    .as_deref()
+                    .is_none_or(eval_method_default_expr_is_supported)
+                && eval_method_default_expr_is_supported(else_branch)
+        }
+        EvalExpr::Unary { expr, .. } => eval_method_default_expr_is_supported(expr),
+        EvalExpr::Binary { left, right, .. } => {
+            eval_method_default_expr_is_supported(left)
+                && eval_method_default_expr_is_supported(right)
+        }
+        _ => false,
+    }
+}
+
+/// Returns whether one object-construction argument is safe inside a method default.
+fn eval_method_default_call_arg_is_supported(arg: &EvalCallArg) -> bool {
+    !arg.is_spread() && eval_method_default_expr_is_supported(arg.value())
+}
+
+/// Returns whether one array default element contains only supported constant expressions.
+fn eval_method_default_array_element_is_supported(element: &EvalArrayElement) -> bool {
+    match element {
+        EvalArrayElement::Value(value) => eval_method_default_expr_is_supported(value),
+        EvalArrayElement::KeyValue { key, value } => {
+            eval_method_default_expr_is_supported(key)
+                && eval_method_default_expr_is_supported(value)
+        }
+    }
+}
+
+/// Returns whether a class-like receiver is legal in a compile-time method default.
+fn eval_method_default_class_receiver_is_supported(class_name: &str) -> bool {
+    !class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("static")
 }
 
 /// Binds one positional dynamic-call value to the next declared parameter slot.

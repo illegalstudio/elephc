@@ -65,17 +65,15 @@ pub(in crate::interpreter) fn eval_expr(
         } => eval_namespaced_const_fetch(name, fallback_name, context, values),
         EvalExpr::NewObject { class_name, args } => {
             let args = eval_method_call_arg_values(args, context, scope, values)?;
+            let class_name = eval_new_object_class_name(class_name, context)?;
             if let Some(object) =
-                eval_reflection_owner_new_object(class_name, args.clone(), context, values)?
+                eval_reflection_owner_new_object(&class_name, args.clone(), context, values)?
             {
                 return Ok(object);
             }
-            if let Some(class) = context.class(class_name).cloned() {
+            if let Some(class) = context.class(&class_name).cloned() {
                 eval_dynamic_class_new_object(&class, args, context, scope, values)
             } else {
-                let class_name = context
-                    .resolve_class_name(class_name)
-                    .unwrap_or_else(|| class_name.clone());
                 let args =
                     bind_native_callable_args(context.native_constructor_signature(&class_name), args)?;
                 values
@@ -221,6 +219,19 @@ pub(in crate::interpreter) fn eval_expr(
                 }
             }
         }
+    }
+}
+
+/// Resolves special class names used by `new` while preserving AOT fallback names.
+fn eval_new_object_class_name(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<String, EvalStatus> {
+    match class_name.to_ascii_lowercase().as_str() {
+        "self" | "parent" | "static" => resolve_eval_static_class_name(class_name, context),
+        _ => Ok(context
+            .resolve_class_name(class_name)
+            .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string())),
     }
 }
 
