@@ -74,7 +74,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, and string-key reads/writes. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
 | Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking for supported public scalar/Mixed constructor signatures. |
-| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and by-reference parameters for direct variable arguments. Runtime/AOT object-method and static-method fallback supports the same argument binding for supported public scalar/Mixed method signatures. |
+| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and by-reference parameters for direct variable and array-element arguments. Runtime/AOT object-method and static-method fallback supports the same argument binding for supported public scalar/Mixed method signatures. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, and eval-declared-function `__FUNCTION__` / `__METHOD__`. |
 | Constants | Predefined eval-visible constants, dynamic constants from `define()`, namespaced constant fallback, and bare constant fetches are supported. |
@@ -188,9 +188,9 @@ through `ReflectionParameter::isOptional()`. Variadic eval method parameters
 bind extra positional and unknown named arguments into a PHP array and are
 reported through `ReflectionParameter::isVariadic()` and
 `ReflectionParameter::isOptional()`. By-reference eval method parameters accept
-direct variable arguments, write back fixed parameters after method execution,
-write back mutated `&...$items` elements when the variadic container itself is
-not rebound, and are reported through
+direct variable and array-element arguments, write back fixed parameters after
+method execution, write back mutated `&...$items` elements when the variadic
+container itself is not rebound, and are reported through
 `ReflectionParameter::isPassedByReference()`.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, and
 `isPrivate()` report eval property metadata.
@@ -357,9 +357,9 @@ Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Method/Parameter/Property/attribute slice, richer
 ReflectionParameter type metadata beyond presence flags, by-reference method
-arguments for property/array-element lvalues, broader default-value expression
-support beyond scalar literals, and broader generated/AOT method bridge
-signatures beyond the current public non-by-reference fixed scalar/Mixed slice.
+arguments for object-property lvalues, broader default-value expression support
+beyond scalar literals, and broader generated/AOT method bridge signatures
+beyond the current public non-by-reference fixed scalar/Mixed slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

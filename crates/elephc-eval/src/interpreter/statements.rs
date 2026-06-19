@@ -2373,6 +2373,21 @@ fn same_method_ref_target(
                 name: right_name,
             },
         ) => left_scope == right_scope && left_name == right_name,
+        (
+            EvaluatedCallRefTarget::ArrayElement {
+                scope: left_scope,
+                array_name: left_name,
+                index: left_index,
+            },
+            EvaluatedCallRefTarget::ArrayElement {
+                scope: right_scope,
+                array_name: right_name,
+                index: right_index,
+            },
+        ) => {
+            left_scope == right_scope && left_name == right_name && left_index == right_index
+        }
+        _ => false,
     }
 }
 
@@ -2452,6 +2467,70 @@ fn write_back_method_ref_target(
             }
             Ok(())
         }
+        EvaluatedCallRefTarget::ArrayElement {
+            scope,
+            array_name,
+            index,
+        } => {
+            let Some(scope) = (unsafe { scope.as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            write_back_method_array_element_ref_target(
+                scope,
+                array_name,
+                *index,
+                value,
+                context,
+                values,
+            )
+        }
+    }
+}
+
+/// Stores one by-reference method result in a caller-side array element.
+fn write_back_method_array_element_ref_target(
+    scope: &mut ElephcEvalScope,
+    array_name: &str,
+    index: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut ownership = ScopeCellOwnership::Owned;
+    let array = if let Some(existing) =
+        scope_entry(context, scope, array_name).filter(|entry| entry.flags().is_visible())
+    {
+        if values.is_array_like(existing.cell())? {
+            ownership = existing.flags().ownership;
+            existing.cell()
+        } else {
+            eval_new_array_for_index(index, values)?
+        }
+    } else {
+        eval_new_array_for_index(index, values)?
+    };
+    let array = values.array_set(array, index, value)?;
+    for replaced in set_scope_cell(
+        context,
+        scope,
+        array_name.to_string(),
+        array,
+        ownership,
+    )? {
+        values.release(replaced)?;
+    }
+    Ok(())
+}
+
+/// Creates an indexed or associative array according to the first write key.
+fn eval_new_array_for_index(
+    index: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.type_tag(index)? == EVAL_TAG_STRING {
+        values.assoc_new(1)
+    } else {
+        values.array_new(1)
     }
 }
 

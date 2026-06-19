@@ -5413,7 +5413,9 @@ $box->change($value);
 EvalByRefMethodBox::changeStatic($value);
 $named = "B";
 $box->changeVariadic($value, named: $named);
-echo $value . ":" . $named;');
+$items = ["k" => "C"];
+$box->change($items["k"]);
+echo $value . ":" . $named . ":" . $items["k"];');
 "#,
     );
     assert!(
@@ -5421,7 +5423,7 @@ echo $value . ":" . $named;');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "A-method-static-variadic:B-named");
+    assert_eq!(out.stdout, "A-method-static-variadic:B-named:C-method");
 }
 
 /// Verifies eval dynamic static callables dispatch eval-declared static methods.
