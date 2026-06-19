@@ -119,6 +119,66 @@ echo $m->answer;
     assert_eq!(out, "answer:99|answer");
 }
 
+/// Verifies `__isset` is invoked for undefined property probes and its result is coerced to bool.
+#[test]
+fn test_magic_isset_handles_missing_property_probes() {
+    let out = compile_and_run(
+        r#"<?php
+class Probe {
+    public function __isset($name) {
+        echo "check:" . $name . ";";
+        if ($name === "enabled") {
+            return "yes";
+        }
+        return "";
+    }
+}
+$p = new Probe();
+echo isset($p->enabled) ? "Y" : "N";
+echo ":";
+echo isset($p->disabled) ? "Y" : "N";
+"#,
+    );
+    assert_eq!(out, "check:enabled;Y:check:disabled;N");
+}
+
+/// Verifies `isset()` does not read an undefined property through `__get`.
+#[test]
+fn test_magic_isset_missing_property_does_not_call_magic_get() {
+    let out = compile_and_run(
+        r#"<?php
+class Probe {
+    public function __get($name) {
+        echo "get:" . $name . ";";
+        return 1;
+    }
+}
+$p = new Probe();
+echo isset($p->missing) ? "Y" : "N";
+"#,
+    );
+    assert_eq!(out, "N");
+}
+
+/// Verifies `__isset` is invoked for inaccessible property probes from outside the class.
+#[test]
+fn test_magic_isset_handles_inaccessible_property_probes() {
+    let out = compile_and_run(
+        r#"<?php
+class Secret {
+    private $token = 1;
+    public function __isset($name) {
+        echo "magic:" . $name . ";";
+        return true;
+    }
+}
+$s = new Secret();
+echo isset($s->token) ? "Y" : "N";
+"#,
+    );
+    assert_eq!(out, "magic:token;Y");
+}
+
 /// Verifies `__invoke` is called when an object is invoked as a function via a variable holding the object.
 #[test]
 fn test_magic_invoke_handles_variable_object_call() {

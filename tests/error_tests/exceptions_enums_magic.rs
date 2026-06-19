@@ -200,6 +200,46 @@ fn test_error_magic_set_must_take_two_arguments() {
     );
 }
 
+/// Verifies that a `static` `__isset` reports
+/// "Magic method must be non-static: Bag::__isset".
+#[test]
+fn test_error_magic_isset_must_be_non_static() {
+    expect_error(
+        "<?php class Bag { public static function __isset($name) { return true; } }",
+        "Magic method must be non-static: Bag::__isset",
+    );
+}
+
+/// Verifies that a private `__isset` method reports
+/// "Magic method must be public: Bag::__isset".
+#[test]
+fn test_error_magic_isset_must_be_public() {
+    expect_error(
+        "<?php class Bag { private function __isset($name) { return true; } }",
+        "Magic method must be public: Bag::__isset",
+    );
+}
+
+/// Verifies that `__isset` with no parameters reports
+/// "Magic method must take 1 argument: Bag::__isset".
+#[test]
+fn test_error_magic_isset_must_take_one_argument() {
+    expect_error(
+        "<?php class Bag { public function __isset() { return true; } }",
+        "Magic method must take 1 argument: Bag::__isset",
+    );
+}
+
+/// Verifies that `__isset` with a non-bool declared return type reports
+/// "Magic method must return bool: Bag::__isset".
+#[test]
+fn test_error_magic_isset_declared_return_type_must_be_bool() {
+    expect_error(
+        "<?php class Bag { public function __isset($name): string { return \"yes\"; } }",
+        "Magic method must return bool: Bag::__isset",
+    );
+}
+
 /// Verifies that `__call` with only one parameter reports
 /// "Magic method must take 2 arguments: Proxy::__call".
 #[test]

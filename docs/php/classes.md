@@ -769,6 +769,7 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__toString()` — string coercion
 - `__get($name)` — reading undefined property
 - `__set($name, $value)` — writing undefined property
+- `__isset($name)` — probing undefined or inaccessible property with `isset()`
 - `__invoke(...$args)` — calling an object directly
 - `__call($name, $args)` — intercepting missing instance methods
 - `__callStatic($name, $args)` — intercepting missing static methods

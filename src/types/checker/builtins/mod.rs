@@ -62,15 +62,21 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
         let normalized_args;
-        let args = if let Some(sig) = crate::types::builtin_call_sig(name) {
-            normalized_args = self.normalize_builtin_call_args(
-                &sig,
-                args,
-                span,
-                &format!("Builtin '{}'", name),
-                env,
-            )?;
-            normalized_args.as_slice()
+        let skip_eager_arg_normalization =
+            crate::names::php_symbol_key(name.trim_start_matches('\\')) == "isset";
+        let args = if !skip_eager_arg_normalization {
+            if let Some(sig) = crate::types::builtin_call_sig(name) {
+                normalized_args = self.normalize_builtin_call_args(
+                    &sig,
+                    args,
+                    span,
+                    &format!("Builtin '{}'", name),
+                    env,
+                )?;
+                normalized_args.as_slice()
+            } else {
+                args
+            }
         } else {
             args
         };

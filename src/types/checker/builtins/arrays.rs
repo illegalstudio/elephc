@@ -142,7 +142,7 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "isset() takes at least 1 argument"));
             }
             for arg in args {
-                checker.infer_type(arg, env)?;
+                check_isset_arg(checker, arg, env)?;
             }
             Ok(Some(PhpType::Int))
         }
@@ -483,6 +483,29 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Array(Box::new(PhpType::Int))))
         }
         _ => Ok(None),
+    }
+}
+
+/// Type-checks one `isset()` operand while preserving PHP's non-reading property semantics.
+fn check_isset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    if let ExprKind::PropertyAccess { object, .. } = &arg.kind {
+        let object_ty = checker.infer_type(object, env)?;
+        if isset_object_receiver_type(checker, &object_ty) {
+            return Ok(());
+        }
+    }
+    checker.infer_type(arg, env).map(|_| ())
+}
+
+/// Returns true when `isset($object->property)` can be checked without reading the property.
+fn isset_object_receiver_type(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::Mixed => true,
+        PhpType::Union(members) => {
+            checker.union_single_object_class(ty).is_some()
+                || members.iter().any(|member| matches!(member, PhpType::Mixed))
+        }
+        _ => false,
     }
 }
 

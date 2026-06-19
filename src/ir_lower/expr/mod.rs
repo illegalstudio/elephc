@@ -1959,21 +1959,226 @@ fn lower_lazy_isset(
 
 /// Lowers a single `isset()` operand that has special lazy PHP semantics.
 fn lower_lazy_isset_operand(ctx: &mut LoweringContext<'_, '_>, arg: &Expr) -> Option<LoweredValue> {
-    let ExprKind::ArrayAccess { array, index } = &arg.kind else {
-        return None;
-    };
+    match &arg.kind {
+        ExprKind::ArrayAccess { array, index } => {
+            lower_lazy_array_access_isset_operand(ctx, array, index, arg)
+        }
+        ExprKind::PropertyAccess { object, property } => {
+            lower_lazy_property_isset_operand(ctx, object, property, arg)
+        }
+        _ => None,
+    }
+}
+
+/// Lowers `isset($array_access[$key])` through `ArrayAccess::offsetExists()` when applicable.
+fn lower_lazy_array_access_isset_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    arg: &Expr,
+) -> Option<LoweredValue> {
     if !array_access_expr_satisfies_array_access(ctx, array) {
         return None;
     }
     let synthetic = Expr::new(
         ExprKind::MethodCall {
-            object: array.clone(),
+            object: Box::new(array.clone()),
             method: "offsetExists".to_string(),
-            args: vec![(**index).clone()],
+            args: vec![index.clone()],
         },
         arg.span,
     );
     Some(lower_expr(ctx, &synthetic))
+}
+
+/// Lowers `isset($object->property)` without performing a normal property read first.
+fn lower_lazy_property_isset_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    arg: &Expr,
+) -> Option<LoweredValue> {
+    match property_isset_action(ctx, object, property)? {
+        IssetPropertyAction::Fallback => None,
+        IssetPropertyAction::Magic => {
+            let object = lower_expr(ctx, object);
+            Some(lower_magic_property_isset(ctx, object, property, arg))
+        }
+        IssetPropertyAction::AlwaysFalse => {
+            lower_expr(ctx, object);
+            Some(emit_bool_literal(ctx, false, Some(arg.span)))
+        }
+    }
+}
+
+/// Describes how `isset($object->property)` should be lowered for a known receiver class.
+enum IssetPropertyAction {
+    Fallback,
+    Magic,
+    AlwaysFalse,
+}
+
+/// Selects the PHP-visible `isset()` behavior for a statically known object property operand.
+fn property_isset_action(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> Option<IssetPropertyAction> {
+    let (class_name, _) = isset_object_expr_class(ctx, object)?;
+    if is_builtin_stdclass_name(&class_name) {
+        return Some(IssetPropertyAction::Fallback);
+    }
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    if class_info.allow_dynamic_properties {
+        return Some(IssetPropertyAction::Fallback);
+    }
+    if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
+        return Some(IssetPropertyAction::Fallback);
+    }
+    if class_method_signature(ctx, &class_name, &php_symbol_key("__isset")).is_some() {
+        Some(IssetPropertyAction::Magic)
+    } else {
+        Some(IssetPropertyAction::AlwaysFalse)
+    }
+}
+
+/// Returns the single receiver class and whether that receiver may be null.
+fn isset_object_expr_class(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<(String, bool)> {
+    let ty = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        ExprKind::This => PhpType::Object(ctx.current_class.clone()?),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
+        ExprKind::NewDynamicObject { fallback_class, .. } => {
+            PhpType::Object(fallback_class.to_string())
+        }
+        ExprKind::FunctionCall { name, .. } => ctx
+            .functions
+            .get(name.as_str())
+            .map(|sig| sig.return_type.clone())
+            .unwrap_or_else(|| infer_expr_type_syntactic(object)),
+        _ => infer_expr_type_syntactic(object),
+    };
+    let (class_name, nullable) = singular_object_class(&ty)?;
+    normalized_class_name(class_name).map(|name| (name, nullable))
+}
+
+/// Returns whether a named property can use normal `isset()` value probing.
+fn property_is_accessible_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    class_info: &crate::types::ClassInfo,
+    property: &str,
+) -> bool {
+    if class_info.visible_property(property).is_none() {
+        return false;
+    }
+    class_info
+        .property_visibilities
+        .get(property)
+        .is_none_or(|visibility| {
+            let declaring_class = class_info
+                .property_declaring_classes
+                .get(property)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            ir_can_access_member(ctx, declaring_class, visibility)
+        })
+}
+
+/// Checks PHP member visibility from the current lowering class scope.
+fn ir_can_access_member(
+    ctx: &LoweringContext<'_, '_>,
+    declaring_class: &str,
+    visibility: &Visibility,
+) -> bool {
+    match visibility {
+        Visibility::Public => true,
+        Visibility::Private => ctx
+            .current_class
+            .as_deref()
+            .is_some_and(|current| same_php_class_name(current, declaring_class)),
+        Visibility::Protected => ctx.current_class.as_deref().is_some_and(|current| {
+            same_php_class_name(current, declaring_class)
+                || class_extends_class(ctx, current, declaring_class)
+        }),
+    }
+}
+
+/// Returns true when two class metadata names match PHP's case-insensitive class lookup.
+fn same_php_class_name(left: &str, right: &str) -> bool {
+    php_symbol_key(left.trim_start_matches('\\')) == php_symbol_key(right.trim_start_matches('\\'))
+}
+
+/// Lowers a magic `__isset($name)` call and coerces the result to PHP boolean semantics.
+fn lower_magic_property_isset(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    arg: &Expr,
+) -> LoweredValue {
+    if value_is_nullable(ctx, object.value) {
+        return lower_nullable_magic_property_isset(ctx, object, property, arg);
+    }
+    let args = vec![Expr::new(
+        ExprKind::StringLiteral(property.to_string()),
+        arg.span,
+    )];
+    let result =
+        lower_method_call_with_receiver(ctx, object, "__isset", &args, Op::MethodCall, arg);
+    ctx.truthy(result, Some(arg.span))
+}
+
+/// Lowers `__isset` for nullable receivers, returning false instead of calling on null.
+fn lower_nullable_magic_property_isset(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    arg: &Expr,
+) -> LoweredValue {
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let null_block = ctx
+        .builder
+        .create_named_block("isset.property.null", Vec::new());
+    let call_block = ctx
+        .builder
+        .create_named_block("isset.property.call", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("isset.property.merge", Vec::new());
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![object.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(arg.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: call_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    let false_value = emit_bool_literal(ctx, false, Some(arg.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, arg.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(call_block);
+    let args = vec![Expr::new(
+        ExprKind::StringLiteral(property.to_string()),
+        arg.span,
+    )];
+    let result =
+        lower_method_call_with_receiver(ctx, object, "__isset", &args, Op::MethodCall, arg);
+    let result = ctx.truthy(result, Some(arg.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, result, arg.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.load_local(&temp_name, Some(arg.span))
 }
 
 /// Lowers direct function/static-method first-class callable probes for `is_callable()`.
@@ -7952,13 +8157,14 @@ fn reflection_parameter_method_owner_operand(
                 span: owner.span,
             })
         }
-        ExprKind::This => ctx
-            .current_class
-            .clone()
-            .map(|name| ReflectionParameterConstructorOperand::ClassName {
-                name,
-                span: owner.span,
-            }),
+        ExprKind::This => {
+            ctx.current_class
+                .clone()
+                .map(|name| ReflectionParameterConstructorOperand::ClassName {
+                    name,
+                    span: owner.span,
+                })
+        }
         _ => Some(ReflectionParameterConstructorOperand::Expr(owner.clone())),
     }
 }
