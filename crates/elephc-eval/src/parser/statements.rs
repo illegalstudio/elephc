@@ -802,7 +802,7 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         let effective_readonly = is_readonly || (is_readonly_class && !is_static);
-        self.skip_optional_property_type()?;
+        let property_type = self.parse_optional_property_type()?;
         let TokenKind::DollarIdent(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
@@ -829,6 +829,7 @@ impl Parser {
                 effective_readonly,
                 None,
             )
+            .with_type(property_type)
             .with_abstract_hook_contract(requires_get_hook, requires_set_hook);
             return Ok((property, Vec::new()));
         }
@@ -843,6 +844,7 @@ impl Parser {
             effective_readonly,
             default,
         )
+        .with_type(property_type)
         .with_hooks(has_get_hook, has_set_hook);
         Ok((property, hook_methods))
     }
@@ -950,7 +952,7 @@ impl Parser {
         if !self.consume(TokenKind::LParen) {
             return Ok("value".to_string());
         }
-        self.skip_optional_property_type()?;
+        let _ = self.parse_optional_property_type()?;
         let TokenKind::DollarIdent(name) = self.current() else {
             return Err(EvalParseError::ExpectedVariable);
         };
@@ -1323,7 +1325,7 @@ impl Parser {
     pub(super) fn parse_interface_property_decl(
         &mut self,
     ) -> Result<EvalInterfaceProperty, EvalParseError> {
-        self.skip_optional_property_type()?;
+        let property_type = self.parse_optional_property_type()?;
         let TokenKind::DollarIdent(name) = self.current() else {
             return Err(EvalParseError::ExpectedVariable);
         };
@@ -1333,7 +1335,7 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         let (requires_get, requires_set) = self.parse_interface_property_hook_contracts()?;
-        Ok(EvalInterfaceProperty::new(name, requires_get, requires_set))
+        Ok(EvalInterfaceProperty::new(name, requires_get, requires_set).with_type(property_type))
     }
 
     /// Parses `{ get; set; }` hook contracts for an abstract or interface property.
@@ -1389,22 +1391,11 @@ impl Parser {
         self.parse_property_hook_contracts()
     }
 
-    /// Consumes a simple declared property type before the `$property` token.
-    pub(super) fn skip_optional_property_type(&mut self) -> Result<(), EvalParseError> {
-        if matches!(self.current(), TokenKind::DollarIdent(_)) {
-            return Ok(());
-        }
-        if self.consume(TokenKind::Question) && matches!(self.current(), TokenKind::DollarIdent(_))
-        {
-            return Err(EvalParseError::UnexpectedToken);
-        }
-        match self.current() {
-            TokenKind::Ident(_) | TokenKind::Backslash => {
-                let _ = self.parse_qualified_name()?;
-                Ok(())
-            }
-            _ => Err(EvalParseError::UnexpectedToken),
-        }
+    /// Parses retained property type metadata before the `$property` token.
+    pub(super) fn parse_optional_property_type(
+        &mut self,
+    ) -> Result<Option<EvalParameterType>, EvalParseError> {
+        self.parse_optional_parameter_type()
     }
 
     /// Parses `function name($param, ...) { ... }` declarations.

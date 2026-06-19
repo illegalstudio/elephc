@@ -240,7 +240,9 @@ when the variadic container itself is not rebound, and are reported through
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
 `isFinal()`, `isAbstract()`, `isReadOnly()`, and `getModifiers()` report eval
 property metadata with PHP-compatible `ReflectionProperty::IS_*` constants for
-the bitmask.
+the bitmask. `ReflectionProperty::hasType()` and `getType()` expose retained
+property type metadata through `ReflectionNamedType`, `ReflectionUnionType`, and
+`ReflectionIntersectionType` where eval has retained a supported declared type.
 `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant
@@ -413,7 +415,7 @@ broader parameter/return ABI shapes are still outside that bridge.
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Method/Parameter/Property/NamedType/UnionType/IntersectionType
-and attribute slice, Reflection type APIs beyond parameter metadata, broader
+and attribute slice, Reflection type APIs beyond parameter/property metadata, broader
 parameter default-value objects beyond the eval-supported
 constant-expression subset, and broader generated/AOT method bridge signatures
 beyond the current public non-by-reference fixed scalar/Mixed slice.

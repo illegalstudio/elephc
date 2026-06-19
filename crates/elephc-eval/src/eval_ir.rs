@@ -534,6 +534,7 @@ impl EvalInterface {
 pub struct EvalInterfaceProperty {
     name: String,
     attributes: Vec<EvalAttribute>,
+    property_type: Option<EvalParameterType>,
     requires_get: bool,
     requires_set: bool,
 }
@@ -544,9 +545,16 @@ impl EvalInterfaceProperty {
         Self {
             name: name.into(),
             attributes: Vec::new(),
+            property_type: None,
             requires_get,
             requires_set,
         }
+    }
+
+    /// Returns a copy of this interface property with retained type metadata.
+    pub fn with_type(mut self, property_type: Option<EvalParameterType>) -> Self {
+        self.property_type = property_type;
+        self
     }
 
     /// Returns a copy of this interface property with declaration attributes attached.
@@ -565,6 +573,11 @@ impl EvalInterfaceProperty {
         &self.attributes
     }
 
+    /// Returns retained PHP type metadata for this interface property contract.
+    pub fn property_type(&self) -> Option<&EvalParameterType> {
+        self.property_type.as_ref()
+    }
+
     /// Returns whether the interface requires the property to be readable.
     pub const fn requires_get(&self) -> bool {
         self.requires_get
@@ -580,6 +593,10 @@ impl EvalInterfaceProperty {
         Self {
             name: self.name.clone(),
             attributes: self.attributes.clone(),
+            property_type: self
+                .property_type
+                .clone()
+                .or_else(|| other.property_type.clone()),
             requires_get: self.requires_get || other.requires_get,
             requires_set: self.requires_set || other.requires_set,
         }
@@ -1235,6 +1252,7 @@ impl EvalTrait {
 pub struct EvalClassProperty {
     name: String,
     attributes: Vec<EvalAttribute>,
+    property_type: Option<EvalParameterType>,
     visibility: EvalVisibility,
     is_static: bool,
     is_final: bool,
@@ -1302,6 +1320,7 @@ impl EvalClassProperty {
         Self {
             name: name.into(),
             attributes: Vec::new(),
+            property_type: None,
             visibility,
             is_static,
             is_final,
@@ -1340,6 +1359,12 @@ impl EvalClassProperty {
         self
     }
 
+    /// Returns a copy of this property with retained type metadata.
+    pub fn with_type(mut self, property_type: Option<EvalParameterType>) -> Self {
+        self.property_type = property_type;
+        self
+    }
+
     /// Returns the PHP-visible property name without `$`.
     pub fn name(&self) -> &str {
         &self.name
@@ -1348,6 +1373,11 @@ impl EvalClassProperty {
     /// Returns attributes declared directly on this class property.
     pub fn attributes(&self) -> &[EvalAttribute] {
         &self.attributes
+    }
+
+    /// Returns retained PHP type metadata for this property.
+    pub fn property_type(&self) -> Option<&EvalParameterType> {
+        self.property_type.as_ref()
     }
 
     /// Returns the PHP visibility declared for this property.

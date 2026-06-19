@@ -335,8 +335,13 @@ impl FakeOps {
                     .map_or_else(|| self.bool_value(false), Ok)
             }
             (FakeValue::Object(properties), "hastype") if args.is_empty() => {
-                Self::object_property(&properties, "__has_type")
-                    .map_or_else(|| self.bool_value(false), Ok)
+                if let Some(has_type) = Self::object_property(&properties, "__has_type") {
+                    return Ok(has_type);
+                }
+                match Self::object_property(&properties, "__type") {
+                    Some(value) => self.bool_value(!matches!(self.get(value), FakeValue::Null)),
+                    None => self.bool_value(false),
+                }
             }
             (FakeValue::Object(properties), "isdefaultvalueavailable") if args.is_empty() => {
                 Self::object_property(&properties, "__has_default_value")
@@ -552,6 +557,7 @@ impl FakeOps {
                 properties.push(("__is_abstract".to_string(), is_abstract));
                 properties.push(("__is_readonly".to_string(), is_readonly));
                 properties.push(("__modifiers".to_string(), modifiers_cell));
+                properties.push(("__type".to_string(), method_objects));
             }
         }
         if matches!(

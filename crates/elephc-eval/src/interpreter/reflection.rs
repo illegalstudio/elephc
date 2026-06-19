@@ -58,6 +58,7 @@ struct EvalReflectionMemberMetadata {
     is_abstract: bool,
     is_readonly: bool,
     modifiers: u64,
+    type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     required_parameter_count: usize,
     parameters: Vec<EvalReflectionParameterMetadata>,
 }
@@ -438,6 +439,7 @@ fn eval_reflection_class_constant_object_result(
         &[],
         Some(&declaring_class_name),
         &[],
+        None,
         flags,
         modifiers,
         0,
@@ -508,6 +510,7 @@ fn eval_reflection_class_new(
         &metadata.property_names,
         metadata.parent_class_name.as_deref(),
         &[],
+        None,
         metadata.flags,
         metadata.modifiers,
         0,
@@ -608,6 +611,7 @@ fn eval_reflection_class_constant_new(
         &[],
         Some(&declaring_class_name),
         &[],
+        None,
         flags,
         modifiers,
         0,
@@ -669,6 +673,7 @@ fn eval_reflection_enum_case_new(
         &[],
         Some(&declaring_class_name),
         &[],
+        None,
         0,
         0,
         0,
@@ -691,6 +696,7 @@ fn eval_reflection_owner_object(
     property_names: &[String],
     parent_class_name: Option<&str>,
     parameter_metadata: &[EvalReflectionParameterMetadata],
+    type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
     flags: u64,
     modifiers: u64,
     method_modifiers: u64,
@@ -709,6 +715,7 @@ fn eval_reflection_owner_object(
         property_names,
         parent_class_name,
         parameter_metadata,
+        type_metadata,
         flags,
         modifiers,
         method_modifiers,
@@ -731,6 +738,7 @@ fn eval_reflection_owner_object_with_members(
     property_names: &[String],
     parent_class_name: Option<&str>,
     parameter_metadata: &[EvalReflectionParameterMetadata],
+    type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
     flags: u64,
     modifiers: u64,
     method_modifiers: u64,
@@ -755,6 +763,11 @@ fn eval_reflection_owner_object_with_members(
         )?
     } else if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
         eval_reflection_parameter_object_array_result(parameter_metadata, context, values)?
+    } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+        match type_metadata {
+            Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
+            None => values.null()?,
+        }
     } else {
         values.array_new(0)?
     };
@@ -877,6 +890,7 @@ fn eval_reflection_full_class_object_result(
         &metadata.property_names,
         metadata.parent_class_name.as_deref(),
         &[],
+        None,
         metadata.flags,
         metadata.modifiers,
         0,
@@ -906,6 +920,7 @@ fn eval_reflection_shallow_class_object_result(
         &[],
         None,
         &[],
+        None,
         metadata.flags,
         metadata.modifiers,
         0,
@@ -1026,6 +1041,7 @@ fn eval_reflection_declaring_function_object_result(
         &[],
         metadata.declaring_class_name.as_deref(),
         &[],
+        None,
         metadata.flags,
         metadata.required_parameter_count as u64,
         eval_reflection_method_modifiers_from_flags(metadata.flags),
@@ -1266,6 +1282,7 @@ fn eval_reflection_member_object_result(
         &[],
         member.declaring_class_name.as_deref(),
         &member.parameters,
+        member.type_metadata.as_ref(),
         flags,
         owner_modifiers,
         method_modifiers,
@@ -1708,6 +1725,7 @@ fn eval_reflection_method_metadata(
                         method.is_final(),
                         method.is_abstract(),
                     ),
+                    type_metadata: None,
                     required_parameter_count,
                     parameters,
                 }
@@ -1762,6 +1780,7 @@ fn eval_reflection_method_metadata(
                         false,
                         true,
                     ),
+                    type_metadata: None,
                     required_parameter_count,
                     parameters,
                 }
@@ -1816,6 +1835,7 @@ fn eval_reflection_method_metadata(
                         method.is_final(),
                         method.is_abstract(),
                     ),
+                    type_metadata: None,
                     required_parameter_count,
                     parameters,
                 }
@@ -1847,6 +1867,9 @@ fn eval_reflection_property_metadata(
                     property.is_readonly(),
                     eval_reflection_property_is_virtual(&property),
                 ),
+                type_metadata: property
+                    .property_type()
+                    .and_then(eval_reflection_parameter_type_metadata),
                 required_parameter_count: 0,
                 parameters: Vec::new(),
             },
@@ -1873,6 +1896,9 @@ fn eval_reflection_property_metadata(
                     false,
                     true,
                 ),
+                type_metadata: property
+                    .property_type()
+                    .and_then(eval_reflection_parameter_type_metadata),
                 required_parameter_count: 0,
                 parameters: Vec::new(),
             });
@@ -1898,6 +1924,9 @@ fn eval_reflection_property_metadata(
                     property.is_readonly(),
                     eval_reflection_property_is_virtual(property),
                 ),
+                type_metadata: property
+                    .property_type()
+                    .and_then(eval_reflection_parameter_type_metadata),
                 required_parameter_count: 0,
                 parameters: Vec::new(),
             })
