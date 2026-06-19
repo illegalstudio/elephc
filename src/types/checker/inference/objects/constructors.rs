@@ -390,7 +390,7 @@ impl Checker {
         }
     }
 
-    /// Returns the reflected method signature for class/interface metadata.
+    /// Returns the reflected method signature for class/interface/trait metadata.
     fn reflection_method_signature(
         &self,
         class_name: &str,
@@ -410,6 +410,9 @@ impl Checker {
                 .get(&method_key)
                 .or_else(|| interface_info.static_methods.get(&method_key))
                 .cloned();
+        }
+        if let Some(trait_methods) = self.declared_trait_methods.get(class_name) {
+            return trait_methods.get(&method_key).cloned();
         }
         None
     }

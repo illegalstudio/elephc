@@ -15,8 +15,9 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind};
 use crate::types::{
+    callable_wrapper_sig,
     traits::{flatten_classes, FlattenedClass},
-    TypeEnv,
+    FunctionSig, PhpType, TypeEnv,
 };
 
 use super::builtin_enums::inject_builtin_enums;
@@ -299,8 +300,10 @@ fn collect_declared_trait_names_into(program: &Program, names: &mut HashSet<Stri
     }
 }
 
-/// Collects source-declared trait method keys recursively, including namespace blocks.
-fn collect_declared_trait_methods(program: &Program) -> HashMap<String, HashSet<String>> {
+/// Collects source-declared trait method signatures recursively, including namespace blocks.
+fn collect_declared_trait_methods(
+    program: &Program,
+) -> HashMap<String, HashMap<String, FunctionSig>> {
     let mut methods = HashMap::new();
     for stmt in program {
         match &stmt.kind {
@@ -313,7 +316,12 @@ fn collect_declared_trait_methods(program: &Program) -> HashMap<String, HashSet<
                     name.clone(),
                     trait_methods
                         .iter()
-                        .map(|method| php_symbol_key(&method.name))
+                        .map(|method| {
+                            (
+                                php_symbol_key(&method.name),
+                                trait_method_reflection_sig(method),
+                            )
+                        })
                         .collect(),
                 );
             }
@@ -324,6 +332,58 @@ fn collect_declared_trait_methods(program: &Program) -> HashMap<String, HashSet<
         }
     }
     methods
+}
+
+/// Builds the reflection-visible signature for a direct trait method.
+///
+/// Trait direct reflection only needs parameter names, defaults, by-reference
+/// flags, variadic shape, and declared-type presence; class-relative type names
+/// are resolved when the trait is flattened into a concrete class.
+fn trait_method_reflection_sig(method: &ClassMethod) -> FunctionSig {
+    let params = method
+        .params
+        .iter()
+        .map(|(name, type_ann, _, _)| {
+            (
+                name.clone(),
+                if type_ann.is_some() {
+                    PhpType::Mixed
+                } else {
+                    PhpType::Int
+                },
+            )
+        })
+        .collect();
+    let defaults = method
+        .params
+        .iter()
+        .map(|(_, _, default, _)| default.clone())
+        .collect();
+    let ref_params = method
+        .params
+        .iter()
+        .map(|(_, _, _, by_ref)| *by_ref)
+        .collect();
+    callable_wrapper_sig(&FunctionSig {
+        params,
+        defaults,
+        return_type: PhpType::Mixed,
+        declared_return: method.return_type.is_some(),
+        ref_params,
+        declared_params: method
+            .params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.is_some())
+            .chain(
+                method
+                    .variadic
+                    .iter()
+                    .map(|_| method.variadic_type.is_some()),
+            )
+            .collect(),
+        variadic: method.variadic.clone(),
+        deprecation: None,
+    })
 }
 
 /// Builds method-checkable `FlattenedClass` units for every `enum` in the program so their method
@@ -394,9 +454,7 @@ fn substitute_relative_class_types_in_flattened(classes: &mut [FlattenedClass]) 
 }
 
 /// Resolves relative class types inside flattened enum methods.
-fn substitute_relative_class_types_in_flattened_enums(
-    enums: &mut HashMap<String, FlattenedClass>,
-) {
+fn substitute_relative_class_types_in_flattened_enums(enums: &mut HashMap<String, FlattenedClass>) {
     for enum_unit in enums.values_mut() {
         let self_class = enum_unit.name.clone();
         substitute_relative_class_types_in_methods(&mut enum_unit.methods, &self_class, None);

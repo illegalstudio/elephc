@@ -1608,6 +1608,9 @@ class ReflectDirectParamTarget {
 interface ReflectDirectParamInterface {
     public static function build(int $id, $name = "x"): void;
 }
+trait ReflectDirectParamTrait {
+    protected static function traitRun(int $first, $second = 2, string ...$rest) {}
+}
 $byName = new ReflectionParameter([ReflectDirectParamTarget::class, "run"], "name");
 echo $byName->getName() . "#" . $byName->getPosition();
 echo ($byName->hasType() ? "T" : "t");
@@ -1626,6 +1629,12 @@ $iface = new ReflectionParameter([ReflectDirectParamInterface::class, "build"], 
 echo $iface->getName() . "#" . $iface->getPosition();
 echo ($iface->isOptional() ? "O" : "R");
 echo "|";
+$trait = new ReflectionParameter([ReflectDirectParamTrait::class, "traitRun"], "rest");
+echo $trait->getName() . "#" . $trait->getPosition();
+echo ($trait->hasType() ? "T" : "t");
+echo ($trait->isOptional() ? "O" : "R");
+echo ($trait->isVariadic() ? "V" : "v");
+echo "|";
 $named = new ReflectionParameter(param: "id", function: [ReflectDirectParamTarget::class, "run"]);
 echo $named->getName() . "#" . $named->getPosition();
 "##,
@@ -1635,7 +1644,7 @@ echo $named->getName() . "#" . $named->getPosition();
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "name#1tRBv|rest#3tObV|name#1O|id#0");
+    assert_eq!(out.stdout, "name#1tRBv|rest#3tObV|name#1O|rest#2TOV|id#0");
 }
 
 /// Verifies that ReflectionMethod objects returned from `ReflectionClass::getMethods()`

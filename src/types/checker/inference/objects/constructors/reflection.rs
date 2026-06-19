@@ -102,7 +102,7 @@ impl Checker {
             ));
         }
         if let Some(trait_methods) = self.declared_trait_methods.get(class_name) {
-            if trait_methods.contains(&method_key) {
+            if trait_methods.contains_key(&method_key) {
                 return Ok(());
             }
             return Err(CompileError::new(
