@@ -572,6 +572,25 @@ fn test_error_reflection_parameter_constructor_dynamic_method_name() {
     );
 }
 
+/// Verifies that `new ReflectionFunction()` rejects unknown function targets.
+#[test]
+fn test_error_reflection_function_constructor_unknown_function() {
+    expect_error(
+        "<?php $r = new ReflectionFunction('missing_reflection_function');",
+        "Function missing_reflection_function() does not exist",
+    );
+}
+
+/// Verifies that `new ReflectionFunction()` rejects dynamic function names
+/// because runtime function reflection lookup metadata is not available.
+#[test]
+fn test_error_reflection_function_constructor_dynamic_function_name() {
+    expect_error(
+        "<?php function reflected_function($a) {} $f = 'reflected_function'; $r = new ReflectionFunction($f);",
+        "requires a string literal function name",
+    );
+}
+
 /// Verifies that accessing `ReflectionAttribute::__name` property reports
 /// "Cannot access private property: ReflectionAttribute::__name".
 #[test]

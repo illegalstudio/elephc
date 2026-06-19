@@ -790,6 +790,7 @@ fn lower_builtin_reflection_methods(
         "ReflectionClassConstant",
         "ReflectionEnumBackedCase",
         "ReflectionEnumUnitCase",
+        "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionParameter",
         "ReflectionProperty",

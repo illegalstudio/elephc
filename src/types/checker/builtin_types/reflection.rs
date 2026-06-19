@@ -35,6 +35,7 @@ pub(crate) fn inject_builtin_reflection(
     for builtin_name in [
         "ReflectionAttribute",
         "ReflectionClass",
+        "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",
         "ReflectionFunction",
@@ -102,6 +103,14 @@ pub(crate) fn inject_builtin_reflection(
         },
     );
     class_map.insert("ReflectionClass".to_string(), builtin_reflection_class());
+    class_map.insert(
+        "ReflectionFunction".to_string(),
+        builtin_reflection_owner_class(
+            "ReflectionFunction",
+            true,
+            vec![("function", Some(TypeExpr::Str), None, false)],
+        ),
+    );
     class_map.insert(
         "ReflectionMethod".to_string(),
         builtin_reflection_owner_class(
@@ -1288,7 +1297,7 @@ fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> Cl
     }
 }
 
-/// Builds a `FlattenedClass` for `ReflectionMethod` or `ReflectionProperty`
+/// Builds a `FlattenedClass` for simple reflection owner classes
 /// with a private `__attrs` array property and two methods: `__construct`
 /// (public, accepting the supplied params) and `getAttributes` (public,
 /// returning the `__attrs` array).
@@ -1311,7 +1320,7 @@ fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_class_string_method("getName", "__name"));
     }
     add_reflection_member_flag_methods(name, &mut properties, &mut methods);
-    if name == "ReflectionMethod" {
+    if matches!(name, "ReflectionFunction" | "ReflectionMethod") {
         properties.push(builtin_property(
             "__parameters",
             Visibility::Private,
@@ -1329,19 +1338,21 @@ fn builtin_reflection_owner_class(
             "__parameters",
             object_array_type("ReflectionParameter"),
         ));
-        methods.push(builtin_reflection_method_parameter_count_method());
+        methods.push(builtin_reflection_parameter_count_method());
         methods.push(builtin_reflection_class_int_method(
             "getNumberOfRequiredParameters",
             "__required_parameter_count",
         ));
     }
-    properties.push(builtin_property(
-        "__attrs",
-        Visibility::Private,
-        Some(array_type()),
-        empty_array(),
-    ));
-    methods.push(builtin_reflection_owner_get_attributes_method());
+    if name != "ReflectionFunction" {
+        properties.push(builtin_property(
+            "__attrs",
+            Visibility::Private,
+            Some(array_type()),
+            empty_array(),
+        ));
+        methods.push(builtin_reflection_owner_get_attributes_method());
+    }
     FlattenedClass {
         name: name.to_string(),
         extends: None,
@@ -1357,8 +1368,8 @@ fn builtin_reflection_owner_class(
     }
 }
 
-/// Builds `ReflectionMethod::getNumberOfParameters()` over the retained parameter array.
-fn builtin_reflection_method_parameter_count_method() -> ClassMethod {
+/// Builds `getNumberOfParameters()` over the retained parameter array.
+fn builtin_reflection_parameter_count_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
         name: "getNumberOfParameters".to_string(),
@@ -1514,6 +1525,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
     }
     for class_name in [
         "ReflectionClass",
+        "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",
         "ReflectionParameter",
@@ -1528,6 +1540,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             if matches!(
                 class_name,
                 "ReflectionClass"
+                    | "ReflectionFunction"
                     | "ReflectionMethod"
                     | "ReflectionProperty"
                     | "ReflectionParameter"
@@ -1612,6 +1625,18 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                         sig.return_type = PhpType::Bool;
                     }
                 }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParameters")) {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionParameter".to_string(),
+                    )));
+                }
+                for method_name in ["getNumberOfParameters", "getNumberOfRequiredParameters"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Int;
+                    }
+                }
+            }
+            if class_name == "ReflectionFunction" {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParameters")) {
                     sig.return_type = PhpType::Array(Box::new(PhpType::Object(
                         "ReflectionParameter".to_string(),

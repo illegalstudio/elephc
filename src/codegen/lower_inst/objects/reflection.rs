@@ -6,10 +6,10 @@
 //! - `crate::codegen::lower_inst::objects::lower_object_new()`.
 //!
 //! Key details:
-//! - `ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`,
-//!   `ReflectionClassConstant`, and `ReflectionEnum*`
+//! - `ReflectionClass`, `ReflectionFunction`, `ReflectionMethod`,
+//!   `ReflectionProperty`, `ReflectionClassConstant`, and `ReflectionEnum*`
 //!   constructors are compile-time metadata lookups that populate private
-//!   `__name`/`__attrs` slots instead of running their public empty bodies.
+//!   metadata slots instead of running their public empty bodies.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, emit_box_current_value_as_mixed, CodegenIrError, Result};
@@ -90,6 +90,7 @@ pub(super) fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
         "ReflectionClass"
+            | "ReflectionFunction"
             | "ReflectionMethod"
             | "ReflectionProperty"
             | "ReflectionParameter"
@@ -179,12 +180,9 @@ fn emit_reflection_owner_object(
             )?;
         }
     }
-    emit_reflection_attrs_property(
-        ctx,
-        class_name,
-        &metadata.attr_names,
-        &metadata.attr_args,
-    )?;
+    if class_name != "ReflectionFunction" {
+        emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
+    }
     if class_name == "ReflectionClass" {
         emit_reflection_bool_property(ctx, "__is_final", metadata.is_final)?;
         emit_reflection_bool_property(ctx, "__is_abstract", metadata.is_abstract)?;
@@ -195,7 +193,7 @@ fn emit_reflection_owner_object(
         emit_reflection_bool_property(ctx, "__is_instantiable", metadata.is_instantiable)?;
         emit_reflection_int_property_by_name(ctx, "__modifiers", metadata.modifiers)?;
     }
-    if class_name == "ReflectionMethod" {
+    if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
         emit_reflection_parameter_array_property_by_name(
             ctx,
             class_name,
@@ -613,6 +611,7 @@ fn reflection_owner_metadata(
 ) -> Result<ReflectionOwnerMetadata> {
     match class_name {
         "ReflectionClass" => reflection_class_metadata(ctx, inst),
+        "ReflectionFunction" => reflection_function_metadata(ctx, inst),
         "ReflectionMethod" => reflection_method_metadata(ctx, inst),
         "ReflectionProperty" => reflection_property_metadata(ctx, inst),
         "ReflectionParameter" => reflection_parameter_metadata(ctx, inst),
@@ -760,6 +759,28 @@ fn reflection_class_metadata_for_name(
         });
     }
     Ok(empty_reflection_metadata())
+}
+
+/// Resolves `ReflectionFunction(function)` metadata.
+fn reflection_function_metadata(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some(function_operand) = inst.operands.first().copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let function_name = const_required_string_operand(ctx, function_operand, "ReflectionFunction")?;
+    let Some(function) = ctx.function_by_name(&function_name) else {
+        return Ok(empty_reflection_metadata());
+    };
+    let Some(signature) = function.signature.as_ref() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let mut metadata = empty_reflection_metadata();
+    metadata.reflected_name = Some(function.name.trim_start_matches('\\').to_string());
+    metadata.parameter_members = reflection_parameter_members(signature);
+    metadata.required_parameter_count = reflection_required_parameter_count(signature);
+    Ok(metadata)
 }
 
 /// Resolves `ReflectionMethod(class, method)` metadata.

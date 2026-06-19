@@ -240,6 +240,9 @@ impl Checker {
         if class_name == "ReflectionParameter" {
             return self.validate_reflection_parameter_constructor(&normalized_args, expr, env);
         }
+        if class_name == "ReflectionFunction" {
+            return self.validate_reflection_function_constructor(&normalized_args, expr, env);
+        }
 
         let reflected_class =
             self.reflection_class_literal_arg(class_name, &normalized_args[0], env)?;
@@ -296,6 +299,34 @@ impl Checker {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Validates `new ReflectionFunction(function)` for a statically known user function.
+    fn validate_reflection_function_constructor(
+        &mut self,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let function_name = self.reflection_string_literal_arg(
+            "ReflectionFunction",
+            "function name",
+            args.first(),
+            env,
+        )?;
+        if self
+            .reflection_function_signature(&function_name)?
+            .is_some()
+        {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            expr.span,
+            &format!(
+                "ReflectionFunction::__construct(): Function {}() does not exist",
+                function_name
+            ),
+        ))
     }
 
     /// Validates `new ReflectionParameter(target, param)`.
@@ -1100,6 +1131,7 @@ fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
         "ReflectionClass"
+            | "ReflectionFunction"
             | "ReflectionMethod"
             | "ReflectionProperty"
             | "ReflectionFunction"
