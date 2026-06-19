@@ -200,7 +200,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         .or_else(|| reflection_property_offset(info, "__parameters"))
         .or_else(|| reflection_property_offset(info, "__types"));
     let property_objects_lo = reflection_property_offset(info, "__properties");
-    let parent_class_lo = reflection_property_offset(info, "__parent_class");
+    let parent_class_lo = reflection_property_offset(info, "__parent_class")
+        .or_else(|| reflection_property_offset(info, "__declaring_class"));
     let is_final_lo = reflection_property_offset(info, "__is_final");
     let is_abstract_lo = reflection_property_offset(info, "__is_abstract");
     let is_interface_lo = reflection_property_offset(info, "__is_interface");

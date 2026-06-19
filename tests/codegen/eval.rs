@@ -6299,6 +6299,46 @@ echo $visibleProp->isPublic() ? "U" : "u";');
     assert_eq!(out.stdout, "SPurfa:APs:FUs:SRp:sPu");
 }
 
+/// Verifies eval reflectors expose their declaring class through the bridge.
+#[test]
+fn test_eval_reflection_members_report_declaring_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalDeclaringBase {
+    public $baseProp = 1;
+    public function inherited() { return "base"; }
+    public const BASE_CONST = 10;
+}
+class EvalDeclaringChild extends EvalDeclaringBase {
+    public $childProp = 2;
+    public function own() { return "child"; }
+    public const CHILD_CONST = 20;
+}
+enum EvalDeclaringEnum: string {
+    case Ready = "ready";
+    public const LEVEL = 3;
+}
+echo (new ReflectionMethod("EvalDeclaringChild", "inherited"))->getDeclaringClass()->getName() . ":";
+echo (new ReflectionClass("EvalDeclaringChild"))->getMethod("own")->getDeclaringClass()->getName() . ":";
+echo (new ReflectionProperty("EvalDeclaringChild", "baseProp"))->getDeclaringClass()->getName() . ":";
+echo (new ReflectionClass("EvalDeclaringChild"))->getProperty("childProp")->getDeclaringClass()->getName() . ":";
+echo (new ReflectionClass("EvalDeclaringChild"))->getReflectionConstant("BASE_CONST")->getDeclaringClass()->getName() . ":";
+echo (new ReflectionClassConstant("EvalDeclaringChild", "BASE_CONST"))->getDeclaringClass()->getName() . ":";
+echo (new ReflectionClass("EvalDeclaringEnum"))->getReflectionConstant("Ready")->getDeclaringClass()->getName() . ":";
+echo (new ReflectionEnumBackedCase("EvalDeclaringEnum", "Ready"))->getDeclaringClass()->getName();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalDeclaringBase:EvalDeclaringChild:EvalDeclaringBase:EvalDeclaringChild:EvalDeclaringBase:EvalDeclaringBase:EvalDeclaringEnum:EvalDeclaringEnum"
+    );
+}
+
 /// Verifies eval ReflectionClass getMethods/getProperties return member objects through the bridge.
 #[test]
 fn test_eval_reflection_class_lists_member_objects() {

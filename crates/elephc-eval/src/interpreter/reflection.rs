@@ -48,6 +48,7 @@ struct EvalReflectionClassMetadata {
 
 /// Eval metadata needed to materialize one `ReflectionMethod` or `ReflectionProperty` owner object.
 struct EvalReflectionMemberMetadata {
+    declaring_class_name: Option<String>,
     attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
     is_static: bool,
@@ -377,7 +378,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
         &[],
         &[],
         &[],
-        None,
+        member.declaring_class_name.as_deref(),
         &member.parameters,
         flags,
         member.required_parameter_count as u64,
@@ -421,8 +422,8 @@ fn eval_reflection_class_constant_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let attributes =
-        eval_reflection_class_constant_attributes(reflected_name, constant_name, context)
+    let (declaring_class_name, attributes) =
+        eval_reflection_class_constant_metadata(reflected_name, constant_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
@@ -432,7 +433,7 @@ fn eval_reflection_class_constant_object_result(
         &[],
         &[],
         &[],
-        None,
+        Some(&declaring_class_name),
         &[],
         0,
         0,
@@ -540,7 +541,7 @@ fn eval_reflection_method_new(
         &[],
         &[],
         &[],
-        None,
+        method.declaring_class_name.as_deref(),
         &method.parameters,
         flags,
         method.required_parameter_count as u64,
@@ -576,7 +577,7 @@ fn eval_reflection_property_new(
         &[],
         &[],
         &[],
-        None,
+        property.declaring_class_name.as_deref(),
         &[],
         flags,
         0,
@@ -601,8 +602,8 @@ fn eval_reflection_class_constant_new(
         return Ok(None);
     }
     let constant_name = eval_reflection_string_arg(args[1], values)?;
-    let attributes =
-        eval_reflection_class_constant_attributes(&class_name, &constant_name, context)
+    let (declaring_class_name, attributes) =
+        eval_reflection_class_constant_metadata(&class_name, &constant_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
@@ -612,7 +613,7 @@ fn eval_reflection_class_constant_new(
         &[],
         &[],
         &[],
-        None,
+        Some(&declaring_class_name),
         &[],
         0,
         0,
@@ -645,6 +646,7 @@ fn eval_reflection_enum_case_new(
         return Err(EvalStatus::RuntimeFatal);
     }
     let case_name = eval_reflection_string_arg(args[1], values)?;
+    let declaring_class_name = enum_decl.name().to_string();
     let attributes = enum_decl
         .case(&case_name)
         .map(|case| case.attributes().to_vec())
@@ -657,7 +659,7 @@ fn eval_reflection_enum_case_new(
         &[],
         &[],
         &[],
-        None,
+        Some(&declaring_class_name),
         &[],
         0,
         0,
@@ -683,12 +685,47 @@ fn eval_reflection_owner_object(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reflection_owner_object_with_members(
+        owner_kind,
+        reflected_name,
+        attributes,
+        interface_names,
+        trait_names,
+        method_names,
+        property_names,
+        parent_class_name,
+        parameter_metadata,
+        flags,
+        modifiers,
+        true,
+        context,
+        values,
+    )
+}
+
+/// Materializes one Reflection owner object with optional nested class member objects.
+fn eval_reflection_owner_object_with_members(
+    owner_kind: u64,
+    reflected_name: &str,
+    attributes: &[EvalAttribute],
+    interface_names: &[String],
+    trait_names: &[String],
+    method_names: &[String],
+    property_names: &[String],
+    parent_class_name: Option<&str>,
+    parameter_metadata: &[EvalReflectionParameterMetadata],
+    flags: u64,
+    modifiers: u64,
+    include_class_members: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let attrs = eval_reflection_attribute_array_result(attributes, context, values)?;
     let interface_names_array = eval_reflection_string_array_result(interface_names, values)?;
     let trait_names_array = eval_reflection_string_array_result(trait_names, values)?;
     let method_names_array = eval_reflection_string_array_result(method_names, values)?;
     let property_names_array = eval_reflection_string_array_result(property_names, values)?;
-    let method_objects = if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
+    let method_objects = if owner_kind == EVAL_REFLECTION_OWNER_CLASS && include_class_members {
         eval_reflection_member_object_array_result(
             EVAL_REFLECTION_OWNER_METHOD,
             reflected_name,
@@ -701,7 +738,7 @@ fn eval_reflection_owner_object(
     } else {
         values.array_new(0)?
     };
-    let property_objects = if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
+    let property_objects = if owner_kind == EVAL_REFLECTION_OWNER_CLASS && include_class_members {
         eval_reflection_member_object_array_result(
             EVAL_REFLECTION_OWNER_PROPERTY,
             reflected_name,
@@ -712,8 +749,13 @@ fn eval_reflection_owner_object(
     } else {
         values.array_new(0)?
     };
-    let parent_class =
-        eval_reflection_parent_class_result(owner_kind, parent_class_name, context, values)?;
+    let parent_class = eval_reflection_related_class_result(
+        owner_kind,
+        parent_class_name,
+        include_class_members,
+        context,
+        values,
+    )?;
     let object = values.reflection_owner_new(
         owner_kind,
         reflected_name,
@@ -743,20 +785,40 @@ fn eval_reflection_owner_object(
     Ok(object)
 }
 
-/// Builds the `ReflectionClass|false` value stored in one ReflectionClass parent slot.
-fn eval_reflection_parent_class_result(
+/// Builds the `ReflectionClass|false` value stored in parent or declaring-class slots.
+fn eval_reflection_related_class_result(
     owner_kind: u64,
-    parent_class_name: Option<&str>,
+    related_class_name: Option<&str>,
+    include_class_members: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if owner_kind != EVAL_REFLECTION_OWNER_CLASS {
-        return values.bool_value(false);
-    }
-    let Some(parent_class_name) = parent_class_name else {
+    let Some(related_class_name) = related_class_name else {
         return values.bool_value(false);
     };
-    let Some(metadata) = eval_reflection_class_like_attributes(parent_class_name, context) else {
+    if owner_kind == EVAL_REFLECTION_OWNER_CLASS && include_class_members {
+        return eval_reflection_full_class_object_result(related_class_name, context, values);
+    }
+    if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_METHOD
+            | EVAL_REFLECTION_OWNER_PROPERTY
+            | EVAL_REFLECTION_OWNER_CLASS_CONSTANT
+            | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
+            | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+    ) {
+        return eval_reflection_shallow_class_object_result(related_class_name, context, values);
+    }
+    values.bool_value(false)
+}
+
+/// Builds a full `ReflectionClass` object for parent-class metadata.
+fn eval_reflection_full_class_object_result(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
         return values.bool_value(false);
     };
     eval_reflection_owner_object(
@@ -771,6 +833,33 @@ fn eval_reflection_parent_class_result(
         &[],
         metadata.flags,
         metadata.modifiers,
+        context,
+        values,
+    )
+}
+
+/// Builds a shallow `ReflectionClass` object for member declaring-class metadata.
+fn eval_reflection_shallow_class_object_result(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
+        return values.bool_value(false);
+    };
+    eval_reflection_owner_object_with_members(
+        EVAL_REFLECTION_OWNER_CLASS,
+        &metadata.resolved_name,
+        &metadata.attributes,
+        &metadata.interface_names,
+        &metadata.trait_names,
+        &[],
+        &[],
+        None,
+        &[],
+        metadata.flags,
+        metadata.modifiers,
+        false,
         context,
         values,
     )
@@ -1028,7 +1117,7 @@ fn eval_reflection_member_object_array_result(
             &[],
             &[],
             &[],
-            None,
+            member.declaring_class_name.as_deref(),
             &member.parameters,
             flags,
             member.required_parameter_count as u64,
@@ -1187,20 +1276,20 @@ fn eval_reflection_class_modifiers(
     modifiers
 }
 
-/// Returns attributes attached to an eval class constant or enum case.
-fn eval_reflection_class_constant_attributes(
+/// Returns declaring class and attributes attached to an eval class constant or enum case.
+fn eval_reflection_class_constant_metadata(
     class_name: &str,
     constant_name: &str,
     context: &ElephcEvalContext,
-) -> Option<Vec<EvalAttribute>> {
+) -> Option<(String, Vec<EvalAttribute>)> {
     if let Some(enum_decl) = context.enum_decl(class_name) {
         if let Some(case) = enum_decl.case(constant_name) {
-            return Some(case.attributes().to_vec());
+            return Some((enum_decl.name().to_string(), case.attributes().to_vec()));
         }
     }
     context
         .class_constant(class_name, constant_name)
-        .map(|(_, constant)| constant.attributes().to_vec())
+        .map(|(declaring_class, constant)| (declaring_class, constant.attributes().to_vec()))
 }
 
 /// Returns true when a name resolves to an eval-declared class-like symbol.
@@ -1288,7 +1377,8 @@ fn eval_reflection_method_metadata(
     if context.has_class(class_name) || context.has_enum(class_name) {
         return context
             .class_method(class_name, method_name)
-            .map(|(_, method)| EvalReflectionMemberMetadata {
+            .map(|(declaring_class, method)| EvalReflectionMemberMetadata {
+                declaring_class_name: Some(declaring_class),
                 attributes: method.attributes().to_vec(),
                 visibility: method.visibility(),
                 is_static: method.is_static(),
@@ -1315,6 +1405,7 @@ fn eval_reflection_method_metadata(
             .into_iter()
             .find(|method| method.name().eq_ignore_ascii_case(method_name))
             .map(|method| EvalReflectionMemberMetadata {
+                declaring_class_name: Some(class_name.to_string()),
                 attributes: method.attributes().to_vec(),
                 visibility: EvalVisibility::Public,
                 is_static: method.is_static(),
@@ -1341,6 +1432,7 @@ fn eval_reflection_method_metadata(
             .iter()
             .find(|method| method.name().eq_ignore_ascii_case(method_name))
             .map(|method| EvalReflectionMemberMetadata {
+                declaring_class_name: Some(trait_decl.name().to_string()),
                 attributes: method.attributes().to_vec(),
                 visibility: method.visibility(),
                 is_static: method.is_static(),
@@ -1372,7 +1464,8 @@ fn eval_reflection_property_metadata(
     if context.has_class(class_name) || context.has_enum(class_name) {
         return context
             .class_property(class_name, property_name)
-            .map(|(_, property)| EvalReflectionMemberMetadata {
+            .map(|(declaring_class, property)| EvalReflectionMemberMetadata {
+                declaring_class_name: Some(declaring_class),
                 attributes: property.attributes().to_vec(),
                 visibility: property.visibility(),
                 is_static: property.is_static(),
@@ -1388,6 +1481,7 @@ fn eval_reflection_property_metadata(
             .into_iter()
             .find(|property| property.name() == property_name)
             .map(|property| EvalReflectionMemberMetadata {
+                declaring_class_name: Some(class_name.to_string()),
                 attributes: property.attributes().to_vec(),
                 visibility: EvalVisibility::Public,
                 is_static: false,
@@ -1403,6 +1497,7 @@ fn eval_reflection_property_metadata(
             .iter()
             .find(|property| property.name() == property_name)
             .map(|property| EvalReflectionMemberMetadata {
+                declaring_class_name: Some(trait_decl.name().to_string()),
                 attributes: property.attributes().to_vec(),
                 visibility: property.visibility(),
                 is_static: property.is_static(),

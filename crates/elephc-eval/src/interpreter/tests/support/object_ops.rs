@@ -158,6 +158,10 @@ impl FakeOps {
                 Self::object_property(&properties, "__parent_class")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "getdeclaringclass") if args.is_empty() => {
+                Self::object_property(&properties, "__declaring_class")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "getmodifiers") if args.is_empty() => {
                 Self::object_property(&properties, "__modifiers").map_or_else(|| self.int(0), Ok)
             }
@@ -512,6 +516,16 @@ impl FakeOps {
             properties.push(("__is_public".to_string(), is_public));
             properties.push(("__is_protected".to_string(), is_protected));
             properties.push(("__is_private".to_string(), is_private));
+        }
+        if matches!(
+            owner_kind,
+            EVAL_REFLECTION_OWNER_METHOD
+                | EVAL_REFLECTION_OWNER_PROPERTY
+                | EVAL_REFLECTION_OWNER_CLASS_CONSTANT
+                | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
+                | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+        ) {
+            properties.push(("__declaring_class".to_string(), parent_class));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
             let is_final = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL) != 0)?;

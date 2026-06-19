@@ -723,6 +723,47 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval member and enum-case reflectors expose their declaring class.
+#[test]
+fn execute_program_reflects_eval_declaring_class_metadata() {
+    let program = parse_fragment(
+        br#"class EvalDeclaringBase {
+    public $baseProp = 1;
+    public function inherited() { return "base"; }
+    public const BASE_CONST = 10;
+}
+class EvalDeclaringChild extends EvalDeclaringBase {
+    public $childProp = 2;
+    public function own() { return "child"; }
+    public const CHILD_CONST = 20;
+}
+enum EvalDeclaringEnum: string {
+    case Ready = "ready";
+    public const LEVEL = 3;
+}
+echo (new ReflectionMethod("EvalDeclaringChild", "inherited"))->getDeclaringClass()->getName(); echo ":";
+echo (new ReflectionClass("EvalDeclaringChild"))->getMethod("own")->getDeclaringClass()->getName(); echo ":";
+echo (new ReflectionProperty("EvalDeclaringChild", "baseProp"))->getDeclaringClass()->getName(); echo ":";
+echo (new ReflectionClass("EvalDeclaringChild"))->getProperty("childProp")->getDeclaringClass()->getName(); echo ":";
+echo (new ReflectionClass("EvalDeclaringChild"))->getReflectionConstant("BASE_CONST")->getDeclaringClass()->getName(); echo ":";
+echo (new ReflectionClassConstant("EvalDeclaringChild", "BASE_CONST"))->getDeclaringClass()->getName(); echo ":";
+echo (new ReflectionClass("EvalDeclaringEnum"))->getReflectionConstant("Ready")->getDeclaringClass()->getName(); echo ":";
+echo (new ReflectionEnumBackedCase("EvalDeclaringEnum", "Ready"))->getDeclaringClass()->getName();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EvalDeclaringBase:EvalDeclaringChild:EvalDeclaringBase:EvalDeclaringChild:EvalDeclaringBase:EvalDeclaringBase:EvalDeclaringEnum:EvalDeclaringEnum"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod exposes eval method parameter objects with names and positions.
 #[test]
 fn execute_program_reflects_eval_method_parameters() {

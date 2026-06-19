@@ -1602,6 +1602,41 @@ echo $visibleProp->isPublic() ? "U" : "u";
     assert_eq!(out, "SPurfa:APs:FUs:SRp:sPu");
 }
 
+/// Verifies member and enum-case reflectors expose their declaring class object.
+#[test]
+fn test_reflection_members_report_declaring_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectDeclaringBase {
+    public int $baseProp = 1;
+    public function inherited(): string { return "base"; }
+    public const BASE_CONST = 10;
+}
+class ReflectDeclaringChild extends ReflectDeclaringBase {
+    public int $childProp = 2;
+    public function own(): string { return "child"; }
+    public const CHILD_CONST = 20;
+}
+enum ReflectDeclaringEnum: string {
+    case Ready = "ready";
+    public const LEVEL = 3;
+}
+echo (new ReflectionMethod(ReflectDeclaringChild::class, "inherited"))->getDeclaringClass()->getName() . ":";
+echo (new ReflectionClass(ReflectDeclaringChild::class))->getMethod("own")->getDeclaringClass()->getName() . ":";
+echo (new ReflectionProperty(ReflectDeclaringChild::class, "baseProp"))->getDeclaringClass()->getName() . ":";
+echo (new ReflectionClass(ReflectDeclaringChild::class))->getProperty("childProp")->getDeclaringClass()->getName() . ":";
+echo (new ReflectionClass(ReflectDeclaringChild::class))->getReflectionConstant("BASE_CONST")->getDeclaringClass()->getName() . ":";
+echo (new ReflectionClassConstant(ReflectDeclaringChild::class, "BASE_CONST"))->getDeclaringClass()->getName() . ":";
+echo (new ReflectionClass(ReflectDeclaringEnum::class))->getReflectionConstant("Ready")->getDeclaringClass()->getName() . ":";
+echo (new ReflectionEnumBackedCase(ReflectDeclaringEnum::class, "Ready"))->getDeclaringClass()->getName();
+"#,
+    );
+    assert_eq!(
+        out,
+        "ReflectDeclaringBase:ReflectDeclaringChild:ReflectDeclaringBase:ReflectDeclaringChild:ReflectDeclaringBase:ReflectDeclaringBase:ReflectDeclaringEnum:ReflectDeclaringEnum"
+    );
+}
+
 /// Verifies that `ReflectionClass::getMethods()` and `getProperties()` return
 /// populated ReflectionMethod/ReflectionProperty objects with member metadata.
 #[test]

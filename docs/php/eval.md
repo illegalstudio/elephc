@@ -186,7 +186,10 @@ constant or case is visible.
 `ReflectionClass::getMethods()` and `ReflectionClass::getProperties()` return
 materialized `ReflectionMethod` and `ReflectionProperty` objects for the same
 visible member metadata, including supported member attributes and predicate
-flags. `ReflectionClass::getParentClass()` returns a materialized
+flags. `ReflectionMethod::getDeclaringClass()` and
+`ReflectionProperty::getDeclaringClass()` return a materialized
+`ReflectionClass` for the eval class-like symbol that declares the reflected
+member. `ReflectionClass::getParentClass()` returns a materialized
 `ReflectionClass` for eval-declared parent classes or `false` when no parent
 class exists. `ReflectionClass::newInstance()` constructs eval-declared reflected
 classes and forwards constructor arguments through eval's positional, named, and
@@ -232,7 +235,9 @@ when the variadic container itself is not rebound, and are reported through
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant
 and enum-case attributes through the same materialized `ReflectionAttribute`
-shape; their `getName()` methods return the reflected constant or case name.
+shape; their `getName()` methods return the reflected constant or case name,
+and `getDeclaringClass()` returns the declaring class or enum as a
+`ReflectionClass`.
 Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the

@@ -1410,6 +1410,25 @@ fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_class_string_method("getName", "__name"));
     }
     add_reflection_member_flag_methods(name, &mut properties, &mut methods);
+    if matches!(
+        name,
+        "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
+    ) {
+        properties.push(builtin_property(
+            "__declaring_class",
+            Visibility::Private,
+            Some(mixed_type()),
+            false_bool(),
+        ));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getDeclaringClass",
+            "__declaring_class",
+        ));
+    }
     if matches!(name, "ReflectionFunction" | "ReflectionMethod") {
         properties.push(builtin_property(
             "__parameters",
