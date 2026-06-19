@@ -3677,6 +3677,9 @@ fn lower_unset_locals(
             ExprKind::ArrayAccess { array, index } => {
                 lower_unset_array_access(ctx, array, index, arg);
             }
+            ExprKind::PropertyAccess { object, property } => {
+                lower_unset_property_access(ctx, object, property, arg);
+            }
             _ => {}
         }
     }
@@ -3688,6 +3691,9 @@ fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     match &arg.kind {
         ExprKind::Variable(_) => true,
         ExprKind::ArrayAccess { array, .. } => unset_array_access_has_object_receiver(ctx, array),
+        ExprKind::PropertyAccess { object, property } => {
+            unset_property_access_has_direct_lowering(ctx, object, property)
+        }
         _ => false,
     }
 }
@@ -3721,6 +3727,132 @@ fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Returns true when a property unset target can be lowered without normal property storage support.
+fn unset_property_access_has_direct_lowering(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    matches!(
+        property_unset_action(ctx, object, property),
+        Some(UnsetPropertyAction::Magic | UnsetPropertyAction::Noop)
+    )
+}
+
+/// Lowers `unset($object->property)` for magic and no-op property targets.
+fn lower_unset_property_access(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    expr: &Expr,
+) {
+    match property_unset_action(ctx, object, property) {
+        Some(UnsetPropertyAction::Magic) => {
+            let object = lower_expr(ctx, object);
+            lower_magic_property_unset(ctx, object, property, expr);
+        }
+        Some(UnsetPropertyAction::Noop) => {
+            lower_expr(ctx, object);
+        }
+        Some(UnsetPropertyAction::Fallback) | None => {}
+    }
+}
+
+/// Describes how `unset($object->property)` should be lowered for a known receiver class.
+enum UnsetPropertyAction {
+    Fallback,
+    Magic,
+    Noop,
+}
+
+/// Selects the PHP-visible `unset()` behavior for a statically known object property operand.
+fn property_unset_action(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> Option<UnsetPropertyAction> {
+    let (class_name, _) = isset_object_expr_class(ctx, object)?;
+    if is_builtin_stdclass_name(&class_name) {
+        return Some(UnsetPropertyAction::Fallback);
+    }
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    if class_info.allow_dynamic_properties {
+        return Some(UnsetPropertyAction::Fallback);
+    }
+    if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
+        return Some(UnsetPropertyAction::Fallback);
+    }
+    if class_method_signature(ctx, &class_name, &php_symbol_key("__unset")).is_some() {
+        Some(UnsetPropertyAction::Magic)
+    } else {
+        Some(UnsetPropertyAction::Noop)
+    }
+}
+
+/// Lowers a magic `__unset($name)` call, guarding nullable receivers as a no-op.
+fn lower_magic_property_unset(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) {
+    if value_is_nullable(ctx, object.value) {
+        lower_nullable_magic_property_unset(ctx, object, property, expr);
+        return;
+    }
+    let args = vec![Expr::new(
+        ExprKind::StringLiteral(property.to_string()),
+        expr.span,
+    )];
+    lower_method_call_with_receiver(ctx, object, "__unset", &args, Op::MethodCall, expr);
+}
+
+/// Lowers `__unset` for nullable receivers, doing nothing when the receiver is null.
+fn lower_nullable_magic_property_unset(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) {
+    let null_block = ctx
+        .builder
+        .create_named_block("unset.property.null", Vec::new());
+    let call_block = ctx
+        .builder
+        .create_named_block("unset.property.call", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("unset.property.merge", Vec::new());
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![object.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: call_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(call_block);
+    let args = vec![Expr::new(
+        ExprKind::StringLiteral(property.to_string()),
+        expr.span,
+    )];
+    lower_method_call_with_receiver(ctx, object, "__unset", &args, Op::MethodCall, expr);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
 }
 
 /// Lowers `array_push($local, $value)` as a direct indexed-array mutation.

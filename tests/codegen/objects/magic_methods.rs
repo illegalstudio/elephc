@@ -179,6 +179,76 @@ echo isset($s->token) ? "Y" : "N";
     assert_eq!(out, "magic:token;Y");
 }
 
+/// Verifies `__unset` is invoked for undefined property unsets.
+#[test]
+fn test_magic_unset_handles_missing_property_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class Probe {
+    public function __unset($name) {
+        echo "unset:" . $name . ";";
+    }
+}
+$p = new Probe();
+unset($p->missing);
+echo "done";
+"#,
+    );
+    assert_eq!(out, "unset:missing;done");
+}
+
+/// Verifies `unset()` does not read an undefined property through `__get`.
+#[test]
+fn test_magic_unset_missing_property_does_not_call_magic_get() {
+    let out = compile_and_run(
+        r#"<?php
+class Probe {
+    public function __get($name) {
+        echo "get:" . $name . ";";
+        return 1;
+    }
+}
+$p = new Probe();
+unset($p->missing);
+echo "done";
+"#,
+    );
+    assert_eq!(out, "done");
+}
+
+/// Verifies `__unset` is invoked for inaccessible property unsets from outside the class.
+#[test]
+fn test_magic_unset_handles_inaccessible_property_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class Secret {
+    private $token = 1;
+    public function __unset($name) {
+        echo "magic:" . $name . ";";
+    }
+}
+$s = new Secret();
+unset($s->token);
+echo "done";
+"#,
+    );
+    assert_eq!(out, "magic:token;done");
+}
+
+/// Verifies unsetting an undefined property without `__unset` is a no-op.
+#[test]
+fn test_magic_unset_missing_property_without_magic_is_noop() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain {}
+$p = new Plain();
+unset($p->missing);
+echo "done";
+"#,
+    );
+    assert_eq!(out, "done");
+}
+
 /// Verifies `__invoke` is called when an object is invoked as a function via a variable holding the object.
 #[test]
 fn test_magic_invoke_handles_variable_object_call() {

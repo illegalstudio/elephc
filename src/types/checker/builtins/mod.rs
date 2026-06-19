@@ -62,8 +62,8 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
         let normalized_args;
-        let skip_eager_arg_normalization =
-            crate::names::php_symbol_key(name.trim_start_matches('\\')) == "isset";
+        let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        let skip_eager_arg_normalization = matches!(builtin_key.as_str(), "isset" | "unset");
         let args = if !skip_eager_arg_normalization {
             if let Some(sig) = crate::types::builtin_call_sig(name) {
                 normalized_args = self.normalize_builtin_call_args(

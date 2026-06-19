@@ -179,9 +179,12 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 let builtin_name = name.trim_start_matches('\\');
-                if builtin_name.eq_ignore_ascii_case("isset") {
+                if matches!(
+                    php_symbol_key(builtin_name).as_str(),
+                    "isset" | "unset"
+                ) {
                     for arg in &expanded_args {
-                        self.infer_isset_arg_assignment_effects(arg, env)?;
+                        self.infer_non_reading_arg_assignment_effects(arg, env)?;
                     }
                     return self.infer_type(expr, env);
                 }
@@ -291,8 +294,8 @@ impl Checker {
         }
     }
 
-    /// Infers effects for one `isset()` operand without treating object properties as reads.
-    fn infer_isset_arg_assignment_effects(
+    /// Infers effects for a language-construct operand without treating properties as reads.
+    fn infer_non_reading_arg_assignment_effects(
         &mut self,
         arg: &Expr,
         env: &mut TypeEnv,
@@ -315,7 +318,7 @@ impl Checker {
                 Ok(())
             }
             ExprKind::NamedArg { value, .. } => {
-                self.infer_isset_arg_assignment_effects(value, env)
+                self.infer_non_reading_arg_assignment_effects(value, env)
             }
             _ => {
                 self.infer_type_with_assignment_effects(arg, env)?;

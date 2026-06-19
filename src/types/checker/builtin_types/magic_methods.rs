@@ -16,12 +16,13 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
-/// Patches the type signatures for magic methods `__get`, `__set`, `__isset`, `__call`, and `__callStatic`
+/// Patches the type signatures for magic methods `__get`, `__set`, `__isset`, `__unset`, `__call`, and `__callStatic`
 /// on user-declared classes to enforce PHP-correct parameter types.
 ///
 /// For `__get`: parameter 0 is `PhpType::Str`.
 /// For `__set`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Mixed`.
 /// For `__isset`: parameter 0 is `PhpType::Str`; declared return types are validated separately.
+/// For `__unset`: parameter 0 is `PhpType::Str`; declared return types are validated separately.
 /// For `__call`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Array` of `PhpType::Never`.
 /// For `__callStatic`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Array` of `PhpType::Never`.
 /// Does nothing for classes that do not declare these methods.
@@ -45,6 +46,11 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
                 param.1 = PhpType::Str;
             }
         }
+        if let Some(sig) = class_info.methods.get_mut("__unset") {
+            if let Some(param) = sig.params.get_mut(0) {
+                param.1 = PhpType::Str;
+            }
+        }
         if let Some(sig) = class_info.methods.get_mut("__call") {
             if let Some(param) = sig.params.get_mut(0) {
                 param.1 = PhpType::Str;
@@ -64,7 +70,7 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
     }
 }
 
-/// Validates that user-declared magic methods (`__toString`, `__get`, `__set`, `__isset`, `__call`, `__callStatic`, `__invoke`)
+/// Validates that user-declared magic methods (`__toString`, `__get`, `__set`, `__isset`, `__unset`, `__call`, `__callStatic`, `__invoke`)
 /// conform to PHP's static/non-static, visibility, arity, and return-type rules.
 ///
 /// Returns `Ok(())` if all declared magic methods are contract-compliant.
@@ -191,6 +197,39 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must return bool: {}::__isset", class_name),
+                        ));
+                    }
+                }
+                "__unset" => {
+                    if method.is_static {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be non-static: {}::__unset", class_name),
+                        ));
+                        continue;
+                    }
+                    if method.visibility != Visibility::Public {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be public: {}::__unset", class_name),
+                        ));
+                        continue;
+                    }
+                    if method.params.len() != 1 || method.variadic.is_some() {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must take 1 argument: {}::__unset", class_name),
+                        ));
+                        continue;
+                    }
+                    if method
+                        .return_type
+                        .as_ref()
+                        .is_some_and(|return_type| !matches!(return_type, TypeExpr::Void))
+                    {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must return void: {}::__unset", class_name),
                         ));
                     }
                 }

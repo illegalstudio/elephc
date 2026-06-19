@@ -240,6 +240,55 @@ fn test_error_magic_isset_declared_return_type_must_be_bool() {
     );
 }
 
+/// Verifies that a `static` `__unset` reports
+/// "Magic method must be non-static: Bag::__unset".
+#[test]
+fn test_error_magic_unset_must_be_non_static() {
+    expect_error(
+        "<?php class Bag { public static function __unset($name) { } }",
+        "Magic method must be non-static: Bag::__unset",
+    );
+}
+
+/// Verifies that a private `__unset` method reports
+/// "Magic method must be public: Bag::__unset".
+#[test]
+fn test_error_magic_unset_must_be_public() {
+    expect_error(
+        "<?php class Bag { private function __unset($name) { } }",
+        "Magic method must be public: Bag::__unset",
+    );
+}
+
+/// Verifies that `__unset` with no parameters reports
+/// "Magic method must take 1 argument: Bag::__unset".
+#[test]
+fn test_error_magic_unset_must_take_one_argument() {
+    expect_error(
+        "<?php class Bag { public function __unset() { } }",
+        "Magic method must take 1 argument: Bag::__unset",
+    );
+}
+
+/// Verifies that `__unset` with a non-void declared return type reports
+/// "Magic method must return void: Bag::__unset".
+#[test]
+fn test_error_magic_unset_declared_return_type_must_be_void() {
+    expect_error(
+        "<?php class Bag { public function __unset($name): bool { return true; } }",
+        "Magic method must return void: Bag::__unset",
+    );
+}
+
+/// Verifies that unsetting an inaccessible property without `__unset` remains an access error.
+#[test]
+fn test_error_unset_private_property_without_magic_unset() {
+    expect_error(
+        "<?php class Bag { private $token = 1; } $bag = new Bag(); unset($bag->token);",
+        "Cannot access private property: Bag::token",
+    );
+}
+
 /// Verifies that `__call` with only one parameter reports
 /// "Magic method must take 2 arguments: Proxy::__call".
 #[test]
