@@ -17,6 +17,12 @@ use super::super::super::Checker;
 
 mod reflection;
 
+/// Compile-time selector accepted by `ReflectionParameter::__construct()`.
+enum ReflectionParameterSelector {
+    Name(String),
+    Position(i64),
+}
+
 impl Checker {
     /// Infers the type of a `new Class(...)` expression.
     ///
@@ -180,12 +186,11 @@ impl Checker {
             && self.current_method.as_deref() == Some(get_iterator_key.as_str())
     }
 
-    /// Validates constructor arguments for reflection owner classes
-    /// (`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`).
+    /// Validates constructor arguments for reflection owner classes.
     ///
-    /// Extracts the reflected class/method/property from string literal args,
-    /// then delegates to `validate_reflection_class_attrs`,
-    /// `validate_reflection_method_attrs`, or `validate_reflection_property_attrs`.
+    /// Extracts the reflected class/member metadata from literal arguments and
+    /// delegates to the focused ReflectionClass/Method/Property/Parameter
+    /// validation helpers.
     fn validate_reflection_owner_constructor(
         &mut self,
         class_name: &str,
@@ -213,6 +218,10 @@ impl Checker {
             env,
             &format!("Constructor '{}::__construct'", class_name),
         )?;
+
+        if class_name == "ReflectionParameter" {
+            return self.validate_reflection_parameter_constructor(&normalized_args, expr, env);
+        }
 
         let reflected_class =
             self.reflection_class_literal_arg(class_name, &normalized_args[0], env)?;
@@ -269,6 +278,140 @@ impl Checker {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Validates `new ReflectionParameter([ClassName::class, "method"], param)`.
+    ///
+    /// The currently supported constructor target is a statically known
+    /// class/interface/trait method array. The parameter selector must be an
+    /// integer position or string name known at compile time.
+    fn validate_reflection_parameter_constructor(
+        &mut self,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let (class_name, method_name) =
+            self.reflection_parameter_method_target(args.first(), env)?;
+        let sig = self
+            .reflection_method_signature(&class_name, &method_name)
+            .ok_or_else(|| {
+                CompileError::new(
+                    expr.span,
+                    &format!(
+                        "ReflectionParameter::__construct(): undefined method '{}::{}'",
+                        class_name, method_name
+                    ),
+                )
+            })?;
+        let selector = self.reflection_parameter_selector_arg(args.get(1), env)?;
+        match selector {
+            ReflectionParameterSelector::Name(name) => {
+                if sig.params.iter().any(|(param_name, _)| param_name == &name) {
+                    Ok(())
+                } else {
+                    Err(CompileError::new(
+                        expr.span,
+                        "ReflectionParameter::__construct(): parameter specified by name could not be found",
+                    ))
+                }
+            }
+            ReflectionParameterSelector::Position(position) => {
+                if position >= 0 && (position as usize) < sig.params.len() {
+                    Ok(())
+                } else {
+                    Err(CompileError::new(
+                        expr.span,
+                        "ReflectionParameter::__construct(): parameter specified by offset could not be found",
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Extracts the class and method names from the ReflectionParameter target array.
+    fn reflection_parameter_method_target(
+        &mut self,
+        arg: Option<&Expr>,
+        env: &TypeEnv,
+    ) -> Result<(String, String), CompileError> {
+        let arg = arg.expect("reflection parameter constructor arity was validated");
+        let arg_ty = self.infer_type(arg, env)?;
+        if !matches!(arg_ty.codegen_repr(), PhpType::Array(_) | PhpType::Mixed) {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() first argument must be a class-method array",
+            ));
+        }
+        let ExprKind::ArrayLiteral(items) = &arg.kind else {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() requires a literal class-method array target",
+            ));
+        };
+        if items.len() != 2 {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() expects array(class, method) as first argument",
+            ));
+        }
+        let class_name =
+            self.reflection_class_literal_arg("ReflectionParameter", &items[0], env)?;
+        let method_name = self.reflection_string_literal_arg(
+            "ReflectionParameter",
+            "method name",
+            items.get(1),
+            env,
+        )?;
+        Ok((class_name, method_name))
+    }
+
+    /// Extracts the name or position selector for `ReflectionParameter`.
+    fn reflection_parameter_selector_arg(
+        &mut self,
+        arg: Option<&Expr>,
+        env: &TypeEnv,
+    ) -> Result<ReflectionParameterSelector, CompileError> {
+        let arg = arg.expect("reflection parameter constructor arity was validated");
+        let arg_ty = self.infer_type(arg, env)?;
+        if !matches!(arg_ty, PhpType::Str | PhpType::Int) {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() second argument must be a string or int",
+            ));
+        }
+        match &arg.kind {
+            ExprKind::StringLiteral(name) => Ok(ReflectionParameterSelector::Name(name.clone())),
+            ExprKind::IntLiteral(position) => Ok(ReflectionParameterSelector::Position(*position)),
+            _ => Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() requires a literal parameter name or position",
+            )),
+        }
+    }
+
+    /// Returns the reflected method signature for class/interface metadata.
+    fn reflection_method_signature(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<FunctionSig> {
+        let method_key = php_symbol_key(method_name);
+        if let Some(class_info) = self.classes.get(class_name) {
+            return class_info
+                .methods
+                .get(&method_key)
+                .or_else(|| class_info.static_methods.get(&method_key))
+                .cloned();
+        }
+        if let Some(interface_info) = self.interfaces.get(class_name) {
+            return interface_info
+                .methods
+                .get(&method_key)
+                .or_else(|| interface_info.static_methods.get(&method_key))
+                .cloned();
+        }
+        None
     }
 
     /// Extracts the class name argument from a reflection constructor call.
@@ -803,13 +946,15 @@ fn fiber_callable_array_parts(expr: &Expr) -> Option<(&Expr, &str)> {
 
 /// Returns `true` if `class_name` is a reflection owner class
 /// (`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`,
-/// `ReflectionClassConstant`, `ReflectionEnumUnitCase`, `ReflectionEnumBackedCase`).
+/// `ReflectionParameter`, `ReflectionClassConstant`, `ReflectionEnumUnitCase`,
+/// `ReflectionEnumBackedCase`).
 fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
         "ReflectionClass"
             | "ReflectionMethod"
             | "ReflectionProperty"
+            | "ReflectionParameter"
             | "ReflectionClassConstant"
             | "ReflectionEnumUnitCase"
             | "ReflectionEnumBackedCase"

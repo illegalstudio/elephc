@@ -1254,7 +1254,10 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
         ),
     ];
     let methods = vec![
-        builtin_reflection_private_constructor_method(),
+        builtin_reflection_owner_constructor_method(vec![
+            ("function", Some(mixed_type()), None, false),
+            ("param", Some(mixed_type()), None, false),
+        ]),
         builtin_reflection_class_string_method("getName", "__name"),
         builtin_reflection_class_int_method("getPosition", "__position"),
         builtin_reflection_class_bool_method("isOptional", "__is_optional"),

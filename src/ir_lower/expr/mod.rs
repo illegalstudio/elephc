@@ -7805,6 +7805,20 @@ fn lower_new_object(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionparameter" {
+        if let Some(operands) = lower_reflection_parameter_constructor_operands(ctx, args) {
+            let php_type = PhpType::Object(class_name.as_str().to_string());
+            let data = ctx.intern_class_name(class_name.as_str());
+            return ctx.emit_value(
+                Op::ObjectNew,
+                operands,
+                Some(Immediate::Data(data)),
+                php_type,
+                Op::ObjectNew.default_effects(),
+                Some(expr.span),
+            );
+        }
+    }
     let sig = constructor_signature(ctx, class_name).cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());
@@ -7817,6 +7831,70 @@ fn lower_new_object(
         Op::ObjectNew.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Lowers validated `ReflectionParameter` constructor arguments into metadata
+/// operands: reflected class, reflected method, and selected parameter.
+fn lower_reflection_parameter_constructor_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<ValueId>> {
+    let (class_arg, method_arg, parameter_arg) =
+        reflection_parameter_constructor_arg_exprs(ctx, args)?;
+    Some(vec![
+        lower_expr(ctx, &class_arg).value,
+        lower_expr(ctx, &method_arg).value,
+        lower_expr(ctx, &parameter_arg).value,
+    ])
+}
+
+/// Returns class/method/parameter expressions from a normalized static
+/// `ReflectionParameter` constructor call.
+fn reflection_parameter_constructor_arg_exprs(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<(Expr, Expr, Expr)> {
+    let args = expand_static_call_spread_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let (target, parameter) = if crate::types::call_args::has_named_args(&args) {
+        let sig = ctx
+            .classes
+            .get("ReflectionParameter")
+            .and_then(|class_info| class_info.methods.get("__construct"))?;
+        let call_span = args
+            .first()
+            .map(|arg| arg.span)
+            .unwrap_or_else(crate::span::Span::dummy);
+        let plan =
+            crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+                sig,
+                &args,
+                call_span,
+                crate::types::call_args::regular_param_count(sig),
+                false,
+                true,
+                &assoc_spread_sources(ctx, &args),
+            )
+            .ok()?;
+        if plan.has_spread_args() {
+            return None;
+        }
+        (
+            planned_regular_arg_expr(plan.regular_args.first()?)?.clone(),
+            planned_regular_arg_expr(plan.regular_args.get(1)?)?.clone(),
+        )
+    } else {
+        (args.first()?.clone(), args.get(1)?.clone())
+    };
+    let ExprKind::ArrayLiteral(items) = &target.kind else {
+        return None;
+    };
+    if items.len() != 2 {
+        return None;
+    }
+    Some((items[0].clone(), items[1].clone(), parameter))
 }
 
 /// Lowers PHP `new $class(...)` into the generic dynamic-new EIR opcode.

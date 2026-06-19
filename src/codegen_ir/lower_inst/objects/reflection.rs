@@ -11,8 +11,8 @@
 //!   constructors are compile-time metadata lookups that populate private
 //!   `__name`/`__attrs` slots instead of running their public empty bodies.
 
-use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
+use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
 use crate::names::php_symbol_key;
@@ -69,6 +69,12 @@ struct ReflectionParameterMember {
     has_type: bool,
 }
 
+/// Compile-time parameter selector from `ReflectionParameter::__construct()`.
+enum ReflectionParameterSelector {
+    Name(String),
+    Position(i64),
+}
+
 /// Boolean metadata exposed by ReflectionMethod and ReflectionProperty predicates.
 #[derive(Clone, Copy, Default)]
 struct ReflectionMemberFlags {
@@ -87,6 +93,7 @@ pub(super) fn is_reflection_owner_class(class_name: &str) -> bool {
         "ReflectionClass"
             | "ReflectionMethod"
             | "ReflectionProperty"
+            | "ReflectionParameter"
             | "ReflectionClassConstant"
             | "ReflectionEnumUnitCase"
             | "ReflectionEnumBackedCase"
@@ -196,6 +203,11 @@ fn emit_reflection_owner_object(
             metadata.required_parameter_count,
         )?;
     }
+    if class_name == "ReflectionParameter" {
+        if let Some(parameter) = metadata.parameter_members.first() {
+            emit_reflection_parameter_properties(ctx, parameter)?;
+        }
+    }
     emit_reflection_member_flag_properties(ctx, class_name, metadata.member_flags)?;
     Ok(())
 }
@@ -233,6 +245,7 @@ fn reflection_owner_metadata(
         "ReflectionClass" => reflection_class_metadata(ctx, inst),
         "ReflectionMethod" => reflection_method_metadata(ctx, inst),
         "ReflectionProperty" => reflection_property_metadata(ctx, inst),
+        "ReflectionParameter" => reflection_parameter_metadata(ctx, inst),
         "ReflectionClassConstant" => reflection_class_constant_metadata(ctx, inst),
         "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
             reflection_enum_case_metadata(ctx, class_name, inst)
@@ -487,6 +500,85 @@ fn reflection_property_metadata(
             })
         })
         .unwrap_or_else(empty_reflection_metadata))
+}
+
+/// Resolves `ReflectionParameter([class, method], parameter)` metadata.
+fn reflection_parameter_metadata(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some(class_operand) = inst.operands.first().copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let Some(method_operand) = inst.operands.get(1).copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let Some(parameter_operand) = inst.operands.get(2).copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let reflected_class = const_string_or_class_operand(ctx, class_operand, "ReflectionParameter")?;
+    let method_name = const_required_string_operand(ctx, method_operand, "ReflectionParameter")?;
+    let selector = const_parameter_selector_operand(ctx, parameter_operand)?;
+    let method_key = php_symbol_key(&method_name);
+    let method = reflection_method_member_for_class_like(ctx, &reflected_class, &method_key);
+    let Some(parameter) = method
+        .as_ref()
+        .and_then(|method| reflection_parameter_member_for_selector(&method.parameters, selector))
+    else {
+        return Ok(empty_reflection_metadata());
+    };
+    Ok(reflection_parameter_owner_metadata(parameter))
+}
+
+/// Builds direct ReflectionParameter constructor metadata from one parameter member.
+fn reflection_parameter_owner_metadata(
+    parameter: ReflectionParameterMember,
+) -> ReflectionOwnerMetadata {
+    let mut metadata = empty_reflection_metadata();
+    metadata.reflected_name = Some(parameter.name.clone());
+    metadata.parameter_members.push(parameter);
+    metadata
+}
+
+/// Resolves a reflected method member on a class, interface, or trait.
+fn reflection_method_member_for_class_like(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+    method_key: &str,
+) -> Option<ReflectionListedMember> {
+    if let Some((_, info)) = resolve_reflection_class(ctx, reflected_class) {
+        return reflection_class_method_member(info, method_key);
+    }
+    if let Some(interface_name) = resolve_reflection_interface(ctx, reflected_class) {
+        return ctx
+            .module
+            .interface_infos
+            .get(interface_name)
+            .and_then(|info| reflection_interface_method_member(info, method_key));
+    }
+    resolve_reflection_trait(ctx, reflected_class).and_then(|trait_name| {
+        ctx.module
+            .declared_trait_methods
+            .get(trait_name)
+            .and_then(|methods| reflection_trait_method_member(methods, method_key))
+    })
+}
+
+/// Returns the selected parameter member by PHP name or zero-based position.
+fn reflection_parameter_member_for_selector(
+    parameters: &[ReflectionParameterMember],
+    selector: ReflectionParameterSelector,
+) -> Option<ReflectionParameterMember> {
+    match selector {
+        ReflectionParameterSelector::Name(name) => parameters
+            .iter()
+            .find(|parameter| parameter.name == name)
+            .cloned(),
+        ReflectionParameterSelector::Position(position) if position >= 0 => {
+            parameters.get(position as usize).cloned()
+        }
+        ReflectionParameterSelector::Position(_) => None,
+    }
 }
 
 /// Resolves `ReflectionClassConstant(class, constant)` metadata.
@@ -963,7 +1055,9 @@ fn reflection_class_property_members(
 ) -> Vec<ReflectionListedMember> {
     property_names
         .iter()
-        .filter_map(|property_name| reflection_class_property_member(ctx, class_name, info, property_name))
+        .filter_map(|property_name| {
+            reflection_class_property_member(ctx, class_name, info, property_name)
+        })
         .collect()
 }
 
@@ -1009,12 +1103,7 @@ fn default_method_members(
             name: name.clone(),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
-            flags: reflection_member_flags(
-                false,
-                &Visibility::Public,
-                false,
-                is_interface,
-            ),
+            flags: reflection_member_flags(false, &Visibility::Public, false, is_interface),
             required_parameter_count: 0,
             parameters: Vec::new(),
         })
@@ -1032,12 +1121,7 @@ fn default_property_members(
             name: name.clone(),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
-            flags: reflection_member_flags(
-                false,
-                &Visibility::Public,
-                false,
-                is_interface,
-            ),
+            flags: reflection_member_flags(false, &Visibility::Public, false, is_interface),
             required_parameter_count: 0,
             parameters: Vec::new(),
         })
@@ -1263,6 +1347,51 @@ fn const_required_string_operand(
     owner: &str,
 ) -> Result<String> {
     const_data_operand(ctx, value, owner, false)
+}
+
+/// Extracts a constant ReflectionParameter name or offset selector from EIR.
+fn const_parameter_selector_operand(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<ReflectionParameterSelector> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::unsupported(
+            "ReflectionParameter constructor with non-literal parameter selector",
+        ));
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match inst_ref.op {
+        Op::ConstI64 => match inst_ref.immediate {
+            Some(Immediate::I64(value)) => Ok(ReflectionParameterSelector::Position(value)),
+            _ => Err(CodegenIrError::invalid_module(
+                "ReflectionParameter position selector missing i64 immediate",
+            )),
+        },
+        Op::ConstStr => {
+            let Some(Immediate::Data(data)) = inst_ref.immediate else {
+                return Err(CodegenIrError::invalid_module(
+                    "ReflectionParameter name selector missing data id",
+                ));
+            };
+            ctx.module
+                .data
+                .strings
+                .get(data.as_raw() as usize)
+                .cloned()
+                .map(ReflectionParameterSelector::Name)
+                .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+        }
+        _ => Err(CodegenIrError::unsupported(
+            "ReflectionParameter constructor with non-literal parameter selector",
+        )),
+    }
 }
 
 /// Reads a `ConstStr` or optional `ConstClassName` value from the module data pool.
@@ -1614,8 +1743,11 @@ fn emit_reflection_member_object(
     member: &ReflectionListedMember,
 ) -> Result<()> {
     let (class_id, property_count, uninitialized_marker_offsets) = {
-        let class_info =
-            ctx.module.class_infos.get(member_class_name).ok_or_else(|| {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get(member_class_name)
+            .ok_or_else(|| {
                 CodegenIrError::unsupported(format!("unknown class {}", member_class_name))
             })?;
         (
@@ -1668,10 +1800,11 @@ fn emit_reflection_parameter_object(
     parameter: &ReflectionParameterMember,
 ) -> Result<()> {
     let (class_id, property_count, uninitialized_marker_offsets) = {
-        let class_info =
-            ctx.module.class_infos.get("ReflectionParameter").ok_or_else(|| {
-                CodegenIrError::unsupported("unknown class ReflectionParameter")
-            })?;
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionParameter")
+            .ok_or_else(|| CodegenIrError::unsupported("unknown class ReflectionParameter"))?;
         (
             class_info.class_id,
             class_info.properties.len(),
@@ -1685,6 +1818,14 @@ fn emit_reflection_parameter_object(
         false,
         &uninitialized_marker_offsets,
     )?;
+    emit_reflection_parameter_properties(ctx, parameter)
+}
+
+/// Writes one ReflectionParameter object's private metadata properties.
+fn emit_reflection_parameter_properties(
+    ctx: &mut FunctionContext<'_>,
+    parameter: &ReflectionParameterMember,
+) -> Result<()> {
     let class_info = ctx
         .module
         .class_infos
@@ -1726,11 +1867,7 @@ fn emit_reflection_parameter_object(
 }
 
 /// Allocates an indexed array for static reflection metadata.
-fn emit_reflection_indexed_array(
-    ctx: &mut FunctionContext<'_>,
-    capacity: usize,
-    stride: i64,
-) {
+fn emit_reflection_indexed_array(ctx: &mut FunctionContext<'_>, capacity: usize, stride: i64) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_int_immediate(ctx.emitter, "x0", capacity as i64);
@@ -1782,32 +1919,32 @@ fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String])
 
 /// Appends ReflectionClass metadata names to the current ARM64 result array.
 fn emit_reflection_string_array_fill_aarch64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the metadata-name array while appending strings
+    ctx.emitter.instruction("str x0, [sp, #-16]!"); // park the metadata-name array while appending strings
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the metadata-name array for this append
+        ctx.emitter.instruction("ldr x0, [sp]"); // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "x1", &label);
         abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("str x0, [sp]"); // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final metadata-name array as the result
+    ctx.emitter.instruction("ldr x0, [sp], #16"); // restore the final metadata-name array as the result
 }
 
 /// Appends ReflectionClass metadata names to the current x86_64 result array.
 fn emit_reflection_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("push rax");                                        // park the metadata-name array while appending strings
-    ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across append helper calls
+    ctx.emitter.instruction("push rax"); // park the metadata-name array while appending strings
+    ctx.emitter.instruction("sub rsp, 8"); // keep stack alignment stable across append helper calls
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the metadata-name array for this append
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]"); // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "rsi", &label);
         abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax"); // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
-    ctx.emitter.instruction("pop rax");                                         // restore the final metadata-name array as the result
+    ctx.emitter.instruction("add rsp, 8"); // drop the temporary alignment slot
+    ctx.emitter.instruction("pop rax"); // restore the final metadata-name array as the result
 }
 
 /// Stores ReflectionMethod/ReflectionProperty boolean predicate slots when supported.

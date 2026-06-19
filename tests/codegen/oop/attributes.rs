@@ -1596,6 +1596,48 @@ echo ($traitParams[2]->hasType() ? "T" : "t");
     );
 }
 
+/// Verifies direct `new ReflectionParameter()` construction for statically known
+/// class and interface method targets.
+#[test]
+fn test_reflection_parameter_constructor_reflects_method_parameters() {
+    let out = compile_and_run_capture(
+        r##"<?php
+class ReflectDirectParamTarget {
+    public function run(int $id, &$name, string $mode = "x", ...$rest) {}
+}
+interface ReflectDirectParamInterface {
+    public static function build(int $id, $name = "x"): void;
+}
+$byName = new ReflectionParameter([ReflectDirectParamTarget::class, "run"], "name");
+echo $byName->getName() . "#" . $byName->getPosition();
+echo ($byName->hasType() ? "T" : "t");
+echo ($byName->isOptional() ? "O" : "R");
+echo ($byName->isPassedByReference() ? "B" : "b");
+echo ($byName->isVariadic() ? "V" : "v");
+echo "|";
+$byPosition = new ReflectionParameter(["reflectdirectparamtarget", "run"], 3);
+echo $byPosition->getName() . "#" . $byPosition->getPosition();
+echo ($byPosition->hasType() ? "T" : "t");
+echo ($byPosition->isOptional() ? "O" : "R");
+echo ($byPosition->isPassedByReference() ? "B" : "b");
+echo ($byPosition->isVariadic() ? "V" : "v");
+echo "|";
+$iface = new ReflectionParameter([ReflectDirectParamInterface::class, "build"], 1);
+echo $iface->getName() . "#" . $iface->getPosition();
+echo ($iface->isOptional() ? "O" : "R");
+echo "|";
+$named = new ReflectionParameter(param: "id", function: [ReflectDirectParamTarget::class, "run"]);
+echo $named->getName() . "#" . $named->getPosition();
+"##,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "name#1tRBv|rest#3tObV|name#1O|id#0");
+}
+
 /// Verifies that ReflectionMethod objects returned from `ReflectionClass::getMethods()`
 /// carry the same parameter metadata as directly constructed method reflectors.
 #[test]
