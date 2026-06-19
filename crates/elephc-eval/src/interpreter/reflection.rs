@@ -23,6 +23,7 @@ const EVAL_REFLECTION_CLASS_FLAG_CLONEABLE: u64 = 128;
 const EVAL_REFLECTION_CLASS_FLAG_INTERNAL: u64 = 256;
 const EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED: u64 = 512;
 const EVAL_REFLECTION_CLASS_FLAG_ITERABLE: u64 = 1024;
+const EVAL_REFLECTION_CLASS_FLAG_ANONYMOUS: u64 = 2048;
 const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
@@ -2210,6 +2211,9 @@ fn eval_reflection_class_like_attributes(
         }
         if eval_reflection_class_is_iterable(class, is_enum, context) {
             flags |= EVAL_REFLECTION_CLASS_FLAG_ITERABLE;
+        }
+        if class.is_anonymous() {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_ANONYMOUS;
         }
         let modifiers = eval_reflection_class_modifiers(
             class.is_final(),

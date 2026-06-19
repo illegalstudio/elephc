@@ -64,6 +64,8 @@ struct ReflectionOwnerLayout {
     is_enum_hi: Option<usize>,
     is_readonly_lo: Option<usize>,
     is_readonly_hi: Option<usize>,
+    is_anonymous_lo: Option<usize>,
+    is_anonymous_hi: Option<usize>,
     is_instantiable_lo: Option<usize>,
     is_instantiable_hi: Option<usize>,
     is_cloneable_lo: Option<usize>,
@@ -231,6 +233,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_trait_lo = reflection_property_offset(info, "__is_trait");
     let is_enum_lo = reflection_property_offset(info, "__is_enum");
     let is_readonly_lo = reflection_property_offset(info, "__is_readonly");
+    let is_anonymous_lo = reflection_property_offset(info, "__is_anonymous");
     let is_instantiable_lo = reflection_property_offset(info, "__is_instantiable");
     let is_cloneable_lo = reflection_property_offset(info, "__is_cloneable");
     let is_iterable_lo = reflection_property_offset(info, "__is_iterable");
@@ -300,6 +303,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         is_enum_hi: is_enum_lo.map(|offset| offset + 8),
         is_readonly_lo,
         is_readonly_hi: is_readonly_lo.map(|offset| offset + 8),
+        is_anonymous_lo,
+        is_anonymous_hi: is_anonymous_lo.map(|offset| offset + 8),
         is_instantiable_lo,
         is_instantiable_hi: is_instantiable_lo.map(|offset| offset + 8),
         is_cloneable_lo,
@@ -970,6 +975,8 @@ fn emit_set_owner_class_flags_property_aarch64(
         Some(is_enum_hi),
         Some(is_readonly_lo),
         Some(is_readonly_hi),
+        Some(is_anonymous_lo),
+        Some(is_anonymous_hi),
         Some(is_instantiable_lo),
         Some(is_instantiable_hi),
         Some(is_cloneable_lo),
@@ -995,6 +1002,8 @@ fn emit_set_owner_class_flags_property_aarch64(
         layout.is_enum_hi,
         layout.is_readonly_lo,
         layout.is_readonly_hi,
+        layout.is_anonymous_lo,
+        layout.is_anonymous_hi,
         layout.is_instantiable_lo,
         layout.is_instantiable_hi,
         layout.is_cloneable_lo,
@@ -1056,6 +1065,10 @@ fn emit_set_owner_class_flags_property_aarch64(
     emitter.instruction("and x10, x10, #1");                                    // extract the iterable-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_iterable_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_iterable_hi);
+    emitter.instruction("lsr x10, x11, #11");                                   // move the anonymous-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the anonymous-class flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_anonymous_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_anonymous_hi);
     emitter.instruction("ldr x10, [sp, #96]");                                  // reload PHP ReflectionClass::getModifiers() bitmask
     abi::emit_store_to_address(emitter, "x10", "x9", modifiers_lo);
     abi::emit_store_zero_to_address(emitter, "x9", modifiers_hi);
@@ -1079,6 +1092,8 @@ fn emit_set_owner_class_flags_property_x86_64(
         Some(is_enum_hi),
         Some(is_readonly_lo),
         Some(is_readonly_hi),
+        Some(is_anonymous_lo),
+        Some(is_anonymous_hi),
         Some(is_instantiable_lo),
         Some(is_instantiable_hi),
         Some(is_cloneable_lo),
@@ -1104,6 +1119,8 @@ fn emit_set_owner_class_flags_property_x86_64(
         layout.is_enum_hi,
         layout.is_readonly_lo,
         layout.is_readonly_hi,
+        layout.is_anonymous_lo,
+        layout.is_anonymous_hi,
         layout.is_instantiable_lo,
         layout.is_instantiable_hi,
         layout.is_cloneable_lo,
@@ -1176,6 +1193,11 @@ fn emit_set_owner_class_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the iterable-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_iterable_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_iterable_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the anonymous bit
+    emitter.instruction("shr rax, 11");                                         // move the anonymous-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the anonymous-class flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_anonymous_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_anonymous_hi);
     emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload PHP ReflectionClass::getModifiers() bitmask
     abi::emit_store_to_address(emitter, "rax", "r10", modifiers_lo);
     abi::emit_store_zero_to_address(emitter, "r10", modifiers_hi);

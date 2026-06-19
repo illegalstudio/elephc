@@ -626,9 +626,17 @@ impl Parser {
         }
     }
 
-    /// Parses `new ClassName(...)` expressions in eval fragments.
+    /// Parses `new ClassName(...)` and anonymous `new class {}` expressions in eval fragments.
     pub(super) fn parse_new_object_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
         self.advance();
+        let is_readonly_anonymous = matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "readonly"))
+            && matches!(self.peek(), TokenKind::Ident(name) if ident_eq(name, "class"));
+        if is_readonly_anonymous {
+            self.advance();
+        }
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "class")) {
+            return self.parse_anonymous_class_expr(is_readonly_anonymous);
+        }
         let class_name = self.parse_qualified_name()?;
         let class_name = self.resolve_class_name(class_name);
         let args = self.parse_call_args()?;

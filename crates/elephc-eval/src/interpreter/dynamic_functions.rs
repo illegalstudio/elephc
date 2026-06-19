@@ -222,7 +222,9 @@ pub(in crate::interpreter) fn bind_evaluated_method_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let mut bound_args = vec![None; params.len()];
-    let variadic_index = parameter_is_variadic.iter().position(|is_variadic| *is_variadic);
+    let variadic_index = parameter_is_variadic
+        .iter()
+        .position(|is_variadic| *is_variadic);
     let required_count =
         method_required_param_count(params.len(), parameter_defaults, parameter_is_variadic);
     let mut next_positional = 0;
@@ -426,11 +428,7 @@ fn bind_dynamic_named_method_arg(
         context,
         values,
     )?;
-    let ref_target = method_parameter_ref_target(
-        parameter_is_by_ref,
-        variadic_index,
-        ref_target,
-    )?;
+    let ref_target = method_parameter_ref_target(parameter_is_by_ref, variadic_index, ref_target)?;
     bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, ref_target, values)
 }
 
@@ -638,10 +636,14 @@ fn eval_method_parameter_scalar_coercion(
         EvalParameterTypeVariant::Bool if eval_method_scalar_coercible_tag(tag) => {
             values.cast_bool(value).map(Some)
         }
-        EvalParameterTypeVariant::Float if eval_method_numeric_coercible_value(value, tag, values)? => {
+        EvalParameterTypeVariant::Float
+            if eval_method_numeric_coercible_value(value, tag, values)? =>
+        {
             values.cast_float(value).map(Some)
         }
-        EvalParameterTypeVariant::Int if eval_method_numeric_coercible_value(value, tag, values)? => {
+        EvalParameterTypeVariant::Int
+            if eval_method_numeric_coercible_value(value, tag, values)? =>
+        {
             values.cast_int(value).map(Some)
         }
         EvalParameterTypeVariant::String if eval_method_scalar_coercible_tag(tag) => {
@@ -701,6 +703,7 @@ fn eval_method_default_expr_is_supported(expr: &EvalExpr) -> bool {
             eval_method_default_class_receiver_is_supported(class_name)
                 && args.iter().all(eval_method_default_call_arg_is_supported)
         }
+        EvalExpr::NewAnonymousClass { .. } => false,
         EvalExpr::NullCoalesce { value, default } => {
             eval_method_default_expr_is_supported(value)
                 && eval_method_default_expr_is_supported(default)

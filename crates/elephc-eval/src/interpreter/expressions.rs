@@ -74,12 +74,23 @@ pub(in crate::interpreter) fn eval_expr(
             if let Some(class) = context.class(&class_name).cloned() {
                 eval_dynamic_class_new_object(&class, args, context, scope, values)
             } else {
-                let args =
-                    bind_native_callable_args(context.native_constructor_signature(&class_name), args)?;
+                let args = bind_native_callable_args(
+                    context.native_constructor_signature(&class_name),
+                    args,
+                )?;
                 values
                     .new_object(&class_name)
                     .and_then(|object| values.construct_object(object, args).map(|()| object))
             }
+        }
+        EvalExpr::NewAnonymousClass { class, args } => {
+            ensure_eval_anonymous_class_decl(class, context, scope, values)?;
+            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+            let class = context
+                .class(class.name())
+                .cloned()
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            eval_dynamic_class_new_object(&class, evaluated_args, context, scope, values)
         }
         EvalExpr::StaticMethodCall {
             class_name,
