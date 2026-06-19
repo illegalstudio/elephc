@@ -559,3 +559,16 @@ fn test_error_new_dynamic_parenthesized_missing_ctor_parens() {
         "Expected '(' after class-name expression in 'new'",
     );
 }
+
+// --- Long-form `array(...)` literal errors ---
+
+/// Verifies that a long-form `array(...)` literal missing a comma between elements is reported as
+/// an array-element error, confirming `array(` is parsed as the array-literal construct rather
+/// than a function call (which would instead complain about arguments).
+#[test]
+fn test_error_long_array_missing_comma() {
+    expect_error(
+        "<?php $x = array(1 2);",
+        "Expected ',' between array elements",
+    );
+}

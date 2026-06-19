@@ -206,6 +206,16 @@ pub(super) fn parse_prefix(
         Token::Function => parse_closure(tokens, pos, span, false),
         Token::Fn => parse_arrow_closure(tokens, pos, span, false),
         Token::AttrOpen => parse_attributed_closure(tokens, pos, span),
+        // `array(...)` long-form array literal. PHP treats `array` followed by `(` as the
+        // array-literal language construct, not a function call, so intercept it here before
+        // the generic identifier/function-call path. The keyword match is case-insensitive
+        // (`Array(`, `ARRAY(`), matching PHP's case-insensitive keyword handling.
+        Token::Identifier(name)
+            if name.eq_ignore_ascii_case("array")
+                && matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::LParen)) =>
+        {
+            parse_long_array_literal(tokens, pos, span)
+        }
         Token::Identifier(_) | Token::Backslash => parse_named_expr(tokens, pos, span),
         Token::Self_ => {
             *pos += 1;
@@ -477,13 +487,46 @@ fn parse_array_literal(
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
-    *pos += 1;
+    *pos += 1; // consume '['
+    parse_array_entries(tokens, pos, span, &Token::RBracket, "Expected ']'")
+}
+
+/// Parses the long-form `array(...)` array-literal language construct, which is exactly
+/// equivalent to the short `[...]` form but delimited by parentheses (e.g.
+/// `array('a' => 1, $x)`). Consumes the `array` keyword identifier and the opening `(`, then
+/// shares the element-parsing body with the short form, closing on `)`. PHP treats `array(...)`
+/// as a language construct rather than a function call; this form is used pervasively by
+/// Composer's autoloader and older PHP code.
+fn parse_long_array_literal(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 2; // consume the `array` keyword and the opening '('
+    parse_array_entries(tokens, pos, span, &Token::RParen, "Expected ')'")
+}
+
+/// Parses the comma-separated element list of an array literal up to its closing delimiter,
+/// shared by the short `[...]` and long `array(...)` forms. Assumes the opening delimiter has
+/// already been consumed and that `*pos` points at the first element (or the closing delimiter
+/// for an empty literal). Handles positional elements, `key => value` keyed entries (promoting
+/// any earlier positional elements to integer keys), and `...` spreads, exactly as PHP does for
+/// both forms. `close` is the delimiter that terminates the list (`]` or `)`) and
+/// `missing_close_msg` is the diagnostic emitted when it is absent. Returns `ArrayLiteralAssoc`
+/// when any keyed entry was seen, otherwise `ArrayLiteral`.
+fn parse_array_entries(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    close: &Token,
+    missing_close_msg: &str,
+) -> Result<Expr, CompileError> {
     let mut elems = Vec::new();
     let mut assoc_elems = Vec::new();
     let mut is_assoc = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBracket {
+    while *pos < tokens.len() && &tokens[*pos].0 != close {
         if !first {
             if tokens[*pos].0 != Token::Comma {
                 return Err(CompileError::new(
@@ -492,7 +535,7 @@ fn parse_array_literal(
                 ));
             }
             *pos += 1;
-            if *pos < tokens.len() && tokens[*pos].0 == Token::RBracket {
+            if *pos < tokens.len() && &tokens[*pos].0 == close {
                 break;
             }
         }
@@ -526,8 +569,8 @@ fn parse_array_literal(
         }
         first = false;
     }
-    if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
-        return Err(CompileError::new(span, "Expected ']'"));
+    if *pos >= tokens.len() || &tokens[*pos].0 != close {
+        return Err(CompileError::new(span, missing_close_msg));
     }
     *pos += 1;
     if is_assoc {

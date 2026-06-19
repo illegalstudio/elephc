@@ -15,6 +15,17 @@ $arr[1] = 99;          // modify
 $arr[] = 40;           // push
 ```
 
+## Long-form `array()` syntax
+The short `[...]` form and the long-form `array(...)` construct are exactly equivalent — `array(...)` is a language construct, not a function call. Both produce the same array and may be mixed freely, including `key => value` entries, `...` spreads, and nesting. The keyword is case-insensitive.
+
+```php
+<?php
+$indexed = array(10, 20, 30);
+$assoc   = array("name" => "Alice", "city" => "Paris");
+$nested  = array("point" => array(1, 2), "label" => "p");
+$spread  = array(...$indexed, 40);   // 10, 20, 30, 40
+```
+
 ## String arrays
 ```php
 <?php

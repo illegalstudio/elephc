@@ -964,3 +964,78 @@ echo (in_array("hello", $a) ? "y" : "n"),
     );
     assert_eq!(out, "yyn");
 }
+
+// --- Long-form `array(...)` literal ---
+
+/// Verifies that the long-form `array(...)` produces an indexed array equivalent to `[...]`.
+#[test]
+fn test_long_array_indexed() {
+    let out = compile_and_run("<?php $a = array(10, 20, 30); echo count($a) . \":\" . $a[0] . \":\" . $a[2];");
+    assert_eq!(out, "3:10:30");
+}
+
+/// Verifies that an empty long-form `array()` is an empty array.
+#[test]
+fn test_long_array_empty() {
+    let out = compile_and_run("<?php $a = array(); echo count($a);");
+    assert_eq!(out, "0");
+}
+
+/// Verifies that long-form `array("k" => v)` produces an associative array with the given keys.
+#[test]
+fn test_long_array_assoc() {
+    let out = compile_and_run(
+        "<?php $m = array(\"a\" => 1, \"b\" => 2); echo $m[\"a\"] + $m[\"b\"];",
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies that a runtime-valued key works in a long-form `array($k => v)` literal.
+#[test]
+fn test_long_array_dynamic_key() {
+    let out = compile_and_run("<?php $k = \"dyn\"; $kv = array($k => 42); echo $kv[\"dyn\"];");
+    assert_eq!(out, "42");
+}
+
+/// Verifies that long-form arrays nest like the short form.
+#[test]
+fn test_long_array_nested() {
+    let out = compile_and_run(
+        "<?php $n = array(\"x\" => array(1, 2), \"y\" => 3); echo count($n[\"x\"]) . \":\" . $n[\"y\"];",
+    );
+    assert_eq!(out, "2:3");
+}
+
+/// Verifies mixed positional and keyed entries in a long-form array (positional elements keep
+/// their auto-incremented integer keys around the explicit string key, as in PHP).
+#[test]
+fn test_long_array_mixed_positional_and_keyed() {
+    let out = compile_and_run(
+        "<?php $m = array(10, \"k\" => 20, 30); echo $m[0] . \":\" . $m[\"k\"] . \":\" . $m[1];",
+    );
+    assert_eq!(out, "10:20:30");
+}
+
+/// Verifies that spread (`...`) works inside a long-form array literal.
+#[test]
+fn test_long_array_spread() {
+    let out = compile_and_run("<?php $s = array(...array(1, 2), 3); echo count($s);");
+    assert_eq!(out, "3");
+}
+
+/// Verifies that the long-form keyword is case-insensitive (`ARRAY(...)`), matching PHP.
+#[test]
+fn test_long_array_case_insensitive() {
+    let out = compile_and_run("<?php $a = ARRAY(1, 2); echo count($a);");
+    assert_eq!(out, "2");
+}
+
+/// Verifies that the short `[...]` and long `array(...)` forms interoperate: a long-form array
+/// passed to a builtin (`array_merge`) combines with a short-form array as expected.
+#[test]
+fn test_long_array_interops_with_short_form() {
+    let out = compile_and_run(
+        "<?php $a = array(1, 2); $b = [3, 4]; $c = array_merge($a, $b); echo count($c) . \":\" . $c[0] . \":\" . $c[3];",
+    );
+    assert_eq!(out, "4:1:4");
+}
