@@ -1081,6 +1081,14 @@ fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
                         push_builtin_spl_metadata_methods(&mut methods, module, class_name);
                     }
                 }
+                Op::DynamicObjectNewWithoutConstructorMixed => {
+                    for class_name in module.class_infos.keys() {
+                        if !is_dynamic_new_mixed_metadata_candidate(class_name) {
+                            continue;
+                        }
+                        push_builtin_spl_metadata_methods(&mut methods, module, class_name);
+                    }
+                }
                 Op::MethodCall | Op::NullsafeMethodCall => {
                     let Some(receiver) = inst.operands.first().copied() else {
                         continue;

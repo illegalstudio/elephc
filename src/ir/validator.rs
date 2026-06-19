@@ -435,8 +435,18 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")
         }
-        PropGet | PropSet | LoadPropRefCell | DynamicPropGet | DynamicPropSet | NullsafePropGet
-        | NullsafeMethodCall | MethodLookup | MethodCall | InstanceOf | InstanceOfDynamic => {
+        DynamicObjectNewWithoutConstructorMixed
+        | PropGet
+        | PropSet
+        | LoadPropRefCell
+        | DynamicPropGet
+        | DynamicPropSet
+        | NullsafePropGet
+        | NullsafeMethodCall
+        | MethodLookup
+        | MethodCall
+        | InstanceOf
+        | InstanceOfDynamic => {
             check_count_at_least(inst_id, inst, 1, "at least 1")
         }
         _ => Ok(()),

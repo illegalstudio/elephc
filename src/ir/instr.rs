@@ -313,6 +313,7 @@ pub enum Op {
     ObjectCloneShallow,
     DynamicObjectNew,
     DynamicObjectNewMixed,
+    DynamicObjectNewWithoutConstructorMixed,
     PropGet,
     PropSet,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
@@ -488,7 +489,8 @@ impl Op {
             }
             HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
-            | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed | DynamicPropGet | NullsafePropGet
+            | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
+            | DynamicObjectNewWithoutConstructorMixed | DynamicPropGet | NullsafePropGet
             | NullsafeMethodCall | MethodLookup | MethodCall | StaticMethodCall
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
@@ -682,6 +684,9 @@ impl Op {
             ObjectCloneShallow => "object_clone_shallow",
             DynamicObjectNew => "dynamic_object_new",
             DynamicObjectNewMixed => "dynamic_object_new_mixed",
+            DynamicObjectNewWithoutConstructorMixed => {
+                "dynamic_object_new_without_constructor_mixed"
+            }
             PropGet => "prop_get",
             PropSet => "prop_set",
             LoadPropRefCell => "load_prop_ref_cell",

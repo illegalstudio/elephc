@@ -9863,6 +9863,11 @@ fn lower_method_call(
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, Some(object_expr), object, args, expr);
     }
+    if op == Op::MethodCall
+        && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
+    {
+        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+    }
     if matches!(
         ctx.builder.value_php_type(object.value).codegen_repr(),
         PhpType::Callable
@@ -10088,6 +10093,27 @@ fn lower_reflection_class_new_instance(
     )
 }
 
+/// Lowers `ReflectionClass::newInstanceWithoutConstructor()` to constructorless allocation.
+fn lower_reflection_class_new_instance_without_constructor(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    if !args.is_empty() {
+        return lower_reflection_class_new_instance_without_constructor_unsupported(ctx, expr);
+    }
+    let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
+    ctx.emit_value(
+        Op::DynamicObjectNewWithoutConstructorMixed,
+        vec![class_name.value],
+        None,
+        PhpType::Mixed,
+        Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
+        Some(expr.span),
+    )
+}
+
 /// Returns the source arguments that can be forwarded to `new $class(...)`.
 fn reflection_class_new_instance_args(args: &[Expr]) -> Vec<Expr> {
     if has_static_call_spread_args(args) {
@@ -10202,6 +10228,19 @@ fn lower_reflection_class_new_instance_unsupported(
     result
 }
 
+/// Emits a runtime fatal for unsupported `newInstanceWithoutConstructor()` argument forms.
+fn lower_reflection_class_new_instance_without_constructor_unsupported(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> LoweredValue {
+    let result = lower_boxed_null(ctx, expr);
+    let message = ctx.intern_string(
+        "Fatal error: unsupported ReflectionClass::newInstanceWithoutConstructor() arguments\n",
+    );
+    ctx.builder.terminate(Terminator::Fatal { message });
+    result
+}
+
 /// Returns true when a method call targets the built-in `ReflectionClass::newInstance()`.
 fn is_reflection_class_new_instance_call(
     ctx: &LoweringContext<'_, '_>,
@@ -10209,6 +10248,22 @@ fn is_reflection_class_new_instance_call(
     method: &str,
 ) -> bool {
     if php_symbol_key(method) != "newinstance" {
+        return false;
+    }
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some((class_name, false)) = singular_object_class(&object_ty) else {
+        return false;
+    };
+    php_symbol_key(class_name.trim_start_matches('\\')) == "reflectionclass"
+}
+
+/// Returns true when a method call targets `ReflectionClass::newInstanceWithoutConstructor()`.
+fn is_reflection_class_new_instance_without_constructor_call(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+    method: &str,
+) -> bool {
+    if php_symbol_key(method) != "newinstancewithoutconstructor" {
         return false;
     }
     let object_ty = ctx.builder.value_php_type(object);
@@ -10319,6 +10374,11 @@ fn lower_method_call_with_receiver(
 ) -> LoweredValue {
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
+    }
+    if op == Op::MethodCall
+        && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
+    {
+        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
     }
     let magic_args;
     let (dispatch_method, args) =
