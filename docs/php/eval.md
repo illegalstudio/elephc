@@ -231,6 +231,12 @@ eval's positional, named, and unpacking-aware call binding.
 `ReflectionClass::newInstanceWithoutConstructor()` allocates eval-declared
 reflected classes, initializes supported property defaults, and skips
 `__construct()`.
+`ReflectionMethod::invoke()` and `invokeArgs()` call eval-declared reflected
+methods, bypass public/protected/private visibility like PHP reflection,
+preserve named arguments for the invoked method, follow PHP's by-value
+`invoke()` variadic forwarding, accept `null` or an object for static methods,
+and throw catchable `ReflectionException` values when an instance receiver is
+not compatible with the reflected declaring class.
 Eval-declared method parameter type hints are checked when the method is
 entered. Supported checks include scalar hints with PHP-style weak scalar
 coercion, `array`, `object`, `iterable`, `mixed`, nullable/union forms, and

@@ -588,6 +588,44 @@ pub(in crate::interpreter) fn eval_reflection_class_set_static_property_value_re
     values.null().map(Some)
 }
 
+/// Handles eval-backed `ReflectionMethod::invoke()` and `invokeArgs()` calls.
+pub(in crate::interpreter) fn eval_reflection_method_invoke_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let is_invoke = method_name.eq_ignore_ascii_case("invoke");
+    let is_invoke_args = method_name.eq_ignore_ascii_case("invokeArgs");
+    if !is_invoke && !is_invoke_args {
+        return Ok(None);
+    }
+    let Some((declaring_class, reflected_method)) =
+        context
+            .eval_reflection_method(identity)
+            .map(|(declaring_class, method)| {
+                (declaring_class.to_string(), method.to_string())
+            })
+    else {
+        return Ok(None);
+    };
+    let (object, method_args) = if is_invoke {
+        eval_reflection_method_invoke_args(evaluated_args)?
+    } else {
+        eval_reflection_method_invoke_args_array(evaluated_args, values)?
+    };
+    eval_reflection_method_invoke_dispatch(
+        &declaring_class,
+        &reflected_method,
+        object,
+        method_args,
+        context,
+        values,
+    )
+    .map(Some)
+}
+
 /// Handles eval-backed `ReflectionProperty::getValue()` calls.
 pub(in crate::interpreter) fn eval_reflection_property_get_value_result(
     identity: u64,
@@ -1510,6 +1548,11 @@ fn eval_reflection_owner_object_with_members(
     if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
         let identity = values.object_identity(object)?;
         context.register_eval_reflection_class(identity, reflected_name);
+    } else if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        if let Some(declaring_class) = parent_class_name {
+            let identity = values.object_identity(object)?;
+            context.register_eval_reflection_method(identity, declaring_class, reflected_name);
+        }
     } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
         if let Some(declaring_class) = parent_class_name {
             if context.has_class(declaring_class) {
@@ -3098,6 +3141,173 @@ fn eval_reflection_property_set_value_args(
     }
     let object_or_value = bound_args[0].ok_or(EvalStatus::RuntimeFatal)?;
     Ok((object_or_value, bound_args[1]))
+}
+
+/// Binds `ReflectionMethod::invoke()` arguments and preserves forwarded named args.
+fn eval_reflection_method_invoke_args(
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Result<(RuntimeCellHandle, Vec<EvaluatedCallArg>), EvalStatus> {
+    let mut object = None;
+    let mut method_args = Vec::new();
+    for arg in evaluated_args {
+        if matches!(arg.name.as_deref(), Some("object")) {
+            if object.is_some() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            object = Some(arg.value);
+        } else if object.is_none() && arg.name.is_none() {
+            object = Some(arg.value);
+        } else {
+            method_args.push(eval_reflection_method_forwarded_value_arg(arg));
+        }
+    }
+    object
+        .map(|object| (object, method_args))
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Converts a variadic `invoke()` argument into a by-value forwarded method argument.
+fn eval_reflection_method_forwarded_value_arg(arg: EvaluatedCallArg) -> EvaluatedCallArg {
+    EvaluatedCallArg {
+        name: arg.name,
+        value: arg.value,
+        ref_target: None,
+    }
+}
+
+/// Binds `ReflectionMethod::invokeArgs()` and expands its PHP argument array.
+fn eval_reflection_method_invoke_args_array(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Vec<EvaluatedCallArg>), EvalStatus> {
+    let args = bind_evaluated_function_args(
+        &[String::from("object"), String::from("args")],
+        evaluated_args,
+    )?;
+    let method_args = eval_array_call_arg_values(args[1], values)?;
+    Ok((args[0], method_args))
+}
+
+/// Dispatches one reflected method invocation through eval or public AOT bridges.
+fn eval_reflection_method_invoke_dispatch(
+    declaring_class: &str,
+    method_name: &str,
+    object: RuntimeCellHandle,
+    method_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some((method_class, method)) = context.class_method(declaring_class, method_name) {
+        if method.is_abstract() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let by_value_parameters = vec![false; method.params().len()];
+        if method.is_static() {
+            return eval_dynamic_static_method_with_values_and_ref_flags(
+                &method_class,
+                &method_class,
+                &method,
+                &by_value_parameters,
+                method_args,
+                context,
+                values,
+            );
+        }
+        let called_class = eval_reflection_method_instance_called_class(
+            declaring_class,
+            object,
+            context,
+            values,
+        )?;
+        return eval_dynamic_method_with_values_and_ref_flags(
+            &method_class,
+            &called_class,
+            &method,
+            object,
+            &by_value_parameters,
+            method_args,
+            context,
+            values,
+        );
+    }
+    eval_reflection_aot_method_invoke_dispatch(
+        declaring_class,
+        method_name,
+        object,
+        method_args,
+        context,
+        values,
+    )
+}
+
+/// Returns the runtime class name for an eval object used as a reflected receiver.
+fn eval_reflection_method_instance_called_class(
+    declaring_class: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    if values.is_null(object)? || values.type_tag(object)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let identity = values.object_identity(object)?;
+    let Some(object_class_name) = context
+        .dynamic_object_class(identity)
+        .map(|class| class.name().to_string())
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if !context.class_is_a(&object_class_name, declaring_class, false) {
+        eval_throw_reflection_exception(
+            "Given object is not an instance of the class this method was declared in",
+            context,
+            values,
+        )?;
+        return Err(EvalStatus::UncaughtThrowable);
+    }
+    Ok(object_class_name)
+}
+
+/// Invokes one reflected generated/AOT method when it fits the public bridge slice.
+fn eval_reflection_aot_method_invoke_dispatch(
+    declaring_class: &str,
+    method_name: &str,
+    object: RuntimeCellHandle,
+    method_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let member =
+        eval_reflection_aot_method_metadata_if_exists(declaring_class, method_name, values)?
+            .ok_or(EvalStatus::RuntimeFatal)?;
+    if member.visibility != EvalVisibility::Public || member.is_abstract {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if member.is_static {
+        let args = bind_native_callable_args(
+            context.native_static_method_signature(declaring_class, method_name),
+            method_args,
+        )?;
+        return values.static_method_call(declaring_class, method_name, args);
+    }
+    if values.is_null(object)? || values.type_tag(object)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let is_instance = dynamic_object_is_a(object, declaring_class, false, context, values)?
+        .map_or_else(|| values.object_is_a(object, declaring_class, false), Ok)?;
+    if !is_instance {
+        eval_throw_reflection_exception(
+            "Given object is not an instance of the class this method was declared in",
+            context,
+            values,
+        )?;
+        return Err(EvalStatus::UncaughtThrowable);
+    }
+    let args = bind_native_callable_args(
+        context.native_method_signature(declaring_class, method_name),
+        method_args,
+    )?;
+    values.method_call(object, method_name, args)
 }
 
 /// Reads one eval instance property through ReflectionProperty semantics.

@@ -162,6 +162,7 @@ pub struct ElephcEvalContext {
     dynamic_objects: HashMap<u64, String>,
     eval_reflection_attributes: HashMap<u64, EvalAttribute>,
     eval_reflection_classes: HashMap<u64, String>,
+    eval_reflection_methods: HashMap<u64, (String, String)>,
     eval_reflection_properties: HashMap<u64, (String, String)>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
@@ -207,6 +208,7 @@ impl ElephcEvalContext {
             dynamic_objects: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
+            eval_reflection_methods: HashMap::new(),
             eval_reflection_properties: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
@@ -253,6 +255,7 @@ impl ElephcEvalContext {
             dynamic_objects: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
+            eval_reflection_methods: HashMap::new(),
             eval_reflection_properties: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
@@ -558,6 +561,29 @@ impl ElephcEvalContext {
         self.eval_reflection_classes
             .get(&identity)
             .map(String::as_str)
+    }
+
+    /// Records reflected method metadata for one synthetic ReflectionMethod object.
+    pub fn register_eval_reflection_method(
+        &mut self,
+        identity: u64,
+        declaring_class: &str,
+        method_name: &str,
+    ) {
+        self.eval_reflection_methods.insert(
+            identity,
+            (
+                declaring_class.trim_start_matches('\\').to_string(),
+                method_name.to_string(),
+            ),
+        );
+    }
+
+    /// Returns the declaring class and method name attached to a synthetic ReflectionMethod.
+    pub fn eval_reflection_method(&self, identity: u64) -> Option<(&str, &str)> {
+        self.eval_reflection_methods
+            .get(&identity)
+            .map(|(class, method)| (class.as_str(), method.as_str()))
     }
 
     /// Records reflected property metadata for one synthetic ReflectionProperty object.
