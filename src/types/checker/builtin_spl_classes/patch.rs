@@ -97,9 +97,7 @@ pub(super) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
     ] {
         if let Some(class_info) = checker.classes.get_mut(class_name) {
             for (name, ty) in &mut class_info.properties {
-                if name == "inner" {
-                    *ty = PhpType::Object("RecursiveIterator".to_string());
-                } else if name == "callback" {
+                if name == "callback" {
                     *ty = PhpType::Callable;
                 } else if name == "callbackEnv" {
                     *ty = PhpType::Pointer(None);
