@@ -78,6 +78,7 @@ fn populate_metadata(module: &mut Module, program: &Program, check_result: &Chec
     module.declared_trait_property_names = collect_declared_trait_property_names(program);
     module.declared_trait_constant_names = collect_declared_trait_constant_names(program);
     module.declared_trait_constants = collect_declared_trait_constants(program);
+    module.declared_trait_final_constants = collect_declared_trait_final_constants(program);
     module.class_infos = check_result.classes.clone();
     module.interface_infos = check_result.interfaces.clone();
     module.enum_infos = check_result.enums.clone();
@@ -550,6 +551,34 @@ fn collect_declared_trait_constants(program: &Program) -> HashMap<String, HashMa
             }
             StmtKind::NamespaceBlock { body, .. } => {
                 constants.extend(collect_declared_trait_constants(body));
+            }
+            _ => {}
+        }
+    }
+    constants
+}
+
+/// Collects direct PHP final constant names declared by each trait.
+fn collect_declared_trait_final_constants(program: &Program) -> HashMap<String, HashSet<String>> {
+    let mut constants = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl {
+                name,
+                constants: trait_constants,
+                ..
+            } => {
+                constants.insert(
+                    name.clone(),
+                    trait_constants
+                        .iter()
+                        .filter(|constant| constant.is_final)
+                        .map(|constant| constant.name.clone())
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                constants.extend(collect_declared_trait_final_constants(body));
             }
             _ => {}
         }

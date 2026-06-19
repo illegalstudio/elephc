@@ -115,6 +115,8 @@ pub(crate) struct Checker {
     pub declared_traits: HashSet<String>,
     /// Reflection-visible method signatures declared directly on each trait.
     pub declared_trait_methods: HashMap<String, HashMap<String, FunctionSig>>,
+    /// Reflection-visible class constant names declared directly on each trait.
+    pub declared_trait_constants: HashMap<String, HashSet<String>>,
     /// Name of the class currently being type-checked (used for `$this` resolution).
     pub current_class: Option<String>,
     /// Name of the current method being type-checked, when inside a class body.

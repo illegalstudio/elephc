@@ -56,6 +56,14 @@ struct ReflectionOwnerMetadata {
     member_flags: ReflectionMemberFlags,
 }
 
+/// Compile-time metadata for one class/interface/trait/enum constant reflector.
+struct ReflectionClassConstantMetadata {
+    declaring_class_name: String,
+    attr_names: Vec<String>,
+    attr_args: Vec<Option<Vec<AttrArgValue>>>,
+    is_final: bool,
+}
+
 /// Metadata for one member object returned by `ReflectionClass::getMethods()` or `getProperties()`.
 #[derive(Clone)]
 struct ReflectionListedMember {
@@ -898,53 +906,9 @@ fn reflection_class_constant_metadata(
             member_flags: ReflectionMemberFlags::default(),
         });
     }
-    Ok(
-        resolve_reflection_class_constant(ctx, &reflected_class, &constant_name)
-            .map(|(declaring_class_name, info)| {
-                let is_final = info.final_constants.contains(&constant_name);
-                let attr_names = info
-                    .constant_attribute_names
-                    .get(&constant_name)
-                    .cloned()
-                    .unwrap_or_default();
-                let attr_args = info
-                    .constant_attribute_args
-                    .get(&constant_name)
-                    .cloned()
-                    .unwrap_or_default();
-                ReflectionOwnerMetadata {
-                    reflected_name: Some(constant_name),
-                    attr_names,
-                    attr_args,
-                    interface_names: Vec::new(),
-                    trait_names: Vec::new(),
-                    method_names: Vec::new(),
-                    property_names: Vec::new(),
-                    constant_names: Vec::new(),
-                    constant_members: Vec::new(),
-                    constant_reflection_members: Vec::new(),
-                    method_members: Vec::new(),
-                    property_members: Vec::new(),
-                    constructor_member: None,
-                    parent_class_name: Some(declaring_class_name.to_string()),
-                    parameter_members: Vec::new(),
-                    required_parameter_count: 0,
-                    is_final,
-                    is_abstract: false,
-                    is_interface: false,
-                    is_trait: false,
-                    is_enum: false,
-                    is_readonly: false,
-                    is_instantiable: false,
-                    modifiers: 0,
-                    member_flags: ReflectionMemberFlags {
-                        is_final,
-                        ..ReflectionMemberFlags::default()
-                    },
-                }
-            })
-            .unwrap_or_else(empty_reflection_metadata),
-    )
+    Ok(reflection_class_constant_lookup(ctx, &reflected_class, &constant_name)
+        .map(|metadata| reflection_class_constant_owner_metadata(constant_name, metadata))
+        .unwrap_or_else(empty_reflection_metadata))
 }
 
 /// Resolves `ReflectionEnumUnitCase/BackedCase(enum, case)` metadata.
@@ -992,6 +956,103 @@ fn reflection_enum_case_metadata(
             })
             .unwrap_or_else(empty_reflection_metadata),
     )
+}
+
+/// Builds owner metadata for one resolved class/interface/trait/enum constant reflector.
+fn reflection_class_constant_owner_metadata(
+    reflected_name: String,
+    metadata: ReflectionClassConstantMetadata,
+) -> ReflectionOwnerMetadata {
+    let is_final = metadata.is_final;
+    ReflectionOwnerMetadata {
+        reflected_name: Some(reflected_name),
+        attr_names: metadata.attr_names,
+        attr_args: metadata.attr_args,
+        interface_names: Vec::new(),
+        trait_names: Vec::new(),
+        method_names: Vec::new(),
+        property_names: Vec::new(),
+        constant_names: Vec::new(),
+        constant_members: Vec::new(),
+        constant_reflection_members: Vec::new(),
+        method_members: Vec::new(),
+        property_members: Vec::new(),
+        constructor_member: None,
+        parent_class_name: Some(metadata.declaring_class_name),
+        parameter_members: Vec::new(),
+        required_parameter_count: 0,
+        is_final,
+        is_abstract: false,
+        is_interface: false,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        is_instantiable: false,
+        modifiers: 0,
+        member_flags: ReflectionMemberFlags {
+            is_final,
+            ..ReflectionMemberFlags::default()
+        },
+    }
+}
+
+/// Resolves static metadata for a direct `ReflectionClassConstant` constructor call.
+fn reflection_class_constant_lookup(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    constant_name: &str,
+) -> Option<ReflectionClassConstantMetadata> {
+    if let Some((declaring_class_name, info)) =
+        resolve_reflection_class_constant(ctx, class_name, constant_name)
+    {
+        return Some(ReflectionClassConstantMetadata {
+            declaring_class_name: declaring_class_name.to_string(),
+            attr_names: info
+                .constant_attribute_names
+                .get(constant_name)
+                .cloned()
+                .unwrap_or_default(),
+            attr_args: info
+                .constant_attribute_args
+                .get(constant_name)
+                .cloned()
+                .unwrap_or_default(),
+            is_final: info.final_constants.contains(constant_name),
+        });
+    }
+    if let Some(interface_name) = resolve_reflection_interface(ctx, class_name) {
+        if let Some(info) = ctx.module.interface_infos.get(interface_name) {
+            if info.constants.contains_key(constant_name) {
+                return Some(ReflectionClassConstantMetadata {
+                    declaring_class_name: interface_name.to_string(),
+                    attr_names: Vec::new(),
+                    attr_args: Vec::new(),
+                    is_final: info.final_constants.contains(constant_name),
+                });
+            }
+        }
+    }
+    if let Some(trait_name) = resolve_reflection_trait(ctx, class_name) {
+        if ctx
+            .module
+            .declared_trait_constants
+            .get(trait_name)
+            .is_some_and(|constants| constants.contains_key(constant_name))
+        {
+            let is_final = ctx
+                .module
+                .declared_trait_final_constants
+                .get(trait_name)
+                .is_some_and(|constants| constants.contains(constant_name));
+            return Some(ReflectionClassConstantMetadata {
+                declaring_class_name: trait_name.to_string(),
+                attr_names: Vec::new(),
+                attr_args: Vec::new(),
+                is_final,
+            });
+        }
+    }
+    None
 }
 
 /// Looks up class metadata by PHP-style case-insensitive name.
@@ -1387,13 +1448,14 @@ fn reflection_trait_constant_reflection_members(
         .map(|constants| {
             let mut members = Vec::new();
             let mut seen = std::collections::HashSet::new();
+            let final_constants = ctx.module.declared_trait_final_constants.get(trait_name);
             for constant_name in constants.keys() {
                 push_unique_constant_reflection_member(
                     constant_name,
                     trait_name,
                     Vec::new(),
                     Vec::new(),
-                    false,
+                    final_constants.is_some_and(|constants| constants.contains(constant_name)),
                     &mut members,
                     &mut seen,
                 );

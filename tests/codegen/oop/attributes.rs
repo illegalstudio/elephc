@@ -2572,6 +2572,52 @@ echo $backedAttrs[0]->newInstance()->label();
     );
 }
 
+/// Verifies trait constants expose final metadata through direct and listed reflection.
+#[test]
+fn test_reflection_trait_constant_final_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+trait TraitConstTarget {
+    final public const FLAG = 1;
+    public const OPEN = 2;
+}
+interface InterfaceConstTarget {
+    final public const LIMIT = 3;
+    public const OPEN = 4;
+}
+$direct = new ReflectionClassConstant(TraitConstTarget::class, "FLAG");
+echo $direct->getDeclaringClass()->getName() . ":";
+echo $direct->isFinal() ? "F" : "f";
+$flag = "?";
+$open = "?";
+foreach ((new ReflectionClass(TraitConstTarget::class))->getReflectionConstants() as $constant) {
+    if ($constant->getName() === "FLAG") {
+        $flag = $constant->isFinal() ? "F" : "f";
+    }
+    if ($constant->getName() === "OPEN") {
+        $open = $constant->isFinal() ? "O" : "o";
+    }
+}
+echo ":" . $flag . $open;
+$ifaceDirect = new ReflectionClassConstant(InterfaceConstTarget::class, "LIMIT");
+echo ":" . $ifaceDirect->getDeclaringClass()->getName() . ":";
+echo $ifaceDirect->isFinal() ? "I" : "i";
+$limit = "?";
+$ifaceOpen = "?";
+foreach ((new ReflectionClass(InterfaceConstTarget::class))->getReflectionConstants() as $constant) {
+    if ($constant->getName() === "LIMIT") {
+        $limit = $constant->isFinal() ? "I" : "i";
+    }
+    if ($constant->getName() === "OPEN") {
+        $ifaceOpen = $constant->isFinal() ? "P" : "p";
+    }
+}
+echo ":" . $limit . $ifaceOpen;
+"#,
+    );
+    assert_eq!(out, "TraitConstTarget:F:Fo:InterfaceConstTarget:I:Ip");
+}
+
 /// Verifies that `ReflectionClass` accepts `user::class` (lowercase class
 /// constant) for case-insensitive class resolution and `getAttributes()`
 /// returns the correct attribute data.
