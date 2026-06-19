@@ -6424,6 +6424,11 @@ foreach ($params as $param) {
     } else {
         echo ":null";
     }
+    echo $param->isDefaultValueAvailable() ? ":D" : ":d";
+    if ($param->isDefaultValueAvailable()) {
+        echo "=";
+        echo $param->getDefaultValue() === null ? "null" : $param->getDefaultValue();
+    }
     echo "|";
 }');
 "#,
@@ -6435,7 +6440,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "3/1:first@0rvbT:int!B|second@1OvbT:App\\Name?C|rest@2OVbt:null|"
+        "3/1:first@0rvbT:int!B:d|second@1OvbT:App\\Name?C:D=null|rest@2OVbt:null:d|"
     );
 }
 

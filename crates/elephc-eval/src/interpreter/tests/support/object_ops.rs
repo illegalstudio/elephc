@@ -19,6 +19,7 @@ const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
+const EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE: u64 = 16;
 
 impl FakeOps {
     /// Reads one fake object property by name.
@@ -288,6 +289,10 @@ impl FakeOps {
             (FakeValue::Object(properties), "gettype") if args.is_empty() => {
                 Self::object_property(&properties, "__type").map_or_else(|| self.null(), Ok)
             }
+            (FakeValue::Object(properties), "getdefaultvalue") if args.is_empty() => {
+                Self::object_property(&properties, "__default_value")
+                    .map_or_else(|| self.null(), Ok)
+            }
             (FakeValue::Object(properties), "isoptional") if args.is_empty() => {
                 Self::object_property(&properties, "__is_optional")
                     .map_or_else(|| self.bool_value(false), Ok)
@@ -302,6 +307,10 @@ impl FakeOps {
             }
             (FakeValue::Object(properties), "hastype") if args.is_empty() => {
                 Self::object_property(&properties, "__has_type")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "isdefaultvalueavailable") if args.is_empty() => {
+                Self::object_property(&properties, "__has_default_value")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
             (FakeValue::Object(properties), "allowsnull") if args.is_empty() => {
@@ -517,6 +526,8 @@ impl FakeOps {
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_BY_REF) != 0)?;
             let has_type =
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE) != 0)?;
+            let has_default_value =
+                self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE) != 0)?;
             properties.push(("__position".to_string(), position));
             properties.push(("__is_optional".to_string(), is_optional));
             properties.push(("__is_variadic".to_string(), is_variadic));
@@ -526,6 +537,8 @@ impl FakeOps {
             ));
             properties.push(("__has_type".to_string(), has_type));
             properties.push(("__type".to_string(), method_objects));
+            properties.push(("__has_default_value".to_string(), has_default_value));
+            properties.push(("__default_value".to_string(), property_objects));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_NAMED_TYPE {
             let allows_null = self.bool_value((flags & 1) != 0)?;

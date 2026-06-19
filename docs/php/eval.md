@@ -203,7 +203,8 @@ declared-type presence, and simple named type metadata through
 `ReflectionParameter::getType()` / `ReflectionNamedType::getName()`,
 `allowsNull()`, and `isBuiltin()`. Union/intersection parameter type objects are
 not yet materialized. Defaulted eval method parameters are bound when omitted and reported through
-`ReflectionParameter::isOptional()`. Supported default expressions include
+`ReflectionParameter::isOptional()`, `isDefaultValueAvailable()`, and
+`getDefaultValue()`. Supported default expressions include
 scalar literals, arrays whose keys and values are supported default
 expressions, magic constants, unary and binary operators supported by eval,
 ternary and null-coalescing expressions, predefined or eval-defined constant
@@ -384,7 +385,8 @@ broader parameter/return ABI shapes are still outside that bridge.
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Method/Parameter/Property/NamedType/attribute slice,
-union/intersection Reflection type objects, and broader generated/AOT method
+union/intersection Reflection type objects, broader parameter default-value
+objects beyond the eval-supported constant-expression subset, and broader generated/AOT method
 bridge signatures beyond the current public non-by-reference fixed scalar/Mixed
 slice.
 

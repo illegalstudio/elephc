@@ -76,6 +76,7 @@ struct ReflectionParameterMember {
     is_passed_by_reference: bool,
     has_type: bool,
     type_metadata: Option<ReflectionNamedTypeMetadata>,
+    default_value: Option<ReflectionParameterDefaultValue>,
 }
 
 /// Metadata for one `ReflectionNamedType` returned by `ReflectionParameter::getType()`.
@@ -84,6 +85,16 @@ struct ReflectionNamedTypeMetadata {
     name: String,
     allows_null: bool,
     is_builtin: bool,
+}
+
+/// Compile-time default forms returned by `ReflectionParameter::getDefaultValue()`.
+#[derive(Clone)]
+enum ReflectionParameterDefaultValue {
+    Int(i64),
+    Bool(bool),
+    Float(f64),
+    Str(String),
+    Null,
 }
 
 /// Metadata for one constant entry returned by `ReflectionClass::getConstants()`.
@@ -1597,9 +1608,33 @@ fn reflection_parameter_members(sig: &FunctionSig) -> Vec<ReflectionParameterMem
                 is_passed_by_reference: sig.ref_params.get(index).copied().unwrap_or(false),
                 has_type,
                 type_metadata: reflection_named_type_metadata(ty).filter(|_| has_type),
+                default_value: sig
+                    .defaults
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .and_then(reflection_parameter_default_value),
             }
         })
         .collect()
+}
+
+/// Converts a supported parameter default expression into Reflection metadata.
+fn reflection_parameter_default_value(default: &Expr) -> Option<ReflectionParameterDefaultValue> {
+    match &default.kind {
+        ExprKind::IntLiteral(value) => Some(ReflectionParameterDefaultValue::Int(*value)),
+        ExprKind::BoolLiteral(value) => Some(ReflectionParameterDefaultValue::Bool(*value)),
+        ExprKind::FloatLiteral(value) => Some(ReflectionParameterDefaultValue::Float(*value)),
+        ExprKind::StringLiteral(value) => Some(ReflectionParameterDefaultValue::Str(value.clone())),
+        ExprKind::Null => Some(ReflectionParameterDefaultValue::Null),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value
+                .checked_neg()
+                .map(ReflectionParameterDefaultValue::Int),
+            ExprKind::FloatLiteral(value) => Some(ReflectionParameterDefaultValue::Float(-value)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Converts a normalized parameter type into the simple `ReflectionNamedType` subset.
@@ -2726,6 +2761,13 @@ fn emit_reflection_parameter_properties(
         parameter.has_type,
     )?;
     emit_reflection_parameter_type_property(ctx, parameter)?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionParameter",
+        "__has_default_value",
+        parameter.default_value.is_some(),
+    )?;
+    emit_reflection_parameter_default_property(ctx, parameter)?;
     Ok(())
 }
 
@@ -2757,6 +2799,44 @@ fn emit_reflection_parameter_type_property(
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, type_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, type_offset + 8);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
+}
+
+/// Writes one ReflectionParameter object's boxed default-value slot.
+fn emit_reflection_parameter_default_property(
+    ctx: &mut FunctionContext<'_>,
+    parameter: &ReflectionParameterMember,
+) -> Result<()> {
+    let default_offset = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionParameter")
+            .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+        reflection_property_offset(class_info, "__default_value")?
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    match parameter.default_value.as_ref() {
+        Some(ReflectionParameterDefaultValue::Int(value)) => {
+            emit_boxed_int_literal_to_result(ctx, *value)
+        }
+        Some(ReflectionParameterDefaultValue::Bool(value)) => {
+            emit_boxed_bool_literal_to_result(ctx, *value)
+        }
+        Some(ReflectionParameterDefaultValue::Float(value)) => {
+            emit_boxed_float_literal_to_result(ctx, *value)
+        }
+        Some(ReflectionParameterDefaultValue::Str(value)) => {
+            emit_boxed_string_literal_default_to_result(ctx, value)
+        }
+        Some(ReflectionParameterDefaultValue::Null) | None => emit_boxed_null_literal_to_result(ctx),
+    }
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, default_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, default_offset + 8);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
     Ok(())
 }
