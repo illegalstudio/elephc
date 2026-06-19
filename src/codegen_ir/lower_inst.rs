@@ -3242,11 +3242,12 @@ fn lower_throwable_standard_method(
     store_if_result(ctx, inst)
 }
 
-/// Loads `Throwable::getMessage()` from payload offsets 8/16 into string result registers.
+/// Loads `Throwable::getMessage()` from payload offsets 8/16 and returns a caller-owned string copy.
 fn lower_throwable_get_message(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, ptr_reg, object_reg, 8);
     abi::emit_load_from_address(ctx.emitter, len_reg, object_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     Ok(PhpType::Str)
 }
 

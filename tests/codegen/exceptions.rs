@@ -62,6 +62,16 @@ fn test_builtin_exception_message_api() {
     assert_eq!(out, "boom:boom");
 }
 
+/// Verifies `getMessage()` returns a caller-owned string without consuming the
+/// builtin Throwable payload used by later reads and `__toString()`.
+#[test]
+fn test_builtin_exception_get_message_does_not_consume_payload() {
+    let out = compile_and_run(
+        "<?php $e = new Exception(\"boom\"); echo $e->getMessage(); echo \":\"; echo $e->getMessage(); echo \":\"; echo $e->__toString();",
+    );
+    assert_eq!(out, "boom:boom:boom");
+}
+
 /// Checks that Exception messages built from temporary string results survive the throw.
 #[test]
 fn test_builtin_exception_message_persists_concatenated_temporary() {
