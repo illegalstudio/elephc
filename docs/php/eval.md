@@ -199,10 +199,12 @@ For generated/AOT classes, `ReflectionClass::hasMethod()` and `hasProperty()`
 can also probe emitted method/property metadata without requiring the full
 member lists to be materialized on the `ReflectionClass` object.
 `ReflectionClass::hasConstant()`, `getConstant()`, `getConstants()`,
-`getDefaultProperties()`, `getReflectionConstant()`, and
-`getReflectionConstants()` expose eval-visible class constants, interface
-constants, trait constants, enum constants, enum cases, and supported
-materialized property defaults. Constant lookup is case-sensitive; single-value
+`getDefaultProperties()`, `getStaticProperties()`,
+`getStaticPropertyValue()`, `setStaticPropertyValue()`,
+`getReflectionConstant()`, and `getReflectionConstants()` expose eval-visible
+class constants, interface constants, trait constants, enum constants, enum
+cases, supported materialized property defaults, and current eval-declared
+static property values. Constant lookup is case-sensitive; single-value
 lookups return `false` when no constant or case is visible.
 `ReflectionClass::getMethods()` and `ReflectionClass::getProperties()` return
 materialized `ReflectionMethod` and `ReflectionProperty` objects for the same

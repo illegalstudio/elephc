@@ -7112,7 +7112,7 @@ echo $listed->getDefaultValue() === null ? "null" : "bad";');
 fn test_eval_reflection_class_get_default_properties_metadata() {
     let out = compile_and_run_capture(
         r#"<?php
-eval('class EvalReflectClassDefaultBase {
+	eval('class EvalReflectClassDefaultBase {
     public int $base = 1;
     protected string $prot = "p";
     private int $shadow = 3;
@@ -7144,6 +7144,63 @@ echo array_key_exists("typed", $defaults) ? "T" : "t";');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "7:bs:5:9:1:p:I:N:t");
+}
+
+/// Verifies eval ReflectionClass static-property APIs use current runtime values.
+#[test]
+fn test_eval_reflection_class_static_property_values() {
+    let out = compile_and_run_capture(
+        r#"<?php
+	eval('class EvalReflectStaticBase {
+    public static $base = "b";
+    protected static $prot = "p";
+    private static $shadow = "base-hidden";
+    public $instance = "i";
+}
+class EvalReflectStaticChild extends EvalReflectStaticBase {
+    public static $child = "c";
+    private static $shadow = "child-hidden";
+    public static int $count = 1;
+}
+EvalReflectStaticChild::$child = "mut";
+$ref = new ReflectionClass("EvalReflectStaticChild");
+$statics = $ref->getStaticProperties();
+echo count($statics) . ":";
+echo $statics["child"] . ":";
+echo $statics["base"] . ":";
+echo $statics["prot"] . ":";
+echo $statics["shadow"] . ":";
+echo $ref->getStaticPropertyValue("count") . ":";
+$ref->setStaticPropertyValue("shadow", "changed");
+echo $ref->getStaticPropertyValue("shadow") . ":";
+$ref->setStaticPropertyValue(name: "count", value: 5);
+echo EvalReflectStaticChild::$count . ":";
+echo $ref->getStaticPropertyValue("instance", "fallback") . ":";
+echo $ref->getStaticPropertyValue("missing", "fallback") . ":";
+try {
+    $ref->getStaticPropertyValue("missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo "E";
+}
+echo ":";
+try {
+    $ref->setStaticPropertyValue("instance", "bad");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo "S";
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "5:mut:b:p:child-hidden:1:changed:5:fallback:fallback:E:S"
+    );
 }
 
 /// Verifies eval ReflectionParameter exposes the declaring class for method parameters.
