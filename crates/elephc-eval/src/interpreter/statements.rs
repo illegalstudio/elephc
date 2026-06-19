@@ -1077,9 +1077,11 @@ fn class_method_signature_accepts(method: &EvalClassMethod, required: &EvalClass
     method_signature_accepts(
         method.params().len(),
         method.parameter_defaults(),
+        method.parameter_is_by_ref(),
         method.parameter_is_variadic(),
         required.params().len(),
         required.parameter_defaults(),
+        required.parameter_is_by_ref(),
         required.parameter_is_variadic(),
     )
 }
@@ -1345,9 +1347,11 @@ fn class_method_satisfies_interface_signature(
     method_signature_accepts(
         method.params().len(),
         method.parameter_defaults(),
+        method.parameter_is_by_ref(),
         method.parameter_is_variadic(),
         requirement.params().len(),
         requirement.parameter_defaults(),
+        requirement.parameter_is_by_ref(),
         requirement.parameter_is_variadic(),
     )
 }
@@ -1356,9 +1360,11 @@ fn class_method_satisfies_interface_signature(
 fn method_signature_accepts(
     implementation_param_count: usize,
     implementation_defaults: &[Option<EvalExpr>],
+    implementation_by_refs: &[bool],
     implementation_variadics: &[bool],
     required_param_count: usize,
     required_defaults: &[Option<EvalExpr>],
+    required_by_refs: &[bool],
     required_variadics: &[bool],
 ) -> bool {
     let implementation_min = method_signature_min_arity(
@@ -1375,11 +1381,51 @@ fn method_signature_accepts(
     let implementation_max =
         method_signature_max_arity(implementation_param_count, implementation_variadics);
     let required_max = method_signature_max_arity(required_param_count, required_variadics);
-    match (implementation_max, required_max) {
+    let arity_accepted = match (implementation_max, required_max) {
         (None, _) => true,
         (Some(_), None) => false,
         (Some(implementation_max), Some(required_max)) => implementation_max >= required_max,
+    };
+    arity_accepted
+        && method_signature_by_refs_accept(
+            implementation_by_refs,
+            implementation_variadics,
+            required_param_count,
+            required_by_refs,
+            required_variadics,
+        )
+}
+
+/// Returns whether pass-by-reference requirements are compatible across accepted args.
+fn method_signature_by_refs_accept(
+    implementation_by_refs: &[bool],
+    implementation_variadics: &[bool],
+    required_param_count: usize,
+    required_by_refs: &[bool],
+    required_variadics: &[bool],
+) -> bool {
+    (0..required_param_count).all(|position| {
+        method_signature_effective_by_ref(
+            implementation_by_refs,
+            implementation_variadics,
+            position,
+        )
+            == method_signature_effective_by_ref(required_by_refs, required_variadics, position)
+    })
+}
+
+/// Returns the by-reference mode that one signature applies at an argument position.
+fn method_signature_effective_by_ref(
+    by_refs: &[bool],
+    variadics: &[bool],
+    position: usize,
+) -> bool {
+    if let Some(variadic_index) = variadics.iter().position(|is_variadic| *is_variadic) {
+        if position >= variadic_index {
+            return by_refs.get(variadic_index).copied().unwrap_or(false);
+        }
     }
+    by_refs.get(position).copied().unwrap_or(false)
 }
 
 /// Returns the minimum argument count accepted by one eval method signature.
@@ -1533,7 +1579,11 @@ pub(in crate::interpreter) fn eval_property_set_result(
                     &object_class_name,
                     &hook_method,
                     object,
-                    vec![EvaluatedCallArg { name: None, value }],
+                    vec![EvaluatedCallArg {
+                        name: None,
+                        value,
+                        ref_target: None,
+                    }],
                     context,
                     values,
                 )?;
@@ -2252,6 +2302,159 @@ fn eval_classes_are_related(left: &str, right: &str, context: &ElephcEvalContext
         || context.class_is_a(right, left, false)
 }
 
+/// Binds method parameters into a fresh method scope and marks by-reference params as aliases.
+fn bind_method_scope_args(
+    method_scope: &mut ElephcEvalScope,
+    params: &[String],
+    parameter_is_by_ref: &[bool],
+    bound_args: &[BoundMethodArg],
+) {
+    for (position, (name, bound_arg)) in params.iter().zip(bound_args.iter()).enumerate() {
+        if parameter_is_by_ref.get(position).copied().unwrap_or(false) {
+            method_scope.set_reference(
+                name.clone(),
+                name.clone(),
+                bound_arg.value,
+                ScopeCellOwnership::Borrowed,
+            );
+        } else {
+            method_scope.set(name.clone(), bound_arg.value, ScopeCellOwnership::Borrowed);
+        }
+    }
+    alias_duplicate_method_ref_args(method_scope, params, bound_args);
+}
+
+/// Creates local aliases when two by-reference method parameters point at the same caller variable.
+fn alias_duplicate_method_ref_args(
+    method_scope: &mut ElephcEvalScope,
+    params: &[String],
+    bound_args: &[BoundMethodArg],
+) {
+    for (position, bound_arg) in bound_args.iter().enumerate() {
+        let Some(target) = bound_arg.ref_target.as_ref() else {
+            continue;
+        };
+        let Some(param) = params.get(position) else {
+            continue;
+        };
+        for previous_position in 0..position {
+            let Some(previous_target) = bound_args[previous_position].ref_target.as_ref() else {
+                continue;
+            };
+            if !same_method_ref_target(target, previous_target) {
+                continue;
+            }
+            if let Some(previous_param) = params.get(previous_position) {
+                method_scope.set_reference(
+                    param.clone(),
+                    previous_param.clone(),
+                    bound_args[previous_position].value,
+                    ScopeCellOwnership::Borrowed,
+                );
+            }
+            break;
+        }
+    }
+}
+
+/// Returns true when two evaluated arguments target the same caller-side variable.
+fn same_method_ref_target(
+    left: &EvaluatedCallRefTarget,
+    right: &EvaluatedCallRefTarget,
+) -> bool {
+    match (left, right) {
+        (
+            EvaluatedCallRefTarget::Variable {
+                scope: left_scope,
+                name: left_name,
+            },
+            EvaluatedCallRefTarget::Variable {
+                scope: right_scope,
+                name: right_name,
+            },
+        ) => left_scope == right_scope && left_name == right_name,
+    }
+}
+
+/// Writes completed by-reference method parameter values back to their caller-side variables.
+fn write_back_method_ref_args(
+    params: &[String],
+    bound_args: &[BoundMethodArg],
+    method_scope: &ElephcEvalScope,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (position, bound_arg) in bound_args.iter().enumerate() {
+        let Some(param) = params.get(position) else {
+            continue;
+        };
+        if let Some(target) = bound_arg.ref_target.as_ref() {
+            let Some(entry) = method_scope
+                .entry(param)
+                .filter(|entry| entry.flags().is_visible() && entry.flags().by_ref)
+            else {
+                continue;
+            };
+            write_back_method_ref_target(target, entry.cell(), context, values)?;
+        }
+        write_back_method_variadic_ref_args(param, bound_arg, method_scope, context, values)?;
+    }
+    Ok(())
+}
+
+/// Writes element-level changes from a by-reference variadic method parameter back to callers.
+fn write_back_method_variadic_ref_args(
+    param: &str,
+    bound_arg: &BoundMethodArg,
+    method_scope: &ElephcEvalScope,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if bound_arg.variadic_ref_targets.is_empty() {
+        return Ok(());
+    }
+    let Some(entry) = method_scope
+        .entry(param)
+        .filter(|entry| entry.flags().is_visible() && entry.flags().by_ref)
+    else {
+        return Ok(());
+    };
+    if entry.cell() != bound_arg.value {
+        return Ok(());
+    }
+    for (key, target) in &bound_arg.variadic_ref_targets {
+        let value = values.array_get(entry.cell(), *key)?;
+        write_back_method_ref_target(target, value, context, values)?;
+    }
+    Ok(())
+}
+
+/// Stores one by-reference method result in the original caller-side variable.
+fn write_back_method_ref_target(
+    target: &EvaluatedCallRefTarget,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    match target {
+        EvaluatedCallRefTarget::Variable { scope, name } => {
+            let Some(scope) = (unsafe { scope.as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            for replaced in set_scope_cell(
+                context,
+                scope,
+                name.clone(),
+                value,
+                ScopeCellOwnership::Borrowed,
+            )? {
+                values.release(replaced)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Executes one eval-declared class method with `$this` bound in method scope.
 pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     class_name: &str,
@@ -2266,6 +2469,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
+        method.parameter_is_by_ref(),
         method.parameter_is_variadic(),
         evaluated_args,
         context,
@@ -2273,9 +2477,12 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     )?;
     let mut method_scope = ElephcEvalScope::new();
     method_scope.set("this", object, ScopeCellOwnership::Borrowed);
-    for (name, value) in method.params().iter().zip(evaluated_args) {
-        method_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);
-    }
+    bind_method_scope_args(
+        &mut method_scope,
+        method.params(),
+        method.parameter_is_by_ref(),
+        &evaluated_args,
+    );
     let qualified_method_name =
         format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
     let static_names = static_var_names(method.body());
@@ -2290,10 +2497,18 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
         &method_scope,
         values,
     );
+    let writeback_result = write_back_method_ref_args(
+        method.params(),
+        &evaluated_args,
+        &method_scope,
+        context,
+        values,
+    );
     context.pop_called_class_scope();
     context.pop_class_scope();
     context.pop_function();
     persist_result?;
+    writeback_result?;
     match result? {
         EvalControl::None => values.null(),
         EvalControl::Return(result) => Ok(result),
@@ -2318,15 +2533,19 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
+        method.parameter_is_by_ref(),
         method.parameter_is_variadic(),
         evaluated_args,
         context,
         values,
     )?;
     let mut method_scope = ElephcEvalScope::new();
-    for (name, value) in method.params().iter().zip(evaluated_args) {
-        method_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);
-    }
+    bind_method_scope_args(
+        &mut method_scope,
+        method.params(),
+        method.parameter_is_by_ref(),
+        &evaluated_args,
+    );
     let qualified_method_name =
         format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
     let static_names = static_var_names(method.body());
@@ -2341,10 +2560,18 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
         &method_scope,
         values,
     );
+    let writeback_result = write_back_method_ref_args(
+        method.params(),
+        &evaluated_args,
+        &method_scope,
+        context,
+        values,
+    );
     context.pop_called_class_scope();
     context.pop_class_scope();
     context.pop_function();
     persist_result?;
+    writeback_result?;
     match result? {
         EvalControl::None => values.null(),
         EvalControl::Return(result) => Ok(result),
@@ -2361,7 +2588,11 @@ pub(in crate::interpreter) fn positional_args(
     args: Vec<RuntimeCellHandle>,
 ) -> Vec<EvaluatedCallArg> {
     args.into_iter()
-        .map(|value| EvaluatedCallArg { name: None, value })
+        .map(|value| EvaluatedCallArg {
+            name: None,
+            value,
+            ref_target: None,
+        })
         .collect()
 }
 

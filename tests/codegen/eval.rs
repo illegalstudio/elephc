@@ -5390,6 +5390,40 @@ echo $box->read($dep, "3", 4);');
     assert_eq!(out.stdout, "EvalTypedDep:7");
 }
 
+/// Verifies eval-declared methods write back by-reference arguments through compiled eval calls.
+#[test]
+fn test_eval_declared_method_by_ref_arguments() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalByRefMethodBox {
+    public function change(&$value) {
+        $value = $value . "-method";
+    }
+    public static function changeStatic(&$value) {
+        $value = $value . "-static";
+    }
+    public function changeVariadic(&...$items) {
+        $items[0] = $items[0] . "-variadic";
+        $items["named"] = $items["named"] . "-named";
+    }
+}
+$box = new EvalByRefMethodBox();
+$value = "A";
+$box->change($value);
+EvalByRefMethodBox::changeStatic($value);
+$named = "B";
+$box->changeVariadic($value, named: $named);
+echo $value . ":" . $named;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "A-method-static-variadic:B-named");
+}
+
 /// Verifies eval dynamic static callables dispatch eval-declared static methods.
 #[test]
 fn test_eval_declared_static_method_dynamic_callables() {
