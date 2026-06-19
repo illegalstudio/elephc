@@ -386,7 +386,7 @@ impl Parser {
                     let args = self.parse_call_args()?;
                     expr = EvalExpr::MethodCall {
                         object: Box::new(expr),
-                        method: member.to_ascii_lowercase(),
+                        method: member,
                         args,
                     };
                 } else {
@@ -610,7 +610,7 @@ impl Parser {
                 Ok(EvalExpr::ClassNameFetch { class_name })
             }
             TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen) => {
-                let method = method.to_ascii_lowercase();
+                let method = method.clone();
                 self.advance();
                 let args = self.parse_call_args()?;
                 Ok(EvalExpr::StaticMethodCall {

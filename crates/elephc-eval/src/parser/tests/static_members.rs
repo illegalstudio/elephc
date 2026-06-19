@@ -58,7 +58,7 @@ fn parse_fragment_accepts_static_method_call_expression() {
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::StaticMethodCall {
             class_name: "EvalStaticBox".to_string(),
-            method: "read".to_string(),
+            method: "Read".to_string(),
             args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(2)))],
         }))]
     );
@@ -73,7 +73,7 @@ fn parse_fragment_accepts_named_static_method_call_expression() {
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::StaticMethodCall {
             class_name: "EvalStaticBox".to_string(),
-            method: "read".to_string(),
+            method: "Read".to_string(),
             args: vec![EvalCallArg::named(
                 "step",
                 EvalExpr::Const(EvalConst::Int(2)),

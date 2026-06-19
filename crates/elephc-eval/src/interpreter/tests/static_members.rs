@@ -100,9 +100,9 @@ return EvalStaticCallRules::read();"#,
         .expect_err("static call to instance method should fail");
 }
 
-/// Verifies eval rejects object-style calls to static methods.
+/// Verifies eval allows object-style calls to accessible static methods.
 #[test]
-fn execute_program_rejects_instance_call_to_eval_static_method() {
+fn execute_program_allows_instance_call_to_eval_static_method() {
     let program = parse_fragment(
         br#"class EvalStaticInstanceRules {
     public static function read() { return 1; }
@@ -114,6 +114,60 @@ return $box->read();"#,
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    execute_program(&program, &mut scope, &mut values)
-        .expect_err("instance call to static method should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(1));
+}
+
+/// Verifies missing and inaccessible instance methods dispatch through `__call`.
+#[test]
+fn execute_program_dispatches_eval_magic_call() {
+    let program = parse_fragment(
+        br#"class EvalMagicCallBox {
+    private function hidden($value) { return "bad"; }
+    public function __call($method, $args) {
+        return $method . ":" . $args[0] . ":" . $args["name"];
+    }
+}
+$box = new EvalMagicCallBox();
+echo $box->DoThing("A", name: "B"); echo ":";
+return $box->hidden("C", name: "D");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "DoThing:A:B:");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("hidden:C:D".to_string())
+    );
+}
+
+/// Verifies missing and inaccessible static methods dispatch through `__callStatic`.
+#[test]
+fn execute_program_dispatches_eval_magic_call_static() {
+    let program = parse_fragment(
+        br#"class EvalMagicStaticBox {
+    private static function hidden($value) { return "bad"; }
+    public static function __callStatic($method, $args) {
+        return $method . ":" . $args[0] . ":" . $args["name"];
+    }
+}
+echo EvalMagicStaticBox::DoStatic("A", name: "B"); echo ":";
+return EvalMagicStaticBox::Hidden("C", name: "D");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "DoStatic:A:B:");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("Hidden:C:D".to_string())
+    );
 }

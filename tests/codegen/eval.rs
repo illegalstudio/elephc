@@ -5615,6 +5615,53 @@ echo call_user_func_array($box, ["right" => "J", "left" => "I"]);');
     assert_eq!(out.stdout, "Y:plain:box:CD:new:EF:box:GH:box:IJ");
 }
 
+/// Verifies eval object method fallback dispatches missing and inaccessible methods through `__call`.
+#[test]
+fn test_eval_declared_magic_call_method_fallback() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalMagicCallBox {
+    private function hidden($value) { return "bad"; }
+    public function __call($method, $args) {
+        return $method . ":" . $args[0] . ":" . $args["name"];
+    }
+}
+$box = new EvalMagicCallBox();
+echo $box->DoThing("A", name: "B") . ":";
+echo $box->hidden("C", name: "D");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "DoThing:A:B:hidden:C:D");
+}
+
+/// Verifies eval static method fallback dispatches missing and inaccessible methods through `__callStatic`.
+#[test]
+fn test_eval_declared_magic_call_static_method_fallback() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalMagicStaticBox {
+    private static function hidden($value) { return "bad"; }
+    public static function __callStatic($method, $args) {
+        return $method . ":" . $args[0] . ":" . $args["name"];
+    }
+}
+echo EvalMagicStaticBox::DoStatic("A", name: "B") . ":";
+echo EvalMagicStaticBox::Hidden("C", name: "D");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "DoStatic:A:B:Hidden:C:D");
+}
+
 /// Verifies eval object-method callable arrays bind named arguments.
 #[test]
 fn test_eval_declared_object_method_callable_array_named_args() {
