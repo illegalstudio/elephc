@@ -364,15 +364,42 @@ fn lower_ref_assign_target(
     };
     let array_value = ctx.load_local(array_name, Some(span));
     let index_value = lower_expr(ctx, index);
+    // Promote an indexed/empty base to a Mixed-valued associative array so the reference entry can
+    // be stored with value_tag 11 and read back through the Mixed hash path. A base that already
+    // lowers to a hash needs no promotion. The freshly promoted hash is its own sole owner, so
+    // `RefAssignElement` mutates it without a copy-on-write clone; we then write it back to the base
+    // local explicitly (the promoted hash value is not sourced from a local, so the instruction's
+    // own table writeback would not target the base).
+    let promotion = if array_set_op(array_value.ir_type) != Op::HashSet {
+        let current_ty = ctx.builder.value_php_type(array_value.value);
+        let assoc_ty = promoted_assoc_array_type(current_ty, PhpType::Mixed);
+        let hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![array_value.value],
+            None,
+            assoc_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+        Some((hash, assoc_ty))
+    } else {
+        None
+    };
+    let hash_value = promotion
+        .as_ref()
+        .map_or(array_value.value, |(hash, _)| hash.value);
     let source_ty = ctx.local_type(source);
     let source_slot = ctx.declare_local(source, source_ty);
     ctx.emit_void(
         Op::RefAssignElement,
-        vec![array_value.value, index_value.value],
+        vec![hash_value, index_value.value],
         Some(Immediate::LocalSlot(source_slot)),
         Op::RefAssignElement.default_effects(),
         Some(span),
     );
+    if let Some((hash, assoc_ty)) = promotion {
+        ctx.store_mutated_local(array_name, hash, assoc_ty, Some(span));
+    }
     ctx.mark_ref_bound_local(source);
 }
 

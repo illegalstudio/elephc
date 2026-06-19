@@ -247,10 +247,13 @@ pub(super) fn check_array_push(
 
 /// Type-checks `$arr[$key] =& $source` (reference assignment into an array element).
 ///
-/// M2 scope: only an associative-array element whose value type is already `Mixed`, with a scalar
-/// (`int`/`bool`) local source. Any other shape — indexed arrays, non-`Mixed` value types, property
-/// targets, or non-scalar/undefined sources — returns the same "not yet supported" diagnostic the
-/// M0 gate produced, so unimplemented forms fail cleanly instead of miscompiling.
+/// M2/M3 scope: a single-level array-element target whose base local is any array (empty, indexed,
+/// or associative), with a scalar (`int`/`bool`) local source. The base is promoted/widened to
+/// `AssocArray { key, Mixed }` because a reference entry is stored as a boxed reference cell read
+/// back through the Mixed hash path — so the element value type must be `Mixed`. Non-array bases
+/// (a plain `Mixed`, object, buffer, or string), property targets, nested targets, and
+/// non-scalar/undefined sources return the same "not yet supported" diagnostic the M0 gate produced,
+/// so unimplemented forms fail cleanly instead of miscompiling.
 pub(super) fn check_ref_assign_target(
     checker: &mut Checker,
     target: &Expr,
@@ -281,13 +284,29 @@ pub(super) fn check_ref_assign_target(
         .get(array_name)
         .cloned()
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array_name)))?;
-    let is_mixed_assoc = matches!(
-        &array_ty,
-        PhpType::AssocArray { value, .. } if matches!(value.as_ref(), PhpType::Mixed)
+    let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+    let normalized_idx = normalized_array_key_type(index, idx_ty);
+    // A reference entry always forces Mixed value storage (the cell deref yields a boxed Mixed),
+    // so widen the base to an associative array of Mixed regardless of its prior element type.
+    let merged_key = match &array_ty {
+        PhpType::Array(elem_ty) => {
+            if matches!(elem_ty.as_ref(), PhpType::Never) {
+                normalized_idx
+            } else {
+                merge_array_key_types(PhpType::Int, normalized_idx)
+            }
+        }
+        PhpType::AssocArray { key, .. } => {
+            merge_array_key_types(*key.clone(), normalized_idx)
+        }
+        _ => return Err(unsupported()),
+    };
+    env.insert(
+        array_name.to_string(),
+        PhpType::AssocArray {
+            key: Box::new(merged_key),
+            value: Box::new(PhpType::Mixed),
+        },
     );
-    if !is_mixed_assoc {
-        return Err(unsupported());
-    }
-    checker.infer_type_with_assignment_effects(index, env)?;
     Ok(())
 }

@@ -1040,7 +1040,7 @@ fn test_long_array_interops_with_short_form() {
     assert_eq!(out, "4:1:4");
 }
 
-// --- References into array elements (#80, M2) ---
+// --- References into array elements (#80, M2/M3) ---
 
 /// Smallest end-to-end reference-into-array-element case: `$a['x'] =& $v` aliases a scalar local
 /// into a Mixed associative-array element, so a later write to the source local is observed through
@@ -1061,4 +1061,24 @@ fn test_reference_into_assoc_element_source_and_element_in_sync() {
         "<?php $a = ['k' => 's', 'n' => 1]; $v = 10; $a['x'] =& $v; $v = 7; echo $a['x'], '|', $v;",
     );
     assert_eq!(out, "7|7");
+}
+
+/// Verifies M3 base promotion: a reference may target an element of an initially **empty** array.
+/// The base is promoted to a Mixed associative array on the reference assignment, so `$a['x']`
+/// observes later writes to the aliased source. Matches `php -r` output `5`.
+#[test]
+fn test_reference_into_empty_array_promotes_base() {
+    let out = compile_and_run("<?php $a = []; $v = 1; $a['x'] =& $v; $v = 5; echo $a['x'];");
+    assert_eq!(out, "5");
+}
+
+/// Verifies M3 base promotion from an **indexed** array: the existing integer-keyed elements survive
+/// the indexed→hash promotion while the new reference element tracks the aliased source. Matches
+/// `php -r` output `7|10`.
+#[test]
+fn test_reference_into_indexed_array_promotes_and_preserves_elements() {
+    let out = compile_and_run(
+        "<?php $a = [10, 20]; $v = 1; $a['x'] =& $v; $v = 7; echo $a['x'], '|', $a[0];",
+    );
+    assert_eq!(out, "7|10");
 }
