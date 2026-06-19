@@ -553,7 +553,16 @@ impl FakeOps {
             properties.push(("__required_parameter_count".to_string(), modifiers_cell));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
+            let is_public = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PUBLIC) != 0)?;
+            let is_protected =
+                self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED) != 0)?;
+            let is_private = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE) != 0)?;
+            let is_final = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL) != 0)?;
+            properties.push(("__is_public".to_string(), is_public));
+            properties.push(("__is_protected".to_string(), is_protected));
+            properties.push(("__is_private".to_string(), is_private));
             properties.push(("__is_final".to_string(), is_final));
+            properties.push(("__modifiers".to_string(), modifiers_cell));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_PARAMETER {
             let position = self.int(modifiers as i64)?;

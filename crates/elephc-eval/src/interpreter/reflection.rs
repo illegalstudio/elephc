@@ -437,14 +437,11 @@ fn eval_reflection_class_constant_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (declaring_class_name, attributes, is_final) =
+    let (declaring_class_name, attributes, visibility, is_final) =
         eval_reflection_class_constant_metadata(reflected_name, constant_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
-    let flags = if is_final {
-        EVAL_REFLECTION_CLASS_FLAG_FINAL
-    } else {
-        0
-    };
+    let flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
+    let modifiers = eval_reflection_class_constant_modifiers(visibility, is_final);
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
         constant_name,
@@ -456,7 +453,7 @@ fn eval_reflection_class_constant_object_result(
         Some(&declaring_class_name),
         &[],
         flags,
-        0,
+        modifiers,
         context,
         values,
     )
@@ -629,14 +626,11 @@ fn eval_reflection_class_constant_new(
         return Ok(None);
     }
     let constant_name = eval_reflection_string_arg(args[1], values)?;
-    let (declaring_class_name, attributes, is_final) =
+    let (declaring_class_name, attributes, visibility, is_final) =
         eval_reflection_class_constant_metadata(&class_name, &constant_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
-    let flags = if is_final {
-        EVAL_REFLECTION_CLASS_FLAG_FINAL
-    } else {
-        0
-    };
+    let flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
+    let modifiers = eval_reflection_class_constant_modifiers(visibility, is_final);
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
         &constant_name,
@@ -648,7 +642,7 @@ fn eval_reflection_class_constant_new(
         Some(&declaring_class_name),
         &[],
         flags,
-        0,
+        modifiers,
         context,
         values,
     )
@@ -1342,15 +1336,33 @@ fn eval_reflection_class_modifiers(
     modifiers
 }
 
-/// Returns declaring class, attributes, and finality for an eval class constant or enum case.
+/// Computes PHP's `ReflectionClassConstant::getModifiers()` bitmask for eval metadata.
+fn eval_reflection_class_constant_modifiers(visibility: EvalVisibility, is_final: bool) -> u64 {
+    let mut modifiers = match visibility {
+        EvalVisibility::Public => 1,
+        EvalVisibility::Protected => 2,
+        EvalVisibility::Private => 4,
+    };
+    if is_final {
+        modifiers |= 32;
+    }
+    modifiers
+}
+
+/// Returns declaring class, attributes, visibility, and finality for an eval class constant or enum case.
 fn eval_reflection_class_constant_metadata(
     class_name: &str,
     constant_name: &str,
     context: &ElephcEvalContext,
-) -> Option<(String, Vec<EvalAttribute>, bool)> {
+) -> Option<(String, Vec<EvalAttribute>, EvalVisibility, bool)> {
     if let Some(enum_decl) = context.enum_decl(class_name) {
         if let Some(case) = enum_decl.case(constant_name) {
-            return Some((enum_decl.name().to_string(), case.attributes().to_vec(), false));
+            return Some((
+                enum_decl.name().to_string(),
+                case.attributes().to_vec(),
+                EvalVisibility::Public,
+                false,
+            ));
         }
     }
     context.class_constant(class_name, constant_name).map(
@@ -1358,6 +1370,7 @@ fn eval_reflection_class_constant_metadata(
             (
                 declaring_class,
                 constant.attributes().to_vec(),
+                constant.visibility(),
                 constant.is_final(),
             )
         },

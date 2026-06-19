@@ -1859,9 +1859,22 @@ fn builtin_reflection_owner_class(
         properties,
         methods,
         attributes: Vec::new(),
-        constants: Vec::new(),
+        constants: reflection_owner_constants(name),
         used_traits: Vec::new(),
     }
+}
+
+/// Returns public class constants exposed by a synthetic reflection owner.
+fn reflection_owner_constants(class_name: &str) -> Vec<ClassConst> {
+    if class_name == "ReflectionClassConstant" {
+        return vec![
+            builtin_class_const("IS_PUBLIC", 1),
+            builtin_class_const("IS_PROTECTED", 2),
+            builtin_class_const("IS_PRIVATE", 4),
+            builtin_class_const("IS_FINAL", 32),
+        ];
+    }
+    Vec::new()
 }
 
 /// Builds `getNumberOfParameters()` over the retained parameter array.
@@ -1906,14 +1919,16 @@ fn add_reflection_member_flag_methods(
     properties: &mut Vec<ClassProperty>,
     methods: &mut Vec<ClassMethod>,
 ) {
-    let common_flags = [
-        ("__is_static", "isStatic"),
+    let visibility_flags = [
         ("__is_public", "isPublic"),
         ("__is_protected", "isProtected"),
         ("__is_private", "isPrivate"),
     ];
-    if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") {
-        for (property, method) in common_flags {
+    if matches!(
+        class_name,
+        "ReflectionMethod" | "ReflectionProperty" | "ReflectionClassConstant"
+    ) {
+        for (property, method) in visibility_flags {
             properties.push(builtin_property(
                 property,
                 Visibility::Private,
@@ -1922,6 +1937,18 @@ fn add_reflection_member_flag_methods(
             ));
             methods.push(builtin_reflection_class_bool_method(method, property));
         }
+    }
+    if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") {
+        properties.push(builtin_property(
+            "__is_static",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isStatic",
+            "__is_static",
+        ));
     }
     if class_name == "ReflectionProperty" {
         for (property, method) in [("__is_final", "isFinal"), ("__is_abstract", "isAbstract")] {
@@ -1954,6 +1981,16 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_class_bool_method(
             "isFinal",
             "__is_final",
+        ));
+        properties.push(builtin_property(
+            "__modifiers",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        methods.push(builtin_reflection_class_int_method(
+            "getModifiers",
+            "__modifiers",
         ));
     }
     if class_name == "ReflectionMethod" {

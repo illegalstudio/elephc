@@ -61,6 +61,7 @@ struct ReflectionClassConstantMetadata {
     declaring_class_name: String,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
+    visibility: Visibility,
     is_final: bool,
 }
 
@@ -343,6 +344,9 @@ fn emit_reflection_owner_object(
             metadata.required_parameter_count,
         )?;
     }
+    if class_name == "ReflectionClassConstant" {
+        emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
+    }
     if class_name == "ReflectionParameter" {
         if let Some(parameter) = metadata.parameter_members.first() {
             emit_reflection_parameter_properties(ctx, parameter)?;
@@ -513,8 +517,8 @@ fn reflection_class_metadata_for_name(
             is_enum: false,
             is_readonly: false,
             is_instantiable: false,
-            modifiers: 0,
-            member_flags: ReflectionMemberFlags::default(),
+            modifiers: reflection_class_constant_modifiers(&Visibility::Public, false),
+            member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
         });
     }
     if let Some(trait_name) = resolve_reflection_trait(ctx, &reflected_class) {
@@ -562,8 +566,8 @@ fn reflection_class_metadata_for_name(
             is_enum: false,
             is_readonly: false,
             is_instantiable: false,
-            modifiers: 0,
-            member_flags: ReflectionMemberFlags::default(),
+            modifiers: reflection_class_constant_modifiers(&Visibility::Public, false),
+            member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
         });
     }
     Ok(empty_reflection_metadata())
@@ -902,8 +906,8 @@ fn reflection_class_constant_metadata(
             is_enum: false,
             is_readonly: false,
             is_instantiable: false,
-            modifiers: 0,
-            member_flags: ReflectionMemberFlags::default(),
+            modifiers: reflection_class_constant_modifiers(&Visibility::Public, false),
+            member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
         });
     }
     Ok(reflection_class_constant_lookup(ctx, &reflected_class, &constant_name)
@@ -964,6 +968,8 @@ fn reflection_class_constant_owner_metadata(
     metadata: ReflectionClassConstantMetadata,
 ) -> ReflectionOwnerMetadata {
     let is_final = metadata.is_final;
+    let modifiers = reflection_class_constant_modifiers(&metadata.visibility, is_final);
+    let member_flags = reflection_member_flags(false, &metadata.visibility, is_final, false, false);
     ReflectionOwnerMetadata {
         reflected_name: Some(reflected_name),
         attr_names: metadata.attr_names,
@@ -988,11 +994,8 @@ fn reflection_class_constant_owner_metadata(
         is_enum: false,
         is_readonly: false,
         is_instantiable: false,
-        modifiers: 0,
-        member_flags: ReflectionMemberFlags {
-            is_final,
-            ..ReflectionMemberFlags::default()
-        },
+        modifiers,
+        member_flags,
     }
 }
 
@@ -1017,6 +1020,11 @@ fn reflection_class_constant_lookup(
                 .get(constant_name)
                 .cloned()
                 .unwrap_or_default(),
+            visibility: info
+                .constant_visibilities
+                .get(constant_name)
+                .cloned()
+                .unwrap_or(Visibility::Public),
             is_final: info.final_constants.contains(constant_name),
         });
     }
@@ -1052,6 +1060,13 @@ fn reflection_class_constant_lookup(
                 declaring_class_name: trait_name.to_string(),
                 attr_names: Vec::new(),
                 attr_args: Vec::new(),
+                visibility: ctx
+                    .module
+                    .declared_trait_constant_visibilities
+                    .get(trait_name)
+                    .and_then(|constants| constants.get(constant_name))
+                    .cloned()
+                    .unwrap_or(Visibility::Public),
                 is_final,
             });
         }
@@ -1081,6 +1096,7 @@ fn reflection_interface_class_constant_lookup(
         declaring_class_name: declaring_interface.to_string(),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
+        visibility: Visibility::Public,
         is_final,
     })
 }
@@ -1394,6 +1410,7 @@ fn reflection_class_constant_reflection_members(
                 class_name,
                 case.attribute_names.clone(),
                 case.attribute_args.clone(),
+                Visibility::Public,
                 false,
                 &mut members,
                 &mut seen,
@@ -1423,6 +1440,11 @@ fn reflection_class_constant_reflection_members(
                     .get(constant_name)
                     .cloned()
                     .unwrap_or_default(),
+                current_info
+                    .constant_visibilities
+                    .get(constant_name)
+                    .cloned()
+                    .unwrap_or(Visibility::Public),
                 current_info.final_constants.contains(constant_name),
                 &mut members,
                 &mut seen,
@@ -1475,6 +1497,7 @@ fn collect_interface_constant_reflection_members(
             declaring_interface,
             Vec::new(),
             Vec::new(),
+            Visibility::Public,
             is_final,
             members,
             seen,
@@ -1500,6 +1523,12 @@ fn reflection_trait_constant_reflection_members(
                     trait_name,
                     Vec::new(),
                     Vec::new(),
+                    ctx.module
+                        .declared_trait_constant_visibilities
+                        .get(trait_name)
+                        .and_then(|constants| constants.get(constant_name))
+                        .cloned()
+                        .unwrap_or(Visibility::Public),
                     final_constants.is_some_and(|constants| constants.contains(constant_name)),
                     &mut members,
                     &mut seen,
@@ -1516,6 +1545,7 @@ fn push_unique_constant_reflection_member(
     declaring_class_name: &str,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgEntry>>>,
+    visibility: Visibility,
     is_final: bool,
     members: &mut Vec<ReflectionListedMember>,
     seen: &mut std::collections::HashSet<String>,
@@ -1528,10 +1558,7 @@ fn push_unique_constant_reflection_member(
         declaring_class_name: Some(declaring_class_name.to_string()),
         attr_names,
         attr_args,
-        flags: ReflectionMemberFlags {
-            is_final,
-            ..ReflectionMemberFlags::default()
-        },
+        flags: reflection_member_flags(false, &visibility, is_final, false, false),
         required_parameter_count: 0,
         parameters: Vec::new(),
     });
@@ -3189,6 +3216,14 @@ fn emit_reflection_member_object(
             member.required_parameter_count,
         )?;
     }
+    if member_class_name == "ReflectionClassConstant" {
+        emit_reflection_owner_int_property(
+            ctx,
+            member_class_name,
+            "__modifiers",
+            reflection_class_constant_modifiers_from_flags(member.flags),
+        )?;
+    }
     emit_reflection_member_flag_properties(ctx, member_class_name, member.flags)?;
     Ok(())
 }
@@ -3783,6 +3818,14 @@ fn emit_reflection_member_flag_properties(
             )?;
         }
         "ReflectionClassConstant" => {
+            emit_reflection_owner_bool_property(ctx, class_name, "__is_public", flags.is_public)?;
+            emit_reflection_owner_bool_property(
+                ctx,
+                class_name,
+                "__is_protected",
+                flags.is_protected,
+            )?;
+            emit_reflection_owner_bool_property(ctx, class_name, "__is_private", flags.is_private)?;
             emit_reflection_owner_bool_property(ctx, class_name, "__is_final", flags.is_final)?;
         }
         _ => {}
@@ -3865,6 +3908,31 @@ fn reflection_class_modifiers(
         modifiers |= 65_536;
     }
     modifiers
+}
+
+/// Computes PHP's `ReflectionClassConstant::getModifiers()` bitmask.
+fn reflection_class_constant_modifiers(visibility: &Visibility, is_final: bool) -> i64 {
+    let mut modifiers = match visibility {
+        Visibility::Public => 1,
+        Visibility::Protected => 2,
+        Visibility::Private => 4,
+    };
+    if is_final {
+        modifiers |= 32;
+    }
+    modifiers
+}
+
+/// Computes the class-constant modifier bitmask from populated Reflection member flags.
+fn reflection_class_constant_modifiers_from_flags(flags: ReflectionMemberFlags) -> i64 {
+    let visibility = if flags.is_private {
+        Visibility::Private
+    } else if flags.is_protected {
+        Visibility::Protected
+    } else {
+        Visibility::Public
+    };
+    reflection_class_constant_modifiers(&visibility, flags.is_final)
 }
 
 /// Returns one declared property offset from a synthetic Reflection class layout.
