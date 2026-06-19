@@ -14,7 +14,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
 use crate::names::{method_symbol, php_symbol_key, static_method_symbol};
-use crate::parser::ast::ExprKind;
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{
     ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
     PackedClassInfo, PhpType,
@@ -59,6 +59,8 @@ pub(super) fn emit_class_methods(
         let epilogue_label = format!("{}_epilogue", label);
         let generated_body = if class_name == "ReflectionAttribute" && method_key == "newinstance" {
             Some(crate::codegen::reflection::build_attribute_new_instance_body(classes))
+        } else if class_name == "ReflectionClass" && method_key == "newinstance" {
+            Some(build_reflection_class_new_instance_legacy_body())
         } else {
             None
         };
@@ -88,6 +90,15 @@ pub(super) fn emit_class_methods(
             extern_globals,
         );
     }
+}
+
+/// Builds the legacy fallback body for `ReflectionClass::newInstance()`.
+fn build_reflection_class_new_instance_legacy_body() -> Vec<Stmt> {
+    let dummy_span = crate::span::Span::dummy();
+    vec![Stmt::new(
+        StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+        dummy_span,
+    )]
 }
 
 /// Builds the symbol label and `FunctionSig` for a static method.

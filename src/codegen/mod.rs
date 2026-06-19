@@ -661,6 +661,9 @@ fn expand_emitted_class_dependencies(
             }
             let previous_len = names.len();
             for method in &class_info.method_decls {
+                if skip_legacy_emitted_class_dependency_body(&class_name, method) {
+                    continue;
+                }
                 collect_dynamic_object_factory_classes(&method.body, classes, names);
                 collect_required_class_names_in_stmts(&method.body, names);
             }
@@ -670,6 +673,14 @@ fn expand_emitted_class_dependencies(
             break;
         }
     }
+}
+
+/// Returns true for synthetic method bodies that should not expand legacy class emission.
+fn skip_legacy_emitted_class_dependency_body(
+    class_name: &str,
+    method: &crate::parser::ast::ClassMethod,
+) -> bool {
+    class_name == "ReflectionClass" && crate::names::php_symbol_key(&method.name) == "newinstance"
 }
 
 /// Adds every concrete class that an internal dynamic object factory can instantiate.

@@ -508,6 +508,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 null_expr(),
             ),
             builtin_property(
+                "__parent_class",
+                Visibility::Private,
+                Some(mixed_type()),
+                false_bool(),
+            ),
+            builtin_property(
                 "__properties",
                 Visibility::Private,
                 Some(object_array_type("ReflectionProperty")),
@@ -554,6 +560,7 @@ fn builtin_reflection_class() -> FlattenedClass {
                 "__constructor",
                 "ReflectionMethod",
             ),
+            builtin_reflection_class_mixed_method("getParentClass", "__parent_class"),
             builtin_reflection_class_array_method(
                 "getProperties",
                 "__properties",
@@ -749,6 +756,35 @@ fn builtin_reflection_class_nullable_object_method(
         variadic: None,
         variadic_type: None,
         return_type: Some(nullable_object_type(class_name)),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public mixed `ReflectionClass` method backed by one private slot.
+fn builtin_reflection_class_mixed_method(method_name: &str, property: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -1144,6 +1180,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                         PhpType::Object("ReflectionMethod".to_string()),
                         PhpType::Void,
                     ]);
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParentClass")) {
+                    sig.return_type = PhpType::Mixed;
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;

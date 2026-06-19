@@ -5739,6 +5739,31 @@ echo count($parentInterfaces) . ":" . $parentInterfaces[0];');
     );
 }
 
+/// Verifies eval ReflectionClass::getParentClass crosses the generated runtime bridge.
+#[test]
+fn test_eval_reflection_class_get_parent_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalBridgeParent {}
+class EvalBridgeChild extends EvalBridgeParent {}
+$parent = (new ReflectionClass("EvalBridgeChild"))->getParentClass();
+echo $parent->getName() . ":";
+$root = (new ReflectionClass("EvalBridgeParent"))->getParentClass();
+if ($root === false) {
+    echo "false";
+} else {
+    echo "bad";
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "EvalBridgeParent:false");
+}
+
 /// Verifies eval ReflectionClass reports class-like final and abstract flags.
 #[test]
 fn test_eval_reflection_class_modifier_flags() {
