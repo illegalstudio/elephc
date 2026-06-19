@@ -2182,6 +2182,11 @@ impl Parser {
 fn method_parameter_default_is_supported(default: &EvalExpr) -> bool {
     match default {
         EvalExpr::Const(_) => true,
+        EvalExpr::ConstFetch(_) | EvalExpr::NamespacedConstFetch { .. } => true,
+        EvalExpr::ClassConstantFetch { class_name, .. }
+        | EvalExpr::ClassNameFetch { class_name } => {
+            !class_name.eq_ignore_ascii_case("static")
+        }
         EvalExpr::Unary {
             op: EvalUnaryOp::Plus | EvalUnaryOp::Negate,
             expr,

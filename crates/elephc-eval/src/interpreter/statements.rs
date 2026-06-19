@@ -2599,7 +2599,13 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = bind_evaluated_method_args(
+    let qualified_method_name =
+        format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
+    let static_names = static_var_names(method.body());
+    context.push_function(qualified_method_name.clone());
+    context.push_class_scope(class_name.to_string());
+    context.push_called_class_scope(called_class_name.to_string());
+    let evaluated_args = match bind_evaluated_method_args(
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -2608,7 +2614,15 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
         evaluated_args,
         context,
         values,
-    )?;
+    ) {
+        Ok(args) => args,
+        Err(status) => {
+            context.pop_called_class_scope();
+            context.pop_class_scope();
+            context.pop_function();
+            return Err(status);
+        }
+    };
     let mut method_scope = ElephcEvalScope::new();
     method_scope.set("this", object, ScopeCellOwnership::Borrowed);
     bind_method_scope_args(
@@ -2617,12 +2631,6 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
         method.parameter_is_by_ref(),
         &evaluated_args,
     );
-    let qualified_method_name =
-        format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
-    let static_names = static_var_names(method.body());
-    context.push_function(qualified_method_name.clone());
-    context.push_class_scope(class_name.to_string());
-    context.push_called_class_scope(called_class_name.to_string());
     let result = execute_statements(method.body(), context, &mut method_scope, values);
     let persist_result = persist_static_locals(
         context,
@@ -2663,7 +2671,13 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = bind_evaluated_method_args(
+    let qualified_method_name =
+        format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
+    let static_names = static_var_names(method.body());
+    context.push_function(qualified_method_name.clone());
+    context.push_class_scope(class_name.to_string());
+    context.push_called_class_scope(called_class_name.to_string());
+    let evaluated_args = match bind_evaluated_method_args(
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -2672,7 +2686,15 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
         evaluated_args,
         context,
         values,
-    )?;
+    ) {
+        Ok(args) => args,
+        Err(status) => {
+            context.pop_called_class_scope();
+            context.pop_class_scope();
+            context.pop_function();
+            return Err(status);
+        }
+    };
     let mut method_scope = ElephcEvalScope::new();
     bind_method_scope_args(
         &mut method_scope,
@@ -2680,12 +2702,6 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
         method.parameter_is_by_ref(),
         &evaluated_args,
     );
-    let qualified_method_name =
-        format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
-    let static_names = static_var_names(method.body());
-    context.push_function(qualified_method_name.clone());
-    context.push_class_scope(class_name.to_string());
-    context.push_called_class_scope(called_class_name.to_string());
     let result = execute_statements(method.body(), context, &mut method_scope, values);
     let persist_result = persist_static_locals(
         context,

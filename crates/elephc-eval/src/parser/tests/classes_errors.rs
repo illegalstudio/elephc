@@ -617,6 +617,52 @@ fn parse_fragment_accepts_typed_method_parameter_metadata() {
     assert_eq!(method.parameter_is_variadic(), &[false, false, false, true]);
 }
 
+/// Verifies eval method parameter defaults retain supported constant-expression metadata.
+#[test]
+fn parse_fragment_accepts_method_parameter_constant_defaults() {
+    let program = parse_fragment(
+        br#"class DynEvalDefaultConstants {
+    const LABEL = "box";
+    public function read($global = DYN_EVAL_DEFAULT_GLOBAL, $label = self::LABEL, $parent = parent::LABEL, $class = self::class) {}
+}"#,
+    )
+    .expect("fragment should parse");
+    let [EvalStmt::ClassDecl(class)] = program.statements() else {
+        panic!("expected one class declaration");
+    };
+    let [method] = class.methods() else {
+        panic!("expected one class method");
+    };
+
+    assert!(matches!(
+        method.parameter_defaults(),
+        [
+            Some(EvalExpr::ConstFetch(global)),
+            Some(EvalExpr::ClassConstantFetch { class_name: self_name, constant: self_constant }),
+            Some(EvalExpr::ClassConstantFetch { class_name: parent_name, constant: parent_constant }),
+            Some(EvalExpr::ClassNameFetch { class_name })
+        ] if global == "DYN_EVAL_DEFAULT_GLOBAL"
+            && self_name == "self"
+            && self_constant == "LABEL"
+            && parent_name == "parent"
+            && parent_constant == "LABEL"
+            && class_name == "self"
+    ));
+}
+
+/// Verifies eval rejects late-bound `static::` defaults like PHP compile-time constants do.
+#[test]
+fn parse_fragment_rejects_late_bound_static_method_parameter_defaults() {
+    parse_fragment(
+        b"class DynEvalStaticDefault { public function read($label = static::LABEL) {} }",
+    )
+    .expect_err("static class constant defaults are not PHP compile-time constants");
+    parse_fragment(
+        b"class DynEvalStaticClassDefault { public function read($class = static::class) {} }",
+    )
+    .expect_err("static class-name defaults are not PHP compile-time constants");
+}
+
 /// Verifies eval rejects invalid variadic method parameter forms.
 #[test]
 fn parse_fragment_rejects_invalid_variadic_method_parameters() {

@@ -184,9 +184,14 @@ eval/runtime class or interface names.
 eval-declared method parameters. Eval currently exposes parameter names and
 zero-based positions there, plus declared-type presence for method parameter
 type hints. Defaulted eval method parameters are bound when omitted and reported
-through `ReflectionParameter::isOptional()`. Variadic eval method parameters
-bind extra positional and unknown named arguments into a PHP array and are
-reported through `ReflectionParameter::isVariadic()` and
+through `ReflectionParameter::isOptional()`. Supported default expressions
+include scalar literals, signed numeric literals, predefined or eval-defined
+constant fetches, namespaced constant fallback, class/interface/trait/enum
+constant fetches, and `self::class` / `parent::class` / named class-like
+`::class` literals. Late-bound `static::` defaults are rejected like PHP
+compile-time constants. Variadic eval method parameters bind extra positional
+and unknown named arguments into a PHP array and are reported through
+`ReflectionParameter::isVariadic()` and
 `ReflectionParameter::isOptional()`. By-reference eval method parameters accept
 direct variable, array-element, and object-property arguments, write back fixed
 parameters after method execution, write back mutated `&...$items` elements
@@ -357,9 +362,9 @@ Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Method/Parameter/Property/attribute slice, richer
 ReflectionParameter type metadata beyond presence flags, broader default-value
-expression support beyond scalar literals, and broader generated/AOT method
-bridge signatures beyond the current public non-by-reference fixed scalar/Mixed
-slice.
+expression support beyond the supported literal and constant-expression forms,
+and broader generated/AOT method bridge signatures beyond the current public
+non-by-reference fixed scalar/Mixed slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`
