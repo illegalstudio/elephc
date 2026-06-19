@@ -548,6 +548,7 @@ impl FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let class_name = match owner_kind {
             EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
+            EVAL_REFLECTION_OWNER_FUNCTION => "ReflectionFunction",
             EVAL_REFLECTION_OWNER_METHOD => "ReflectionMethod",
             EVAL_REFLECTION_OWNER_PROPERTY => "ReflectionProperty",
             EVAL_REFLECTION_OWNER_CLASS_CONSTANT => "ReflectionClassConstant",
@@ -654,6 +655,13 @@ impl FakeOps {
         ) {
             properties.push(("__declaring_class".to_string(), parent_class));
         }
+        if matches!(
+            owner_kind,
+            EVAL_REFLECTION_OWNER_METHOD | EVAL_REFLECTION_OWNER_FUNCTION
+        ) {
+            properties.push(("__parameters".to_string(), method_objects));
+            properties.push(("__required_parameter_count".to_string(), modifiers_cell));
+        }
         if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
             let is_final = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL) != 0)?;
             let is_abstract =
@@ -661,8 +669,6 @@ impl FakeOps {
             let method_modifiers = self.int(method_modifiers as i64)?;
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__is_abstract".to_string(), is_abstract));
-            properties.push(("__parameters".to_string(), method_objects));
-            properties.push(("__required_parameter_count".to_string(), modifiers_cell));
             properties.push(("__modifiers".to_string(), method_modifiers));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {

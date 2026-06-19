@@ -1,7 +1,7 @@
 //! Purpose:
 //! Emits user-assembly helpers that let libelephc-eval materialize
-//! ReflectionClass, ReflectionMethod, ReflectionParameter, ReflectionProperty,
-//! ReflectionClassConstant, ReflectionEnum*, and ReflectionType objects
+//! ReflectionClass, ReflectionFunction, ReflectionMethod, ReflectionParameter,
+//! ReflectionProperty, ReflectionClassConstant, ReflectionEnum*, and ReflectionType objects
 //! with private metadata slots populated from runtime eval declarations.
 //!
 //! Called from:
@@ -121,6 +121,7 @@ struct ReflectionOwnerLayout {
 /// Layouts for the Reflection owner classes eval can materialize.
 struct ReflectionOwnerLayouts {
     class: ReflectionOwnerLayout,
+    function: ReflectionOwnerLayout,
     method: ReflectionOwnerLayout,
     property: ReflectionOwnerLayout,
     class_constant: ReflectionOwnerLayout,
@@ -182,6 +183,7 @@ fn function_uses_eval(function: &Function) -> bool {
 fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
     Some(ReflectionOwnerLayouts {
         class: reflection_owner_layout(module.class_infos.get("ReflectionClass")?, true)?,
+        function: reflection_owner_layout(module.class_infos.get("ReflectionFunction")?, true)?,
         method: reflection_owner_layout(module.class_infos.get("ReflectionMethod")?, true)?,
         property: reflection_owner_layout(module.class_infos.get("ReflectionProperty")?, true)?,
         class_constant: reflection_owner_layout(
@@ -383,6 +385,7 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     let done_label = "__elephc_eval_reflection_owner_new_done";
     let box_label = "__elephc_eval_reflection_owner_new_box";
     let class_label = "__elephc_eval_reflection_owner_new_class";
+    let function_label = "__elephc_eval_reflection_owner_new_function";
     let method_label = "__elephc_eval_reflection_owner_new_method";
     let property_label = "__elephc_eval_reflection_owner_new_property";
     let class_constant_label = "__elephc_eval_reflection_owner_new_class_constant";
@@ -439,11 +442,21 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction(&format!("b.eq {}", union_type_label));                 // allocate a ReflectionUnionType owner
     emitter.instruction("cmp x0, #9");                                          // owner kind 9 means ReflectionIntersectionType
     emitter.instruction(&format!("b.eq {}", intersection_type_label));          // allocate a ReflectionIntersectionType owner
+    emitter.instruction("cmp x0, #10");                                         // owner kind 10 means ReflectionFunction
+    emitter.instruction(&format!("b.eq {}", function_label));                   // allocate a ReflectionFunction owner
     emitter.instruction(&format!("b {}", fail_label));                          // reject unknown owner kinds
     emit_aarch64_owner_kind_body(
         emitter,
         class_label,
         &layouts.class,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_aarch64_owner_kind_body(
+        emitter,
+        function_label,
+        &layouts.function,
         true,
         fail_label,
         box_label,
@@ -540,6 +553,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let done_label = "__elephc_eval_reflection_owner_new_done_x";
     let box_label = "__elephc_eval_reflection_owner_new_box_x";
     let class_label = "__elephc_eval_reflection_owner_new_class_x";
+    let function_label = "__elephc_eval_reflection_owner_new_function_x";
     let method_label = "__elephc_eval_reflection_owner_new_method_x";
     let property_label = "__elephc_eval_reflection_owner_new_property_x";
     let class_constant_label = "__elephc_eval_reflection_owner_new_class_constant_x";
@@ -598,11 +612,21 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction(&format!("je {}", union_type_label));                   // allocate a ReflectionUnionType owner
     emitter.instruction("cmp rdi, 9");                                          // owner kind 9 means ReflectionIntersectionType
     emitter.instruction(&format!("je {}", intersection_type_label));            // allocate a ReflectionIntersectionType owner
+    emitter.instruction("cmp rdi, 10");                                         // owner kind 10 means ReflectionFunction
+    emitter.instruction(&format!("je {}", function_label));                     // allocate a ReflectionFunction owner
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject unknown owner kinds
     emit_x86_64_owner_kind_body(
         emitter,
         class_label,
         &layouts.class,
+        true,
+        fail_label,
+        box_label,
+    );
+    emit_x86_64_owner_kind_body(
+        emitter,
+        function_label,
+        &layouts.function,
         true,
         fail_label,
         box_label,

@@ -7620,6 +7620,38 @@ echo $listed->getDeclaringFunction()->getName();');
     );
 }
 
+/// Verifies eval ReflectionFunction materializes eval-declared function parameters.
+#[test]
+fn test_eval_reflection_function_reports_eval_function_parameters() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('function eval_reflect_free($left, $right) {
+    return $left;
+}
+$ref = new ReflectionFunction("eval_reflect_free");
+$params = $ref->getParameters();
+echo $ref->getName() . ":";
+echo $ref->getNumberOfParameters() . ":";
+echo $ref->getNumberOfRequiredParameters() . ":";
+echo count($params) . ":";
+echo $params[0]->getName() . ":";
+echo $params[1]->getPosition() . ":";
+$declaring = $params[0]->getDeclaringFunction();
+echo get_class($declaring) . ":";
+echo $declaring->getName();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "eval_reflect_free:2:2:2:left:1:ReflectionFunction:eval_reflect_free"
+    );
+}
+
 /// Verifies eval ReflectionClass::isCloneable uses eval class metadata through the bridge.
 #[test]
 fn test_eval_reflection_class_cloneable_predicate() {

@@ -24,6 +24,7 @@ mod builtins_language_constructs;
 mod builtins_math_formatting;
 mod builtins_process_pipes;
 mod builtins_readline;
+mod builtins_reflection_functions;
 mod builtins_scalars;
 mod builtins_spl_autoload;
 mod builtins_stream_contexts;

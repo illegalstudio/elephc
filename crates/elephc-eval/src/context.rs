@@ -162,6 +162,7 @@ pub struct ElephcEvalContext {
     dynamic_objects: HashMap<u64, String>,
     eval_reflection_attributes: HashMap<u64, EvalAttribute>,
     eval_reflection_classes: HashMap<u64, String>,
+    eval_reflection_functions: HashMap<u64, String>,
     eval_reflection_methods: HashMap<u64, (String, String)>,
     eval_reflection_properties: HashMap<u64, (String, String)>,
     global_scope: Option<*mut ElephcEvalScope>,
@@ -208,6 +209,7 @@ impl ElephcEvalContext {
             dynamic_objects: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
+            eval_reflection_functions: HashMap::new(),
             eval_reflection_methods: HashMap::new(),
             eval_reflection_properties: HashMap::new(),
             global_scope: None,
@@ -255,6 +257,7 @@ impl ElephcEvalContext {
             dynamic_objects: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
+            eval_reflection_functions: HashMap::new(),
             eval_reflection_methods: HashMap::new(),
             eval_reflection_properties: HashMap::new(),
             global_scope: None,
@@ -559,6 +562,19 @@ impl ElephcEvalContext {
     /// Returns the reflected class name attached to a synthetic ReflectionClass.
     pub fn eval_reflection_class_name(&self, identity: u64) -> Option<&str> {
         self.eval_reflection_classes
+            .get(&identity)
+            .map(String::as_str)
+    }
+
+    /// Records reflected function metadata for one synthetic ReflectionFunction object.
+    pub fn register_eval_reflection_function(&mut self, identity: u64, function_name: &str) {
+        self.eval_reflection_functions
+            .insert(identity, function_name.trim_start_matches('\\').to_string());
+    }
+
+    /// Returns the reflected function name attached to a synthetic ReflectionFunction.
+    pub fn eval_reflection_function_name(&self, identity: u64) -> Option<&str> {
+        self.eval_reflection_functions
             .get(&identity)
             .map(String::as_str)
     }

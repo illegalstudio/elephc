@@ -268,10 +268,12 @@ with PHP-compatible `ReflectionMethod::IS_*` constants for the bitmask.
 `ReflectionMethod::isConstructor()` and `isDestructor()` report whether the
 reflected method is `__construct` or `__destruct`.
 `ReflectionMethod::setAccessible()` is accepted as a PHP-compatible no-op.
+`ReflectionFunction::getName()`, `ReflectionFunction::getParameters()`,
 `ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
-`getNumberOfRequiredParameters()` report eval-declared method parameter
-metadata. Eval currently exposes parameter names and zero-based positions there,
-declared-type presence, simple named type metadata through
+`getNumberOfRequiredParameters()` report retained eval-declared function and
+method metadata. Free eval functions expose the reflected function name,
+parameter names, and positions from their currently retained function signature;
+eval methods also expose declared-type presence, simple named type metadata through
 `ReflectionParameter::getType()` / `ReflectionNamedType::getName()`,
 `allowsNull()`, and `isBuiltin()`, and multi-member union metadata through
 `ReflectionUnionType::getTypes()` and `allowsNull()`. Intersection parameter
@@ -280,8 +282,9 @@ metadata is exposed through `ReflectionIntersectionType::getTypes()` and
 `ReflectionParameter::getAttributes()` using materialized `ReflectionAttribute`
 objects. `ReflectionParameter::getDeclaringClass()` returns the declaring
 class-like symbol for eval method parameters, and
-`ReflectionParameter::getDeclaringFunction()` returns a `ReflectionMethod`
-object for the declaring eval method. Defaulted eval method parameters are bound
+`ReflectionParameter::getDeclaringFunction()` returns a `ReflectionFunction`
+object for eval free-function parameters or a `ReflectionMethod` object for the
+declaring eval method. Defaulted eval method parameters are bound
 when omitted and reported through
 `ReflectionParameter::isOptional()`, `isDefaultValueAvailable()`, and
 `getDefaultValue()`. Supported default expressions include
@@ -492,7 +495,7 @@ broader parameter/return ABI shapes are still outside that bridge.
 
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
-ReflectionClass/Method/Parameter/Property/NamedType/UnionType/IntersectionType
+ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and attribute slice, Reflection type APIs beyond parameter/property metadata, broader
 parameter default-value objects beyond the eval-supported
 constant-expression subset, by-reference promoted constructor parameters, and

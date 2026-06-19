@@ -140,6 +140,9 @@ pub(in crate::interpreter) fn eval_reflection_owner_new_object(
         Some(EVAL_REFLECTION_OWNER_CLASS) => {
             eval_reflection_class_new(evaluated_args, context, values)
         }
+        Some(EVAL_REFLECTION_OWNER_FUNCTION) => {
+            eval_reflection_function_new(evaluated_args, context, values)
+        }
         Some(EVAL_REFLECTION_OWNER_METHOD) => {
             eval_reflection_method_new(evaluated_args, context, values)
         }
@@ -1125,6 +1128,85 @@ fn eval_reflection_aot_class_flags(
     Ok(Some((flags, modifiers)))
 }
 
+/// Builds an eval-backed `ReflectionFunction` object for eval or registered native functions.
+fn eval_reflection_function_new(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let args = bind_evaluated_function_args(&[String::from("function")], evaluated_args)?;
+    let requested_name = eval_reflection_string_arg(args[0], values)?;
+    let lookup_name = requested_name.trim_start_matches('\\').to_ascii_lowercase();
+    if let Some(function) = context.function(&lookup_name).cloned() {
+        let parameters =
+            eval_reflection_function_parameters(function.name(), function.params(), Vec::new());
+        return eval_reflection_function_object_result(
+            function.name(),
+            &parameters,
+            context,
+            values,
+        )
+        .map(Some);
+    }
+    if let Some(function) = context.native_function(&lookup_name) {
+        let reflected_name = requested_name.trim_start_matches('\\');
+        let parameter_names = eval_reflection_native_function_parameter_names(&function);
+        let parameters =
+            eval_reflection_function_parameters(reflected_name, &parameter_names, Vec::new());
+        return eval_reflection_function_object_result(
+            reflected_name,
+            &parameters,
+            context,
+            values,
+        )
+        .map(Some);
+    }
+    Ok(None)
+}
+
+/// Returns parameter names for a registered native function, filling missing bridge names.
+fn eval_reflection_native_function_parameter_names(function: &NativeFunction) -> Vec<String> {
+    (0..function.param_count())
+        .map(|index| {
+            function
+                .param_names()
+                .get(index)
+                .filter(|name| !name.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("arg{}", index))
+        })
+        .collect()
+}
+
+/// Builds one `ReflectionFunction` object from retained eval function metadata.
+fn eval_reflection_function_object_result(
+    function_name: &str,
+    parameters: &[EvalReflectionParameterMetadata],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reflection_owner_object(
+        EVAL_REFLECTION_OWNER_FUNCTION,
+        function_name,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        None,
+        parameters,
+        None,
+        None,
+        0,
+        parameters.len() as u64,
+        0,
+        None,
+        None,
+        context,
+        values,
+    )
+}
+
 /// Builds an eval-backed `ReflectionMethod` object when the reflected method exists in eval.
 fn eval_reflection_method_new(
     evaluated_args: Vec<EvaluatedCallArg>,
@@ -1498,7 +1580,10 @@ fn eval_reflection_owner_object_with_members(
             context,
             values,
         )?
-    } else if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+    } else if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_METHOD | EVAL_REFLECTION_OWNER_FUNCTION
+    ) {
         eval_reflection_parameter_object_array_result(parameter_metadata, context, values)?
     } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
         match type_metadata {
@@ -1573,6 +1658,9 @@ fn eval_reflection_owner_object_with_members(
             let identity = values.object_identity(object)?;
             context.register_eval_reflection_method(identity, declaring_class, reflected_name);
         }
+    } else if owner_kind == EVAL_REFLECTION_OWNER_FUNCTION {
+        let identity = values.object_identity(object)?;
+        context.register_eval_reflection_function(identity, reflected_name);
     } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
         if let Some(declaring_class) = parent_class_name {
             if context.has_class(declaring_class) {
@@ -1815,8 +1903,18 @@ fn eval_reflection_declaring_function_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let owner_kind = if metadata.declaring_class_name.is_some() {
+        EVAL_REFLECTION_OWNER_METHOD
+    } else {
+        EVAL_REFLECTION_OWNER_FUNCTION
+    };
+    let method_modifiers = if metadata.declaring_class_name.is_some() {
+        eval_reflection_method_modifiers_from_flags(metadata.flags)
+    } else {
+        0
+    };
     eval_reflection_owner_object(
-        EVAL_REFLECTION_OWNER_METHOD,
+        owner_kind,
         &metadata.name,
         &metadata.attributes,
         &[],
@@ -1829,7 +1927,7 @@ fn eval_reflection_declaring_function_object_result(
         None,
         metadata.flags,
         metadata.required_parameter_count as u64,
-        eval_reflection_method_modifiers_from_flags(metadata.flags),
+        method_modifiers,
         None,
         None,
         context,
@@ -3555,6 +3653,33 @@ fn eval_reflection_parameters_from_names_and_type_flags(
         .collect()
 }
 
+/// Builds ReflectionParameter metadata for eval-declared or native free functions.
+fn eval_reflection_function_parameters(
+    function_name: &str,
+    names: &[String],
+    attributes: Vec<EvalAttribute>,
+) -> Vec<EvalReflectionParameterMetadata> {
+    let declaring_function = EvalReflectionDeclaringFunctionMetadata {
+        name: function_name.to_string(),
+        declaring_class_name: None,
+        attributes,
+        flags: 0,
+        required_parameter_count: names.len(),
+    };
+    eval_reflection_parameters_from_names_and_type_flags(
+        None,
+        Some(&declaring_function),
+        names,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+}
+
 /// Returns promoted constructor parameter names for one eval class method.
 fn eval_reflection_promoted_parameter_names(
     class_name: &str,
@@ -3775,6 +3900,7 @@ fn reflection_owner_kind(class_name: &str) -> Option<u64> {
         .as_str()
     {
         "reflectionclass" => Some(EVAL_REFLECTION_OWNER_CLASS),
+        "reflectionfunction" => Some(EVAL_REFLECTION_OWNER_FUNCTION),
         "reflectionmethod" => Some(EVAL_REFLECTION_OWNER_METHOD),
         "reflectionproperty" => Some(EVAL_REFLECTION_OWNER_PROPERTY),
         "reflectionclassconstant" => Some(EVAL_REFLECTION_OWNER_CLASS_CONSTANT),
