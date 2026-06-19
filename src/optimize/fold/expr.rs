@@ -126,6 +126,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             try_fold_bit_not(&inner).unwrap_or_else(|| ExprKind::BitNot(Box::new(inner)))
         }
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(fold_expr(*inner))),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(fold_expr(*inner))),
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(fold_expr(*inner))),
         ExprKind::Print(inner) => ExprKind::Print(Box::new(fold_expr(*inner))),
         ExprKind::NullCoalesce { value, default } => {

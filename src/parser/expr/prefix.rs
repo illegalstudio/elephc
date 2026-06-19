@@ -44,6 +44,7 @@ pub(super) fn parse_prefix(
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
         Token::Print => parse_unary(tokens, pos, span, ExprKind::Print, 7),
         Token::Throw => parse_unary(tokens, pos, span, ExprKind::Throw, 0),
+        Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 35),
         Token::True => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(true)),
         Token::False => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(false)),
         Token::Null => parse_simple(tokens, pos, span, ExprKind::Null),

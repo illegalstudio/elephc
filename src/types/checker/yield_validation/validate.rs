@@ -284,6 +284,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Spread(inner)
         | ExprKind::Cast { expr: inner, .. }

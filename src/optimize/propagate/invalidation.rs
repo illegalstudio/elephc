@@ -116,6 +116,12 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::BufferNew { len: inner, .. }
         | ExprKind::NamedArg { value: inner, .. } => expr_invalidation(inner),
+        ExprKind::Clone(inner) => expr_invalidation(inner).union(top_level_globals_guard(
+            Effect::PURE
+                .with_side_effects()
+                .with_may_throw()
+                .with_writes_globals(),
+        )),
         ExprKind::BinaryOp { left, right, .. } => {
             expr_invalidation(left).union(expr_invalidation(right))
         }

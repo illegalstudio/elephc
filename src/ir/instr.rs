@@ -310,6 +310,7 @@ pub enum Op {
     IteratorMethodCall,
     SplRuntimeCall,
     ObjectNew,
+    ObjectCloneShallow,
     DynamicObjectNew,
     DynamicObjectNewMixed,
     PropGet,
@@ -465,7 +466,9 @@ impl Op {
             }
             ArrayGet => E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN,
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
-            | HashCloneShallow => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
+            | HashCloneShallow | ObjectCloneShallow => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+            }
             ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | LoadPropRefCell => {
                 E::READS_HEAP
             }
@@ -676,6 +679,7 @@ impl Op {
             IteratorMethodCall => "iterator_method_call",
             SplRuntimeCall => "spl_runtime_call",
             ObjectNew => "object_new",
+            ObjectCloneShallow => "object_clone_shallow",
             DynamicObjectNew => "dynamic_object_new",
             DynamicObjectNewMixed => "dynamic_object_new_mixed",
             PropGet => "prop_get",

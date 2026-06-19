@@ -9,6 +9,7 @@
 //! - Inference must preserve PHP evaluation errors and avoid treating effectful expressions as pure type facts.
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{
@@ -528,6 +529,16 @@ impl Checker {
             ExprKind::NewObject { class_name, args } => {
                 self.infer_new_object_type(class_name.as_str(), args, expr, env)
             }
+            ExprKind::Clone(inner) => {
+                let ty = self.infer_type(inner, env)?;
+                match ty {
+                    PhpType::Object(class_name) => {
+                        self.check_clone_visibility(&class_name, expr.span)?;
+                        Ok(PhpType::Object(class_name))
+                    }
+                    _ => Err(CompileError::new(expr.span, "clone requires an object value")),
+                }
+            }
             ExprKind::NewDynamic { name_expr, args } => {
                 // The class is named at runtime; without a literal class
                 // we can't typecheck constructor args or the resulting
@@ -743,6 +754,39 @@ impl Checker {
             .unwrap_or(PhpType::Mixed)
     }
 
+}
+
+impl Checker {
+    /// Checks whether the current scope may invoke a class's `__clone` hook.
+    ///
+    /// PHP permits `__clone` to be non-public, but the actual `clone $object`
+    /// expression must obey the hook's visibility when a hook exists.
+    fn check_clone_visibility(&self, class_name: &str, span: Span) -> Result<(), CompileError> {
+        let normalized = class_name.trim_start_matches('\\');
+        let Some(class_info) = self.classes.get(normalized) else {
+            return Ok(());
+        };
+        let key = php_symbol_key("__clone");
+        let Some(visibility) = class_info.method_visibilities.get(&key) else {
+            return Ok(());
+        };
+        let declaring_class = class_info
+            .method_declaring_classes
+            .get(&key)
+            .map(String::as_str)
+            .unwrap_or(normalized);
+        if self.can_access_member(declaring_class, visibility) {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot access {} method: {}::__clone",
+                Self::visibility_label(visibility),
+                normalized
+            ),
+        ))
+    }
 }
 
 /// Returns `true` if `index` is a valid string offset index for a string receiver.

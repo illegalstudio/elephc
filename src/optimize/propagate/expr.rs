@@ -88,6 +88,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::Not(inner) => ExprKind::Not(Box::new(propagate_expr(*inner, env))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(propagate_expr(*inner, env))),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(propagate_expr(*inner, env))),
+        ExprKind::Clone(inner) => {
+            let empty_env = HashMap::new();
+            ExprKind::Clone(Box::new(propagate_expr(*inner, &empty_env)))
+        }
         ExprKind::ErrorSuppress(inner) => {
             ExprKind::ErrorSuppress(Box::new(propagate_expr(*inner, env)))
         }

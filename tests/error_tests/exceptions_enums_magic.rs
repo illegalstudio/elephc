@@ -120,6 +120,51 @@ fn test_error_throw_expression_requires_object() {
     );
 }
 
+/// Verifies that `clone` rejects scalar operands during type checking.
+#[test]
+fn test_error_clone_requires_object() {
+    expect_error("<?php $copy = clone 123;", "clone requires an object value");
+}
+
+/// Verifies that a `static` `__clone` reports
+/// "Magic method must be non-static: User::__clone".
+#[test]
+fn test_error_magic_clone_must_be_non_static() {
+    expect_error(
+        "<?php class User { public static function __clone() { } }",
+        "Magic method must be non-static: User::__clone",
+    );
+}
+
+/// Verifies that `__clone` with a parameter reports
+/// "Magic method must take 0 arguments: User::__clone".
+#[test]
+fn test_error_magic_clone_must_take_zero_arguments() {
+    expect_error(
+        "<?php class User { public function __clone($x) { } }",
+        "Magic method must take 0 arguments: User::__clone",
+    );
+}
+
+/// Verifies that `__clone` with a non-void declared return type reports
+/// "Magic method must return void: User::__clone".
+#[test]
+fn test_error_magic_clone_must_return_void() {
+    expect_error(
+        "<?php class User { public function __clone(): int { return 1; } }",
+        "Magic method must return void: User::__clone",
+    );
+}
+
+/// Verifies that cloning from outside respects a private `__clone` hook's visibility.
+#[test]
+fn test_error_private_magic_clone_is_inaccessible_from_global_scope() {
+    expect_error(
+        "<?php class Locked { private function __clone() { } } $a = new Locked(); $b = clone $a;",
+        "Cannot access private method: Locked::__clone",
+    );
+}
+
 /// Verifies that a private `__toString` method reports
 /// "Magic method must be public: User::__toString".
 #[test]

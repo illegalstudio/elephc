@@ -287,6 +287,7 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         | ExprKind::Throw(expr)
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::Spread(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. } => collect_required_class_names_in_expr(expr, names),

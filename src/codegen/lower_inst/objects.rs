@@ -228,6 +228,81 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
     Ok(())
 }
 
+/// Lowers PHP object cloning for fixed-class receivers.
+pub(super) fn lower_object_clone_shallow(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let source = expect_operand(inst, 0)?;
+    let class_name = class_name_immediate(ctx, inst)?.to_string();
+    if is_builtin_stdclass(&class_name) {
+        return lower_stdclass_clone(ctx, inst, source);
+    }
+    if is_runtime_managed_object_clone_class(&class_name) {
+        return Err(CodegenIrError::unsupported(format!(
+            "clone for runtime-managed class {}",
+            class_name
+        )));
+    }
+    let (class_id, property_count, allow_dynamic_properties, retained_offsets) = {
+        let class_info =
+            ctx.module.class_infos.get(&class_name).ok_or_else(|| {
+                CodegenIrError::unsupported(format!("unknown class {}", class_name))
+            })?;
+        let retained_offsets = cloned_property_retain_offsets(class_info);
+        (
+            class_info.class_id,
+            class_info.properties.len(),
+            class_info.allow_dynamic_properties,
+            retained_offsets,
+        )
+    };
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("object_clone_shallow missing result value"))?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(source, result_reg)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    emit_object_allocation(ctx, class_id, property_count, allow_dynamic_properties, &[])?;
+    ctx.store_result_value(result)?;
+    let source_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let dest_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+    ctx.load_value_to_reg(result, dest_reg)?;
+    emit_clone_declared_property_slots(ctx, source_reg, dest_reg, property_count, &retained_offsets);
+    if allow_dynamic_properties {
+        emit_clone_dynamic_property_hash(
+            ctx,
+            source_reg,
+            dest_reg,
+            dynamic_property_hash_offset(property_count),
+        );
+    }
+    Ok(())
+}
+
+/// Lowers `clone` for `stdClass`, whose payload is just class id plus dynamic-property hash.
+fn lower_stdclass_clone(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    source: ValueId,
+) -> Result<()> {
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("stdClass clone missing result value"))?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(source, result_reg)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_new");
+    ctx.store_result_value(result)?;
+    let source_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let dest_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+    ctx.load_value_to_reg(result, dest_reg)?;
+    emit_clone_dynamic_property_hash(ctx, source_reg, dest_reg, 8);
+    Ok(())
+}
+
 /// Lowers `new stdClass()` through the runtime helper that seeds its dynamic-property hash.
 fn lower_stdclass_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if !inst.operands.is_empty() {
@@ -243,6 +318,19 @@ fn lower_stdclass_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
 /// Returns true when the class uses the runtime-managed SPL doubly-linked-list payload.
 fn is_spl_doubly_linked_list_family(class_name: &str) -> bool {
     matches!(class_name, "SplDoublyLinkedList" | "SplStack" | "SplQueue")
+}
+
+/// Returns true for object classes whose payload is not the generic declared-property layout.
+fn is_runtime_managed_object_clone_class(class_name: &str) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    is_fiber_class(class_name)
+        || class_name == "Generator"
+        || reflection::is_reflection_owner_class(class_name)
+        || class_name == "CallbackFilterIterator"
+        || class_name == "RecursiveCallbackFilterIterator"
+        || class_name == "IteratorIterator"
+        || is_spl_doubly_linked_list_family(class_name)
+        || class_name == "SplFixedArray"
 }
 
 /// Lowers `new SplDoublyLinkedList`, `new SplStack`, and `new SplQueue`.
@@ -3862,6 +3950,124 @@ fn emit_owned_reference_property_cell(
 /// Returns the byte offset of the dynamic-property hash pointer for this layout.
 fn dynamic_property_hash_offset(property_count: usize) -> usize {
     8 + property_count * 16
+}
+
+/// Returns property slot offsets whose copied low word must be retained for the cloned owner.
+fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usize> {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (property, php_type))| {
+            if class_info.property_slot_is_reference(index, property) {
+                return None;
+            }
+            property_clone_needs_retain(php_type).then_some(8 + index * 16)
+        })
+        .collect()
+}
+
+/// Returns true when a property slot's low word owns heap storage after a shallow copy.
+fn property_clone_needs_retain(php_type: &PhpType) -> bool {
+    let php_type = php_type.codegen_repr();
+    matches!(php_type, PhpType::Str) || php_type.is_refcounted()
+}
+
+/// Copies declared 16-byte property slots and retains heap-backed child payloads.
+fn emit_clone_declared_property_slots(
+    ctx: &mut FunctionContext<'_>,
+    source_reg: &str,
+    dest_reg: &str,
+    property_count: usize,
+    retained_offsets: &[usize],
+) {
+    for index in 0..property_count {
+        let offset = 8 + index * 16;
+        emit_copy_property_slot(ctx, source_reg, dest_reg, offset);
+        if retained_offsets.contains(&offset) {
+            emit_retain_cloned_property_pointer(ctx, source_reg, dest_reg, offset);
+        }
+    }
+}
+
+/// Copies one 16-byte declared-property slot from the source object to the clone.
+fn emit_copy_property_slot(
+    ctx: &mut FunctionContext<'_>,
+    source_reg: &str,
+    dest_reg: &str,
+    offset: usize,
+) {
+    let low_reg = abi::int_result_reg(ctx.emitter);
+    let high_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, low_reg, source_reg, offset);
+    abi::emit_load_from_address(ctx.emitter, high_reg, source_reg, offset + 8);
+    abi::emit_store_to_address(ctx.emitter, low_reg, dest_reg, offset);
+    abi::emit_store_to_address(ctx.emitter, high_reg, dest_reg, offset + 8);
+}
+
+/// Retains the copied low-word pointer for string, array, hash, object, or Mixed slots.
+fn emit_retain_cloned_property_pointer(
+    ctx: &mut FunctionContext<'_>,
+    source_reg: &str,
+    dest_reg: &str,
+    offset: usize,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, source_reg);
+    abi::emit_push_reg(ctx.emitter, dest_reg);
+    abi::emit_load_from_address(ctx.emitter, result_reg, dest_reg, offset);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_pop_reg(ctx.emitter, dest_reg);
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+}
+
+/// Replaces the constructor-seeded dynamic-property hash with a shallow clone of the source hash.
+fn emit_clone_dynamic_property_hash(
+    ctx: &mut FunctionContext<'_>,
+    source_reg: &str,
+    dest_reg: &str,
+    offset: usize,
+) {
+    emit_release_existing_dynamic_property_hash(ctx, source_reg, dest_reg, offset);
+    let null_label = ctx.next_label("object_clone_dyn_props_null");
+    let done_label = ctx.next_label("object_clone_dyn_props_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, result_reg, source_reg, offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, null_label)); // missing dynamic-property hash clones as a null hash pointer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the source dynamic-property hash exists
+            ctx.emitter.instruction(&format!("jz {}", null_label));             // missing dynamic-property hash clones as a null hash pointer
+        }
+    }
+    abi::emit_push_reg(ctx.emitter, source_reg);
+    abi::emit_push_reg(ctx.emitter, dest_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
+    abi::emit_pop_reg(ctx.emitter, dest_reg);
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, dest_reg, offset);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_store_zero_to_address(ctx.emitter, dest_reg, offset);
+    ctx.emitter.label(&done_label);
+}
+
+/// Releases the empty hash allocated while constructing the clone shell.
+fn emit_release_existing_dynamic_property_hash(
+    ctx: &mut FunctionContext<'_>,
+    source_reg: &str,
+    dest_reg: &str,
+    offset: usize,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, source_reg);
+    abi::emit_push_reg(ctx.emitter, dest_reg);
+    abi::emit_load_from_address(ctx.emitter, result_reg, dest_reg, offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    abi::emit_pop_reg(ctx.emitter, dest_reg);
+    abi::emit_pop_reg(ctx.emitter, source_reg);
 }
 
 /// Allocates the per-object dynamic-property hash and stores it in the object payload.
