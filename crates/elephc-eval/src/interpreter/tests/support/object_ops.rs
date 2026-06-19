@@ -24,6 +24,7 @@ const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE: u64 = 16;
+const EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED: u64 = 32;
 
 impl FakeOps {
     /// Reads one fake object property by name.
@@ -684,6 +685,8 @@ impl FakeOps {
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE) != 0)?;
             let has_default_value =
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE) != 0)?;
+            let is_promoted =
+                self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED) != 0)?;
             properties.push(("__position".to_string(), position));
             properties.push(("__is_optional".to_string(), is_optional));
             properties.push(("__is_variadic".to_string(), is_variadic));
@@ -691,6 +694,7 @@ impl FakeOps {
                 "__is_passed_by_reference".to_string(),
                 is_passed_by_reference,
             ));
+            properties.push(("__is_promoted".to_string(), is_promoted));
             properties.push(("__has_type".to_string(), has_type));
             properties.push(("__type".to_string(), method_objects));
             properties.push(("__has_default_value".to_string(), has_default_value));

@@ -2219,6 +2219,12 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
             false_bool(),
         ),
         builtin_property(
+            "__is_promoted",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+        builtin_property(
             "__has_type",
             Visibility::Private,
             Some(bool_type()),
@@ -2259,6 +2265,7 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
         builtin_reflection_class_bool_method("isOptional", "__is_optional"),
         builtin_reflection_class_bool_method("isVariadic", "__is_variadic"),
         builtin_reflection_class_bool_method("isPassedByReference", "__is_passed_by_reference"),
+        builtin_reflection_class_bool_method("isPromoted", "__is_promoted"),
         builtin_reflection_class_bool_method("hasType", "__has_type"),
         builtin_reflection_class_mixed_method("getType", "__type"),
         builtin_reflection_owner_get_attributes_method(),

@@ -157,3 +157,25 @@ echo $box->value;
     );
     assert_eq!(out, "7:9");
 }
+
+/// Verifies ReflectionParameter reports constructor-promoted parameters.
+#[test]
+fn test_reflection_parameter_is_promoted() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectPromotedParamUser {
+    public function __construct(public int $id, string $name = "Ada") {}
+    public function run(int $id) {}
+}
+$ctor = new ReflectionMethod(ReflectPromotedParamUser::class, "__construct");
+$params = $ctor->getParameters();
+echo $params[0]->isPromoted() ? "I" : "i";
+echo $params[1]->isPromoted() ? "N" : "n";
+$direct = new ReflectionParameter([ReflectPromotedParamUser::class, "__construct"], "id");
+echo $direct->isPromoted() ? "D" : "d";
+$run = new ReflectionParameter([ReflectPromotedParamUser::class, "run"], "id");
+echo $run->isPromoted() ? "R" : "r";
+"#,
+    );
+    assert_eq!(out, "InDr");
+}

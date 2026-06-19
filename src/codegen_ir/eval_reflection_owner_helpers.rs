@@ -1473,6 +1473,8 @@ fn emit_set_owner_parameter_property_aarch64(
         Some(has_type_hi),
         Some(has_default_value_lo),
         Some(has_default_value_hi),
+        Some(is_promoted_lo),
+        Some(is_promoted_hi),
     ) = (
         layout.position_lo,
         layout.position_hi,
@@ -1486,6 +1488,8 @@ fn emit_set_owner_parameter_property_aarch64(
         layout.has_type_hi,
         layout.has_default_value_lo,
         layout.has_default_value_hi,
+        layout.is_promoted_lo,
+        layout.is_promoted_hi,
     )
     else {
         return;
@@ -1514,6 +1518,10 @@ fn emit_set_owner_parameter_property_aarch64(
     emitter.instruction("and x10, x10, #1");                                    // extract the default-value flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", has_default_value_lo);
     abi::emit_store_zero_to_address(emitter, "x9", has_default_value_hi);
+    emitter.instruction("lsr x10, x11, #5");                                    // move the promoted-parameter bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the promoted-parameter flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_promoted_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_promoted_hi);
 }
 
 /// Stores incoming ARM64 ReflectionParameter type metadata.
@@ -1596,6 +1604,8 @@ fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &Refl
         Some(has_type_hi),
         Some(has_default_value_lo),
         Some(has_default_value_hi),
+        Some(is_promoted_lo),
+        Some(is_promoted_hi),
     ) = (
         layout.position_lo,
         layout.position_hi,
@@ -1609,6 +1619,8 @@ fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &Refl
         layout.has_type_hi,
         layout.has_default_value_lo,
         layout.has_default_value_hi,
+        layout.is_promoted_lo,
+        layout.is_promoted_hi,
     )
     else {
         return;
@@ -1642,6 +1654,11 @@ fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &Refl
     emitter.instruction("and rax, 1");                                          // extract the default-value flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", has_default_value_lo);
     abi::emit_store_zero_to_address(emitter, "r10", has_default_value_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the promoted bit
+    emitter.instruction("shr rax, 5");                                          // move the promoted-parameter bit into position
+    emitter.instruction("and rax, 1");                                          // extract the promoted-parameter flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_promoted_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_promoted_hi);
 }
 
 /// Stores incoming x86_64 ReflectionParameter type metadata.

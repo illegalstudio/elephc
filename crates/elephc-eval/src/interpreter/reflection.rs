@@ -38,6 +38,7 @@ const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE: u64 = 16;
+const EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED: u64 = 32;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_ALLOWS_NULL: u64 = 1;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN: u64 = 2;
 
@@ -81,6 +82,7 @@ struct EvalReflectionParameterMetadata {
     is_optional: bool,
     is_variadic: bool,
     is_passed_by_reference: bool,
+    is_promoted: bool,
     has_type: bool,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
@@ -293,17 +295,16 @@ pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
     };
     let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
     let requested_name = eval_reflection_string_arg(args[0], values)?;
-    let exists = if let Some(metadata) =
-        eval_reflection_class_like_attributes(&reflected_name, context)
-    {
-        metadata
-            .method_names
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(&requested_name))
-    } else {
-        eval_reflection_aot_method_metadata_if_exists(&reflected_name, &requested_name, values)?
-            .is_some()
-    };
+    let exists =
+        if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
+            metadata
+                .method_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&requested_name))
+        } else {
+            eval_reflection_aot_method_metadata_if_exists(&reflected_name, &requested_name, values)?
+                .is_some()
+        };
     values.bool_value(exists).map(Some)
 }
 
@@ -329,7 +330,10 @@ pub(in crate::interpreter) fn eval_reflection_class_has_property_result(
     let exists = if let Some(metadata) =
         eval_reflection_class_like_attributes(&reflected_name, context)
     {
-        metadata.property_names.iter().any(|name| name == &property_name)
+        metadata
+            .property_names
+            .iter()
+            .any(|name| name == &property_name)
     } else {
         eval_reflection_aot_property_metadata_if_exists(&reflected_name, &property_name, values)?
             .is_some()
@@ -726,8 +730,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
                 &reflected_name,
                 &requested_name,
                 values,
-            )?
-            {
+            )? {
                 let member_name = requested_name.to_ascii_lowercase();
                 return eval_reflection_member_object_result(
                     EVAL_REFLECTION_OWNER_METHOD,
@@ -885,8 +888,7 @@ fn eval_reflection_class_new(
     let args = bind_evaluated_function_args(&[String::from("class_name")], evaluated_args)?;
     let class_name = eval_reflection_string_arg(args[0], values)?;
     let Some(metadata) = eval_reflection_class_like_attributes(&class_name, context) else {
-        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(&class_name, values)?
-        else {
+        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(&class_name, values)? else {
             return Ok(None);
         };
         return eval_reflection_owner_object(
@@ -2588,6 +2590,11 @@ fn eval_reflection_method_metadata(
                     flags,
                     required_parameter_count,
                 };
+                let promoted_parameter_names = eval_reflection_promoted_parameter_names(
+                    &declaring_class,
+                    method.name(),
+                    context,
+                );
                 let parameters = eval_reflection_parameters_from_names_and_type_flags(
                     Some(declaring_class.as_str()),
                     Some(&declaring_function),
@@ -2598,6 +2605,7 @@ fn eval_reflection_method_metadata(
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
+                    &promoted_parameter_names,
                 );
                 EvalReflectionMemberMetadata {
                     declaring_class_name: Some(declaring_class),
@@ -2655,6 +2663,7 @@ fn eval_reflection_method_metadata(
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
+                    &[],
                 );
                 EvalReflectionMemberMetadata {
                     declaring_class_name: Some(class_name.to_string()),
@@ -2702,6 +2711,8 @@ fn eval_reflection_method_metadata(
                     flags,
                     required_parameter_count,
                 };
+                let promoted_parameter_names =
+                    eval_reflection_promoted_trait_parameter_names(trait_decl, method.name());
                 let parameters = eval_reflection_parameters_from_names_and_type_flags(
                     Some(trait_decl.name()),
                     Some(&declaring_function),
@@ -2712,6 +2723,7 @@ fn eval_reflection_method_metadata(
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
+                    &promoted_parameter_names,
                 );
                 EvalReflectionMemberMetadata {
                     declaring_class_name: Some(trait_decl.name().to_string()),
@@ -2979,6 +2991,7 @@ fn eval_reflection_parameters_from_names_and_type_flags(
     defaults: &[Option<EvalExpr>],
     by_ref_flags: &[bool],
     variadic_flags: &[bool],
+    promoted_parameter_names: &[String],
 ) -> Vec<EvalReflectionParameterMetadata> {
     names
         .iter()
@@ -2996,6 +3009,9 @@ fn eval_reflection_parameters_from_names_and_type_flags(
                 || variadic_flags.get(position).copied().unwrap_or(false),
             is_variadic: variadic_flags.get(position).copied().unwrap_or(false),
             is_passed_by_reference: by_ref_flags.get(position).copied().unwrap_or(false),
+            is_promoted: promoted_parameter_names
+                .iter()
+                .any(|promoted_name| promoted_name == name),
             has_type: has_type_flags.get(position).copied().unwrap_or(false),
             type_metadata: parameter_types
                 .get(position)
@@ -3004,6 +3020,49 @@ fn eval_reflection_parameters_from_names_and_type_flags(
                 .filter(|_| has_type_flags.get(position).copied().unwrap_or(false)),
             default_value: defaults.get(position).and_then(Clone::clone),
         })
+        .collect()
+}
+
+/// Returns promoted constructor parameter names for one eval class method.
+fn eval_reflection_promoted_parameter_names(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<String> {
+    if !method_name.eq_ignore_ascii_case("__construct") {
+        return Vec::new();
+    }
+    context
+        .class(class_name)
+        .map(eval_reflection_promoted_property_names)
+        .unwrap_or_default()
+}
+
+/// Returns promoted constructor parameter names for one eval trait method.
+fn eval_reflection_promoted_trait_parameter_names(
+    trait_decl: &EvalTrait,
+    method_name: &str,
+) -> Vec<String> {
+    if method_name.eq_ignore_ascii_case("__construct") {
+        eval_reflection_promoted_property_names_from_slice(trait_decl.properties())
+    } else {
+        Vec::new()
+    }
+}
+
+/// Returns property names marked as constructor-promoted in one eval class.
+fn eval_reflection_promoted_property_names(class: &EvalClass) -> Vec<String> {
+    eval_reflection_promoted_property_names_from_slice(class.properties())
+}
+
+/// Returns property names marked as constructor-promoted in one property list.
+fn eval_reflection_promoted_property_names_from_slice(
+    properties: &[EvalClassProperty],
+) -> Vec<String> {
+    properties
+        .iter()
+        .filter(|property| property.is_promoted())
+        .map(|property| property.name().to_string())
         .collect()
 }
 
@@ -3133,6 +3192,9 @@ fn eval_reflection_parameter_flags(parameter: &EvalReflectionParameterMetadata) 
     }
     if parameter.is_passed_by_reference {
         flags |= EVAL_REFLECTION_PARAMETER_FLAG_BY_REF;
+    }
+    if parameter.is_promoted {
+        flags |= EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED;
     }
     if parameter.has_type {
         flags |= EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE;
