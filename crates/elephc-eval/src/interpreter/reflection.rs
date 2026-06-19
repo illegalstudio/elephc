@@ -626,6 +626,26 @@ pub(in crate::interpreter) fn eval_reflection_method_invoke_result(
     .map(Some)
 }
 
+/// Handles PHP's no-op `ReflectionMethod/Property::setAccessible()` calls.
+pub(in crate::interpreter) fn eval_reflection_set_accessible_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("setAccessible") {
+        return Ok(None);
+    }
+    if context.eval_reflection_method(identity).is_none()
+        && context.eval_reflection_property(identity).is_none()
+    {
+        return Ok(None);
+    }
+    let _ = bind_evaluated_function_args(&[String::from("accessible")], evaluated_args)?;
+    values.null().map(Some)
+}
+
 /// Handles eval-backed `ReflectionProperty::getValue()` calls.
 pub(in crate::interpreter) fn eval_reflection_property_get_value_result(
     identity: u64,
