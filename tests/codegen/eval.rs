@@ -5955,6 +5955,51 @@ if ($root === false) {
     assert_eq!(out.stdout, "EvalBridgeParent:false");
 }
 
+/// Verifies eval ReflectionClass::getConstructor crosses the generated runtime bridge.
+#[test]
+fn test_eval_reflection_class_get_constructor() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalBridgeCtorBase {
+    public function __construct($required, $optional = 2) {}
+}
+class EvalBridgeCtorChild extends EvalBridgeCtorBase {}
+class EvalBridgeCtorPlain {}
+interface EvalBridgeCtorInterface {
+    public function __construct($required);
+}
+trait EvalBridgeCtorTrait {
+    public function __construct($required, $optional = null, ...$rest) {}
+}
+$base = (new ReflectionClass("EvalBridgeCtorBase"))->getConstructor();
+echo $base->getName() . "/" . $base->getNumberOfParameters();
+echo "/" . $base->getNumberOfRequiredParameters() . ":";
+$child = (new ReflectionClass("EvalBridgeCtorChild"))->getConstructor();
+echo $child->getName() . "/" . $child->getNumberOfParameters();
+echo "/" . $child->getNumberOfRequiredParameters() . ":";
+$plain = (new ReflectionClass("EvalBridgeCtorPlain"))->getConstructor();
+echo $plain === null ? "null" : "bad";
+echo ":";
+$interface = (new ReflectionClass("EvalBridgeCtorInterface"))->getConstructor();
+echo $interface->getName() . "/" . $interface->getNumberOfParameters();
+echo "/" . $interface->getNumberOfRequiredParameters() . ":";
+$trait = (new ReflectionClass("EvalBridgeCtorTrait"))->getConstructor();
+echo $trait->getName() . "/" . $trait->getNumberOfParameters();
+echo "/" . $trait->getNumberOfRequiredParameters();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "__construct/2/1:__construct/2/1:null:__construct/1/1:__construct/3/1"
+    );
+}
+
 /// Verifies eval ReflectionClass reports class-like final and abstract flags.
 #[test]
 fn test_eval_reflection_class_modifier_flags() {

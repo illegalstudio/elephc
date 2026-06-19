@@ -160,6 +160,10 @@ impl FakeOps {
                 Self::object_property(&properties, "__parent_class")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "getconstructor") if args.is_empty() => {
+                Self::object_property(&properties, "__constructor")
+                    .map_or_else(|| self.null(), Ok)
+            }
             (FakeValue::Object(properties), "getdeclaringclass") if args.is_empty() => {
                 Self::object_property(&properties, "__declaring_class")
                     .map_or_else(|| self.bool_value(false), Ok)
@@ -469,6 +473,7 @@ impl FakeOps {
         method_modifiers: u64,
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
+        constructor: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let class_name = match owner_kind {
             EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
@@ -521,6 +526,7 @@ impl FakeOps {
             properties.push(("__constants".to_string(), constants));
             properties.push(("__reflection_constants".to_string(), reflection_constants));
             properties.push(("__methods".to_string(), method_objects));
+            properties.push(("__constructor".to_string(), constructor));
             properties.push(("__parent_class".to_string(), parent_class));
             properties.push(("__properties".to_string(), property_objects));
         }

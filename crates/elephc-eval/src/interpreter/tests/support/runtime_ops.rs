@@ -139,6 +139,7 @@ impl RuntimeValueOps for FakeOps {
         method_modifiers: u64,
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
+        constructor: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_reflection_owner_new(
             owner_kind,
@@ -156,6 +157,7 @@ impl RuntimeValueOps for FakeOps {
             method_modifiers,
             constant_value,
             backing_value,
+            constructor,
         )
     }
     /// Creates one fake object for eval `new` unit tests.

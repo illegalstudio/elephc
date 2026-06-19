@@ -380,42 +380,8 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
     let member =
         eval_reflection_member_metadata(owner_kind, &reflected_name, &member_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
-    let flags = eval_reflection_member_flags(
-        member.visibility,
-        member.is_static,
-        member.is_final,
-        member.is_abstract,
-        member.is_readonly,
-    );
-    let method_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-        eval_reflection_method_modifiers(
-            member.visibility,
-            member.is_static,
-            member.is_final,
-            member.is_abstract,
-        )
-    } else {
-        0
-    };
-    eval_reflection_owner_object(
-        owner_kind,
-        &member_name,
-        &member.attributes,
-        &[],
-        &[],
-        &[],
-        &[],
-        member.declaring_class_name.as_deref(),
-        &member.parameters,
-        flags,
-        member.required_parameter_count as u64,
-        method_modifiers,
-        None,
-        None,
-        context,
-        values,
-    )
-    .map(Some)
+    eval_reflection_member_object_result(owner_kind, &member_name, &member, context, values)
+        .map(Some)
 }
 
 /// Returns the constant names visible through eval-backed `ReflectionClass`.
@@ -570,33 +536,10 @@ fn eval_reflection_method_new(
     let method_name = eval_reflection_string_arg(args[1], values)?;
     let method = eval_reflection_method_metadata(&class_name, &method_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
-    let flags = eval_reflection_member_flags(
-        method.visibility,
-        method.is_static,
-        method.is_final,
-        method.is_abstract,
-        false,
-    );
-    eval_reflection_owner_object(
+    eval_reflection_member_object_result(
         EVAL_REFLECTION_OWNER_METHOD,
         &method_name,
-        &method.attributes,
-        &[],
-        &[],
-        &[],
-        &[],
-        method.declaring_class_name.as_deref(),
-        &method.parameters,
-        flags,
-        method.required_parameter_count as u64,
-        eval_reflection_method_modifiers(
-            method.visibility,
-            method.is_static,
-            method.is_final,
-            method.is_abstract,
-        ),
-        None,
-        None,
+        &method,
         context,
         values,
     )
@@ -620,28 +563,10 @@ fn eval_reflection_property_new(
     let property_name = eval_reflection_string_arg(args[1], values)?;
     let property = eval_reflection_property_metadata(&class_name, &property_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
-    let flags = eval_reflection_member_flags(
-        property.visibility,
-        property.is_static,
-        property.is_final,
-        property.is_abstract,
-        property.is_readonly,
-    );
-    eval_reflection_owner_object(
+    eval_reflection_member_object_result(
         EVAL_REFLECTION_OWNER_PROPERTY,
         &property_name,
-        &property.attributes,
-        &[],
-        &[],
-        &[],
-        &[],
-        property.declaring_class_name.as_deref(),
-        &[],
-        flags,
-        property.modifiers,
-        0,
-        None,
-        None,
+        &property,
         context,
         values,
     )
@@ -851,6 +776,13 @@ fn eval_reflection_owner_object_with_members(
         context,
         values,
     )?;
+    let constructor = eval_reflection_constructor_object_result(
+        owner_kind,
+        reflected_name,
+        include_class_members,
+        context,
+        values,
+    )?;
     let (constant_value_cell, release_constant_value) = match constant_value {
         Some(value) => (value, false),
         None => (values.null()?, true),
@@ -875,6 +807,7 @@ fn eval_reflection_owner_object_with_members(
         method_modifiers,
         constant_value_cell,
         backing_value_cell,
+        constructor,
     )?;
     if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
         let identity = values.object_identity(object)?;
@@ -888,6 +821,7 @@ fn eval_reflection_owner_object_with_members(
     values.release(method_objects)?;
     values.release(property_objects)?;
     values.release(parent_class)?;
+    values.release(constructor)?;
     if release_constant_value {
         values.release(constant_value_cell)?;
     }
@@ -1060,6 +994,7 @@ fn eval_reflection_parameter_object_result(
         0,
         constant_value,
         backing_value,
+        constant_value,
     )?;
     values.release(attrs)?;
     values.release(declaring_function)?;
@@ -1151,6 +1086,7 @@ fn eval_reflection_named_type_object_result(
         0,
         constant_value,
         backing_value,
+        constant_value,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -1197,6 +1133,7 @@ fn eval_reflection_union_type_object_result(
         0,
         constant_value,
         backing_value,
+        constant_value,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -1242,6 +1179,7 @@ fn eval_reflection_intersection_type_object_result(
         0,
         constant_value,
         backing_value,
+        constant_value,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -1270,6 +1208,74 @@ fn eval_reflection_named_type_object_array_result(
     Ok(result)
 }
 
+/// Builds the `ReflectionMethod|null` value stored in ReflectionClass::__constructor.
+fn eval_reflection_constructor_object_result(
+    owner_kind: u64,
+    class_name: &str,
+    include_class_members: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if owner_kind != EVAL_REFLECTION_OWNER_CLASS || !include_class_members {
+        return values.null();
+    }
+    let Some(member) = eval_reflection_method_metadata(class_name, "__construct", context) else {
+        return values.null();
+    };
+    eval_reflection_member_object_result(
+        EVAL_REFLECTION_OWNER_METHOD,
+        "__construct",
+        &member,
+        context,
+        values,
+    )
+}
+
+/// Materializes one eval-backed ReflectionMethod or ReflectionProperty object.
+fn eval_reflection_member_object_result(
+    owner_kind: u64,
+    reflected_name: &str,
+    member: &EvalReflectionMemberMetadata,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let flags = eval_reflection_member_flags(
+        member.visibility,
+        member.is_static,
+        member.is_final,
+        member.is_abstract,
+        member.is_readonly,
+    );
+    let owner_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        member.required_parameter_count as u64
+    } else {
+        member.modifiers
+    };
+    let method_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        member.modifiers
+    } else {
+        0
+    };
+    eval_reflection_owner_object(
+        owner_kind,
+        reflected_name,
+        &member.attributes,
+        &[],
+        &[],
+        &[],
+        &[],
+        member.declaring_class_name.as_deref(),
+        &member.parameters,
+        flags,
+        owner_modifiers,
+        method_modifiers,
+        None,
+        None,
+        context,
+        values,
+    )
+}
+
 /// Builds an indexed array of ReflectionMethod or ReflectionProperty objects for a ReflectionClass.
 fn eval_reflection_member_object_array_result(
     owner_kind: u64,
@@ -1285,41 +1291,8 @@ fn eval_reflection_member_object_array_result(
         else {
             continue;
         };
-        let flags = eval_reflection_member_flags(
-            member.visibility,
-            member.is_static,
-            member.is_final,
-            member.is_abstract,
-            member.is_readonly,
-        );
-        let owner_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-            member.required_parameter_count as u64
-        } else {
-            member.modifiers
-        };
-        let method_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-            member.modifiers
-        } else {
-            0
-        };
-        let member_object = eval_reflection_owner_object(
-            owner_kind,
-            name,
-            &member.attributes,
-            &[],
-            &[],
-            &[],
-            &[],
-            member.declaring_class_name.as_deref(),
-            &member.parameters,
-            flags,
-            owner_modifiers,
-            method_modifiers,
-            None,
-            None,
-            context,
-            values,
-        )?;
+        let member_object =
+            eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
         result = values.array_set(result, key, member_object)?;
         index += 1;

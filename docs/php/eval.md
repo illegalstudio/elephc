@@ -190,11 +190,13 @@ visible member metadata, including supported member attributes and predicate
 flags. `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the eval class-like symbol that declares the reflected
-member. `ReflectionClass::getParentClass()` returns a materialized
-`ReflectionClass` for eval-declared parent classes or `false` when no parent
-class exists. `ReflectionClass::newInstance()` constructs eval-declared reflected
-classes and forwards constructor arguments through eval's positional, named, and
-unpacking-aware call binding.
+member. `ReflectionClass::getConstructor()` returns a materialized
+`ReflectionMethod` for direct, inherited, interface, and trait constructors, or
+`null` when no constructor is visible. `ReflectionClass::getParentClass()`
+returns a materialized `ReflectionClass` for eval-declared parent classes or
+`false` when no parent class exists. `ReflectionClass::newInstance()` constructs
+eval-declared reflected classes and forwards constructor arguments through
+eval's positional, named, and unpacking-aware call binding.
 Eval-declared method parameter type hints are checked when the method is
 entered. Supported checks include scalar hints with PHP-style weak scalar
 coercion, `array`, `object`, `iterable`, `mixed`, nullable/union forms, and

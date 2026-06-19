@@ -511,6 +511,54 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::getConstructor exposes eval constructor metadata.
+#[test]
+fn execute_program_reflection_class_get_constructor() {
+    let program = parse_fragment(
+        br#"class EvalCtorBase {
+    public function __construct($required, $optional = 2) {}
+}
+class EvalCtorChild extends EvalCtorBase {}
+class EvalCtorPlain {}
+interface EvalCtorInterface {
+    public function __construct($required);
+}
+trait EvalCtorTrait {
+    public function __construct($required, $optional = null, ...$rest) {}
+}
+$base = (new ReflectionClass("EvalCtorBase"))->getConstructor();
+echo $base->getName(); echo "/";
+echo $base->getNumberOfParameters(); echo "/";
+echo $base->getNumberOfRequiredParameters(); echo ":";
+$child = (new ReflectionClass("EvalCtorChild"))->getConstructor();
+echo $child->getName(); echo "/";
+echo $child->getNumberOfParameters(); echo "/";
+echo $child->getNumberOfRequiredParameters(); echo ":";
+$plain = (new ReflectionClass("EvalCtorPlain"))->getConstructor();
+echo $plain === null ? "null" : "bad"; echo ":";
+$interface = (new ReflectionClass("EvalCtorInterface"))->getConstructor();
+echo $interface->getName(); echo "/";
+echo $interface->getNumberOfParameters(); echo "/";
+echo $interface->getNumberOfRequiredParameters(); echo ":";
+$trait = (new ReflectionClass("EvalCtorTrait"))->getConstructor();
+echo $trait->getName(); echo "/";
+echo $trait->getNumberOfParameters(); echo "/";
+echo $trait->getNumberOfRequiredParameters();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "__construct/2/1:__construct/2/1:null:__construct/1/1:__construct/3/1"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass reports eval class-like method, property, and constant membership.
 #[test]
 fn execute_program_reflects_eval_class_member_existence() {

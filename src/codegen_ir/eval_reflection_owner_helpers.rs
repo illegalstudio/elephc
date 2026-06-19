@@ -42,6 +42,8 @@ struct ReflectionOwnerLayout {
     method_objects_hi: Option<usize>,
     property_objects_lo: Option<usize>,
     property_objects_hi: Option<usize>,
+    constructor_lo: Option<usize>,
+    constructor_hi: Option<usize>,
     parent_class_lo: Option<usize>,
     parent_class_hi: Option<usize>,
     value_lo: Option<usize>,
@@ -208,6 +210,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         .or_else(|| reflection_property_offset(info, "__parameters"))
         .or_else(|| reflection_property_offset(info, "__types"));
     let property_objects_lo = reflection_property_offset(info, "__properties");
+    let constructor_lo = reflection_property_offset(info, "__constructor");
     let parent_class_lo = reflection_property_offset(info, "__parent_class")
         .or_else(|| reflection_property_offset(info, "__declaring_class"));
     let value_lo = reflection_property_offset(info, "__value");
@@ -259,6 +262,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         method_objects_hi: method_objects_lo.map(|offset| offset + 8),
         property_objects_lo,
         property_objects_hi: property_objects_lo.map(|offset| offset + 8),
+        constructor_lo,
+        constructor_hi: constructor_lo.map(|offset| offset + 8),
         parent_class_lo,
         parent_class_hi: parent_class_lo.map(|offset| offset + 8),
         value_lo,
@@ -682,6 +687,7 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_parameter_default_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_named_type_flags_property_aarch64(emitter, layout);
     emit_set_owner_metadata_arrays_property_aarch64(emitter, layout, fail_label);
+    emit_set_owner_constructor_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_parent_class_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_declaring_function_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_aarch64(emitter, layout, fail_label);
@@ -713,6 +719,7 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_parameter_default_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_named_type_flags_property_x86_64(emitter, layout);
     emit_set_owner_metadata_arrays_property_x86_64(emitter, layout, fail_label);
+    emit_set_owner_constructor_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_parent_class_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_declaring_function_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_x86_64(emitter, layout, fail_label);
@@ -1685,6 +1692,45 @@ fn emit_set_owner_metadata_array_slot_x86_64(
     abi::emit_store_to_address(emitter, "rdi", "r10", low_offset);
     abi::emit_load_int_immediate(emitter, "r11", 4);
     abi::emit_store_to_address(emitter, "r11", "r10", high_offset);
+}
+
+/// Stores a retained ARM64 boxed ReflectionMethod-or-null constructor cell.
+fn emit_set_owner_constructor_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(low), Some(high)) = (layout.constructor_lo, layout.constructor_hi) else {
+        return;
+    };
+    emitter.instruction("ldr x0, [sp, #224]");                                  // reload the boxed ReflectionClass constructor value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null constructor metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed constructor value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed constructor value for ReflectionClass storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed constructor value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", low);
+    abi::emit_store_zero_to_address(emitter, "x9", high);
+}
+
+/// Stores a retained x86_64 boxed ReflectionMethod-or-null constructor cell.
+fn emit_set_owner_constructor_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(low), Some(high)) = (layout.constructor_lo, layout.constructor_hi) else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp + 96]");                       // reload the boxed ReflectionClass constructor value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed constructor value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null constructor metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed constructor value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed constructor value for ReflectionClass storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed constructor value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "rdi", "r10", low);
+    abi::emit_store_zero_to_address(emitter, "r10", high);
 }
 
 /// Stores a retained ARM64 boxed parent ReflectionClass-or-false cell.
