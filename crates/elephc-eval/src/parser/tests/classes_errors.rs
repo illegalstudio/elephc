@@ -565,7 +565,7 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
 fn parse_fragment_accepts_typed_method_parameter_metadata() {
     let program = parse_fragment(
         br#"class DynEvalTypedParams {
-    public function run(int $id = 7, ?\App\Name $name = null, string|null $label = "x") {}
+    public function run(int $id = 7, ?\App\Name $name = null, string|null $label = "x", mixed ...$tail) {}
 }"#,
     )
     .expect("fragment should parse");
@@ -577,17 +577,33 @@ fn parse_fragment_accepts_typed_method_parameter_metadata() {
     };
     assert_eq!(
         method.params(),
-        &["id".to_string(), "name".to_string(), "label".to_string()]
+        &[
+            "id".to_string(),
+            "name".to_string(),
+            "label".to_string(),
+            "tail".to_string()
+        ]
     );
-    assert_eq!(method.parameter_has_types(), &[true, true, true]);
+    assert_eq!(method.parameter_has_types(), &[true, true, true, true]);
     assert!(matches!(
         method.parameter_defaults(),
         [
             Some(EvalExpr::Const(EvalConst::Int(7))),
             Some(EvalExpr::Const(EvalConst::Null)),
-            Some(EvalExpr::Const(EvalConst::String(label)))
+            Some(EvalExpr::Const(EvalConst::String(label))),
+            None
         ] if label == "x"
     ));
+    assert_eq!(method.parameter_is_variadic(), &[false, false, false, true]);
+}
+
+/// Verifies eval rejects invalid variadic method parameter forms.
+#[test]
+fn parse_fragment_rejects_invalid_variadic_method_parameters() {
+    parse_fragment(b"class DynEvalVariadicDefault { public function run(...$tail = null) {} }")
+        .expect_err("variadic method parameters cannot have defaults");
+    parse_fragment(b"class DynEvalVariadicNotLast { public function run(...$tail, $next) {} }")
+        .expect_err("variadic method parameters must be last");
 }
 
 /// Verifies trait declarations and class trait uses lower into dynamic metadata.

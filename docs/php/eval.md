@@ -180,9 +180,12 @@ unpacking-aware call binding.
 eval-declared method parameters. Eval currently exposes parameter names and
 zero-based positions there, plus declared-type presence for method parameter
 type hints. Defaulted eval method parameters are bound when omitted and reported
-through `ReflectionParameter::isOptional()`. Variadic and by-reference flags
-remain false until eval's method-parameter parser and call binder carry those
-richer parameter forms.
+through `ReflectionParameter::isOptional()`. Variadic eval method parameters
+bind extra positional and unknown named arguments into a PHP array and are
+reported through `ReflectionParameter::isVariadic()` and
+`ReflectionParameter::isOptional()`. By-reference flags remain false until
+eval's method-parameter parser and call binder carry by-reference parameter
+forms.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, and
 `isPrivate()` report eval property metadata.
 `ReflectionClassConstant::getAttributes()`,
@@ -347,11 +350,11 @@ broader parameter/return ABI shapes are still outside that bridge.
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Method/Parameter/Property/attribute slice, richer
-ReflectionParameter metadata for variadic and by-reference eval-declared
-parameters, enforcement of eval-declared method parameter type hints, broader
-default-value expression support beyond scalar literals, and broader
-generated/AOT method bridge signatures beyond the current public
-non-by-reference fixed scalar/Mixed slice.
+ReflectionParameter metadata for by-reference eval-declared parameters,
+enforcement of eval-declared method parameter type hints, broader default-value
+expression support beyond scalar literals, and broader generated/AOT method
+bridge signatures beyond the current public non-by-reference fixed scalar/Mixed
+slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

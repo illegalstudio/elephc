@@ -1066,7 +1066,22 @@ fn validate_method_parent_override(
     if method.is_abstract() && !parent_method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    if !class_method_signature_accepts(method, &parent_method) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     Ok(())
+}
+
+/// Returns whether one eval class method can accept every call accepted by its parent method.
+fn class_method_signature_accepts(method: &EvalClassMethod, required: &EvalClassMethod) -> bool {
+    method_signature_accepts(
+        method.params().len(),
+        method.parameter_defaults(),
+        method.parameter_is_variadic(),
+        required.params().len(),
+        required.parameter_defaults(),
+        required.parameter_is_variadic(),
+    )
 }
 
 /// Returns a comparable rank where larger means less restrictive visibility.
@@ -1309,7 +1324,7 @@ fn class_has_interface_method(
         return method.visibility() == EvalVisibility::Public
             && !method.is_static()
             && !method.is_abstract()
-            && method.params().len() == requirement.params().len();
+            && class_method_satisfies_interface_signature(method, requirement);
     }
     class
         .parent()
@@ -1318,8 +1333,77 @@ fn class_has_interface_method(
             method.visibility() == EvalVisibility::Public
                 && !method.is_static()
                 && !method.is_abstract()
-                && method.params().len() == requirement.params().len()
+                && class_method_satisfies_interface_signature(&method, requirement)
         })
+}
+
+/// Returns whether one class method can accept every call required by an interface method.
+fn class_method_satisfies_interface_signature(
+    method: &EvalClassMethod,
+    requirement: &EvalInterfaceMethod,
+) -> bool {
+    method_signature_accepts(
+        method.params().len(),
+        method.parameter_defaults(),
+        method.parameter_is_variadic(),
+        requirement.params().len(),
+        requirement.parameter_defaults(),
+        requirement.parameter_is_variadic(),
+    )
+}
+
+/// Returns whether an implementing method accepts the full required arity range.
+fn method_signature_accepts(
+    implementation_param_count: usize,
+    implementation_defaults: &[Option<EvalExpr>],
+    implementation_variadics: &[bool],
+    required_param_count: usize,
+    required_defaults: &[Option<EvalExpr>],
+    required_variadics: &[bool],
+) -> bool {
+    let implementation_min = method_signature_min_arity(
+        implementation_param_count,
+        implementation_defaults,
+        implementation_variadics,
+    );
+    let required_min =
+        method_signature_min_arity(required_param_count, required_defaults, required_variadics);
+    if implementation_min > required_min {
+        return false;
+    }
+
+    let implementation_max =
+        method_signature_max_arity(implementation_param_count, implementation_variadics);
+    let required_max = method_signature_max_arity(required_param_count, required_variadics);
+    match (implementation_max, required_max) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(implementation_max), Some(required_max)) => implementation_max >= required_max,
+    }
+}
+
+/// Returns the minimum argument count accepted by one eval method signature.
+fn method_signature_min_arity(
+    param_count: usize,
+    defaults: &[Option<EvalExpr>],
+    variadics: &[bool],
+) -> usize {
+    let fixed_count = variadics
+        .iter()
+        .position(|is_variadic| *is_variadic)
+        .unwrap_or(param_count);
+    (0..fixed_count)
+        .rfind(|position| !defaults.get(*position).is_some_and(Option::is_some))
+        .map_or(0, |position| position + 1)
+}
+
+/// Returns the maximum argument count accepted by one eval method signature.
+fn method_signature_max_arity(param_count: usize, variadics: &[bool]) -> Option<usize> {
+    if variadics.iter().any(|is_variadic| *is_variadic) {
+        None
+    } else {
+        Some(param_count)
+    }
 }
 
 /// Returns whether a class or its eval parents satisfy one interface property contract.
@@ -2181,6 +2265,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     let evaluated_args = bind_evaluated_method_args(
         method.params(),
         method.parameter_defaults(),
+        method.parameter_is_variadic(),
         evaluated_args,
         values,
     )?;
@@ -2230,6 +2315,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
     let evaluated_args = bind_evaluated_method_args(
         method.params(),
         method.parameter_defaults(),
+        method.parameter_is_variadic(),
         evaluated_args,
         values,
     )?;

@@ -5334,6 +5334,36 @@ echo EvalNamedMethodBox::join(right: "H", left: "G");');
     assert_eq!(out.stdout, "AB:C:D:AB:E:F:G-H");
 }
 
+/// Verifies eval-declared constructors and methods bind variadic arguments.
+#[test]
+fn test_eval_declared_method_variadic_arguments() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalVariadicMethodBox {
+    public function __construct(...$parts) {
+        $this->label = $parts[0] . $parts["right"];
+    }
+    public function read($head, ...$tail) {
+        echo count($tail) . ":";
+        return $this->label . ":" . $head . ":" . $tail[0] . ":" . $tail["named"] . ":" . $tail["tail"];
+    }
+    public static function join(...$items) {
+        return $items[0] . $items[1];
+    }
+}
+$box = new EvalVariadicMethodBox("A", right: "B");
+echo $box->read("C", "D", named: "E", tail: "F") . ":";
+echo EvalVariadicMethodBox::join("G", "H");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "3:AB:C:D:E:F:GH");
+}
+
 /// Verifies eval dynamic static callables dispatch eval-declared static methods.
 #[test]
 fn test_eval_declared_static_method_dynamic_callables() {
@@ -5874,7 +5904,7 @@ fn test_eval_reflection_method_lists_parameters() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalReflectParamTarget {
-    public function run(int $first, \App\Name|null $second = null) {}
+    public function run(int $first, \App\Name|null $second = null, ...$rest) {}
 }
 $params = (new ReflectionMethod("EvalReflectParamTarget", "run"))->getParameters();
 echo count($params) . ":";
@@ -5893,7 +5923,7 @@ foreach ($params as $param) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:first@0rvbT|second@1OvbT|");
+    assert_eq!(out.stdout, "3:first@0rvbT|second@1OvbT|rest@2OVbt|");
 }
 
 /// Verifies eval ReflectionClass::newInstance constructs eval-declared classes.

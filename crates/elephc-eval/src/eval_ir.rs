@@ -529,6 +529,7 @@ pub struct EvalInterfaceMethod {
     params: Vec<String>,
     parameter_has_types: Vec<bool>,
     parameter_defaults: Vec<Option<EvalExpr>>,
+    parameter_is_variadic: Vec<bool>,
 }
 
 impl EvalInterfaceMethod {
@@ -536,12 +537,14 @@ impl EvalInterfaceMethod {
     pub fn new(name: impl Into<String>, params: Vec<String>) -> Self {
         let parameter_has_types = vec![false; params.len()];
         let parameter_defaults = vec![None; params.len()];
+        let parameter_is_variadic = vec![false; params.len()];
         Self {
             name: name.into(),
             attributes: Vec::new(),
             params,
             parameter_has_types,
             parameter_defaults,
+            parameter_is_variadic,
         }
     }
 
@@ -560,6 +563,12 @@ impl EvalInterfaceMethod {
     /// Returns a copy of this interface method with source-order default expressions.
     pub fn with_parameter_defaults(mut self, parameter_defaults: Vec<Option<EvalExpr>>) -> Self {
         self.parameter_defaults = parameter_defaults;
+        self
+    }
+
+    /// Returns a copy of this interface method with source-order variadic flags.
+    pub fn with_parameter_variadic_flags(mut self, parameter_is_variadic: Vec<bool>) -> Self {
+        self.parameter_is_variadic = parameter_is_variadic;
         self
     }
 
@@ -586,6 +595,11 @@ impl EvalInterfaceMethod {
     /// Returns default expressions declared for each source-order parameter.
     pub fn parameter_defaults(&self) -> &[Option<EvalExpr>] {
         &self.parameter_defaults
+    }
+
+    /// Returns source-order flags for whether each parameter was declared variadic.
+    pub fn parameter_is_variadic(&self) -> &[bool] {
+        &self.parameter_is_variadic
     }
 }
 
@@ -1240,6 +1254,7 @@ pub struct EvalClassMethod {
     params: Vec<String>,
     parameter_has_types: Vec<bool>,
     parameter_defaults: Vec<Option<EvalExpr>>,
+    parameter_is_variadic: Vec<bool>,
     body: Vec<EvalStmt>,
 }
 
@@ -1280,6 +1295,7 @@ impl EvalClassMethod {
     ) -> Self {
         let parameter_has_types = vec![false; params.len()];
         let parameter_defaults = vec![None; params.len()];
+        let parameter_is_variadic = vec![false; params.len()];
         Self {
             name: name.into(),
             attributes: Vec::new(),
@@ -1290,6 +1306,7 @@ impl EvalClassMethod {
             params,
             parameter_has_types,
             parameter_defaults,
+            parameter_is_variadic,
             body,
         }
     }
@@ -1314,6 +1331,12 @@ impl EvalClassMethod {
     /// Returns a copy of this method with source-order default expressions.
     pub fn with_parameter_defaults(mut self, parameter_defaults: Vec<Option<EvalExpr>>) -> Self {
         self.parameter_defaults = parameter_defaults;
+        self
+    }
+
+    /// Returns a copy of this method with source-order variadic flags.
+    pub fn with_parameter_variadic_flags(mut self, parameter_is_variadic: Vec<bool>) -> Self {
+        self.parameter_is_variadic = parameter_is_variadic;
         self
     }
 
@@ -1369,6 +1392,11 @@ impl EvalClassMethod {
     /// Returns default expressions declared for each source-order parameter.
     pub fn parameter_defaults(&self) -> &[Option<EvalExpr>] {
         &self.parameter_defaults
+    }
+
+    /// Returns source-order flags for whether each parameter was declared variadic.
+    pub fn parameter_is_variadic(&self) -> &[bool] {
+        &self.parameter_is_variadic
     }
 
     /// Returns the dynamic EvalIR statements that form the method body.
