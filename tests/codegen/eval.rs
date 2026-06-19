@@ -6416,6 +6416,14 @@ foreach ($params as $param) {
     echo $param->isVariadic() ? "V" : "v";
     echo $param->isPassedByReference() ? "R" : "b";
     echo $param->hasType() ? "T" : "t";
+    $type = $param->getType();
+    if ($type) {
+        echo ":" . $type->getName();
+        echo $type->allowsNull() ? "?" : "!";
+        echo $type->isBuiltin() ? "B" : "C";
+    } else {
+        echo ":null";
+    }
     echo "|";
 }');
 "#,
@@ -6425,7 +6433,10 @@ foreach ($params as $param) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "3/1:first@0rvbT|second@1OvbT|rest@2OVbt|");
+    assert_eq!(
+        out.stdout,
+        "3/1:first@0rvbT:int!B|second@1OvbT:App\\Name?C|rest@2OVbt:null|"
+    );
 }
 
 /// Verifies eval ReflectionClass::newInstance constructs eval-declared classes.

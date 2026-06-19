@@ -29,6 +29,8 @@ const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
+const EVAL_REFLECTION_NAMED_TYPE_FLAG_ALLOWS_NULL: u64 = 1;
+const EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN: u64 = 2;
 
 /// Eval metadata needed to materialize one `ReflectionClass` owner object.
 struct EvalReflectionClassMetadata {
@@ -62,6 +64,14 @@ struct EvalReflectionParameterMetadata {
     is_variadic: bool,
     is_passed_by_reference: bool,
     has_type: bool,
+    type_metadata: Option<EvalReflectionNamedTypeMetadata>,
+}
+
+/// Eval metadata needed to materialize one `ReflectionNamedType` object.
+struct EvalReflectionNamedTypeMetadata {
+    name: String,
+    allows_null: bool,
+    is_builtin: bool,
 }
 
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.
@@ -779,6 +789,10 @@ fn eval_reflection_parameter_object_result(
     let method_objects = values.array_new(0)?;
     let property_objects = values.array_new(0)?;
     let parent_class = values.bool_value(false)?;
+    let type_value = match parameter.type_metadata.as_ref() {
+        Some(type_metadata) => eval_reflection_named_type_object_result(type_metadata, values)?,
+        None => values.null()?,
+    };
     let flags = eval_reflection_parameter_flags(parameter);
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_PARAMETER,
@@ -788,11 +802,51 @@ fn eval_reflection_parameter_object_result(
         trait_names,
         method_names,
         property_names,
-        method_objects,
+        type_value,
         property_objects,
         parent_class,
         flags,
         parameter.position as u64,
+    )?;
+    values.release(attrs)?;
+    values.release(interface_names)?;
+    values.release(trait_names)?;
+    values.release(method_names)?;
+    values.release(property_names)?;
+    values.release(method_objects)?;
+    values.release(type_value)?;
+    values.release(property_objects)?;
+    values.release(parent_class)?;
+    Ok(object)
+}
+
+/// Materializes one ReflectionNamedType object through the shared reflection helper.
+fn eval_reflection_named_type_object_result(
+    type_metadata: &EvalReflectionNamedTypeMetadata,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let attrs = values.array_new(0)?;
+    let interface_names = values.array_new(0)?;
+    let trait_names = values.array_new(0)?;
+    let method_names = values.array_new(0)?;
+    let property_names = values.array_new(0)?;
+    let method_objects = values.array_new(0)?;
+    let property_objects = values.array_new(0)?;
+    let parent_class = values.bool_value(false)?;
+    let flags = eval_reflection_named_type_flags(type_metadata);
+    let object = values.reflection_owner_new(
+        EVAL_REFLECTION_OWNER_NAMED_TYPE,
+        &type_metadata.name,
+        attrs,
+        interface_names,
+        trait_names,
+        method_names,
+        property_names,
+        method_objects,
+        property_objects,
+        parent_class,
+        flags,
+        0,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -1107,6 +1161,7 @@ fn eval_reflection_method_metadata(
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
                     method.params(),
                     method.parameter_has_types(),
+                    method.parameter_types(),
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
@@ -1131,6 +1186,7 @@ fn eval_reflection_method_metadata(
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
                     method.params(),
                     method.parameter_has_types(),
+                    method.parameter_types(),
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
@@ -1155,6 +1211,7 @@ fn eval_reflection_method_metadata(
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
                     method.params(),
                     method.parameter_has_types(),
+                    method.parameter_types(),
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
@@ -1232,6 +1289,7 @@ fn eval_reflection_required_parameter_count(
 fn eval_reflection_parameters_from_names_and_type_flags(
     names: &[String],
     has_type_flags: &[bool],
+    parameter_types: &[Option<EvalParameterType>],
     defaults: &[Option<EvalExpr>],
     by_ref_flags: &[bool],
     variadic_flags: &[bool],
@@ -1247,8 +1305,67 @@ fn eval_reflection_parameters_from_names_and_type_flags(
             is_variadic: variadic_flags.get(position).copied().unwrap_or(false),
             is_passed_by_reference: by_ref_flags.get(position).copied().unwrap_or(false),
             has_type: has_type_flags.get(position).copied().unwrap_or(false),
+            type_metadata: parameter_types
+                .get(position)
+                .and_then(Option::as_ref)
+                .and_then(eval_reflection_named_type_metadata)
+                .filter(|_| has_type_flags.get(position).copied().unwrap_or(false)),
         })
         .collect()
+}
+
+/// Converts eval parameter type metadata into the simple ReflectionNamedType subset.
+fn eval_reflection_named_type_metadata(
+    parameter_type: &EvalParameterType,
+) -> Option<EvalReflectionNamedTypeMetadata> {
+    let [variant] = parameter_type.variants() else {
+        return None;
+    };
+    let allows_null = parameter_type.allows_null();
+    match variant {
+        EvalParameterTypeVariant::Array => {
+            Some(eval_reflection_builtin_named_type("array", allows_null))
+        }
+        EvalParameterTypeVariant::Bool => {
+            Some(eval_reflection_builtin_named_type("bool", allows_null))
+        }
+        EvalParameterTypeVariant::Callable => {
+            Some(eval_reflection_builtin_named_type("callable", allows_null))
+        }
+        EvalParameterTypeVariant::Class(name) => Some(EvalReflectionNamedTypeMetadata {
+            name: name.clone(),
+            allows_null,
+            is_builtin: false,
+        }),
+        EvalParameterTypeVariant::Float => {
+            Some(eval_reflection_builtin_named_type("float", allows_null))
+        }
+        EvalParameterTypeVariant::Int => {
+            Some(eval_reflection_builtin_named_type("int", allows_null))
+        }
+        EvalParameterTypeVariant::Iterable => {
+            Some(eval_reflection_builtin_named_type("iterable", allows_null))
+        }
+        EvalParameterTypeVariant::Mixed => Some(eval_reflection_builtin_named_type("mixed", true)),
+        EvalParameterTypeVariant::Object => {
+            Some(eval_reflection_builtin_named_type("object", allows_null))
+        }
+        EvalParameterTypeVariant::String => {
+            Some(eval_reflection_builtin_named_type("string", allows_null))
+        }
+    }
+}
+
+/// Builds metadata for one builtin eval `ReflectionNamedType`.
+fn eval_reflection_builtin_named_type(
+    name: &str,
+    allows_null: bool,
+) -> EvalReflectionNamedTypeMetadata {
+    EvalReflectionNamedTypeMetadata {
+        name: name.to_string(),
+        allows_null,
+        is_builtin: true,
+    }
 }
 
 /// Packs ReflectionMethod/ReflectionProperty predicate flags for the runtime owner factory.
@@ -1290,6 +1407,18 @@ fn eval_reflection_parameter_flags(parameter: &EvalReflectionParameterMetadata) 
     }
     if parameter.has_type {
         flags |= EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE;
+    }
+    flags
+}
+
+/// Packs ReflectionNamedType predicate flags for the runtime type factory.
+fn eval_reflection_named_type_flags(type_metadata: &EvalReflectionNamedTypeMetadata) -> u64 {
+    let mut flags = 0;
+    if type_metadata.allows_null {
+        flags |= EVAL_REFLECTION_NAMED_TYPE_FLAG_ALLOWS_NULL;
+    }
+    if type_metadata.is_builtin {
+        flags |= EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN;
     }
     flags
 }

@@ -75,6 +75,15 @@ struct ReflectionParameterMember {
     is_variadic: bool,
     is_passed_by_reference: bool,
     has_type: bool,
+    type_metadata: Option<ReflectionNamedTypeMetadata>,
+}
+
+/// Metadata for one `ReflectionNamedType` returned by `ReflectionParameter::getType()`.
+#[derive(Clone)]
+struct ReflectionNamedTypeMetadata {
+    name: String,
+    allows_null: bool,
+    is_builtin: bool,
 }
 
 /// Metadata for one constant entry returned by `ReflectionClass::getConstants()`.
@@ -1572,8 +1581,9 @@ fn reflection_parameter_members(sig: &FunctionSig) -> Vec<ReflectionParameterMem
     sig.params
         .iter()
         .enumerate()
-        .map(|(index, (name, _))| {
+        .map(|(index, (name, ty))| {
             let is_variadic = sig.variadic.as_deref() == Some(name.as_str());
+            let has_type = sig.declared_params.get(index).copied().unwrap_or(false);
             ReflectionParameterMember {
                 name: name.clone(),
                 position: index as i64,
@@ -1585,10 +1595,57 @@ fn reflection_parameter_members(sig: &FunctionSig) -> Vec<ReflectionParameterMem
                         .unwrap_or(false),
                 is_variadic,
                 is_passed_by_reference: sig.ref_params.get(index).copied().unwrap_or(false),
-                has_type: sig.declared_params.get(index).copied().unwrap_or(false),
+                has_type,
+                type_metadata: reflection_named_type_metadata(ty).filter(|_| has_type),
             }
         })
         .collect()
+}
+
+/// Converts a normalized parameter type into the simple `ReflectionNamedType` subset.
+fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionNamedTypeMetadata> {
+    match ty {
+        PhpType::Int => Some(reflection_builtin_named_type("int", false)),
+        PhpType::Float => Some(reflection_builtin_named_type("float", false)),
+        PhpType::Str => Some(reflection_builtin_named_type("string", false)),
+        PhpType::Bool => Some(reflection_builtin_named_type("bool", false)),
+        PhpType::Iterable => Some(reflection_builtin_named_type("iterable", false)),
+        PhpType::Mixed => Some(reflection_builtin_named_type("mixed", true)),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            Some(reflection_builtin_named_type("array", false))
+        }
+        PhpType::Callable => Some(reflection_builtin_named_type("callable", false)),
+        PhpType::Object(name) => Some(ReflectionNamedTypeMetadata {
+            name: name.clone(),
+            allows_null: false,
+            is_builtin: false,
+        }),
+        PhpType::Union(members) => reflection_nullable_named_type_metadata(members),
+        _ => None,
+    }
+}
+
+/// Builds metadata for one builtin named type.
+fn reflection_builtin_named_type(name: &str, allows_null: bool) -> ReflectionNamedTypeMetadata {
+    ReflectionNamedTypeMetadata {
+        name: name.to_string(),
+        allows_null,
+        is_builtin: true,
+    }
+}
+
+/// Handles `T|null` unions while leaving broader union types for future `ReflectionUnionType`.
+fn reflection_nullable_named_type_metadata(
+    members: &[PhpType],
+) -> Option<ReflectionNamedTypeMetadata> {
+    let mut non_null_members = members.iter().filter(|member| !matches!(member, PhpType::Void));
+    let first = non_null_members.next()?;
+    if non_null_members.next().is_some() {
+        return None;
+    }
+    let mut metadata = reflection_named_type_metadata(first)?;
+    metadata.allows_null = true;
+    Some(metadata)
 }
 
 /// Returns the `__construct` member object metadata when the reflected class-like symbol has one.
@@ -2667,6 +2724,80 @@ fn emit_reflection_parameter_properties(
         "ReflectionParameter",
         "__has_type",
         parameter.has_type,
+    )?;
+    emit_reflection_parameter_type_property(ctx, parameter)?;
+    Ok(())
+}
+
+/// Writes one ReflectionParameter object's nullable `ReflectionNamedType` slot.
+fn emit_reflection_parameter_type_property(
+    ctx: &mut FunctionContext<'_>,
+    parameter: &ReflectionParameterMember,
+) -> Result<()> {
+    let type_offset = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionParameter")
+            .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+        reflection_property_offset(class_info, "__type")?
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if let Some(type_metadata) = parameter.type_metadata.as_ref() {
+        emit_reflection_named_type_object(ctx, type_metadata)?;
+        emit_box_current_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Object("ReflectionNamedType".to_string()),
+        );
+    } else {
+        emit_boxed_null_literal_to_result(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, type_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, type_offset + 8);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
+}
+
+/// Allocates and populates one `ReflectionNamedType` object.
+fn emit_reflection_named_type_object(
+    ctx: &mut FunctionContext<'_>,
+    type_metadata: &ReflectionNamedTypeMetadata,
+) -> Result<()> {
+    let (class_id, property_count, uninitialized_marker_offsets, name_offset) = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionNamedType")
+            .ok_or_else(|| CodegenIrError::unsupported("unknown class ReflectionNamedType"))?;
+        (
+            class_info.class_id,
+            class_info.properties.len(),
+            super::uninitialized_property_marker_offsets(class_info),
+            reflection_property_offset(class_info, "__name")?,
+        )
+    };
+    super::emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        false,
+        &uninitialized_marker_offsets,
+    )?;
+    emit_reflection_string_property(ctx, &type_metadata.name, name_offset, name_offset + 8);
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionNamedType",
+        "__allows_null",
+        type_metadata.allows_null,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionNamedType",
+        "__is_builtin",
+        type_metadata.is_builtin,
     )?;
     Ok(())
 }

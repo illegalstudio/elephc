@@ -740,6 +740,14 @@ foreach ($params as $param) {
     echo $param->isVariadic() ? "V" : "v";
     echo $param->isPassedByReference() ? "R" : "b";
     echo $param->hasType() ? "T" : "t";
+    $type = $param->getType();
+    if ($type) {
+        echo ":"; echo $type->getName();
+        echo $type->allowsNull() ? "?" : "!";
+        echo $type->isBuiltin() ? "B" : "C";
+    } else {
+        echo ":null";
+    }
     echo "|";
 }
 return true;"##,
@@ -750,7 +758,10 @@ return true;"##,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "3/1:first#0rvRT|second#1OvbT|rest#2OVRt|");
+    assert_eq!(
+        values.output,
+        "3/1:first#0rvRT:int!B|second#1OvbT:App\\Name?C|rest#2OVRt:null|"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

@@ -285,6 +285,9 @@ impl FakeOps {
             (FakeValue::Object(properties), "getposition") if args.is_empty() => {
                 Self::object_property(&properties, "__position").map_or_else(|| self.int(0), Ok)
             }
+            (FakeValue::Object(properties), "gettype") if args.is_empty() => {
+                Self::object_property(&properties, "__type").map_or_else(|| self.null(), Ok)
+            }
             (FakeValue::Object(properties), "isoptional") if args.is_empty() => {
                 Self::object_property(&properties, "__is_optional")
                     .map_or_else(|| self.bool_value(false), Ok)
@@ -299,6 +302,14 @@ impl FakeOps {
             }
             (FakeValue::Object(properties), "hastype") if args.is_empty() => {
                 Self::object_property(&properties, "__has_type")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "allowsnull") if args.is_empty() => {
+                Self::object_property(&properties, "__allows_null")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "isbuiltin") if args.is_empty() => {
+                Self::object_property(&properties, "__is_builtin")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
             (FakeValue::Object(_), "newinstance") if args.is_empty() => self.null(),
@@ -430,6 +441,7 @@ impl FakeOps {
             EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE => "ReflectionEnumUnitCase",
             EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE => "ReflectionEnumBackedCase",
             EVAL_REFLECTION_OWNER_PARAMETER => "ReflectionParameter",
+            EVAL_REFLECTION_OWNER_NAMED_TYPE => "ReflectionNamedType",
             _ => return Err(EvalStatus::RuntimeFatal),
         };
         let name = self.string(reflected_name)?;
@@ -513,6 +525,13 @@ impl FakeOps {
                 is_passed_by_reference,
             ));
             properties.push(("__has_type".to_string(), has_type));
+            properties.push(("__type".to_string(), method_objects));
+        }
+        if owner_kind == EVAL_REFLECTION_OWNER_NAMED_TYPE {
+            let allows_null = self.bool_value((flags & 1) != 0)?;
+            let is_builtin = self.bool_value((flags & 2) != 0)?;
+            properties.push(("__allows_null".to_string(), allows_null));
+            properties.push(("__is_builtin".to_string(), is_builtin));
         }
         let object = self.alloc(FakeValue::Object(properties));
         self.object_classes

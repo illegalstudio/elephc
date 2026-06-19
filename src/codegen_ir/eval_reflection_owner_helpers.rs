@@ -1,8 +1,8 @@
 //! Purpose:
 //! Emits user-assembly helpers that let libelephc-eval materialize
 //! ReflectionClass, ReflectionMethod, ReflectionParameter, ReflectionProperty,
-//! ReflectionClassConstant, and ReflectionEnum* objects with private metadata
-//! slots populated from runtime eval declarations.
+//! ReflectionClassConstant, ReflectionEnum*, and ReflectionNamedType objects
+//! with private metadata slots populated from runtime eval declarations.
 //!
 //! Called from:
 //! - `crate::codegen_ir::finalize_user_asm()` when an EIR module uses eval.
@@ -84,6 +84,12 @@ struct ReflectionOwnerLayout {
     is_passed_by_reference_hi: Option<usize>,
     has_type_lo: Option<usize>,
     has_type_hi: Option<usize>,
+    parameter_type_lo: Option<usize>,
+    parameter_type_hi: Option<usize>,
+    allows_null_lo: Option<usize>,
+    allows_null_hi: Option<usize>,
+    is_builtin_lo: Option<usize>,
+    is_builtin_hi: Option<usize>,
 }
 
 /// Layouts for the Reflection owner classes eval can materialize.
@@ -95,6 +101,7 @@ struct ReflectionOwnerLayouts {
     enum_unit_case: ReflectionOwnerLayout,
     enum_backed_case: ReflectionOwnerLayout,
     parameter: ReflectionOwnerLayout,
+    named_type: ReflectionOwnerLayout,
 }
 
 /// Emits eval Reflection owner helpers when any lowered function owns an eval context.
@@ -162,6 +169,7 @@ fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
             true,
         )?,
         parameter: reflection_owner_layout(module.class_infos.get("ReflectionParameter")?, true)?,
+        named_type: reflection_owner_layout(module.class_infos.get("ReflectionNamedType")?, true)?,
     })
 }
 
@@ -200,6 +208,9 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_variadic_lo = reflection_property_offset(info, "__is_variadic");
     let is_passed_by_reference_lo = reflection_property_offset(info, "__is_passed_by_reference");
     let has_type_lo = reflection_property_offset(info, "__has_type");
+    let parameter_type_lo = reflection_property_offset(info, "__type");
+    let allows_null_lo = reflection_property_offset(info, "__allows_null");
+    let is_builtin_lo = reflection_property_offset(info, "__is_builtin");
     Some(ReflectionOwnerLayout {
         class_id: info.class_id,
         property_count: info.properties.len(),
@@ -263,6 +274,12 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         is_passed_by_reference_hi: is_passed_by_reference_lo.map(|offset| offset + 8),
         has_type_lo,
         has_type_hi: has_type_lo.map(|offset| offset + 8),
+        parameter_type_lo,
+        parameter_type_hi: parameter_type_lo.map(|offset| offset + 8),
+        allows_null_lo,
+        allows_null_hi: allows_null_lo.map(|offset| offset + 8),
+        is_builtin_lo,
+        is_builtin_hi: is_builtin_lo.map(|offset| offset + 8),
     })
 }
 
@@ -297,6 +314,7 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     let enum_unit_case_label = "__elephc_eval_reflection_owner_new_enum_unit_case";
     let enum_backed_case_label = "__elephc_eval_reflection_owner_new_enum_backed_case";
     let parameter_label = "__elephc_eval_reflection_owner_new_parameter";
+    let named_type_label = "__elephc_eval_reflection_owner_new_named_type";
     emitter.instruction("sub sp, sp, #160");                                    // reserve helper frame for inputs, object, arrays, scratch, and fp/lr
     emitter.instruction("stp x29, x30, [sp, #144]");                            // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #144");                                   // establish a stable helper frame pointer
@@ -332,6 +350,8 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction(&format!("b.eq {}", enum_backed_case_label));           // allocate a ReflectionEnumBackedCase owner
     emitter.instruction("cmp x0, #6");                                          // owner kind 6 means ReflectionParameter
     emitter.instruction(&format!("b.eq {}", parameter_label));                  // allocate a ReflectionParameter owner
+    emitter.instruction("cmp x0, #7");                                          // owner kind 7 means ReflectionNamedType
+    emitter.instruction(&format!("b.eq {}", named_type_label));                 // allocate a ReflectionNamedType owner
     emitter.instruction(&format!("b {}", fail_label));                          // reject unknown owner kinds
     emit_aarch64_owner_kind_body(
         emitter,
@@ -389,6 +409,14 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
         fail_label,
         box_label,
     );
+    emit_aarch64_owner_kind_body(
+        emitter,
+        named_type_label,
+        &layouts.named_type,
+        true,
+        fail_label,
+        box_label,
+    );
     emitter.label(box_label);
     emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
     emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
@@ -415,6 +443,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let enum_unit_case_label = "__elephc_eval_reflection_owner_new_enum_unit_case_x";
     let enum_backed_case_label = "__elephc_eval_reflection_owner_new_enum_backed_case_x";
     let parameter_label = "__elephc_eval_reflection_owner_new_parameter_x";
+    let named_type_label = "__elephc_eval_reflection_owner_new_named_type_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction("sub rsp, 144");                                        // reserve slots for inputs, object, metadata arrays, and name parts
@@ -452,6 +481,8 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction(&format!("je {}", enum_backed_case_label));             // allocate a ReflectionEnumBackedCase owner
     emitter.instruction("cmp rdi, 6");                                          // owner kind 6 means ReflectionParameter
     emitter.instruction(&format!("je {}", parameter_label));                    // allocate a ReflectionParameter owner
+    emitter.instruction("cmp rdi, 7");                                          // owner kind 7 means ReflectionNamedType
+    emitter.instruction(&format!("je {}", named_type_label));                   // allocate a ReflectionNamedType owner
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject unknown owner kinds
     emit_x86_64_owner_kind_body(
         emitter,
@@ -509,6 +540,14 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
         fail_label,
         box_label,
     );
+    emit_x86_64_owner_kind_body(
+        emitter,
+        named_type_label,
+        &layouts.named_type,
+        true,
+        fail_label,
+        box_label,
+    );
     emitter.label(box_label);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // move the Reflection owner object pointer into the Mixed payload
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
@@ -542,6 +581,8 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_member_flags_property_aarch64(emitter, layout);
     emit_set_owner_required_parameter_count_property_aarch64(emitter, layout);
     emit_set_owner_parameter_property_aarch64(emitter, layout);
+    emit_set_owner_parameter_type_property_aarch64(emitter, layout, fail_label);
+    emit_set_owner_named_type_flags_property_aarch64(emitter, layout);
     emit_set_owner_metadata_arrays_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_parent_class_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_aarch64(emitter, layout, fail_label);
@@ -567,6 +608,8 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_member_flags_property_x86_64(emitter, layout);
     emit_set_owner_required_parameter_count_property_x86_64(emitter, layout);
     emit_set_owner_parameter_property_x86_64(emitter, layout);
+    emit_set_owner_parameter_type_property_x86_64(emitter, layout, fail_label);
+    emit_set_owner_named_type_flags_property_x86_64(emitter, layout);
     emit_set_owner_metadata_arrays_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_parent_class_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_x86_64(emitter, layout, fail_label);
@@ -1150,6 +1193,56 @@ fn emit_set_owner_parameter_property_aarch64(
     abi::emit_store_zero_to_address(emitter, "x9", has_type_hi);
 }
 
+/// Stores incoming ARM64 ReflectionParameter type metadata.
+fn emit_set_owner_parameter_type_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(type_lo), Some(type_hi)) = (layout.parameter_type_lo, layout.parameter_type_hi)
+    else {
+        return;
+    };
+    emitter.instruction("ldr x0, [sp, #120]");                                  // reload the boxed ReflectionParameter type value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null type metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed type value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed type value for ReflectionParameter storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed type value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionParameter object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", type_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", type_hi);
+}
+
+/// Stores incoming ARM64 ReflectionNamedType predicate flags.
+fn emit_set_owner_named_type_flags_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let (
+        Some(allows_null_lo),
+        Some(allows_null_hi),
+        Some(is_builtin_lo),
+        Some(is_builtin_hi),
+    ) = (
+        layout.allows_null_lo,
+        layout.allows_null_hi,
+        layout.is_builtin_lo,
+        layout.is_builtin_hi,
+    )
+    else {
+        return;
+    };
+    emitter.instruction("ldr x11, [sp, #48]");                                  // reload ReflectionNamedType predicate flags
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionNamedType object pointer
+    emitter.instruction("and x10, x11, #1");                                    // extract the nullable-type flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", allows_null_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", allows_null_hi);
+    emitter.instruction("lsr x10, x11, #1");                                    // move the builtin-type bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the builtin-type flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_builtin_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_builtin_hi);
+}
+
 /// Stores incoming x86_64 ReflectionParameter position and predicate flags.
 fn emit_set_owner_parameter_property_x86_64(
     emitter: &mut Emitter,
@@ -1205,6 +1298,59 @@ fn emit_set_owner_parameter_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the typed-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", has_type_lo);
     abi::emit_store_zero_to_address(emitter, "r10", has_type_hi);
+}
+
+/// Stores incoming x86_64 ReflectionParameter type metadata.
+fn emit_set_owner_parameter_type_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(type_lo), Some(type_hi)) = (layout.parameter_type_lo, layout.parameter_type_hi)
+    else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp - 128]");                      // reload the boxed ReflectionParameter type value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed type value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null type metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed type value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed type value for ReflectionParameter storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed type value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionParameter object pointer
+    abi::emit_store_to_address(emitter, "rdi", "r10", type_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", type_hi);
+}
+
+/// Stores incoming x86_64 ReflectionNamedType predicate flags.
+fn emit_set_owner_named_type_flags_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let (
+        Some(allows_null_lo),
+        Some(allows_null_hi),
+        Some(is_builtin_lo),
+        Some(is_builtin_hi),
+    ) = (
+        layout.allows_null_lo,
+        layout.allows_null_hi,
+        layout.is_builtin_lo,
+        layout.is_builtin_hi,
+    )
+    else {
+        return;
+    };
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload ReflectionNamedType predicate flags
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionNamedType object pointer
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the nullable bit
+    emitter.instruction("and rax, 1");                                          // extract the nullable-type flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", allows_null_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", allows_null_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the builtin bit
+    emitter.instruction("shr rax, 1");                                          // move the builtin-type bit into position
+    emitter.instruction("and rax, 1");                                          // extract the builtin-type flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_builtin_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_builtin_hi);
 }
 
 /// Stores incoming ARM64 ReflectionClass metadata name arrays.

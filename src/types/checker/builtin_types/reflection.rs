@@ -39,6 +39,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionMethod",
         "ReflectionProperty",
         "ReflectionParameter",
+        "ReflectionNamedType",
         "ReflectionClassConstant",
         "ReflectionEnumUnitCase",
         "ReflectionEnumBackedCase",
@@ -134,6 +135,10 @@ pub(crate) fn inject_builtin_reflection(
     class_map.insert(
         "ReflectionParameter".to_string(),
         builtin_reflection_parameter_class(),
+    );
+    class_map.insert(
+        "ReflectionNamedType".to_string(),
+        builtin_reflection_named_type_class(),
     );
     for class_name in [
         "ReflectionClassConstant",
@@ -1512,6 +1517,12 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
             empty_array(),
         ),
         builtin_property(
+            "__type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ),
+        builtin_property(
             "__position",
             Visibility::Private,
             Some(TypeExpr::Int),
@@ -1553,9 +1564,59 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
         builtin_reflection_class_bool_method("isVariadic", "__is_variadic"),
         builtin_reflection_class_bool_method("isPassedByReference", "__is_passed_by_reference"),
         builtin_reflection_class_bool_method("hasType", "__has_type"),
+        builtin_reflection_class_mixed_method("getType", "__type"),
     ];
     FlattenedClass {
         name: "ReflectionParameter".to_string(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties,
+        methods,
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+    }
+}
+
+/// Builds the synthetic `ReflectionNamedType` shell returned by `ReflectionParameter::getType()`.
+fn builtin_reflection_named_type_class() -> FlattenedClass {
+    let properties = vec![
+        builtin_property(
+            "__name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ),
+        builtin_property(
+            "__attrs",
+            Visibility::Private,
+            Some(object_array_type("ReflectionAttribute")),
+            empty_array(),
+        ),
+        builtin_property(
+            "__allows_null",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+        builtin_property(
+            "__is_builtin",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+    ];
+    let methods = vec![
+        builtin_reflection_private_constructor_method(),
+        builtin_reflection_class_string_method("getName", "__name"),
+        builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
+        builtin_reflection_class_bool_method("isBuiltin", "__is_builtin"),
+    ];
+    FlattenedClass {
+        name: "ReflectionNamedType".to_string(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -1652,6 +1713,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
         "ReflectionMethod",
         "ReflectionProperty",
         "ReflectionParameter",
+        "ReflectionNamedType",
         "ReflectionClassConstant",
         "ReflectionEnumUnitCase",
         "ReflectionEnumBackedCase",
@@ -1667,6 +1729,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     | "ReflectionMethod"
                     | "ReflectionProperty"
                     | "ReflectionParameter"
+                    | "ReflectionNamedType"
                     | "ReflectionClassConstant"
                     | "ReflectionEnumUnitCase"
                     | "ReflectionEnumBackedCase"
@@ -1796,6 +1859,16 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     sig.return_type = PhpType::Int;
                 }
                 for method_name in ["isoptional", "isvariadic", "ispassedbyreference", "hastype"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getType")) {
+                    sig.return_type = PhpType::Mixed;
+                }
+            }
+            if class_name == "ReflectionNamedType" {
+                for method_name in ["allowsnull", "isbuiltin"] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }

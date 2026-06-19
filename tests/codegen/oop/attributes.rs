@@ -1759,6 +1759,47 @@ echo ($traitParams[2]->hasType() ? "T" : "t");
     );
 }
 
+/// Verifies that `ReflectionParameter::getType()` returns simple named type metadata.
+#[test]
+fn test_reflection_parameter_get_type_returns_named_type_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectParamTypeDep {}
+class ReflectParamTypeTarget {
+    public function run(int $id, ?string $name, ReflectParamTypeDep $dep, $plain, int|string $union) {}
+}
+$params = (new ReflectionMethod(ReflectParamTypeTarget::class, "run"))->getParameters();
+foreach ($params as $param) {
+    echo $param->getName() . ":";
+    echo $param->hasType() ? "T:" : "t:";
+    $type = $param->getType();
+    if ($type instanceof ReflectionNamedType) {
+        echo $type->getName();
+        echo $type->allowsNull() ? "?" : "!";
+        echo $type->isBuiltin() ? "B" : "C";
+    } else {
+        echo "null";
+    }
+    echo "|";
+}
+$direct = new ReflectionParameter([ReflectParamTypeTarget::class, "run"], "dep");
+$directType = $direct->getType();
+if ($directType instanceof ReflectionNamedType) {
+    echo "direct:" . $directType->getName();
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "id:T:int!B|name:T:string?B|dep:T:ReflectParamTypeDep!C|plain:t:null|union:T:null|direct:ReflectParamTypeDep"
+    );
+}
+
 /// Verifies direct `new ReflectionParameter()` construction for statically known
 /// class and interface method targets.
 #[test]
