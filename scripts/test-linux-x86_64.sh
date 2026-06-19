@@ -34,11 +34,15 @@ fi
 
 REBUILD=false
 TEST_ARGS=()
+TEST_ARG_COUNT=0
 
 for arg in "$@"; do
     case "$arg" in
         --rebuild) REBUILD=true ;;
-        *)         TEST_ARGS+=("$arg") ;;
+        *)
+            TEST_ARGS+=("$arg")
+            TEST_ARG_COUNT=$((TEST_ARG_COUNT + 1))
+            ;;
     esac
 done
 
@@ -67,7 +71,7 @@ trap cleanup EXIT INT TERM
 # crates first so libelephc_tls.a / libelephc_pdo.a / libelephc_crypto.a /
 # libelephc_phar.a / libelephc_tz.a exist in the target dir — `cargo test` alone
 # never emits the staticlib crate-type.
-if [ ${#TEST_ARGS[@]} -eq 0 ]; then
+if [ "$TEST_ARG_COUNT" -eq 0 ]; then
     echo "Running all tests on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using temporary target volume '$TARGET_VOLUME'..."
     docker run \
         --platform "$PLATFORM" \
