@@ -11,20 +11,37 @@
 use super::super::*;
 use super::*;
 
+/// Evaluates `function_exists()` and `is_callable()` inside an eval fragment.
 pub(in crate::interpreter) fn eval_builtin_function_probe(
+    name: &str,
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [name] = args else {
+    let [value] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let name = eval_expr(name, context, scope, values)?;
-    let name = values.string_bytes(name)?;
-    let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
-    let name = name.trim_start_matches('\\').to_ascii_lowercase();
-    values.bool_value(eval_function_probe_exists(context, &name))
+    let value = eval_expr(value, context, scope, values)?;
+    eval_function_probe_result(name, value, context, values)
+}
+
+/// Evaluates `function_exists()` and `is_callable()` from materialized arguments.
+pub(in crate::interpreter) fn eval_function_probe_result(
+    name: &str,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let exists = match name {
+        "function_exists" => {
+            let name = eval_function_probe_name(value, values)?;
+            eval_function_probe_exists(context, &name)
+        }
+        "is_callable" => eval_is_callable_value(value, context, values)?,
+        _ => return Err(EvalStatus::UnsupportedConstruct),
+    };
+    values.bool_value(exists)
 }
 
 /// Evaluates `define(name, value)` for eval dynamic constant-name registration.
@@ -596,4 +613,84 @@ pub(in crate::interpreter) fn eval_function_probe_exists(
     name: &str,
 ) -> bool {
     !name.contains("::") && (context.has_function(name) || eval_php_visible_builtin_exists(name))
+}
+
+/// Reads and normalizes a function-probe string argument.
+fn eval_function_probe_name(
+    name: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let name = values.string_bytes(name)?;
+    let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok(name.trim_start_matches('\\').to_ascii_lowercase())
+}
+
+/// Returns whether one runtime value is callable from the current eval scope.
+fn eval_is_callable_value(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Ok(callback) = eval_callable(value, context, values) else {
+        return Ok(false);
+    };
+    eval_callable_probe_exists(&callback, context, values)
+}
+
+/// Returns whether a normalized eval callback has an invokable target.
+fn eval_callable_probe_exists(
+    callback: &EvaluatedCallable,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    match callback {
+        EvaluatedCallable::Named(name) => Ok(eval_function_probe_exists(context, name)),
+        EvaluatedCallable::InvokableObject { object } => {
+            eval_object_method_callable_probe(*object, "__invoke", context, values)
+        }
+        EvaluatedCallable::ObjectMethod { object, method } => {
+            eval_object_method_callable_probe(*object, method, context, values)
+        }
+        EvaluatedCallable::StaticMethod { class_name, method } => Ok(
+            eval_static_method_callable_probe(class_name, method, context),
+        ),
+    }
+}
+
+/// Returns whether one object method can be called from the current eval scope.
+fn eval_object_method_callable_probe(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        return Ok(false);
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return Ok(false);
+    };
+    let Some((declaring_class, method)) =
+        eval_dynamic_method_for_call(class.name(), method_name, context)
+    else {
+        return Ok(false);
+    };
+    if method.is_static() || method.is_abstract() {
+        return Ok(false);
+    }
+    Ok(validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok())
+}
+
+/// Returns whether one static method can be called from the current eval scope.
+fn eval_static_method_callable_probe(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    let Some((declaring_class, method)) = context.class_method(class_name, method_name) else {
+        return false;
+    };
+    method.is_static()
+        && !method.is_abstract()
+        && validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok()
 }

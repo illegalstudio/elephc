@@ -399,7 +399,7 @@ pub(in crate::interpreter) fn eval_dynamic_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_expr(callee, context, scope, values)?;
-    let callback = eval_callable(callback, values)?;
+    let callback = eval_callable(callback, context, values)?;
     let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
     eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
 }
@@ -557,7 +557,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "stat" | "lstat" => eval_builtin_stat_array(name, args, context, scope, values),
         "floor" => eval_builtin_floor(args, context, scope, values),
         "function_exists" | "is_callable" => {
-            eval_builtin_function_probe(args, context, scope, values)
+            eval_builtin_function_probe(name, args, context, scope, values)
         }
         "gethostbyaddr" => eval_builtin_gethostbyaddr(args, context, scope, values),
         "gethostbyname" => eval_builtin_gethostbyname(args, context, scope, values),

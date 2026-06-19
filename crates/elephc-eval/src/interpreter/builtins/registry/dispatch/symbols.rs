@@ -42,13 +42,10 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
             eval_spl_object_identity_result(name, *object, values)?
         }
         "function_exists" | "is_callable" => {
-            let [name] = evaluated_args else {
+            let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            let name = values.string_bytes(*name)?;
-            let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
-            let name = name.trim_start_matches('\\').to_ascii_lowercase();
-            values.bool_value(eval_function_probe_exists(context, &name))?
+            eval_function_probe_result(name, *value, context, values)?
         }
         "empty" => eval_empty_result(evaluated_args, values)?,
         "isset" => eval_isset_result(evaluated_args, values)?,

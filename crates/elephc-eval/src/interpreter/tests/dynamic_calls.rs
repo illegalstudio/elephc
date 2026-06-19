@@ -201,6 +201,62 @@ return $named(right: "H", left: "G");"#,
     assert_eq!(values.get(result), FakeValue::String("GH".to_string()));
 }
 
+/// Verifies invokable eval objects dispatch through variable and callback call paths.
+#[test]
+fn execute_program_invokes_eval_object_callables() {
+    let program = parse_fragment(
+        br#"class EvalInvokableBox {
+    public function __construct($label = "box") {
+        $this->label = $label;
+    }
+    public function __invoke($left = "A", $right = "B") {
+        return $this->label . ":" . $left . $right;
+    }
+}
+class EvalPlainCallableProbe {}
+$box = new EvalInvokableBox("box");
+$plain = new EvalPlainCallableProbe();
+echo is_callable($box) ? "Y:" : "N:";
+echo is_callable($plain) ? "bad:" : "plain:";
+echo $box(right: "D", left: "C"); echo ":";
+echo (new EvalInvokableBox("new"))("E", "F"); echo ":";
+echo call_user_func($box, "G", "H"); echo ":";
+return call_user_func_array($box, ["right" => "J", "left" => "I"]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Y:plain:box:CD:new:EF:box:GH:");
+    assert_eq!(values.get(result), FakeValue::String("box:IJ".to_string()));
+}
+
+/// Verifies object-method callable arrays preserve eval named-argument binding.
+#[test]
+fn execute_program_object_method_callable_array_binds_eval_named_args() {
+    let program = parse_fragment(
+        br#"class EvalObjectCallableArrayBox {
+    public function join($left, $right) {
+        return $left . $right;
+    }
+}
+$box = new EvalObjectCallableArrayBox();
+$cb = [$box, "join"];
+echo is_callable($cb) ? "Y:" : "N:";
+return call_user_func_array($cb, ["right" => "B", "left" => "A"]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Y:");
+    assert_eq!(values.get(result), FakeValue::String("AB".to_string()));
+}
+
 /// Verifies static calls fall back to runtime AOT hooks when no eval class matches.
 #[test]
 fn execute_program_static_call_dispatches_runtime_method_hook() {

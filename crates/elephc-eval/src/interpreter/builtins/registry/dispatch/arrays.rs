@@ -229,11 +229,11 @@ pub(in crate::interpreter) fn eval_arrays_builtin_with_values(
         },
         "iterator_apply" => match evaluated_args {
             [iterator, callback] => {
-                let callback = eval_callable(*callback, values)?;
+                let callback = eval_callable(*callback, context, values)?;
                 eval_iterator_apply_result(*iterator, &callback, Vec::new(), context, values)?
             }
             [iterator, callback, args] => {
-                let callback = eval_callable(*callback, values)?;
+                let callback = eval_callable(*callback, context, values)?;
                 let callback_args = eval_iterator_apply_arg_values(*args, values)?;
                 eval_iterator_apply_result(*iterator, &callback, callback_args, context, values)?
             }

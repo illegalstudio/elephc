@@ -72,7 +72,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Scalars | `null`, booleans, integers, floats, and strings. |
 | Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, eval object property access, static property access, and class constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, and string-key reads/writes. |
-| Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
+| Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, invokable eval objects, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
 | Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking for supported public scalar/Mixed constructor signatures. |
 | Object cloning | `clone $object` shallow-copies eval-declared objects and `stdClass` storage. Eval-declared `__clone()` hooks run after the copy and obey public/protected/private visibility. |
 | Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and by-reference parameters for direct variable, array-element, and object-property arguments. Runtime/AOT object-method and static-method fallback supports the same argument binding for supported public scalar/Mixed method signatures. |
@@ -117,9 +117,13 @@ eval-declared functions, and registered AOT functions.
 
 Inside eval fragments, two-element object-method callable arrays such as
 `[$this, "method"]` can be invoked through `$cb(...)`, `call_user_func($cb,
-...)`, `call_user_func_array($cb, [...])`, and `iterator_apply()` with
-positional arguments. Static method callables can use `["ClassName", "method"]`
-or `"ClassName::method"` through `$cb(...)`, `call_user_func()`, and
+...)`, `call_user_func_array($cb, [...])`, and `iterator_apply()`. Eval-declared
+object methods support string-keyed named arguments through
+`call_user_func_array()`. Eval-declared objects with `__invoke()` can be called
+through `$object(...)`, `call_user_func($object, ...)`, and
+`call_user_func_array($object, [...])`, and `is_callable($object)` reports them
+as callable. Static method callables can use `["ClassName", "method"]` or
+`"ClassName::method"` through `$cb(...)`, `call_user_func()`, and
 `call_user_func_array()`. Eval-declared static methods also support string-keyed
 named arguments through `call_user_func_array()`; generated/AOT static method
 fallback supports the same named-argument binding for public scalar/Mixed

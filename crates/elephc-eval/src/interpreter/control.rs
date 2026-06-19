@@ -65,6 +65,9 @@ pub(super) struct BoundMethodArg {
 /// One already evaluated PHP callback supported by the eval dispatcher.
 pub(super) enum EvaluatedCallable {
     Named(String),
+    InvokableObject {
+        object: RuntimeCellHandle,
+    },
     ObjectMethod {
         object: RuntimeCellHandle,
         method: String,

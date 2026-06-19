@@ -2638,8 +2638,14 @@ fn eval_reflection_class_new_instance_result(
     };
     if let Some(class) = context.class(&reflected_name).cloned() {
         let mut scope = ElephcEvalScope::new();
-        return eval_dynamic_class_new_object(&class, constructor_args, context, &mut scope, values)
-            .map(Some);
+        return eval_dynamic_class_new_object(
+            &class,
+            constructor_args,
+            context,
+            &mut scope,
+            values,
+        )
+        .map(Some);
     }
     let class_name = context
         .resolve_class_name(&reflected_name)
@@ -2739,7 +2745,7 @@ fn eval_reflection_attribute_arg_value(
 }
 
 /// Resolves the method metadata visible from the current class scope.
-fn eval_dynamic_method_for_call(
+pub(in crate::interpreter) fn eval_dynamic_method_for_call(
     object_class_name: &str,
     method_name: &str,
     context: &ElephcEvalContext,
@@ -2759,7 +2765,7 @@ fn eval_dynamic_method_for_call(
 }
 
 /// Returns whether the current eval class scope can access one declared member.
-fn validate_eval_member_access(
+pub(in crate::interpreter) fn validate_eval_member_access(
     declaring_class: &str,
     visibility: EvalVisibility,
     context: &ElephcEvalContext,

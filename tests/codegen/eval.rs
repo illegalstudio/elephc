@@ -5583,6 +5583,62 @@ echo $named(right: "H", left: "G");');
     assert_eq!(out.stdout, "AB:CD:EF:GH");
 }
 
+/// Verifies eval invokable objects dispatch through variable and callback call paths.
+#[test]
+fn test_eval_declared_invokable_object_dynamic_callables() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalInvokableBox {
+    public function __construct($label = "box") {
+        $this->label = $label;
+    }
+    public function __invoke($left = "A", $right = "B") {
+        return $this->label . ":" . $left . $right;
+    }
+}
+class EvalPlainCallableProbe {}
+$box = new EvalInvokableBox("box");
+$plain = new EvalPlainCallableProbe();
+echo is_callable($box) ? "Y:" : "N:";
+echo is_callable($plain) ? "bad:" : "plain:";
+echo $box(right: "D", left: "C") . ":";
+echo (new EvalInvokableBox("new"))("E", "F") . ":";
+echo call_user_func($box, "G", "H") . ":";
+echo call_user_func_array($box, ["right" => "J", "left" => "I"]);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Y:plain:box:CD:new:EF:box:GH:box:IJ");
+}
+
+/// Verifies eval object-method callable arrays bind named arguments.
+#[test]
+fn test_eval_declared_object_method_callable_array_named_args() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalObjectCallableArrayBox {
+    public function join($left, $right) {
+        return $left . $right;
+    }
+}
+$box = new EvalObjectCallableArrayBox();
+$cb = [$box, "join"];
+echo is_callable($cb) ? "Y:" : "N:";
+echo call_user_func_array($cb, ["right" => "B", "left" => "A"]);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Y:AB");
+}
+
 /// Verifies eval-declared class constants work through the bridge.
 #[test]
 fn test_eval_declared_class_constants_and_scoped_fetches() {

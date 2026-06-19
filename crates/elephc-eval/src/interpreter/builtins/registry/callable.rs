@@ -50,7 +50,7 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable(callback, values)?;
+    let callback = eval_callable(callback, context, values)?;
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -67,19 +67,42 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values(
     let Some((callback, callback_args)) = evaluated_args.split_first() else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let callback = eval_callable(*callback, values)?;
+    let callback = eval_callable(*callback, context, values)?;
     eval_evaluated_callable_with_values(&callback, callback_args.to_vec(), context, values)
 }
 
 /// Normalizes one PHP callback value for eval dynamic callable dispatch.
 pub(in crate::interpreter) fn eval_callable(
     callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
+    if values.type_tag(callback)? == EVAL_TAG_OBJECT {
+        return eval_object_callable(callback, context, values);
+    }
     if values.is_array_like(callback)? {
         return eval_array_callable(callback, values);
     }
     eval_string_callable(callback, values)
+}
+
+/// Normalizes one invokable eval object for dynamic callable dispatch.
+pub(in crate::interpreter) fn eval_object_callable(
+    callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedCallable, EvalStatus> {
+    let identity = values.object_identity(callback)?;
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return Ok(EvaluatedCallable::InvokableObject { object: callback });
+    };
+    let Some((_, method)) = context.class_method(class.name(), "__invoke") else {
+        return Err(EvalStatus::UnsupportedConstruct);
+    };
+    if method.is_static() || method.is_abstract() {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    Ok(EvaluatedCallable::InvokableObject { object: callback })
 }
 
 /// Normalizes one two-element object-method or static-method callable array.
@@ -156,6 +179,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
         EvaluatedCallable::Named(name) => {
             eval_callable_with_values(name, evaluated_args, context, values)
         }
+        EvaluatedCallable::InvokableObject { object } => {
+            eval_method_call_result(*object, "__invoke", evaluated_args, context, values)
+        }
         EvaluatedCallable::ObjectMethod { object, method } => {
             eval_method_call_result(*object, method, evaluated_args, context, values)
         }
@@ -180,12 +206,23 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
         EvaluatedCallable::Named(name) => {
             eval_callable_with_call_array_args(name, evaluated_args, context, values)
         }
+        EvaluatedCallable::InvokableObject { object } => {
+            eval_method_call_result_with_evaluated_args(
+                *object,
+                "__invoke",
+                evaluated_args,
+                context,
+                values,
+            )
+        }
         EvaluatedCallable::ObjectMethod { object, method } => {
-            if evaluated_args.iter().any(|arg| arg.name.is_some()) {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            let evaluated_args = evaluated_args.into_iter().map(|arg| arg.value).collect();
-            eval_method_call_result(*object, method, evaluated_args, context, values)
+            eval_method_call_result_with_evaluated_args(
+                *object,
+                method,
+                evaluated_args,
+                context,
+                values,
+            )
         }
         EvaluatedCallable::StaticMethod { class_name, method } => {
             eval_static_method_call_result(class_name, method, evaluated_args, context, values)
