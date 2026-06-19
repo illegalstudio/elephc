@@ -323,17 +323,20 @@ property.
 ```php
 <?php
 class Base {
-    public int $value = 0;
+    private int $value = 1;
+
+    public function parentValue(): int {
+        return $this->value;
+    }
 }
 
 class Child extends Base {
     public int $value = 5;
 }
 
-echo (new Child())->value; // 5
+$child = new Child();
+echo $child->value . ":" . $child->parentValue(); // 5:1
 ```
-
-Private parent properties are still considered separate slots in PHP, but elephc rejects same-named redeclarations through them; declare a different name in the child for now.
 
 ### Property hooks (`get` / `set`)
 
@@ -1203,7 +1206,7 @@ Limitations today:
 - A symbolic reference that elephc cannot resolve — for example a built-in class constant such as `Attribute::TARGET_CLASS`, which is not registered — is treated as unsupported metadata: the attribute still parses and compiles and `class_attribute_names()` still lists it, but its arguments are not reflectable through `getAttributes()`/`class_get_attributes()`/`class_attribute_args()`.
 - The flat `class_attribute_args()` helper returns a positional array of scalars only; it rejects attributes whose arguments are keyed (named arguments or associative arrays, at any depth) or contain a symbolic reference. Use `ReflectionClass::getAttributes()->getArguments()` for those.
 - When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
-- `ReflectionClass` supports `getName()`, `getShortName()`, `getNamespaceName()`, `inNamespace()`, `getAttributes()`, `isFinal()`, `isAbstract()`, `isInterface()`, `isTrait()`, `isEnum()`, `isReadOnly()`, `isInstantiable()`, `getModifiers()`, `hasMethod()`, `hasProperty()`, `implementsInterface()`, `getInterfaceNames()`, `getTraitNames()`, `getMethods()`, `getConstructor()`, `getParentClass()`, `getProperties()`, and `newInstance()`. It also exposes PHP-compatible `ReflectionClass::IS_IMPLICIT_ABSTRACT`, `ReflectionClass::IS_FINAL`, `ReflectionClass::IS_EXPLICIT_ABSTRACT`, and `ReflectionClass::IS_READONLY` constants. `ReflectionClass::implementsInterface()` returns the metadata predicate for known interface names and throws PHP-compatible `ReflectionException` messages when the argument is missing or names a non-interface class-like symbol. `ReflectionClass::newInstance()` forwards direct positional arguments and statically known indexed unpacking to the reflected constructor. Dynamic unpacking and named-argument forwarding through the static pipeline are still outside this slice. `ReflectionMethod` supports `getName()`, `getAttributes()`, `getParameters()`, `getNumberOfParameters()`, `getNumberOfRequiredParameters()`, `isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`, `isFinal()`, and `isAbstract()`. `ReflectionParameter` supports `getName()`, `getPosition()`, `isOptional()`, `isVariadic()`, `isPassedByReference()`, `hasType()`, and `getType()` where type metadata is available. `ReflectionProperty` supports `getName()`, `getAttributes()`, `isStatic()`, `isPublic()`, `isProtected()`, and `isPrivate()`. Broader APIs beyond the listed reflection surface are not yet available.
+- `ReflectionClass` supports `getName()`, `getShortName()`, `getNamespaceName()`, `inNamespace()`, `getAttributes()`, `isFinal()`, `isAbstract()`, `isInterface()`, `isTrait()`, `isEnum()`, `isReadOnly()`, `isInstantiable()`, `getModifiers()`, `hasMethod()`, `hasProperty()`, `implementsInterface()`, `getInterfaceNames()`, `getTraitNames()`, `getMethods()`, `getConstructor()`, `getParentClass()`, `getProperties()`, and `newInstance()`. It also exposes PHP-compatible `ReflectionClass::IS_IMPLICIT_ABSTRACT`, `ReflectionClass::IS_FINAL`, `ReflectionClass::IS_EXPLICIT_ABSTRACT`, and `ReflectionClass::IS_READONLY` constants. `ReflectionClass::implementsInterface()` returns the metadata predicate for known interface names and throws PHP-compatible `ReflectionException` messages when the argument is missing or names a non-interface class-like symbol. `ReflectionClass::newInstance()` forwards direct positional arguments and statically known indexed unpacking to the reflected constructor. When the receiver is an inline `new ReflectionClass(Known::class)` expression, named arguments, static string-keyed unpacking, and constructor defaults are normalized through the reflected constructor signature. Dynamic unpacking and named-argument forwarding from a `ReflectionClass` object held only in runtime storage still require richer runtime constructor binding. `ReflectionMethod` supports `getName()`, `getAttributes()`, `getParameters()`, `getNumberOfParameters()`, `getNumberOfRequiredParameters()`, `isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`, `isFinal()`, and `isAbstract()`. `ReflectionParameter` supports `getName()`, `getPosition()`, `isOptional()`, `isVariadic()`, `isPassedByReference()`, `hasType()`, and `getType()` where type metadata is available. `ReflectionProperty` supports `getName()`, `getAttributes()`, `isStatic()`, `isPublic()`, `isProtected()`, and `isPrivate()`. Broader APIs beyond the listed reflection surface are not yet available.
 - `ReflectionFunction`/`ReflectionParameter` reflect named functions only (the constructor argument must be a compile-time function-name string). `ReflectionParameter::getType()` resolves a single named type (including a nullable `?T`); union and intersection parameter types, default-value reflection (`getDefaultValue()`), and per-parameter attribute reflection are not yet available. An explicit `mixed` hint is reported as untyped.
 
 ### Class constants
