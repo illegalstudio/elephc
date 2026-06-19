@@ -854,6 +854,42 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod constructor/destructor predicates for eval methods.
+#[test]
+fn execute_program_reflection_method_reports_constructor_and_destructor() {
+    let program = parse_fragment(
+        br#"class EvalReflectLifecycle {
+    public function __construct() {}
+    public function __destruct() {}
+    public function run() {}
+}
+$ctor = new ReflectionMethod("EvalReflectLifecycle", "__CONSTRUCT");
+echo $ctor->isConstructor() ? "C" : "c";
+echo $ctor->isDestructor() ? "D" : "d";
+echo ":";
+$dtor = new ReflectionMethod("EvalReflectLifecycle", "__destruct");
+echo $dtor->isConstructor() ? "C" : "c";
+echo $dtor->isDestructor() ? "D" : "d";
+echo ":";
+$run = new ReflectionMethod("EvalReflectLifecycle", "run");
+echo $run->isConstructor() ? "C" : "c";
+echo $run->isDestructor() ? "D" : "d";
+echo ":";
+$listed = (new ReflectionClass("EvalReflectLifecycle"))->getConstructor();
+echo $listed->isConstructor() ? "C" : "c";
+echo $listed->isDestructor() ? "D" : "d";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Cd:cD:cd:Cd");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval member and enum-case reflectors expose their declaring class.
 #[test]
 fn execute_program_reflects_eval_declaring_class_metadata() {

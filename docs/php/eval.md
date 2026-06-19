@@ -204,6 +204,8 @@ eval/runtime class or interface names.
 `ReflectionMethod::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
 `isFinal()`, `isAbstract()`, and `getModifiers()` report eval method metadata,
 with PHP-compatible `ReflectionMethod::IS_*` constants for the bitmask.
+`ReflectionMethod::isConstructor()` and `isDestructor()` report whether the
+reflected method is `__construct` or `__destruct`.
 `ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
 `getNumberOfRequiredParameters()` report eval-declared method parameter
 metadata. Eval currently exposes parameter names and zero-based positions there,

@@ -6425,6 +6425,41 @@ echo $classReadonlyProp->getModifiers();');
     );
 }
 
+/// Verifies eval ReflectionMethod constructor/destructor predicates through the bridge.
+#[test]
+fn test_eval_reflection_method_reports_constructor_and_destructor() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectLifecycle {
+    public function __construct() {}
+    public function __destruct() {}
+    public function run() {}
+}
+$ctor = new ReflectionMethod("EvalReflectLifecycle", "__CONSTRUCT");
+echo $ctor->isConstructor() ? "C" : "c";
+echo $ctor->isDestructor() ? "D" : "d";
+echo ":";
+$dtor = new ReflectionMethod("EvalReflectLifecycle", "__destruct");
+echo $dtor->isConstructor() ? "C" : "c";
+echo $dtor->isDestructor() ? "D" : "d";
+echo ":";
+$run = new ReflectionMethod("EvalReflectLifecycle", "run");
+echo $run->isConstructor() ? "C" : "c";
+echo $run->isDestructor() ? "D" : "d";
+echo ":";
+$listed = (new ReflectionClass("EvalReflectLifecycle"))->getConstructor();
+echo $listed->isConstructor() ? "C" : "c";
+echo $listed->isDestructor() ? "D" : "d";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Cd:cD:cd:Cd");
+}
+
 /// Verifies eval-declared final properties cannot be redeclared by subclasses.
 #[test]
 fn test_eval_declared_final_property_override_fails() {

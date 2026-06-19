@@ -322,6 +322,24 @@ impl FakeOps {
                 Self::object_property(&properties, "__default_value")
                     .map_or_else(|| self.null(), Ok)
             }
+            (FakeValue::Object(properties), "isconstructor") if args.is_empty() => {
+                let Some(name) = Self::object_property(&properties, "__name") else {
+                    return self.bool_value(false);
+                };
+                let FakeValue::String(name) = self.get(name) else {
+                    return self.bool_value(false);
+                };
+                self.bool_value(name.eq_ignore_ascii_case("__construct"))
+            }
+            (FakeValue::Object(properties), "isdestructor") if args.is_empty() => {
+                let Some(name) = Self::object_property(&properties, "__name") else {
+                    return self.bool_value(false);
+                };
+                let FakeValue::String(name) = self.get(name) else {
+                    return self.bool_value(false);
+                };
+                self.bool_value(name.eq_ignore_ascii_case("__destruct"))
+            }
             (FakeValue::Object(properties), "isoptional") if args.is_empty() => {
                 Self::object_property(&properties, "__is_optional")
                     .map_or_else(|| self.bool_value(false), Ok)
