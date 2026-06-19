@@ -1333,6 +1333,64 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass exposes and mutates eval static property values.
+#[test]
+fn execute_program_reflection_class_static_property_values() {
+    let program = parse_fragment(
+        br#"class EvalReflectStaticBase {
+    public static $base = "b";
+    protected static $prot = "p";
+    private static $shadow = "base-hidden";
+    public $instance = "i";
+}
+class EvalReflectStaticChild extends EvalReflectStaticBase {
+    public static $child = "c";
+    private static $shadow = "child-hidden";
+    public static int $count = 1;
+}
+EvalReflectStaticChild::$child = "mut";
+$ref = new ReflectionClass("EvalReflectStaticChild");
+$statics = $ref->getStaticProperties();
+echo count($statics); echo ":";
+echo $statics["child"]; echo ":";
+echo $statics["base"]; echo ":";
+echo $statics["prot"]; echo ":";
+echo $statics["shadow"]; echo ":";
+echo $ref->getStaticPropertyValue("count"); echo ":";
+$ref->setStaticPropertyValue("shadow", "changed");
+echo $ref->getStaticPropertyValue("shadow"); echo ":";
+$ref->setStaticPropertyValue(name: "count", value: 5);
+echo EvalReflectStaticChild::$count; echo ":";
+echo $ref->getStaticPropertyValue("instance", "fallback"); echo ":";
+echo $ref->getStaticPropertyValue("missing", "fallback"); echo ":";
+try {
+    $ref->getStaticPropertyValue("missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo "E";
+}
+echo ":";
+try {
+    $ref->setStaticPropertyValue("instance", "bad");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo "S";
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "5:mut:b:p:child-hidden:1:changed:5:fallback:fallback:E:S"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval ReflectionParameter exposes declaring class metadata.
 #[test]
 fn execute_program_reflects_eval_parameter_declaring_class() {

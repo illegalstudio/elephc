@@ -600,6 +600,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__static_properties",
+                Visibility::Private,
+                Some(mixed_type()),
+                empty_array(),
+            ),
+            builtin_property(
                 "__reflection_constants",
                 Visibility::Private,
                 Some(object_array_type("ReflectionClassConstant")),
@@ -671,6 +677,9 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_get_constant_method(),
             builtin_reflection_class_mixed_method("getConstants", "__constants"),
             builtin_reflection_class_mixed_method("getDefaultProperties", "__default_properties"),
+            builtin_reflection_class_mixed_method("getStaticProperties", "__static_properties"),
+            builtin_reflection_class_get_static_property_value_method(),
+            builtin_reflection_class_set_static_property_value_method(),
             builtin_reflection_class_array_method(
                 "getReflectionConstants",
                 "__reflection_constants",
@@ -904,6 +913,62 @@ fn builtin_reflection_class_get_constant_method() -> ClassMethod {
                 dummy_span,
             ),
         ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::getStaticPropertyValue()` backed by the static-property map.
+fn builtin_reflection_class_get_static_property_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name = variable_expr("name", dummy_span);
+    let value_read = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(reflection_this_property("__static_properties", dummy_span)),
+            index: Box::new(name),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "getStaticPropertyValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("name".to_string(), Some(TypeExpr::Str), None, false),
+            ("default".to_string(), Some(mixed_type()), null_expr(), false),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        body: vec![Stmt::new(StmtKind::Return(Some(value_read)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns the public `ReflectionClass::setStaticPropertyValue()` signature.
+fn builtin_reflection_class_set_static_property_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "setStaticPropertyValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("name".to_string(), Some(TypeExpr::Str), None, false),
+            ("value".to_string(), Some(mixed_type()), None, false),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        body: Vec::new(),
         span: dummy_span,
         attributes: Vec::new(),
     }
