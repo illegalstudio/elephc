@@ -641,6 +641,36 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass origin predicates report eval class-like symbols as user-defined.
+#[test]
+fn execute_program_reflects_eval_class_origin_predicates() {
+    let program = parse_fragment(
+        br#"class EvalOriginClass {}
+interface EvalOriginIface {}
+trait EvalOriginTrait {}
+enum EvalOriginEnum { case Ready; }
+function eval_reflect_origin($name) {
+    $r = new ReflectionClass($name);
+    echo $r->isInternal() ? "I" : "i";
+    echo $r->isUserDefined() ? "U" : "u";
+    echo ":";
+}
+eval_reflect_origin("EvalOriginClass");
+eval_reflect_origin("EvalOriginIface");
+eval_reflect_origin("EvalOriginTrait");
+eval_reflect_origin("EvalOriginEnum");
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "iU:iU:iU:iU:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::getConstructor exposes eval constructor metadata.
 #[test]
 fn execute_program_reflection_class_get_constructor() {

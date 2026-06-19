@@ -7030,6 +7030,33 @@ echo (new ReflectionClass("EvalCloneEnum"))->isCloneable() ? "E" : "e";');
     assert_eq!(out, "aPFvrUite");
 }
 
+/// Verifies eval ReflectionClass origin predicates distinguish eval symbols from built-ins.
+#[test]
+fn test_eval_reflection_class_internal_user_defined_predicates() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalOriginClass {}
+interface EvalOriginIface {}
+trait EvalOriginTrait {}
+enum EvalOriginEnum { case Ready; }
+function eval_reflect_origin($name) {
+    $r = new ReflectionClass($name);
+    echo $r->isInternal() ? "I" : "i";
+    echo $r->isUserDefined() ? "U" : "u";
+    echo ":";
+}
+eval_reflect_origin("EvalOriginClass");
+eval_reflect_origin("EvalOriginIface");
+eval_reflect_origin("EvalOriginTrait");
+eval_reflect_origin("EvalOriginEnum");
+eval_reflect_origin("stdClass");
+eval_reflect_origin("ReflectionClass");
+eval_reflect_origin("Iterator");');
+"#,
+    );
+    assert_eq!(out, "iU:iU:iU:iU:Iu:Iu:Iu:");
+}
+
 /// Verifies eval ReflectionClass::newInstance constructs eval-declared classes.
 #[test]
 fn test_eval_reflection_class_new_instance_constructs_eval_class() {

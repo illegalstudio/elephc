@@ -165,6 +165,14 @@ impl FakeOps {
                 Self::object_property(&properties, "__is_cloneable")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "isinternal") if args.is_empty() => {
+                Self::object_property(&properties, "__is_internal")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "isuserdefined") if args.is_empty() => {
+                Self::object_property(&properties, "__is_user_defined")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "getparentclass") if args.is_empty() => {
                 Self::object_property(&properties, "__parent_class")
                     .map_or_else(|| self.bool_value(false), Ok)
@@ -533,6 +541,8 @@ impl FakeOps {
         let is_readonly = self.bool_value((flags & 32) != 0)?;
         let is_instantiable = self.bool_value((flags & 64) != 0)?;
         let is_cloneable = self.bool_value((flags & 128) != 0)?;
+        let is_internal = self.bool_value((flags & 256) != 0)?;
+        let is_user_defined = self.bool_value((flags & 512) != 0)?;
         let is_anonymous = self.bool_value(false)?;
         let modifiers_cell = self.int(modifiers as i64)?;
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
@@ -554,6 +564,8 @@ impl FakeOps {
             properties.push(("__is_anonymous".to_string(), is_anonymous));
             properties.push(("__is_instantiable".to_string(), is_instantiable));
             properties.push(("__is_cloneable".to_string(), is_cloneable));
+            properties.push(("__is_internal".to_string(), is_internal));
+            properties.push(("__is_user_defined".to_string(), is_user_defined));
             properties.push(("__modifiers".to_string(), modifiers_cell));
             properties.push(("__short_name".to_string(), short_name));
             properties.push(("__namespace_name".to_string(), namespace_name));
