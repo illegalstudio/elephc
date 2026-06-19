@@ -514,9 +514,10 @@ pub(in crate::interpreter) fn eval_builtin_empty(
     values.bool_value(empty)
 }
 
-/// Evaluates direct `unset(...)` calls over eval-visible variable names.
+/// Evaluates direct `unset(...)` calls over eval-visible variables and object properties.
 pub(in crate::interpreter) fn eval_builtin_unset(
     args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -524,11 +525,17 @@ pub(in crate::interpreter) fn eval_builtin_unset(
         return Err(EvalStatus::RuntimeFatal);
     }
     for arg in args {
-        let EvalExpr::LoadVar(name) = arg else {
-            return Err(EvalStatus::RuntimeFatal);
-        };
-        if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
-            values.release(replaced)?;
+        match arg {
+            EvalExpr::LoadVar(name) => {
+                if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
+                    values.release(replaced)?;
+                }
+            }
+            EvalExpr::PropertyGet { object, property } => {
+                let object = eval_expr(object, context, scope, values)?;
+                eval_property_unset_result(object, property, context, values)?;
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
         }
     }
     values.null()
@@ -586,6 +593,14 @@ pub(in crate::interpreter) fn eval_empty_arg(
         };
         return Ok(!values.truthy(value)?);
     }
+    if let EvalExpr::PropertyGet { object, property } = arg {
+        let object = eval_expr(object, context, scope, values)?;
+        if !eval_property_isset_result(object, property, context, values)? {
+            return Ok(true);
+        }
+        let value = eval_property_get_result(object, property, context, values)?;
+        return Ok(!values.truthy(value)?);
+    }
     let value = eval_expr(arg, context, scope, values)?;
     Ok(!values.truthy(value)?)
 }
@@ -602,6 +617,10 @@ pub(in crate::interpreter) fn eval_isset_arg(
             return Ok(false);
         };
         return Ok(!values.is_null(value)?);
+    }
+    if let EvalExpr::PropertyGet { object, property } = arg {
+        let object = eval_expr(object, context, scope, values)?;
+        return eval_property_isset_result(object, property, context, values);
     }
     let value = eval_expr(arg, context, scope, values)?;
     Ok(!values.is_null(value)?)

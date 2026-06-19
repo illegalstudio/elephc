@@ -2339,17 +2339,22 @@ impl Parser {
         Ok(body)
     }
 
-    /// Parses `unset($name[, ...]);`.
+    /// Parses `unset($name[, ...]);` with variable and object-property operands.
     pub(super) fn parse_unset_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LParen)?;
         let mut statements = Vec::new();
         loop {
-            let TokenKind::DollarIdent(name) = self.current() else {
-                return Err(EvalParseError::ExpectedVariable);
+            let target = self.parse_expr()?;
+            let stmt = match target {
+                EvalExpr::LoadVar(name) => EvalStmt::UnsetVar { name },
+                EvalExpr::PropertyGet { object, property } => EvalStmt::UnsetProperty {
+                    object: *object,
+                    property,
+                },
+                _ => return Err(EvalParseError::ExpectedVariable),
             };
-            statements.push(EvalStmt::UnsetVar { name: name.clone() });
-            self.advance();
+            statements.push(stmt);
             if !self.consume(TokenKind::Comma) {
                 break;
             }

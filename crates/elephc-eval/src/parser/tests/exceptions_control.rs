@@ -251,15 +251,19 @@ fn parse_fragment_accepts_eval_finally_source() {
         }]
     );
 }
-/// Verifies unset fragments expand to one by-name unset statement per variable.
+/// Verifies unset fragments expand variable and object-property operands.
 #[test]
 fn parse_fragment_accepts_unset_source() {
-    let program = parse_fragment(b"unset($x, $y);").expect("fragment should parse");
+    let program = parse_fragment(b"unset($x, $this->name, $y);").expect("fragment should parse");
     assert_eq!(
         program.statements(),
         &[
             EvalStmt::UnsetVar {
                 name: "x".to_string()
+            },
+            EvalStmt::UnsetProperty {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: "name".to_string(),
             },
             EvalStmt::UnsetVar {
                 name: "y".to_string()

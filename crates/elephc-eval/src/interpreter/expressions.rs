@@ -777,7 +777,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "long2ip" => eval_builtin_long2ip(args, context, scope, values),
         "trim" => eval_builtin_trim_like(name, args, context, scope, values),
         "ucwords" => eval_builtin_ucwords(args, context, scope, values),
-        "unset" => eval_builtin_unset(args, scope, values),
+        "unset" => eval_builtin_unset(args, context, scope, values),
         "umask" => eval_builtin_umask(args, context, scope, values),
         "usleep" => eval_builtin_usleep(args, context, scope, values),
         "var_dump" => eval_builtin_var_dump(args, context, scope, values),

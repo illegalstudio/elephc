@@ -5258,6 +5258,53 @@ echo $box->missing;');
     assert_eq!(out.stdout, "plain:magic:missing");
 }
 
+/// Verifies eval property probes and unsets dispatch through `__isset` and `__unset`.
+#[test]
+fn test_eval_declared_magic_isset_empty_and_unset_property_methods() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalMagicPropertyProbeBox {
+    public string $events = "";
+    public string $present = "ready";
+    public $nullish = null;
+    private string $secret = "raw";
+    public function __isset($name) {
+        $this->events = $this->events . "isset:" . $name . ";";
+        return $name !== "no";
+    }
+    public function __get($name) {
+        $this->events = $this->events . "get:" . $name . ";";
+        return $name === "empty" ? "" : "value:" . $name;
+    }
+    public function __unset($name) {
+        $this->events = $this->events . "unset:" . $name . ";";
+    }
+}
+$box = new EvalMagicPropertyProbeBox();
+echo isset($box->present) ? "P" : "p"; echo ":";
+echo isset($box->nullish) ? "N" : "n"; echo ":";
+echo isset($box->secret) ? "S" : "s"; echo ":";
+echo isset($box->no) ? "bad" : "no"; echo ":";
+echo empty($box->secret) ? "bad" : "filled"; echo ":";
+echo empty($box->empty) ? "empty" : "bad"; echo ":";
+unset($box->present);
+unset($box->secret);
+unset($box->missing);
+echo isset($box->present) ? "bad" : "unset"; echo ":";
+echo $box->events;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "P:n:S:no:filled:empty:unset:isset:secret;isset:no;isset:secret;get:secret;isset:empty;get:empty;unset:secret;unset:missing;"
+    );
+}
+
 /// Verifies eval-declared interface property hook contracts validate class properties.
 #[test]
 fn test_eval_declared_interface_property_hook_contracts() {

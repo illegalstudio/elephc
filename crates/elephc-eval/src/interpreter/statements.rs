@@ -223,6 +223,11 @@ pub(in crate::interpreter) fn execute_stmt(
             catches,
             finally_body,
         } => execute_try_stmt(body, catches, finally_body, context, scope, values),
+        EvalStmt::UnsetProperty { object, property } => {
+            let object = eval_expr(object, context, scope, values)?;
+            eval_property_unset_result(object, property, context, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::UnsetVar { name } => {
             if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
                 values.release(replaced)?;
@@ -1751,6 +1756,86 @@ pub(in crate::interpreter) fn eval_property_set_result(
     values.property_set(object, &storage_property_name, value)
 }
 
+/// Evaluates PHP `isset($object->property)` without forcing `__get()` first.
+pub(in crate::interpreter) fn eval_property_isset_result(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        let value = values.property_get(object, property_name)?;
+        return Ok(!values.is_null(value)?);
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        let value = values.property_get(object, property_name)?;
+        return Ok(!values.is_null(value)?);
+    };
+    let object_class_name = class.name().to_string();
+    if let Some((declaring_class, property)) =
+        eval_dynamic_property_for_access(&object_class_name, property_name, context)
+    {
+        if validate_eval_member_access(&declaring_class, property.visibility(), context).is_ok() {
+            let value = eval_property_get_result(object, property_name, context, values)?;
+            return Ok(!values.is_null(value)?);
+        }
+        return eval_magic_property_isset(
+            object,
+            &object_class_name,
+            property_name,
+            context,
+            values,
+        )
+        .map(|result| result.unwrap_or(false));
+    }
+    if eval_object_public_property_exists(object, property_name, values)? {
+        let value = values.property_get(object, property_name)?;
+        return Ok(!values.is_null(value)?);
+    }
+    eval_magic_property_isset(object, &object_class_name, property_name, context, values)
+        .map(|result| result.unwrap_or(false))
+}
+
+/// Evaluates PHP `unset($object->property)` for eval-declared object receivers.
+pub(in crate::interpreter) fn eval_property_unset_result(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        return Ok(());
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return Ok(());
+    };
+    let object_class_name = class.name().to_string();
+    if context.has_enum(&object_class_name) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Some((declaring_class, property)) =
+        eval_dynamic_property_for_access(&object_class_name, property_name, context)
+    {
+        if validate_eval_member_access(&declaring_class, property.visibility(), context).is_ok() {
+            validate_eval_readonly_property_write(&declaring_class, &property, context)?;
+            let storage_property_name =
+                eval_instance_property_storage_name(&declaring_class, &property);
+            let null = values.null()?;
+            return values.property_set(object, &storage_property_name, null);
+        }
+        if eval_magic_property_unset(object, &object_class_name, property_name, context, values)? {
+            return Ok(());
+        }
+        return Ok(());
+    }
+    if eval_object_public_property_exists(object, property_name, values)? {
+        let null = values.null()?;
+        return values.property_set(object, property_name, null);
+    }
+    let _ = eval_magic_property_unset(object, &object_class_name, property_name, context, values)?;
+    Ok(())
+}
+
 /// Dispatches an undefined or inaccessible eval property read through `__get()`.
 fn eval_magic_property_get(
     object: RuntimeCellHandle,
@@ -1802,6 +1887,65 @@ fn eval_magic_property_set(
         &method,
         object,
         positional_args(vec![property, value]),
+        context,
+        values,
+    )?;
+    values.release(result)?;
+    Ok(true)
+}
+
+/// Dispatches an undefined or inaccessible eval property probe through `__isset()`.
+fn eval_magic_property_isset(
+    object: RuntimeCellHandle,
+    object_class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<bool>, EvalStatus> {
+    let Some((declaring_class, method)) = context.class_method(object_class_name, "__isset") else {
+        return Ok(None);
+    };
+    if method.is_static() || method.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
+    let property = values.string(property_name)?;
+    let result = eval_dynamic_method_with_values(
+        &declaring_class,
+        object_class_name,
+        &method,
+        object,
+        positional_args(vec![property]),
+        context,
+        values,
+    )?;
+    let truthy = values.truthy(result)?;
+    values.release(result)?;
+    Ok(Some(truthy))
+}
+
+/// Dispatches an undefined or inaccessible eval property unset through `__unset()`.
+fn eval_magic_property_unset(
+    object: RuntimeCellHandle,
+    object_class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some((declaring_class, method)) = context.class_method(object_class_name, "__unset") else {
+        return Ok(false);
+    };
+    if method.is_static() || method.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
+    let property = values.string(property_name)?;
+    let result = eval_dynamic_method_with_values(
+        &declaring_class,
+        object_class_name,
+        &method,
+        object,
+        positional_args(vec![property]),
         context,
         values,
     )?;
