@@ -128,6 +128,7 @@ pub trait RuntimeValueOps {
         flags: u64,
         modifiers: u64,
         constant_value: RuntimeCellHandle,
+        backing_value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Creates a named runtime object without constructor arguments.

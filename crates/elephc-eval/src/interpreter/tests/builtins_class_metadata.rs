@@ -1093,8 +1093,10 @@ enum EvalCaseReflectTarget: string {
 $const_attrs = (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getAttributes();
 echo count($const_attrs); echo ":"; echo (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getName(); echo ":";
 echo (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->isFinal() ? "F" : "f"; echo ":";
+echo (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->isEnumCase() ? "enum" : "plain"; echo ":";
 echo (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getValue(); echo ":";
 echo ((new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->getValue() === EvalCaseReflectTarget::Ready) ? "E" : "e"; echo ":";
+echo (new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->isEnumCase() ? "enum" : "plain"; echo ":";
 echo $const_attrs[0]->getName(); echo ":"; echo $const_attrs[0]->getArguments()[0]; echo ":";
 echo $const_attrs[0]->newInstance()->label(); echo ":";
 $case_attrs = (new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->getAttributes();
@@ -1102,9 +1104,12 @@ echo count($case_attrs); echo ":"; echo (new ReflectionClassConstant("EvalCaseRe
 echo $case_attrs[0]->getName(); echo ":"; echo $case_attrs[0]->getArguments()[0]; echo ":";
 $unit_attrs = (new ReflectionEnumUnitCase("EvalCaseReflectTarget", "Ready"))->getAttributes();
 echo (new ReflectionEnumUnitCase("EvalCaseReflectTarget", "Ready"))->getName(); echo ":";
+echo ((new ReflectionEnumUnitCase("EvalCaseReflectTarget", "Ready"))->getValue() === EvalCaseReflectTarget::Ready) ? "unit" : "bad"; echo ":";
 echo $unit_attrs[0]->newInstance()->label(); echo ":";
 $backed_attrs = (new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getAttributes();
 echo (new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getName(); echo ":";
+echo ((new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getValue() === EvalCaseReflectTarget::Ready) ? "backed" : "bad"; echo ":";
+echo (new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getBackingValue(); echo ":";
 echo $backed_attrs[0]->newInstance()->label();
 return true;"#,
     )
@@ -1116,7 +1121,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "1:ANSWER:F:42:E:EvalConstMarker:const:const:1:Ready:EvalConstMarker:case:Ready:case:Ready:case"
+        "1:ANSWER:F:plain:42:E:enum:EvalConstMarker:const:const:1:Ready:EvalConstMarker:case:Ready:unit:case:Ready:backed:ready:case"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

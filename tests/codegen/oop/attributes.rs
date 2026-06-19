@@ -2540,6 +2540,7 @@ $const = new ReflectionClassConstant(ConstTarget::class, "ANSWER");
 $constAttrs = $const->getAttributes();
 echo $const->getName() . "/";
 echo ($const->isFinal() ? "final" : "open") . "/";
+echo ($const->isEnumCase() ? "enum" : "plain") . "/";
 echo count($constAttrs) . "/";
 echo $constAttrs[0]->getName() . "/";
 echo $constAttrs[0]->getArguments()[0] . "/";
@@ -2550,25 +2551,35 @@ $case = new ReflectionClassConstant(CaseTarget::class, "Ready");
 $caseAttrs = $case->getAttributes();
 echo $case->getName() . "/";
 echo ($case->isFinal() ? "final" : "open") . "/";
+echo ($case->isEnumCase() ? "enum" : "plain") . "/";
 echo count($caseAttrs) . "/";
 echo $caseAttrs[0]->getName() . "/";
 echo $caseAttrs[0]->getArguments()[0] . "/";
 echo $caseAttrs[0]->newInstance()->label() . "\n";
+foreach ((new ReflectionClass(CaseTarget::class))->getReflectionConstants() as $constant) {
+    if ($constant->getName() === "Ready") {
+        echo ($constant->isEnumCase() ? "listed-enum" : "listed-plain") . "\n";
+    }
+}
 $level = new ReflectionClassConstant(CaseTarget::class, "LEVEL");
-echo ($level->isFinal() ? "level-final" : "level-open") . "\n";
+echo ($level->isFinal() ? "level-final" : "level-open") . "/";
+echo ($level->isEnumCase() ? "level-enum" : "level-plain") . "\n";
 $unit = new ReflectionEnumUnitCase(CaseTarget::class, "Ready");
 $unitAttrs = $unit->getAttributes();
 echo $unit->getName() . "/";
+echo ($unit->getValue() === CaseTarget::Ready ? "unit-value" : "unit-bad") . "/";
 echo $unitAttrs[0]->newInstance()->label() . "\n";
 $backed = new ReflectionEnumBackedCase(CaseTarget::class, "Ready");
 $backedAttrs = $backed->getAttributes();
 echo $backed->getName() . "/";
+echo ($backed->getValue() === CaseTarget::Ready ? "backed-value" : "backed-bad") . "/";
+echo $backed->getBackingValue() . "/";
 echo $backedAttrs[0]->newInstance()->label();
 "#,
     );
     assert_eq!(
         out,
-        "ANSWER/final/1/Marker/const/const\nlisted-final\nReady/open/1/Marker/case/case\nlevel-final\nReady/case\nReady/case"
+        "ANSWER/final/plain/1/Marker/const/const\nlisted-final\nReady/open/enum/1/Marker/case/case\nlisted-enum\nlevel-final/level-plain\nReady/unit-value/case\nReady/backed-value/ready/case"
     );
 }
 

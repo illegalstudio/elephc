@@ -1983,6 +1983,16 @@ fn add_reflection_member_flag_methods(
             "__value",
         ));
         properties.push(builtin_property(
+            "__is_enum_case",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isEnumCase",
+            "__is_enum_case",
+        ));
+        properties.push(builtin_property(
             "__is_final",
             Visibility::Private,
             Some(bool_type()),
@@ -2001,6 +2011,33 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_class_int_method(
             "getModifiers",
             "__modifiers",
+        ));
+    }
+    if matches!(
+        class_name,
+        "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        properties.push(builtin_property(
+            "__value",
+            Visibility::Private,
+            Some(mixed_type()),
+            Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
+        ));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getValue",
+            "__value",
+        ));
+    }
+    if class_name == "ReflectionEnumBackedCase" {
+        properties.push(builtin_property(
+            "__backing_value",
+            Visibility::Private,
+            Some(mixed_type()),
+            Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
+        ));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getBackingValue",
+            "__backing_value",
         ));
     }
     if class_name == "ReflectionMethod" {

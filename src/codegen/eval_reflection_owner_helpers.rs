@@ -46,6 +46,8 @@ struct ReflectionOwnerLayout {
     parent_class_hi: Option<usize>,
     value_lo: Option<usize>,
     value_hi: Option<usize>,
+    backing_value_lo: Option<usize>,
+    backing_value_hi: Option<usize>,
     attrs_lo: usize,
     attrs_hi: usize,
     is_final_lo: Option<usize>,
@@ -74,6 +76,8 @@ struct ReflectionOwnerLayout {
     is_protected_hi: Option<usize>,
     is_private_lo: Option<usize>,
     is_private_hi: Option<usize>,
+    is_enum_case_lo: Option<usize>,
+    is_enum_case_hi: Option<usize>,
     required_parameter_count_lo: Option<usize>,
     required_parameter_count_hi: Option<usize>,
     position_lo: Option<usize>,
@@ -207,6 +211,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let parent_class_lo = reflection_property_offset(info, "__parent_class")
         .or_else(|| reflection_property_offset(info, "__declaring_class"));
     let value_lo = reflection_property_offset(info, "__value");
+    let backing_value_lo = reflection_property_offset(info, "__backing_value");
     let is_final_lo = reflection_property_offset(info, "__is_final");
     let is_abstract_lo = reflection_property_offset(info, "__is_abstract");
     let is_interface_lo = reflection_property_offset(info, "__is_interface");
@@ -220,6 +225,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_public_lo = reflection_property_offset(info, "__is_public");
     let is_protected_lo = reflection_property_offset(info, "__is_protected");
     let is_private_lo = reflection_property_offset(info, "__is_private");
+    let is_enum_case_lo = reflection_property_offset(info, "__is_enum_case");
     let required_parameter_count_lo = reflection_property_offset(info, "__required_parameter_count");
     let position_lo = reflection_property_offset(info, "__position");
     let is_optional_lo = reflection_property_offset(info, "__is_optional")
@@ -260,6 +266,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         parent_class_hi: parent_class_lo.map(|offset| offset + 8),
         value_lo,
         value_hi: value_lo.map(|offset| offset + 8),
+        backing_value_lo,
+        backing_value_hi: backing_value_lo.map(|offset| offset + 8),
         attrs_lo,
         attrs_hi: attrs_lo + 8,
         is_final_lo,
@@ -288,6 +296,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         is_protected_hi: is_protected_lo.map(|offset| offset + 8),
         is_private_lo,
         is_private_hi: is_private_lo.map(|offset| offset + 8),
+        is_enum_case_lo,
+        is_enum_case_hi: is_enum_case_lo.map(|offset| offset + 8),
         required_parameter_count_lo,
         required_parameter_count_hi: required_parameter_count_lo.map(|offset| offset + 8),
         position_lo,
@@ -372,6 +382,8 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("str x8, [sp, #96]");                                   // save ReflectionClass getModifiers bitmask
     emitter.instruction("ldr x8, [sp, #200]");                                  // load boxed ReflectionClassConstant value from the sixth stack argument
     emitter.instruction("str x8, [sp, #56]");                                   // save boxed ReflectionClassConstant value
+    emitter.instruction("ldr x8, [sp, #208]");                                  // load boxed ReflectionEnumBackedCase backing value from the seventh stack argument
+    emitter.instruction("str x8, [sp, #64]");                                   // save boxed ReflectionEnumBackedCase backing value
     emitter.instruction("cmp x0, #0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("b.eq {}", class_label));                      // allocate a ReflectionClass owner
     emitter.instruction("cmp x0, #1");                                          // owner kind 1 means ReflectionMethod
@@ -527,6 +539,8 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // save ReflectionClass getModifiers bitmask
     emitter.instruction("mov rax, QWORD PTR [rbp + 72]");                       // load boxed ReflectionClassConstant value from the eighth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save boxed ReflectionClassConstant value
+    emitter.instruction("mov rax, QWORD PTR [rbp + 80]");                       // load boxed ReflectionEnumBackedCase backing value from the ninth stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save boxed ReflectionEnumBackedCase backing value
     emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
     emitter.instruction("cmp rdi, 1");                                          // owner kind 1 means ReflectionMethod
@@ -660,6 +674,7 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_class_flags_property_aarch64(emitter, layout);
     emit_set_owner_member_flags_property_aarch64(emitter, layout);
     emit_set_owner_constant_value_property_aarch64(emitter, layout, fail_label);
+    emit_set_owner_backing_value_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_required_parameter_count_property_aarch64(emitter, layout);
     emit_set_owner_parameter_property_aarch64(emitter, layout);
     emit_set_owner_parameter_type_property_aarch64(emitter, layout, fail_label);
@@ -690,6 +705,7 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_class_flags_property_x86_64(emitter, layout);
     emit_set_owner_member_flags_property_x86_64(emitter, layout);
     emit_set_owner_constant_value_property_x86_64(emitter, layout, fail_label);
+    emit_set_owner_backing_value_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_required_parameter_count_property_x86_64(emitter, layout);
     emit_set_owner_parameter_property_x86_64(emitter, layout);
     emit_set_owner_parameter_type_property_x86_64(emitter, layout, fail_label);
@@ -1105,6 +1121,14 @@ fn emit_set_owner_member_flags_property_aarch64(
     emitter.instruction("and x10, x10, #1");                                    // extract the private-member flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_private_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_private_hi);
+    if let (Some(is_enum_case_lo), Some(is_enum_case_hi)) =
+        (layout.is_enum_case_lo, layout.is_enum_case_hi)
+    {
+        emitter.instruction("lsr x10, x11, #7");                                // move the enum-case flag into position
+        emitter.instruction("and x10, x10, #1");                                // extract the enum-case flag as a boolean
+        abi::emit_store_to_address(emitter, "x10", "x9", is_enum_case_lo);
+        abi::emit_store_zero_to_address(emitter, "x9", is_enum_case_hi);
+    }
     if let (Some(is_readonly_lo), Some(is_readonly_hi)) =
         (layout.is_readonly_lo, layout.is_readonly_hi)
     {
@@ -1196,6 +1220,15 @@ fn emit_set_owner_member_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the private-member flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_private_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_private_hi);
+    if let (Some(is_enum_case_lo), Some(is_enum_case_hi)) =
+        (layout.is_enum_case_lo, layout.is_enum_case_hi)
+    {
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the enum-case bit
+        emitter.instruction("shr rax, 7");                                      // move the enum-case bit into position
+        emitter.instruction("and rax, 1");                                      // extract the enum-case flag as a boolean
+        abi::emit_store_to_address(emitter, "rax", "r10", is_enum_case_lo);
+        abi::emit_store_zero_to_address(emitter, "r10", is_enum_case_hi);
+    }
     if let (Some(is_readonly_lo), Some(is_readonly_hi)) =
         (layout.is_readonly_lo, layout.is_readonly_hi)
     {
@@ -1764,6 +1797,45 @@ fn emit_set_owner_constant_value_property_x86_64(
     emitter.instruction("call __rt_incref");                                    // retain the boxed constant value for ReflectionClassConstant storage
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed constant value
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionClassConstant object pointer
+    abi::emit_store_to_address(emitter, "rdi", "r10", low);
+    abi::emit_store_zero_to_address(emitter, "r10", high);
+}
+
+/// Stores a retained ARM64 boxed ReflectionEnumBackedCase backing-value cell.
+fn emit_set_owner_backing_value_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(low), Some(high)) = (layout.backing_value_lo, layout.backing_value_hi) else {
+        return;
+    };
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the boxed ReflectionEnumBackedCase backing value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null backing-value metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed backing value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed backing value for ReflectionEnumBackedCase storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed backing value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionEnumBackedCase object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", low);
+    abi::emit_store_zero_to_address(emitter, "x9", high);
+}
+
+/// Stores a retained x86_64 boxed ReflectionEnumBackedCase backing-value cell.
+fn emit_set_owner_backing_value_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(low), Some(high)) = (layout.backing_value_lo, layout.backing_value_hi) else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the boxed ReflectionEnumBackedCase backing value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed backing value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null backing-value metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed backing value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed backing value for ReflectionEnumBackedCase storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed backing value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionEnumBackedCase object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low);
     abi::emit_store_zero_to_address(emitter, "r10", high);
 }
