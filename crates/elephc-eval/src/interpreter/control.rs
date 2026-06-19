@@ -8,6 +8,7 @@
 //! Key details:
 //! - Runtime cells are opaque handles; these types do not own or release values by themselves.
 
+use crate::scope::ElephcEvalScope;
 use crate::value::RuntimeCellHandle;
 
 /// Internal statement-control result used to propagate eval returns and loops.
@@ -30,6 +31,24 @@ pub enum EvalOutcome {
 pub(super) struct EvaluatedCallArg {
     pub(super) name: Option<String>,
     pub(super) value: RuntimeCellHandle,
+    pub(super) ref_target: Option<EvaluatedCallRefTarget>,
+}
+
+/// Caller-side storage target for an argument that can satisfy a by-reference parameter.
+#[derive(Clone)]
+pub(super) enum EvaluatedCallRefTarget {
+    Variable {
+        scope: *mut ElephcEvalScope,
+        name: String,
+    },
+}
+
+/// One method argument after PHP parameter-order binding and default materialization.
+#[derive(Clone)]
+pub(super) struct BoundMethodArg {
+    pub(super) value: RuntimeCellHandle,
+    pub(super) ref_target: Option<EvaluatedCallRefTarget>,
+    pub(super) variadic_ref_targets: Vec<(RuntimeCellHandle, EvaluatedCallRefTarget)>,
 }
 
 /// One already evaluated PHP callback supported by the eval dispatcher.

@@ -572,6 +572,7 @@ pub struct EvalInterfaceMethod {
     parameter_has_types: Vec<bool>,
     parameter_types: Vec<Option<EvalParameterType>>,
     parameter_defaults: Vec<Option<EvalExpr>>,
+    parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
 }
 
@@ -581,6 +582,7 @@ impl EvalInterfaceMethod {
         let parameter_has_types = vec![false; params.len()];
         let parameter_types = vec![None; params.len()];
         let parameter_defaults = vec![None; params.len()];
+        let parameter_is_by_ref = vec![false; params.len()];
         let parameter_is_variadic = vec![false; params.len()];
         Self {
             name: name.into(),
@@ -589,6 +591,7 @@ impl EvalInterfaceMethod {
             parameter_has_types,
             parameter_types,
             parameter_defaults,
+            parameter_is_by_ref,
             parameter_is_variadic,
         }
     }
@@ -615,6 +618,12 @@ impl EvalInterfaceMethod {
     /// Returns a copy of this interface method with source-order default expressions.
     pub fn with_parameter_defaults(mut self, parameter_defaults: Vec<Option<EvalExpr>>) -> Self {
         self.parameter_defaults = parameter_defaults;
+        self
+    }
+
+    /// Returns a copy of this interface method with source-order by-reference flags.
+    pub fn with_parameter_by_ref_flags(mut self, parameter_is_by_ref: Vec<bool>) -> Self {
+        self.parameter_is_by_ref = parameter_is_by_ref;
         self
     }
 
@@ -652,6 +661,11 @@ impl EvalInterfaceMethod {
     /// Returns default expressions declared for each source-order parameter.
     pub fn parameter_defaults(&self) -> &[Option<EvalExpr>] {
         &self.parameter_defaults
+    }
+
+    /// Returns source-order flags for whether each parameter was declared by reference.
+    pub fn parameter_is_by_ref(&self) -> &[bool] {
+        &self.parameter_is_by_ref
     }
 
     /// Returns source-order flags for whether each parameter was declared variadic.
@@ -1312,6 +1326,7 @@ pub struct EvalClassMethod {
     parameter_has_types: Vec<bool>,
     parameter_types: Vec<Option<EvalParameterType>>,
     parameter_defaults: Vec<Option<EvalExpr>>,
+    parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
     body: Vec<EvalStmt>,
 }
@@ -1354,6 +1369,7 @@ impl EvalClassMethod {
         let parameter_has_types = vec![false; params.len()];
         let parameter_types = vec![None; params.len()];
         let parameter_defaults = vec![None; params.len()];
+        let parameter_is_by_ref = vec![false; params.len()];
         let parameter_is_variadic = vec![false; params.len()];
         Self {
             name: name.into(),
@@ -1366,6 +1382,7 @@ impl EvalClassMethod {
             parameter_has_types,
             parameter_types,
             parameter_defaults,
+            parameter_is_by_ref,
             parameter_is_variadic,
             body,
         }
@@ -1398,6 +1415,12 @@ impl EvalClassMethod {
     /// Returns a copy of this method with source-order default expressions.
     pub fn with_parameter_defaults(mut self, parameter_defaults: Vec<Option<EvalExpr>>) -> Self {
         self.parameter_defaults = parameter_defaults;
+        self
+    }
+
+    /// Returns a copy of this method with source-order by-reference flags.
+    pub fn with_parameter_by_ref_flags(mut self, parameter_is_by_ref: Vec<bool>) -> Self {
+        self.parameter_is_by_ref = parameter_is_by_ref;
         self
     }
 
@@ -1464,6 +1487,11 @@ impl EvalClassMethod {
     /// Returns default expressions declared for each source-order parameter.
     pub fn parameter_defaults(&self) -> &[Option<EvalExpr>] {
         &self.parameter_defaults
+    }
+
+    /// Returns source-order flags for whether each parameter was declared by reference.
+    pub fn parameter_is_by_ref(&self) -> &[bool] {
+        &self.parameter_is_by_ref
     }
 
     /// Returns source-order flags for whether each parameter was declared variadic.

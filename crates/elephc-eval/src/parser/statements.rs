@@ -754,7 +754,13 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let (params, parameter_types, parameter_defaults, parameter_is_variadic) =
+        let (
+            params,
+            parameter_types,
+            parameter_defaults,
+            parameter_is_by_ref,
+            parameter_is_variadic,
+        ) =
             self.parse_method_params()?;
         let body = if is_abstract {
             self.expect_semicolon()?;
@@ -773,6 +779,7 @@ impl Parser {
         )
         .with_parameter_types(parameter_types)
         .with_parameter_defaults(parameter_defaults)
+        .with_parameter_by_ref_flags(parameter_is_by_ref)
         .with_parameter_variadic_flags(parameter_is_variadic))
     }
 
@@ -1241,12 +1248,19 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let (params, parameter_types, parameter_defaults, parameter_is_variadic) =
+        let (
+            params,
+            parameter_types,
+            parameter_defaults,
+            parameter_is_by_ref,
+            parameter_is_variadic,
+        ) =
             self.parse_method_params()?;
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)
             .with_parameter_types(parameter_types)
             .with_parameter_defaults(parameter_defaults)
+            .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic))
     }
 
@@ -1667,29 +1681,34 @@ impl Parser {
             Vec<Option<EvalParameterType>>,
             Vec<Option<EvalExpr>>,
             Vec<bool>,
+            Vec<bool>,
         ),
         EvalParseError,
     > {
         let mut params = Vec::new();
         let mut parameter_types = Vec::new();
         let mut parameter_defaults = Vec::new();
+        let mut parameter_is_by_ref = Vec::new();
         let mut parameter_is_variadic = Vec::new();
         if self.consume(TokenKind::RParen) {
             return Ok((
                 params,
                 parameter_types,
                 parameter_defaults,
+                parameter_is_by_ref,
                 parameter_is_variadic,
             ));
         }
         loop {
             let param_type = self.parse_optional_parameter_type()?;
+            let is_by_ref = self.consume(TokenKind::Ampersand);
             let is_variadic = self.consume(TokenKind::Ellipsis);
             let TokenKind::DollarIdent(name) = self.current() else {
                 return Err(EvalParseError::ExpectedVariable);
             };
             params.push(name.clone());
             parameter_types.push(param_type);
+            parameter_is_by_ref.push(is_by_ref);
             parameter_is_variadic.push(is_variadic);
             self.advance();
             let default = if self.consume(TokenKind::Equal) {
@@ -1720,6 +1739,7 @@ impl Parser {
             params,
             parameter_types,
             parameter_defaults,
+            parameter_is_by_ref,
             parameter_is_variadic,
         ))
     }
@@ -1730,7 +1750,7 @@ impl Parser {
     ) -> Result<Option<EvalParameterType>, EvalParseError> {
         if matches!(
             self.current(),
-            TokenKind::DollarIdent(_) | TokenKind::Ellipsis
+            TokenKind::DollarIdent(_) | TokenKind::Ampersand | TokenKind::Ellipsis
         ) {
             return Ok(None);
         }

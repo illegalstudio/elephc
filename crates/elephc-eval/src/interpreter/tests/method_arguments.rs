@@ -102,6 +102,114 @@ return EvalVariadicMethodBox::join("G", "H");"#,
     assert_eq!(values.get(result), FakeValue::String("GH".to_string()));
 }
 
+/// Verifies eval-declared instance, static, and constructor methods write back by-reference args.
+#[test]
+fn execute_program_writes_back_eval_method_by_ref_args() {
+    let program = parse_fragment(
+        br#"class EvalByRefMethodBox {
+    public function __construct(&$value) {
+        $value = $value . "-ctor";
+    }
+    public function change(&$value) {
+        $value = $value . "-method";
+    }
+    public static function changeStatic(&$value) {
+        $value = $value . "-static";
+    }
+}
+$ctor = "A";
+$box = new EvalByRefMethodBox($ctor);
+$box->change($ctor);
+EvalByRefMethodBox::changeStatic($ctor);
+$named = "B";
+$box->change(value: $named);
+echo $ctor; echo ":";
+return $named;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "A-ctor-method-static:");
+    assert_eq!(values.get(result), FakeValue::String("B-method".to_string()));
+}
+
+/// Verifies eval-declared by-reference method parameters reject temporary values.
+#[test]
+fn execute_program_rejects_eval_method_by_ref_temporary_arg() {
+    let program = parse_fragment(
+        br#"class EvalByRefMethodBox {
+    public function change(&$value) {
+        $value = "changed";
+    }
+}
+$box = new EvalByRefMethodBox();
+$box->change("literal");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("literal cannot satisfy a by-reference parameter");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies typed eval-declared by-reference method params write back entry coercions.
+#[test]
+fn execute_program_writes_back_eval_method_by_ref_type_coercion() {
+    let program = parse_fragment(
+        br#"class EvalByRefTypedMethodBox {
+    public function coerce(int &$value) {}
+}
+$value = "3";
+$box = new EvalByRefTypedMethodBox();
+$box->coerce($value);
+return $value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(3));
+}
+
+/// Verifies eval-declared by-reference variadics write back mutated captured elements.
+#[test]
+fn execute_program_writes_back_eval_method_by_ref_variadic_elements() {
+    let program = parse_fragment(
+        br#"class EvalByRefVariadicMethodBox {
+    public function change(&...$items) {
+        $items[0] = $items[0] . "-first";
+        $items["named"] = $items["named"] . "-named";
+    }
+    public function rebind(&...$items) {
+        $items = [];
+    }
+}
+$box = new EvalByRefVariadicMethodBox();
+$first = "A";
+$named = "B";
+$box->change($first, named: $named);
+$box->rebind($first);
+echo $first; echo ":";
+return $named;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "A-first:");
+    assert_eq!(values.get(result), FakeValue::String("B-named".to_string()));
+}
+
 /// Verifies eval-declared variadic methods reject duplicate named variadic keys.
 #[test]
 fn execute_program_rejects_duplicate_eval_method_variadic_named_arg() {

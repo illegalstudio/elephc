@@ -768,6 +768,62 @@ class EvalMissingRead implements EvalNeedsRead {}"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies eval interface method contracts require matching by-reference parameters.
+#[test]
+fn execute_program_validates_interface_method_by_ref_parameters() {
+    let program = parse_fragment(
+        br#"interface EvalRefReadable {
+    function read(&$value);
+}
+class EvalRefReader implements EvalRefReadable {
+    public function read(&$value) {
+        $value = "ok";
+    }
+}
+$value = "bad";
+$reader = new EvalRefReader();
+$reader->read($value);
+return $value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("ok".to_string()));
+
+    let bad_value_impl = parse_fragment(
+        br#"interface EvalNeedsByRef {
+    function read(&$value);
+}
+class EvalByValueReader implements EvalNeedsByRef {
+    public function read($value) {}
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_value_impl, &mut scope, &mut values)
+        .expect_err("by-value implementation must not satisfy by-reference contract");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let bad_ref_impl = parse_fragment(
+        br#"interface EvalNeedsByValue {
+    function read($value);
+}
+class EvalByRefReader implements EvalNeedsByValue {
+    public function read(&$value) {}
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_ref_impl, &mut scope, &mut values)
+        .expect_err("by-reference implementation must not satisfy by-value contract");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies variadic eval methods can satisfy fixed-arity interface contracts.
 #[test]
 fn execute_program_accepts_variadic_method_for_fixed_interface_contract() {

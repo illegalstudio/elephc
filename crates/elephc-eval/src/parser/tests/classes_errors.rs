@@ -560,12 +560,12 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
     );
 }
 
-/// Verifies eval method parameters retain declared-type presence for reflection metadata.
+/// Verifies eval method parameters retain type, default, by-reference, and variadic metadata.
 #[test]
 fn parse_fragment_accepts_typed_method_parameter_metadata() {
     let program = parse_fragment(
         br#"class DynEvalTypedParams {
-    public function run(int $id = 7, ?\App\Name $name = null, string|null $label = "x", mixed ...$tail) {}
+    public function run(int &$id = 7, ?\App\Name &$name = null, string|null $label = "x", mixed &...$tail) {}
 }"#,
     )
     .expect("fragment should parse");
@@ -610,6 +610,10 @@ fn parse_fragment_accepts_typed_method_parameter_metadata() {
             None
         ] if label == "x"
     ));
+    assert_eq!(
+        method.parameter_is_by_ref(),
+        &[true, true, false, true]
+    );
     assert_eq!(method.parameter_is_variadic(), &[false, false, false, true]);
 }
 
@@ -620,6 +624,8 @@ fn parse_fragment_rejects_invalid_variadic_method_parameters() {
         .expect_err("variadic method parameters cannot have defaults");
     parse_fragment(b"class DynEvalVariadicNotLast { public function run(...$tail, $next) {} }")
         .expect_err("variadic method parameters must be last");
+    parse_fragment(b"class DynEvalVariadicRefOrder { public function run(...&$tail) {} }")
+        .expect_err("by-reference marker must precede variadic marker");
 }
 
 /// Verifies trait declarations and class trait uses lower into dynamic metadata.
