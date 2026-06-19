@@ -218,7 +218,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args(
     parameter_is_by_ref: &[bool],
     parameter_is_variadic: &[bool],
     evaluated_args: Vec<EvaluatedCallArg>,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let mut bound_args = vec![None; params.len()];
@@ -289,7 +289,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args(
                 return Err(EvalStatus::RuntimeFatal);
             };
             *value = Some(BoundMethodArg {
-                value: eval_method_parameter_default(default, values)?,
+                value: eval_method_parameter_default(default, context, values)?,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
             });
@@ -664,10 +664,23 @@ fn eval_method_numeric_coercible_value(
 /// Materializes a supported eval method parameter default expression.
 fn eval_method_parameter_default(
     default: &EvalExpr,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match default {
         EvalExpr::Const(value) => eval_const(value, values),
+        EvalExpr::ConstFetch(name) => eval_const_fetch(name, context, values),
+        EvalExpr::NamespacedConstFetch {
+            name,
+            fallback_name,
+        } => eval_namespaced_const_fetch(name, fallback_name, context, values),
+        EvalExpr::ClassConstantFetch {
+            class_name,
+            constant,
+        } => eval_class_constant_fetch_result(class_name, constant, context, values),
+        EvalExpr::ClassNameFetch { class_name } => {
+            eval_class_name_fetch_result(class_name, context, values)
+        }
         EvalExpr::Unary {
             op: EvalUnaryOp::Plus,
             expr,

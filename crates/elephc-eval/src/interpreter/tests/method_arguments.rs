@@ -72,6 +72,46 @@ return EvalDefaultMethodBox::join();"#,
     assert_eq!(values.get(result), FakeValue::String("G-H".to_string()));
 }
 
+/// Verifies eval-declared methods materialize constant-expression parameter defaults.
+#[test]
+fn execute_program_binds_eval_method_constant_default_args() {
+    let program = parse_fragment(
+        br#"define("EVAL_METHOD_DEFAULT_GLOBAL", "G");
+class EvalDefaultConstBase {
+    const LABEL = "base";
+}
+interface EvalDefaultConstIface {
+    const WORD = "iface";
+}
+class EvalDefaultConstBox extends EvalDefaultConstBase {
+    const LABEL = "box";
+    public function __construct($label = self::LABEL) {
+        $this->label = $label;
+    }
+    public function read($global = EVAL_METHOD_DEFAULT_GLOBAL, $parent = parent::LABEL, $iface = EvalDefaultConstIface::WORD, $class = self::class, $parentClass = parent::class) {
+        return $this->label . ":" . $global . ":" . $parent . ":" . $iface . ":" . $class . ":" . $parentClass;
+    }
+    public static function join($label = self::LABEL, $parent = parent::LABEL) {
+        return $label . "-" . $parent;
+    }
+}
+$box = new EvalDefaultConstBox();
+echo $box->read(); echo ":";
+return EvalDefaultConstBox::join();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "box:G:base:iface:EvalDefaultConstBox:EvalDefaultConstBase:"
+    );
+    assert_eq!(values.get(result), FakeValue::String("box-base".to_string()));
+}
+
 /// Verifies eval-declared methods bind positional and named values into variadic arrays.
 #[test]
 fn execute_program_binds_eval_method_variadic_args() {

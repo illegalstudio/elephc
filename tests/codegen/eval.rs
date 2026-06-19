@@ -5334,6 +5334,46 @@ echo EvalNamedMethodBox::join(right: "H", left: "G");');
     assert_eq!(out.stdout, "AB:C:D:AB:E:F:G-H");
 }
 
+/// Verifies eval-declared constructors and methods bind constant-expression defaults.
+#[test]
+fn test_eval_declared_method_constant_default_arguments() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('define("EVAL_METHOD_DEFAULT_GLOBAL", "G");
+class EvalDefaultConstBase {
+    const LABEL = "base";
+}
+interface EvalDefaultConstIface {
+    const WORD = "iface";
+}
+class EvalDefaultConstBox extends EvalDefaultConstBase {
+    const LABEL = "box";
+    public function __construct($label = self::LABEL) {
+        $this->label = $label;
+    }
+    public function read($global = EVAL_METHOD_DEFAULT_GLOBAL, $parent = parent::LABEL, $iface = EvalDefaultConstIface::WORD, $class = self::class, $parentClass = parent::class) {
+        return $this->label . ":" . $global . ":" . $parent . ":" . $iface . ":" . $class . ":" . $parentClass;
+    }
+    public static function join($label = self::LABEL, $parent = parent::LABEL) {
+        return $label . "-" . $parent;
+    }
+}
+$box = new EvalDefaultConstBox();
+echo $box->read() . ":";
+echo EvalDefaultConstBox::join();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "box:G:base:iface:EvalDefaultConstBox:EvalDefaultConstBase:box-base"
+    );
+}
+
 /// Verifies eval-declared constructors and methods bind variadic arguments.
 #[test]
 fn test_eval_declared_method_variadic_arguments() {
