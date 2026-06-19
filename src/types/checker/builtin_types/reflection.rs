@@ -503,6 +503,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 false_bool(),
             ),
             builtin_property(
+                "__is_cloneable",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
                 "__modifiers",
                 Visibility::Private,
                 Some(TypeExpr::Int),
@@ -634,6 +640,7 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_bool_method("isReadOnly", "__is_readonly"),
             builtin_reflection_class_bool_method("isAnonymous", "__is_anonymous"),
             builtin_reflection_class_bool_method("isInstantiable", "__is_instantiable"),
+            builtin_reflection_class_bool_method("isCloneable", "__is_cloneable"),
             builtin_reflection_class_int_method("getModifiers", "__modifiers"),
             builtin_reflection_class_has_name_method("hasMethod", "__method_names", true),
             builtin_reflection_class_has_name_method("hasProperty", "__property_names", false),
@@ -2463,6 +2470,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "isreadonly",
                     "isanonymous",
                     "isinstantiable",
+                    "iscloneable",
                     "hasmethod",
                     "hasproperty",
                     "implementsinterface",

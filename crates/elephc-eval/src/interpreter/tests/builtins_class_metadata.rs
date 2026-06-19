@@ -607,6 +607,40 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::isCloneable reports eval class clone metadata.
+#[test]
+fn execute_program_reflects_eval_class_cloneable_predicate() {
+    let program = parse_fragment(
+        br#"abstract class EvalCloneAbstract {}
+class EvalClonePlain {}
+final class EvalCloneFinal {}
+class EvalClonePrivate { private function __clone() {} }
+class EvalCloneProtected { protected function __clone() {} }
+class EvalClonePublic { public function __clone() {} }
+interface EvalCloneIface {}
+trait EvalCloneTrait {}
+enum EvalCloneEnum { case Ready; }
+echo (new ReflectionClass("EvalCloneAbstract"))->isCloneable() ? "A" : "a";
+echo (new ReflectionClass("EvalClonePlain"))->isCloneable() ? "P" : "p";
+echo (new ReflectionClass("EvalCloneFinal"))->isCloneable() ? "F" : "f";
+echo (new ReflectionClass("EvalClonePrivate"))->isCloneable() ? "V" : "v";
+echo (new ReflectionClass("EvalCloneProtected"))->isCloneable() ? "R" : "r";
+echo (new ReflectionClass("EvalClonePublic"))->isCloneable() ? "U" : "u";
+echo (new ReflectionClass("EvalCloneIface"))->isCloneable() ? "I" : "i";
+echo (new ReflectionClass("EvalCloneTrait"))->isCloneable() ? "T" : "t";
+echo (new ReflectionClass("EvalCloneEnum"))->isCloneable() ? "E" : "e";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "aPFvrUite");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::getConstructor exposes eval constructor metadata.
 #[test]
 fn execute_program_reflection_class_get_constructor() {

@@ -19,6 +19,7 @@ const EVAL_REFLECTION_CLASS_FLAG_TRAIT: u64 = 8;
 const EVAL_REFLECTION_CLASS_FLAG_ENUM: u64 = 16;
 const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
 const EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE: u64 = 64;
+const EVAL_REFLECTION_CLASS_FLAG_CLONEABLE: u64 = 128;
 const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
@@ -1520,6 +1521,9 @@ fn eval_reflection_class_like_attributes(
         if eval_reflection_class_is_instantiable(class, is_enum, context) {
             flags |= EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE;
         }
+        if eval_reflection_class_is_cloneable(class, is_enum, context) {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_CLONEABLE;
+        }
         let modifiers = eval_reflection_class_modifiers(
             class.is_final(),
             class.is_abstract(),
@@ -1602,6 +1606,21 @@ fn eval_reflection_class_is_instantiable(
     }
     context
         .class_method(class.name(), "__construct")
+        .map(|(_, method)| method.visibility() == EvalVisibility::Public)
+        .unwrap_or(true)
+}
+
+/// Returns PHP's `ReflectionClass::isCloneable()` value for eval class metadata.
+fn eval_reflection_class_is_cloneable(
+    class: &EvalClass,
+    is_enum: bool,
+    context: &ElephcEvalContext,
+) -> bool {
+    if class.is_abstract() || is_enum {
+        return false;
+    }
+    context
+        .class_method(class.name(), "__clone")
         .map(|(_, method)| method.visibility() == EvalVisibility::Public)
         .unwrap_or(true)
 }

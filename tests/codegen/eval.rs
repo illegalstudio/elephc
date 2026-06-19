@@ -7002,6 +7002,34 @@ echo $listed->getDeclaringFunction()->getName();');
     );
 }
 
+/// Verifies eval ReflectionClass::isCloneable uses eval class metadata through the bridge.
+#[test]
+fn test_eval_reflection_class_cloneable_predicate() {
+    let out = compile_and_run(
+        r#"<?php
+eval('abstract class EvalCloneAbstract {}
+class EvalClonePlain {}
+final class EvalCloneFinal {}
+class EvalClonePrivate { private function __clone() {} }
+class EvalCloneProtected { protected function __clone() {} }
+class EvalClonePublic { public function __clone() {} }
+interface EvalCloneIface {}
+trait EvalCloneTrait {}
+enum EvalCloneEnum { case Ready; }
+echo (new ReflectionClass("EvalCloneAbstract"))->isCloneable() ? "A" : "a";
+echo (new ReflectionClass("EvalClonePlain"))->isCloneable() ? "P" : "p";
+echo (new ReflectionClass("EvalCloneFinal"))->isCloneable() ? "F" : "f";
+echo (new ReflectionClass("EvalClonePrivate"))->isCloneable() ? "V" : "v";
+echo (new ReflectionClass("EvalCloneProtected"))->isCloneable() ? "R" : "r";
+echo (new ReflectionClass("EvalClonePublic"))->isCloneable() ? "U" : "u";
+echo (new ReflectionClass("EvalCloneIface"))->isCloneable() ? "I" : "i";
+echo (new ReflectionClass("EvalCloneTrait"))->isCloneable() ? "T" : "t";
+echo (new ReflectionClass("EvalCloneEnum"))->isCloneable() ? "E" : "e";');
+"#,
+    );
+    assert_eq!(out, "aPFvrUite");
+}
+
 /// Verifies eval ReflectionClass::newInstance constructs eval-declared classes.
 #[test]
 fn test_eval_reflection_class_new_instance_constructs_eval_class() {

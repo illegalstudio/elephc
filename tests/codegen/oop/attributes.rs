@@ -1099,6 +1099,37 @@ echo (new ReflectionClass(ReflectInstEnum::class))->isInstantiable() ? "E" : "e"
     assert_eq!(out, "aBCprite");
 }
 
+/// Verifies that `ReflectionClass::isCloneable()` reports PHP clone visibility,
+/// class-kind, and elephc runtime-storage rules for static metadata.
+#[test]
+fn test_reflection_class_is_cloneable() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class ReflectCloneAbstract {}
+class ReflectClonePlain {}
+final class ReflectCloneFinal {}
+class ReflectClonePrivate { private function __clone() {} }
+class ReflectCloneProtected { protected function __clone() {} }
+class ReflectClonePublic { public function __clone() {} }
+interface ReflectCloneIface {}
+trait ReflectCloneTrait {}
+enum ReflectCloneEnum { case Ready; }
+echo (new ReflectionClass(ReflectCloneAbstract::class))->isCloneable() ? "A" : "a";
+echo (new ReflectionClass(ReflectClonePlain::class))->isCloneable() ? "P" : "p";
+echo (new ReflectionClass(ReflectCloneFinal::class))->isCloneable() ? "F" : "f";
+echo (new ReflectionClass(ReflectClonePrivate::class))->isCloneable() ? "V" : "v";
+echo (new ReflectionClass(ReflectCloneProtected::class))->isCloneable() ? "R" : "r";
+echo (new ReflectionClass(ReflectClonePublic::class))->isCloneable() ? "U" : "u";
+echo (new ReflectionClass(ReflectCloneIface::class))->isCloneable() ? "I" : "i";
+echo (new ReflectionClass(ReflectCloneTrait::class))->isCloneable() ? "T" : "t";
+echo (new ReflectionClass(ReflectCloneEnum::class))->isCloneable() ? "E" : "e";
+echo (new ReflectionClass(stdClass::class))->isCloneable() ? "S" : "s";
+echo (new ReflectionClass(ReflectionClass::class))->isCloneable() ? "C" : "c";
+"#,
+    );
+    assert_eq!(out, "aPFvrUiteSc");
+}
+
 /// Verifies that `ReflectionClass::hasMethod()`, `hasProperty()`, and
 /// `hasConstant()` report PHP-visible members for static class-like metadata.
 #[test]

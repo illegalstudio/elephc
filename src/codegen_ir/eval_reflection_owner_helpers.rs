@@ -66,6 +66,8 @@ struct ReflectionOwnerLayout {
     is_readonly_hi: Option<usize>,
     is_instantiable_lo: Option<usize>,
     is_instantiable_hi: Option<usize>,
+    is_cloneable_lo: Option<usize>,
+    is_cloneable_hi: Option<usize>,
     modifiers_lo: Option<usize>,
     modifiers_hi: Option<usize>,
     in_namespace_lo: Option<usize>,
@@ -222,6 +224,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_enum_lo = reflection_property_offset(info, "__is_enum");
     let is_readonly_lo = reflection_property_offset(info, "__is_readonly");
     let is_instantiable_lo = reflection_property_offset(info, "__is_instantiable");
+    let is_cloneable_lo = reflection_property_offset(info, "__is_cloneable");
     let modifiers_lo = reflection_property_offset(info, "__modifiers");
     let in_namespace_lo = reflection_property_offset(info, "__in_namespace");
     let is_static_lo = reflection_property_offset(info, "__is_static");
@@ -229,7 +232,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_protected_lo = reflection_property_offset(info, "__is_protected");
     let is_private_lo = reflection_property_offset(info, "__is_private");
     let is_enum_case_lo = reflection_property_offset(info, "__is_enum_case");
-    let required_parameter_count_lo = reflection_property_offset(info, "__required_parameter_count");
+    let required_parameter_count_lo =
+        reflection_property_offset(info, "__required_parameter_count");
     let position_lo = reflection_property_offset(info, "__position");
     let is_optional_lo = reflection_property_offset(info, "__is_optional");
     let is_variadic_lo = reflection_property_offset(info, "__is_variadic");
@@ -286,6 +290,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         is_readonly_hi: is_readonly_lo.map(|offset| offset + 8),
         is_instantiable_lo,
         is_instantiable_hi: is_instantiable_lo.map(|offset| offset + 8),
+        is_cloneable_lo,
+        is_cloneable_hi: is_cloneable_lo.map(|offset| offset + 8),
         modifiers_lo,
         modifiers_hi: modifiers_lo.map(|offset| offset + 8),
         in_namespace_lo,
@@ -946,6 +952,8 @@ fn emit_set_owner_class_flags_property_aarch64(
         Some(is_readonly_hi),
         Some(is_instantiable_lo),
         Some(is_instantiable_hi),
+        Some(is_cloneable_lo),
+        Some(is_cloneable_hi),
         Some(modifiers_lo),
         Some(modifiers_hi),
     ) = (
@@ -963,6 +971,8 @@ fn emit_set_owner_class_flags_property_aarch64(
         layout.is_readonly_hi,
         layout.is_instantiable_lo,
         layout.is_instantiable_hi,
+        layout.is_cloneable_lo,
+        layout.is_cloneable_hi,
         layout.modifiers_lo,
         layout.modifiers_hi,
     )
@@ -998,6 +1008,10 @@ fn emit_set_owner_class_flags_property_aarch64(
     emitter.instruction("and x10, x10, #1");                                    // extract the instantiable-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_instantiable_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_instantiable_hi);
+    emitter.instruction("lsr x10, x11, #7");                                    // move the cloneable-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the cloneable-class flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_cloneable_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_cloneable_hi);
     emitter.instruction("ldr x10, [sp, #96]");                                  // reload PHP ReflectionClass::getModifiers() bitmask
     abi::emit_store_to_address(emitter, "x10", "x9", modifiers_lo);
     abi::emit_store_zero_to_address(emitter, "x9", modifiers_hi);
@@ -1023,6 +1037,8 @@ fn emit_set_owner_class_flags_property_x86_64(
         Some(is_readonly_hi),
         Some(is_instantiable_lo),
         Some(is_instantiable_hi),
+        Some(is_cloneable_lo),
+        Some(is_cloneable_hi),
         Some(modifiers_lo),
         Some(modifiers_hi),
     ) = (
@@ -1040,6 +1056,8 @@ fn emit_set_owner_class_flags_property_x86_64(
         layout.is_readonly_hi,
         layout.is_instantiable_lo,
         layout.is_instantiable_hi,
+        layout.is_cloneable_lo,
+        layout.is_cloneable_hi,
         layout.modifiers_lo,
         layout.modifiers_hi,
     )
@@ -1082,6 +1100,11 @@ fn emit_set_owner_class_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the instantiable-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_instantiable_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_instantiable_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the cloneable bit
+    emitter.instruction("shr rax, 7");                                          // move the cloneable-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the cloneable-class flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_cloneable_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_cloneable_hi);
     emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload PHP ReflectionClass::getModifiers() bitmask
     abi::emit_store_to_address(emitter, "rax", "r10", modifiers_lo);
     abi::emit_store_zero_to_address(emitter, "r10", modifiers_hi);
@@ -1460,8 +1483,7 @@ fn emit_set_owner_named_type_flags_property_aarch64(
     emitter.instruction("and x10, x11, #1");                                    // extract the nullable-type flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", allows_null_lo);
     abi::emit_store_zero_to_address(emitter, "x9", allows_null_hi);
-    let (Some(is_builtin_lo), Some(is_builtin_hi)) =
-        (layout.is_builtin_lo, layout.is_builtin_hi)
+    let (Some(is_builtin_lo), Some(is_builtin_hi)) = (layout.is_builtin_lo, layout.is_builtin_hi)
     else {
         return;
     };
@@ -1472,10 +1494,7 @@ fn emit_set_owner_named_type_flags_property_aarch64(
 }
 
 /// Stores incoming x86_64 ReflectionParameter position and predicate flags.
-fn emit_set_owner_parameter_property_x86_64(
-    emitter: &mut Emitter,
-    layout: &ReflectionOwnerLayout,
-) {
+fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &ReflectionOwnerLayout) {
     let (
         Some(position_lo),
         Some(position_hi),
@@ -1595,8 +1614,7 @@ fn emit_set_owner_named_type_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the nullable-type flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", allows_null_lo);
     abi::emit_store_zero_to_address(emitter, "r10", allows_null_hi);
-    let (Some(is_builtin_lo), Some(is_builtin_hi)) =
-        (layout.is_builtin_lo, layout.is_builtin_hi)
+    let (Some(is_builtin_lo), Some(is_builtin_hi)) = (layout.is_builtin_lo, layout.is_builtin_hi)
     else {
         return;
     };
@@ -1795,10 +1813,8 @@ fn emit_set_owner_declaring_function_property_aarch64(
     layout: &ReflectionOwnerLayout,
     fail_label: &str,
 ) {
-    let (Some(low), Some(high)) = (
-        layout.declaring_function_lo,
-        layout.declaring_function_hi,
-    ) else {
+    let (Some(low), Some(high)) = (layout.declaring_function_lo, layout.declaring_function_hi)
+    else {
         return;
     };
     emitter.instruction("ldr x0, [sp, #80]");                                   // reload the boxed ReflectionParameter declaring function
@@ -1817,10 +1833,8 @@ fn emit_set_owner_declaring_function_property_x86_64(
     layout: &ReflectionOwnerLayout,
     fail_label: &str,
 ) {
-    let (Some(low), Some(high)) = (
-        layout.declaring_function_lo,
-        layout.declaring_function_hi,
-    ) else {
+    let (Some(low), Some(high)) = (layout.declaring_function_lo, layout.declaring_function_hi)
+    else {
         return;
     };
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the boxed ReflectionParameter declaring function
