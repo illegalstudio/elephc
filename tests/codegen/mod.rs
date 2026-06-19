@@ -32,6 +32,7 @@ mod pdo;
 mod pdo_mysql;
 mod pdo_pgsql;
 mod arrays;
+mod calendar;
 mod callables;
 mod system;
 mod json;

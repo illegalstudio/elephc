@@ -355,7 +355,7 @@ Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (34 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/` subdirectories)
+**Source:** `src/codegen/runtime/system/` (40 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/` subdirectories)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -397,13 +397,19 @@ The fatal uncaught-exception path writes `Fatal error: uncaught exception` to st
 
 ### Date/time routines
 
-**Files:** `system/date/`, `system/date_data.rs`, `system/mktime.rs`, `system/strtotime/`
+**Files:** `system/date/`, `system/date_data.rs`, `system/mktime.rs`, `system/microtime.rs`, `system/hrtime.rs`, `system/getdate.rs`, `system/localtime.rs`, `system/checkdate.rs`, `system/date_default_timezone.rs`, `system/strtotime/`
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_date` | Format a Unix timestamp using PHP date format characters (Y, m, d, H, i, s, l, F, etc.). Uses `localtime_r()` from libc and static lookup tables (`_day_names`, `_month_names`) for day/month names | `x1`/`x2` = format string, `x0` = timestamp | `x1`/`x2` = formatted string |
-| `__rt_mktime` | Create a Unix timestamp from date components (hour, minute, second, month, day, year). Populates a `tm` struct on the stack and calls libc `mktime()` | `x0`-`x5` = h, m, s, mon, day, year | `x0` = Unix timestamp |
-| `__rt_strtotime` | Parse trimmed date/time strings through strategy emitters: ISO dates/datetimes, time-only forms, bare keywords (`now`, `today`, `tomorrow`, `yesterday`, `midnight`, `noon`), relative offsets (`+1 day`, `3 months ago`, `a/an <unit>` article forms), and named weekdays with `next` / `last` / `this`. Successful paths populate a `tm` struct and call libc `mktime()`; malformed input returns `-1`. | `x1`/`x2` = date string | `x0` = Unix timestamp or `-1` |
+| `__rt_date` / `__rt_gmdate` | Format a Unix timestamp using PHP date format characters (Y, m, d, H, i, s, l, F, T, e, O, P, …). `__rt_date` decomposes with libc `localtime()`, `__rt_gmdate` with `gmtime()` (UTC); both share the formatter and the static `_day_names`/`_month_names` tables. The `T` token reports `"GMT"` on the gmdate path | `x1`/`x2` = format string, `x0` = timestamp | `x1`/`x2` = formatted string |
+| `__rt_mktime` / `__rt_gmmktime` | Create a Unix timestamp from date components (hour, minute, second, month, day, year). Populates a `tm` struct and calls libc `mktime()` (local) or `timegm()` (UTC) | `x0`-`x5` = h, m, s, mon, day, year | `x0` = Unix timestamp |
+| `__rt_strtotime` | Parse trimmed date/time strings through strategy emitters: ISO dates/datetimes (`iso_date`), `M/D/Y` slash dates (`slash_date`), textual dates like `15 January 2020` (`textual_date`), `@<timestamp>` epoch forms (`epoch`), `first`/`last day of …` and `first`/`last <weekday> of …` phrases (`first_last_day`), time-only forms, bare keywords (`now`, `today`, `tomorrow`, `yesterday`, `midnight`, `noon`), relative offsets (`+1 day`, `3 months ago`, `a/an <unit>` article forms), and named weekdays with `next` / `last` / `this`. Successful paths populate a `tm` struct and call libc `mktime()`; malformed input returns the `i64::MIN` failure sentinel | `x1`/`x2` = date string | `x0` = Unix timestamp or sentinel |
+| `__rt_getdate` / `__rt_localtime` | Decompose a timestamp into PHP's `getdate()` / `localtime()` associative array via libc `localtime()`, defaulting the timezone to UTC through `__rt_tz_init_utc` on first use | `x0` = timestamp | `x0` = assoc array pointer |
+| `__rt_checkdate` | Validate a Gregorian month/day/year, leap-year aware | `x0`-`x2` = month, day, year | `x0` = 0/1 |
+| `__rt_microtime` / `__rt_hrtime` | Current wall-clock (`gettimeofday`) / monotonic (`clock_gettime`) time, as a float/string or `[sec, nsec]` array | flag | result |
+| `__rt_date_default_timezone_get` / `__rt_date_default_timezone_set` / `__rt_tz_init_utc` | Read / set the process default timezone (`putenv("TZ=…")` + `tzset`); `__rt_tz_init_utc` lazily defaults it to UTC like PHP | — / `x1`/`x2` = id | — |
+
+`DateTimeZone` introspection (`getLocation()`, `getTransitions()`, `listAbbreviations()`) is backed by the bundled **`elephc-tz`** workspace crate, which bakes PHP timelib's IANA timezone tables into committed data files and exposes them through the `elephc_tz_location` / `elephc_tz_transitions` / `elephc_tz_abbreviations` ABI symbols. Like the `elephc-tls` and `elephc-phar` bridges it is linked only into programs that use it. The offset/DST resolution used by `date()`/`gmdate()` themselves is delegated to libc (`localtime`/`gmtime`/`tzset`).
 
 ### JSON routines
 

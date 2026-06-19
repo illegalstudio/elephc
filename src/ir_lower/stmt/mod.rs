@@ -1562,6 +1562,7 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value: Option<&Expr>, span: S
         terminate_return(ctx, None);
         return;
     }
+    let returns_this = matches!(value.map(|expr| &expr.kind), Some(ExprKind::This));
     let value = if let Some(value) = value {
         lower_expr(ctx, value)
     } else {
@@ -1569,6 +1570,18 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value: Option<&Expr>, span: S
     };
     let value = coerce_to_return_type(ctx, value, Some(span));
     let value = acquire_borrowed_return_value(ctx, value, span);
+    // A method returning its borrowed receiver (`$this`) hands the caller an owned
+    // reference, so acquire it. Unlike an owned local (which is moved on return and
+    // skipped by local cleanup), `$this` is a borrowed parameter the callee never
+    // releases; without this acquire the caller's matching release — e.g. the
+    // discarded result of a fluent `$obj->mutate();` — drops the object's last
+    // reference and frees a still-live object. Acquire is a no-op for receivers whose
+    // class is not refcounted.
+    let value = if returns_this {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    } else {
+        value
+    };
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
 }

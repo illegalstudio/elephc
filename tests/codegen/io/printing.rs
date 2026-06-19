@@ -158,11 +158,99 @@ fn test_print_r_bool_false() {
     assert_eq!(out, "");
 }
 
-/// Verifies `print_r` outputs `Array\n` for a non-empty indexed array, showing only the array header (struct dump not yet implemented).
+/// Verifies `print_r` renders an indexed array with PHP's recursive
+/// `Array\n(\n    [N] => value\n)\n` body and numeric keys.
 #[test]
 fn test_print_r_array() {
     let out = compile_and_run("<?php print_r([1, 2, 3]);");
-    assert_eq!(out, "Array\n");
+    assert_eq!(out, "Array\n(\n    [0] => 1\n    [1] => 2\n    [2] => 3\n)\n");
+}
+
+/// Verifies `print_r` renders an indexed string array, with raw (unquoted) values.
+#[test]
+fn test_print_r_string_array() {
+    let out = compile_and_run(r#"<?php print_r(["a", "b", "c"]);"#);
+    assert_eq!(out, "Array\n(\n    [0] => a\n    [1] => b\n    [2] => c\n)\n");
+}
+
+/// Verifies `print_r` renders a bool array with PHP's `1`/empty rendering for true/false.
+#[test]
+fn test_print_r_bool_array() {
+    let out = compile_and_run("<?php print_r([true, false, true]);");
+    assert_eq!(out, "Array\n(\n    [0] => 1\n    [1] => \n    [2] => 1\n)\n");
+}
+
+/// Verifies `print_r` renders a float array using PHP's float text.
+#[test]
+fn test_print_r_float_array() {
+    let out = compile_and_run("<?php print_r([1.5, 2.25]);");
+    assert_eq!(out, "Array\n(\n    [0] => 1.5\n    [1] => 2.25\n)\n");
+}
+
+/// Verifies `print_r` renders an associative array with unquoted string keys.
+#[test]
+fn test_print_r_assoc_array() {
+    let out = compile_and_run(r#"<?php print_r(["name" => "bob", "age" => 30]);"#);
+    assert_eq!(out, "Array\n(\n    [name] => bob\n    [age] => 30\n)\n");
+}
+
+/// Verifies `print_r` renders an empty array as the bare `Array\n(\n)\n` shell.
+#[test]
+fn test_print_r_empty_array() {
+    let out = compile_and_run("<?php print_r([]);");
+    assert_eq!(out, "Array\n(\n)\n");
+}
+
+/// Verifies `print_r` renders a hash with a heterogeneous (Mixed) value set,
+/// matching PHP's per-type rendering (string raw, bool `1`, null empty).
+#[test]
+fn test_print_r_mixed_value_hash() {
+    let out = compile_and_run(r#"<?php print_r(["s" => "x", "b" => true, "n" => null]);"#);
+    assert_eq!(out, "Array\n(\n    [s] => x\n    [b] => 1\n    [n] => \n)\n");
+}
+
+/// Verifies `print_r` recurses into a nested array inside a hash, indenting the
+/// nested body by 8 spaces per level and emitting the trailing blank line that
+/// PHP writes after a nested array's closing paren.
+#[test]
+fn test_print_r_nested_array_in_hash() {
+    let out = compile_and_run(r#"<?php print_r(["x" => [1, 2], "y" => 3]);"#);
+    assert_eq!(
+        out,
+        "Array\n(\n    [x] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n    [y] => 3\n)\n"
+    );
+}
+
+/// Verifies `print_r` recurses into an array of arrays (indexed nesting), which
+/// relies on the runtime value_type stamp to dispatch the nested element type.
+#[test]
+fn test_print_r_nested_indexed_arrays() {
+    let out = compile_and_run("<?php print_r([[1, 2], [3, 4]]);");
+    assert_eq!(
+        out,
+        "Array\n(\n    [0] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n    [1] => Array\n        (\n            [0] => 3\n            [1] => 4\n        )\n\n)\n"
+    );
+}
+
+/// Verifies `print_r` renders a deeply nested structure with the correct
+/// cumulative indentation at each level.
+#[test]
+fn test_print_r_deep_nesting() {
+    let out = compile_and_run(r#"<?php print_r([1 => ["a" => ["z" => 9]]]);"#);
+    assert_eq!(
+        out,
+        "Array\n(\n    [1] => Array\n        (\n            [a] => Array\n                (\n                    [z] => 9\n                )\n\n        )\n\n)\n"
+    );
+}
+
+/// Verifies `print_r` renders a single boxed Mixed scalar (an element read from
+/// a heterogeneous array) with no type wrapper, matching PHP.
+#[test]
+fn test_print_r_mixed_scalar_element() {
+    let out = compile_and_run(
+        r#"<?php $a = [1, "two", 3.5, true, null]; print_r($a[1]); echo "|"; print_r($a[3]);"#,
+    );
+    assert_eq!(out, "two|1");
 }
 
 /// Verifies `var_dump` formats each argument independently with correct type tags and a trailing newline per call, in source order.
@@ -176,6 +264,109 @@ var_dump(true);
 "#,
     );
     assert_eq!(out, "int(1)\nstring(2) \"hi\"\nbool(true)\n");
+}
+
+/// Regression: `var_dump` of a heterogeneous (Mixed) indexed array must emit one typed line per
+/// element, not an empty body. The Mixed-array walker previously masked the value_type stamp with
+/// `0xff`, leaving the COW bit set so the `== Mixed` check failed and skipped the whole body.
+#[test]
+fn test_var_dump_mixed_indexed_array() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump([1, "x", 2.5]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  string(1) \"x\"\n  [2]=>\n  float(2.5)\n}\n"
+    );
+}
+
+/// `var_export` renders scalars the way PHP does: bare integers, `'…'`-quoted strings with
+/// `\\`/`\'` escaping, `true`/`false`, `NULL`, and an integer-valued float gaining a `.0`.
+#[test]
+fn test_var_export_scalars() {
+    let out = compile_and_run(
+        r#"<?php
+var_export(42); echo "|";
+var_export(-5); echo "|";
+var_export(3.5); echo "|";
+var_export(1.0); echo "|";
+var_export(true); echo "|";
+var_export(false); echo "|";
+var_export(null); echo "|";
+var_export("it's a \\test");
+"#,
+    );
+    assert_eq!(out, r"42|-5|3.5|1.0|true|false|NULL|'it\'s a \\test'");
+}
+
+/// `var_export` renders floats with PHP's `serialize_precision = -1` semantics: the
+/// shortest decimal that round-trips (so `1/3` keeps 16 significant digits, not 14),
+/// scientific notation with a `.0` mantissa and minimal exponent (`1.0E+17`, `1.0E-6`),
+/// and `-0.0` preserved. This is distinct from the default `(string)`/`echo` precision.
+#[test]
+fn test_var_export_float_precision() {
+    let out = compile_and_run(
+        r#"<?php
+var_export(0.1); echo "|";
+var_export(1.0 / 3.0); echo "|";
+var_export(1.5e300); echo "|";
+var_export(1e17); echo "|";
+var_export(1e16); echo "|";
+var_export(0.000001); echo "|";
+var_export(1234567890123456.0); echo "|";
+var_export(-0.0); echo "|";
+var_export(-123.456);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0.1|0.3333333333333333|1.5E+300|1.0E+17|10000000000000000.0|1.0E-6|1234567890123456.0|-0.0|-123.456"
+    );
+}
+
+/// `var_export` renders arrays in PHP's parsable `array ( … )` layout: 2-space-per-level indent,
+/// `key => value,` entries, integer keys bare and string keys quoted, and a nested array placed on
+/// its own line. Covers the empty array and a nested associative array.
+#[test]
+fn test_var_export_arrays() {
+    let out = compile_and_run(
+        "<?php var_export([]); echo \"\\n---\\n\"; \
+         var_export([1, 'two', ['a' => 1, 'b' => [10, 20]]]);",
+    );
+    assert_eq!(
+        out,
+        "array (\n)\n---\narray (\n  0 => 1,\n  1 => 'two',\n  2 => \n  array (\n    'a' => 1,\n    'b' => \n    array (\n      0 => 10,\n      1 => 20,\n    ),\n  ),\n)"
+    );
+}
+
+/// `var_export($value, true)` returns the rendered string instead of printing it, and
+/// `function_exists('var_export')` sees the injected function. The unused-on-echo return is null.
+#[test]
+fn test_var_export_return_mode_and_function_exists() {
+    let out = compile_and_run(
+        r#"<?php
+echo function_exists("var_export") ? "Y" : "N";
+echo "|";
+$s = var_export([1, 2], true);
+echo $s;
+"#,
+    );
+    assert_eq!(out, "Y|array (\n  0 => 1,\n  1 => 2,\n)");
+}
+
+/// A user-defined `var_export` wins over the injected prelude (the prelude must detect the
+/// declaration and skip injection, so there is no redeclaration error).
+#[test]
+fn test_var_export_user_definition_wins() {
+    let out = compile_and_run(
+        r#"<?php
+function var_export($value, $return = false) { return "custom"; }
+echo var_export(123, true);
+"#,
+    );
+    assert_eq!(out, "custom");
 }
 
 // --- File I/O: CSV, timestamps, directory listing, temp files, seek/rewind/eof ---

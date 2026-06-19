@@ -79,7 +79,8 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
-        | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" | "hash_algos" => Some(fixed(&[])),
+        | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" | "hash_algos"
+        | "date_default_timezone_get" => Some(fixed(&[])),
 
         "strlen" | "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "grapheme_strrev" | "addslashes" | "stripslashes" | "nl2br" | "bin2hex"
@@ -99,6 +100,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
 
         "intval" | "floatval" | "boolval" | "gettype" | "is_bool" | "is_null"
         | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
+        | "is_array" | "is_object" | "is_scalar"
         | "empty" | "var_dump" | "print_r" => {
             Some(fixed(&["value"]))
         }
@@ -322,9 +324,18 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "putenv" => Some(fixed(&["assignment"])),
         "exec" | "shell_exec" | "system" | "passthru" => Some(fixed(&["command"])),
         "define" => Some(fixed(&["constant_name", "value"])),
-        "date" => Some(optional(&["format", "timestamp"], 1, vec![null_lit()])),
-        "mktime" => Some(fixed(&["hour", "minute", "second", "month", "day", "year"])),
-        "strtotime" => Some(fixed(&["datetime"])),
+        "date" | "gmdate" => Some(optional(&["format", "timestamp"], 1, vec![null_lit()])),
+        "date_default_timezone_set" => Some(fixed(&["timezoneId"])),
+        "checkdate" => Some(fixed(&["month", "day", "year"])),
+        "getdate" => Some(optional(&["timestamp"], 0, vec![null_lit()])),
+        "localtime" => {
+            Some(optional(&["timestamp", "associative"], 0, vec![int_lit(-1), bool_lit(false)]))
+        }
+        "hrtime" => Some(optional(&["as_number"], 0, vec![bool_lit(false)])),
+        "mktime" | "gmmktime" | "__elephc_mktime_raw" | "__elephc_gmmktime_raw" => {
+            Some(fixed(&["hour", "minute", "second", "month", "day", "year"]))
+        }
+        "strtotime" | "__elephc_strtotime_raw" => Some(optional(&["datetime", "baseTimestamp"], 1, vec![null_lit()])),
         "json_encode" => Some(optional(
             &["value", "flags", "depth"],
             1,
@@ -649,9 +660,15 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[],
             PhpType::Int,
         )),
-        "phpversion" | "getcwd" | "sys_get_temp_dir" | "json_last_error_msg" => {
+        "phpversion" | "getcwd" | "sys_get_temp_dir" | "json_last_error_msg"
+        | "date_default_timezone_get" => {
             Some(typed_first_class_builtin_sig(name, &[], PhpType::Str))
         }
+        "date_default_timezone_set" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Bool,
+        )),
         "pi" => Some(typed_first_class_builtin_sig(name, &[], PhpType::Float)),
         "intval" | "ord" => Some(typed_first_class_builtin_sig(
             name,
@@ -663,6 +680,11 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Mixed],
             PhpType::Float,
         )),
+        // NOTE: is_array/is_object/is_scalar are intentionally NOT first-class callable.
+        // The runtime callable wrapper for a builtin is emitted by the legacy backend, which
+        // has no codegen for these three predicates, so listing them here would emit an
+        // undefined `_fn_is_*` invoker reference in any program using dynamic string callbacks.
+        // Direct calls are fully supported; first-class/string-callback use is not (yet).
         "boolval" | "is_bool" | "is_null" | "is_float" | "is_int" | "is_iterable"
         | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
         | "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
@@ -819,9 +841,45 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Int, PhpType::Int],
             PhpType::Int,
         )),
-        "date" | "php_uname" | "readline" => {
+        "date" | "gmdate" | "php_uname" | "readline" => {
             let mut sig = builtin_call_sig(name)?;
             sig.return_type = PhpType::Str;
+            sig.declared_return = true;
+            Some(sig)
+        }
+        // Date/time helpers that return scalars or arrays. Like `date`/`gmdate`,
+        // they reuse the catalog parameter contract and override only the return
+        // type, so first-class-callable references (`checkdate(...)`, etc.) match PHP.
+        "checkdate" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Bool;
+            sig.declared_return = true;
+            Some(sig)
+        }
+        "mktime" | "gmmktime" | "__elephc_mktime_raw" | "__elephc_gmmktime_raw" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Int;
+            sig.declared_return = true;
+            Some(sig)
+        }
+        "strtotime" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Union(vec![PhpType::Int, PhpType::Bool]);
+            sig.declared_return = true;
+            Some(sig)
+        }
+        "getdate" | "localtime" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            };
+            sig.declared_return = true;
+            Some(sig)
+        }
+        "hrtime" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Mixed;
             sig.declared_return = true;
             Some(sig)
         }

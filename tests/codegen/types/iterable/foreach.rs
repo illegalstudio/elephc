@@ -587,7 +587,9 @@ fn test_iterable_value_appended_to_array_stays_boxed() {
         }
         ",
     );
-    assert_eq!(out, "array:array(1) {\n}\n");
+    // The boxed Mixed value is the associative array ['a' => 1]; var_dump now walks the
+    // hash after unboxing instead of printing the empty `array(1) {}` shell.
+    assert_eq!(out, "array:array(1) {\n  [\"a\"]=>\n  int(1)\n}\n");
 }
 
 /// Verifies a `mixed` variadic parameter receiving an `iterable` value preserves it as a boxed array

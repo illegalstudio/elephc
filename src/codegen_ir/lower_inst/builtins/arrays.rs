@@ -22,7 +22,9 @@ use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::super::{expect_operand, legacy_context_from_eir_module, store_if_result};
+use super::super::{
+    expect_operand, legacy_context_from_eir_module, resolve_int_operand_to_result, store_if_result,
+};
 
 mod column;
 mod key_exists;
@@ -1022,14 +1024,20 @@ pub(super) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     require_range_endpoint(ctx.value_php_type(start)?, "start")?;
     require_range_endpoint(ctx.value_php_type(end)?, "end")?;
     require_range_result_type(&inst.result_php_type.codegen_repr())?;
+    // Resolve each endpoint to a plain integer, unboxing a Mixed cell read from a heterogeneous
+    // array. The end resolution may call __rt_mixed_cast_int, which clobbers caller-saved registers,
+    // so the resolved start is spilled across it instead of being staged in an argument register.
+    resolve_int_operand_to_result(ctx, start, "range start")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    resolve_int_operand_to_result(ctx, end, "range end")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.load_value_to_reg(start, "x0")?;
-            ctx.load_value_to_reg(end, "x1")?;
+            ctx.emitter.instruction("mov x1, x0");                              // move the resolved range end into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x0");                                   // restore the resolved range start into the first runtime argument
         }
         Arch::X86_64 => {
-            ctx.load_value_to_reg(start, "rdi")?;
-            ctx.load_value_to_reg(end, "rsi")?;
+            ctx.emitter.instruction("mov rsi, rax");                            // move the resolved range end into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rdi");                                  // restore the resolved range start into the first runtime argument
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_range");
@@ -1165,6 +1173,7 @@ pub(super) fn lower_in_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         }
         InArrayCase::Scalar => lower_in_array_scalar(ctx, needle, array)?,
         InArrayCase::String => lower_in_array_string(ctx, needle, array)?,
+        InArrayCase::MixedString => lower_in_array_mixed_string(ctx, needle, array)?,
     }
     store_if_result(ctx, inst)
 }
@@ -1327,7 +1336,7 @@ fn lower_user_sort_static_callback(
     super::ensure_arg_count(inst, name, 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
-    indexed_sort_element_type(ctx.value_php_type(array)?, name, false)?;
+    user_sort_element_type(ctx.value_php_type(array)?, name)?;
     let source_local = source_load_local_slot(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     if let Some(slot) = source_local {
@@ -1471,6 +1480,34 @@ fn indexed_sort_element_type(
                 "{} indexed-array element PHP type {:?}",
                 name,
                 elem
+            )))
+        }
+        other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
+    }
+}
+
+/// Returns the indexed-array element type accepted by a user-comparator sort.
+///
+/// User-comparator sorts (`usort`/`uasort`/`uksort`) permute existing
+/// pointer-sized slots through `__rt_usort`, so integer and object/refcounted
+/// handles (each a single 8-byte payload) are sortable; the comparator decides
+/// the ordering and receives each element by its handle. String elements are
+/// rejected here exactly as before — their multi-word descriptors are not
+/// permuted by the 8-byte slot sorter — so they keep producing a clear
+/// unsupported-feature error rather than a corrupt sort.
+fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => {
+            let elem = elem.codegen_repr();
+            if matches!(
+                elem,
+                PhpType::Int | PhpType::Void | PhpType::Never | PhpType::Object(_)
+            ) {
+                return Ok(elem);
+            }
+            Err(CodegenIrError::unsupported(format!(
+                "{} indexed-array element PHP type {:?}",
+                name, elem
             )))
         }
         other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
@@ -3062,9 +3099,12 @@ fn require_assoc_array_key_set_result_type(
 }
 
 /// Verifies that a `range()` endpoint can be passed to the integer runtime helper.
+///
+/// `Mixed`/`Union` endpoints are accepted here and unboxed to a plain integer by `lower_range`
+/// (via `resolve_int_operand_to_result`); the `__rt_range` helper only consumes integer endpoints.
 fn require_range_endpoint(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool => Ok(()),
+        PhpType::Int | PhpType::Bool | PhpType::Mixed | PhpType::Union(_) => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "range {} PHP type {:?}",
             name,
@@ -3122,12 +3162,17 @@ fn ensure_arg_count_between(inst: &Instruction, name: &str, min: usize, max: usi
 }
 
 /// Verifies that the indexed `array_fill()` helper can store the fill value.
+///
+/// `Str` is accepted here and routed to `__rt_array_fill_str`, which materializes 16-byte
+/// (pointer + length) string slots; the single-word scalar/refcounted helpers cannot carry a
+/// string payload.
 fn require_array_fill_indexed_value_type(value_ty: &PhpType) -> Result<()> {
     if matches!(
         value_ty,
         PhpType::Int
             | PhpType::Bool
             | PhpType::Float
+            | PhpType::Str
             | PhpType::Void
             | PhpType::Mixed
             | PhpType::Array(_)
@@ -3350,6 +3395,11 @@ fn require_array_fill_assoc_result_type(result_ty: &PhpType) -> Result<()> {
 }
 
 /// Calls the legacy runtime helper after materializing `array_fill()` arguments.
+///
+/// String fills use the `(count, ptr, len)` ABI of `__rt_array_fill_str` (the helper is always
+/// 0-indexed, so `start` is unused); every other value type uses the shared `(start, count, value)`
+/// scalar/refcounted ABI. The register loads are independent stack reads, so loading `count` before
+/// the string pointer/length cannot clobber it.
 fn lower_array_fill_call(
     ctx: &mut FunctionContext<'_>,
     start: ValueId,
@@ -3357,6 +3407,20 @@ fn lower_array_fill_call(
     value: ValueId,
     value_ty: &PhpType,
 ) -> Result<()> {
+    if matches!(value_ty.codegen_repr(), PhpType::Str) {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.load_value_to_reg(count, "x0")?;
+                ctx.load_string_value_to_regs(value, "x1", "x2")?;
+            }
+            Arch::X86_64 => {
+                ctx.load_value_to_reg(count, "rdi")?;
+                ctx.load_string_value_to_regs(value, "rsi", "rdx")?;
+            }
+        }
+        abi::emit_call_label(ctx.emitter, array_fill_runtime_helper(value_ty));
+        return Ok(());
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(start, "x0")?;
@@ -3497,8 +3561,14 @@ fn array_fill_keys_runtime_helper(value_ty: &PhpType) -> &'static str {
 }
 
 /// Returns the helper matching the fill value's ownership representation.
+///
+/// `Str` routes to the dedicated `__rt_array_fill_str`, which takes a `(count, ptr, len)` ABI and
+/// builds 16-byte string slots; it must be checked before the generic refcounted helper, whose ABI
+/// only carries a single heap-pointer value word.
 fn array_fill_runtime_helper(value_ty: &PhpType) -> &'static str {
-    if value_ty.is_refcounted() {
+    if matches!(value_ty.codegen_repr(), PhpType::Str) {
+        "__rt_array_fill_str"
+    } else if value_ty.is_refcounted() {
         "__rt_array_fill_refcounted"
     } else {
         "__rt_array_fill"
@@ -3782,18 +3852,7 @@ fn lower_array_slice_call(
     length: Option<ValueId>,
     source_elem_ty: &PhpType,
 ) -> Result<()> {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(array, "x0")?;
-            ctx.load_value_to_reg(offset, "x1")?;
-            load_array_slice_length(ctx, length, "x2")?;
-        }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(array, "rdi")?;
-            ctx.load_value_to_reg(offset, "rsi")?;
-            load_array_slice_length(ctx, length, "rdx")?;
-        }
-    }
+    lower_slice_like_args(ctx, array, offset, length, "array_slice")?;
     abi::emit_call_label(ctx.emitter, array_slice_runtime_helper(source_elem_ty));
     Ok(())
 }
@@ -3806,19 +3865,97 @@ fn lower_array_splice_call(
     length: Option<ValueId>,
     elem_ty: &PhpType,
 ) -> Result<()> {
+    lower_slice_like_args(ctx, array, offset, length, "array_splice")?;
+    abi::emit_call_label(ctx.emitter, array_splice_runtime_helper(elem_ty));
+    Ok(())
+}
+
+/// Materializes the shared `(array, offset, length)` argument triple for `array_slice` and
+/// `array_splice` into the runtime argument registers.
+///
+/// The offset and length are resolved to plain integers first — unboxing a `Mixed` cell read from a
+/// heterogeneous array via `__rt_mixed_cast_int` — and spilled to the stack, because that unbox call
+/// clobbers caller-saved registers. The array pointer (a plain stack load that clobbers nothing) is
+/// then placed, and the staged integers are restored into the offset/length argument registers, so
+/// the runtime helper sees the array pointer plus two genuine integers rather than a boxed pointer.
+fn lower_slice_like_args(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    offset: ValueId,
+    length: Option<ValueId>,
+    name: &str,
+) -> Result<()> {
+    resolve_int_operand_to_result(ctx, offset, &format!("{} offset", name))?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    resolve_slice_length_to_result(ctx, length, name)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
-            ctx.load_value_to_reg(offset, "x1")?;
-            load_array_slice_length(ctx, length, "x2")?;
+            abi::emit_pop_reg(ctx.emitter, "x2");                                   // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x1");                                   // restore the resolved offset into the second runtime argument
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rdi")?;
-            ctx.load_value_to_reg(offset, "rsi")?;
-            load_array_slice_length(ctx, length, "rdx")?;
+            abi::emit_pop_reg(ctx.emitter, "rdx");                                  // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rsi");                                  // restore the resolved offset into the second runtime argument
         }
     }
-    abi::emit_call_label(ctx.emitter, array_splice_runtime_helper(elem_ty));
+    Ok(())
+}
+
+/// Resolves an optional `array_slice`/`array_splice` length into the integer result register.
+///
+/// An absent or `Void` length becomes the runtime "until the end" sentinel; otherwise the length is
+/// resolved through the shared integer resolver, unboxing a `Mixed` value to a plain integer.
+fn resolve_slice_length_to_result(
+    ctx: &mut FunctionContext<'_>,
+    length: Option<ValueId>,
+    name: &str,
+) -> Result<()> {
+    let until_end = match length {
+        None => true,
+        Some(length) => matches!(ctx.value_php_type(length)?.codegen_repr(), PhpType::Void),
+    };
+    if until_end {
+        let reg = abi::int_result_reg(ctx.emitter);
+        emit_array_slice_until_end_sentinel(ctx, reg);
+        return Ok(());
+    }
+    resolve_int_operand_to_result(ctx, length.expect("length present"), &format!("{} length", name))
+}
+
+/// Resolves the offset/length arguments for a boxed-Mixed `array_slice`/`array_splice` into the
+/// refcounted runtime helper's argument registers, restoring a previously-staged array pointer.
+///
+/// On entry the converted (now-owned) indexed-array pointer must be the topmost value on the
+/// temporary stack. The offset and length are resolved to plain integers first — `__rt_mixed_cast_int`
+/// unboxes a `Mixed` cell read from a heterogeneous array, and an absent/`Void` length becomes the
+/// until-the-end sentinel — and spilled to the stack, because each unbox call clobbers caller-saved
+/// registers. The three staged values are then popped into the array/offset/length argument registers
+/// so the helper sees a pointer plus two genuine integers rather than a boxed pointer.
+fn materialize_mixed_slice_args(
+    ctx: &mut FunctionContext<'_>,
+    offset: ValueId,
+    length: Option<ValueId>,
+    name: &str,
+) -> Result<()> {
+    resolve_int_operand_to_result(ctx, offset, &format!("{} offset", name))?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    resolve_slice_length_to_result(ctx, length, name)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x2");                                   // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x1");                                   // restore the resolved offset into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x0");                                   // restore the converted array pointer into the first runtime argument
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rdx");                                  // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rsi");                                  // restore the resolved offset into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rdi");                                  // restore the converted array pointer into the first runtime argument
+        }
+    }
     Ok(())
 }
 
@@ -3845,9 +3982,7 @@ fn lower_mixed_array_slice_aarch64(
     abi::emit_pop_reg(ctx.emitter, "x10");
     ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "x0");
-    ctx.load_value_to_reg(offset, "x1")?;
-    load_array_slice_length(ctx, length, "x2")?;
-    abi::emit_pop_reg(ctx.emitter, "x0");
+    materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after slicing the boxed payload
     ctx.emitter.label(&empty_label);
@@ -3880,9 +4015,7 @@ fn lower_mixed_array_slice_x86_64(
     abi::emit_pop_reg(ctx.emitter, "r10");
     ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "rax");
-    ctx.load_value_to_reg(offset, "rsi")?;
-    load_array_slice_length(ctx, length, "rdx")?;
-    abi::emit_pop_reg(ctx.emitter, "rdi");
+    materialize_mixed_slice_args(ctx, offset, length, "array_slice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after slicing the boxed payload
     ctx.emitter.label(&empty_label);
@@ -3915,9 +4048,7 @@ fn lower_mixed_array_splice_aarch64(
     abi::emit_pop_reg(ctx.emitter, "x10");
     ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "x0");
-    ctx.load_value_to_reg(offset, "x1")?;
-    load_array_slice_length(ctx, length, "x2")?;
-    abi::emit_pop_reg(ctx.emitter, "x0");
+    materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array fallback after splicing the boxed payload
     ctx.emitter.label(&drop_label);
@@ -3950,9 +4081,7 @@ fn lower_mixed_array_splice_x86_64(
     abi::emit_pop_reg(ctx.emitter, "r10");
     ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted unique array back into the Mixed cell
     abi::emit_push_reg(ctx.emitter, "rax");
-    ctx.load_value_to_reg(offset, "rsi")?;
-    load_array_slice_length(ctx, length, "rdx")?;
-    abi::emit_pop_reg(ctx.emitter, "rdi");
+    materialize_mixed_slice_args(ctx, offset, length, "array_splice")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_splice_refcounted");
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array fallback after splicing the boxed payload
     ctx.emitter.label(&drop_label);
@@ -4046,31 +4175,6 @@ fn lower_array_pad_call(
         }
     }
     abi::emit_call_label(ctx.emitter, array_pad_runtime_helper(source_elem_ty));
-    Ok(())
-}
-
-/// Loads the optional slice length or the runtime until-end sentinel into `reg`.
-fn load_array_slice_length(
-    ctx: &mut FunctionContext<'_>,
-    length: Option<ValueId>,
-    reg: &str,
-) -> Result<()> {
-    let Some(length) = length else {
-        emit_array_slice_until_end_sentinel(ctx, reg);
-        return Ok(());
-    };
-    match ctx.value_php_type(length)?.codegen_repr() {
-        PhpType::Int => {
-            ctx.load_value_to_reg(length, reg)?;
-        }
-        PhpType::Void => emit_array_slice_until_end_sentinel(ctx, reg),
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "array_slice length PHP type {:?}",
-                other
-            )));
-        }
-    }
     Ok(())
 }
 
@@ -4584,6 +4688,7 @@ enum InArrayCase {
     Empty,
     Scalar,
     String,
+    MixedString,
 }
 
 /// Verifies that an indexed-array `in_array()` call has a lowered Phase 04 payload shape.
@@ -4596,6 +4701,11 @@ fn supported_in_array_case(needle_ty: PhpType, array_ty: PhpType) -> Result<InAr
                 Ok(InArrayCase::Scalar)
             }
             PhpType::Str if needle_ty == PhpType::Str => Ok(InArrayCase::String),
+            // An indexed `array<Mixed>` (e.g. the boxed result of a function that returns a
+            // container built from an untyped parameter) stores one boxed Mixed cell per 8-byte
+            // slot. A string needle is matched by unboxing each cell and string-comparing the
+            // string-tagged ones, mirroring the concrete string-array path's `__rt_str_eq` scan.
+            PhpType::Mixed if needle_ty == PhpType::Str => Ok(InArrayCase::MixedString),
             elem_ty => Err(CodegenIrError::unsupported(format!(
                 "in_array needle PHP type {:?} for indexed-array element PHP type {:?}",
                 needle_ty,
@@ -4683,6 +4793,115 @@ fn lower_in_array_string_aarch64(
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
     ctx.emitter.label(&end_label);
     ctx.emitter.instruction("mov x0, #0");                                      // return false when no indexed string element matches
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers a string-needle membership scan over an indexed `array<Mixed>`.
+///
+/// Each 8-byte slot holds a boxed Mixed cell, so every cell is unboxed and the string-tagged ones
+/// are compared with `__rt_str_eq`, mirroring the concrete string-array path's exact-match scan.
+fn lower_in_array_mixed_string(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_in_array_mixed_string_aarch64(ctx, needle, array),
+        Arch::X86_64 => lower_in_array_mixed_string_x86_64(ctx, needle, array),
+    }
+}
+
+/// Emits the AArch64 boxed-Mixed-array string membership loop.
+fn lower_in_array_mixed_string_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+) -> Result<()> {
+    let loop_label = ctx.next_label("in_array_mix_loop");
+    let not_string_label = ctx.next_label("in_array_mix_not_string");
+    let have_flag_label = ctx.next_label("in_array_mix_have_flag");
+    let found_label = ctx.next_label("in_array_mix_found");
+    let end_label = ctx.next_label("in_array_mix_end");
+    let done_label = ctx.next_label("in_array_mix_done");
+
+    ctx.load_value_to_reg(array, "x10")?;
+    ctx.emitter.instruction("ldr x9, [x10]");                                   // load array<Mixed> length before scanning boxed slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first boxed Mixed cell slot
+    ctx.emitter.instruction("mov x12, #0");                                     // start the membership scan at index zero
+    ctx.emitter.label(&loop_label);
+    ctx.emitter.instruction("cmp x12, x9");                                     // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false once every cell is scanned
+    ctx.emitter.instruction("ldr x0, [x10, x12, lsl #3]");                      // load the current boxed Mixed cell pointer from its 8-byte slot
+    abi::emit_push_reg_pair(ctx.emitter, "x9", "x10");
+    abi::emit_push_reg(ctx.emitter, "x12");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // unbox the cell → x0=tag, x1=string ptr, x2=string len
+    ctx.emitter.instruction("cmp x0, #1");                                      // is this cell a string value (runtime tag 1)?
+    ctx.emitter.instruction(&format!("b.ne {}", not_string_label));             // non-string cells can never equal a string needle
+    ctx.load_string_value_to_regs(needle, "x3", "x4")?;
+    abi::emit_call_label(ctx.emitter, "__rt_str_eq");                           // compare the unboxed string element (x1/x2) against the needle (x3/x4)
+    ctx.emitter.instruction(&format!("b {}", have_flag_label));                 // carry the str-eq result into the shared match-flag join
+    ctx.emitter.label(&not_string_label);
+    ctx.emitter.instruction("mov x0, #0");                                      // a non-string cell yields a not-matched flag
+    ctx.emitter.label(&have_flag_label);
+    abi::emit_pop_reg(ctx.emitter, "x12");
+    abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
+    ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));              // stop as soon as a cell matches the needle
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next boxed Mixed cell
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning the remaining cells
+    ctx.emitter.label(&found_label);
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a matching cell
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the not-found result after a match
+    ctx.emitter.label(&end_label);
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no cell matches the needle
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits the x86_64 boxed-Mixed-array string membership loop.
+fn lower_in_array_mixed_string_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+) -> Result<()> {
+    let loop_label = ctx.next_label("in_array_mix_loop");
+    let not_string_label = ctx.next_label("in_array_mix_not_string");
+    let have_flag_label = ctx.next_label("in_array_mix_have_flag");
+    let found_label = ctx.next_label("in_array_mix_found");
+    let end_label = ctx.next_label("in_array_mix_end");
+    let done_label = ctx.next_label("in_array_mix_done");
+
+    ctx.load_value_to_reg(array, "r10")?;
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load array<Mixed> length before scanning boxed slots
+    ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first boxed Mixed cell slot
+    ctx.emitter.instruction("xor r13d, r13d");                                  // start the membership scan at index zero
+    ctx.emitter.label(&loop_label);
+    ctx.emitter.instruction("cmp r13, r11");                                    // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false once every cell is scanned
+    ctx.emitter.instruction("mov rax, QWORD PTR [r12 + r13*8]");                // load the boxed Mixed cell pointer into rax (the unbox input register)
+    abi::emit_push_reg_pair(ctx.emitter, "r11", "r12");
+    abi::emit_push_reg(ctx.emitter, "r13");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // unbox the cell → rax=tag, rdi=string ptr, rdx=string len
+    ctx.emitter.instruction("cmp rax, 1");                                      // is this cell a string value (runtime tag 1)?
+    ctx.emitter.instruction(&format!("jne {}", not_string_label));              // non-string cells can never equal a string needle
+    ctx.emitter.instruction("mov rsi, rdx");                                    // move the unboxed string length into the comparison argument
+    ctx.load_string_value_to_regs(needle, "rdx", "rcx")?;
+    abi::emit_call_label(ctx.emitter, "__rt_str_eq");                           // compare the unboxed string element (rdi/rsi) against the needle (rdx/rcx)
+    ctx.emitter.instruction(&format!("jmp {}", have_flag_label));               // carry the str-eq result into the shared match-flag join
+    ctx.emitter.label(&not_string_label);
+    ctx.emitter.instruction("xor eax, eax");                                    // a non-string cell yields a not-matched flag
+    ctx.emitter.label(&have_flag_label);
+    abi::emit_pop_reg(ctx.emitter, "r13");
+    abi::emit_pop_reg_pair(ctx.emitter, "r11", "r12");
+    ctx.emitter.instruction("test rax, rax");                                   // did the current cell match the needle?
+    ctx.emitter.instruction(&format!("jne {}", found_label));                   // stop as soon as a cell matches the needle
+    ctx.emitter.instruction("add r13, 1");                                      // advance to the next boxed Mixed cell
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning the remaining cells
+    ctx.emitter.label(&found_label);
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a matching cell
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the not-found result after a match
+    ctx.emitter.label(&end_label);
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no cell matches the needle
     ctx.emitter.label(&done_label);
     Ok(())
 }

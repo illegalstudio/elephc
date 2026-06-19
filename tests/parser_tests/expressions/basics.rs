@@ -220,6 +220,48 @@ fn test_cast_not_confused_with_parens() {
     assert_eq!(stmts.len(), 1);
 }
 
+/// Regression: a cast binds tighter than `+` (PHP precedence). `(int)$x + 3` must parse as
+/// `((int)$x) + 3` — a top-level `Add` whose left operand is the `Cast` — not `(int)($x + 3)`.
+/// The cast operand was previously parsed at binding power 27, which swallowed the trailing `+ 3`.
+#[test]
+fn test_cast_binds_tighter_than_addition() {
+    let stmts = parse_source("<?php echo (int)$x + 3;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::BinaryOp { left, op, .. } => {
+                assert_eq!(*op, BinOp::Add);
+                assert!(
+                    matches!(left.kind, ExprKind::Cast { .. }),
+                    "left operand of + should be the cast, got {:?}",
+                    left.kind
+                );
+            }
+            other => panic!("expected top-level Add, got {:?}", other),
+        },
+        other => panic!("expected echo statement, got {:?}", other),
+    }
+}
+
+/// Regression: `**` binds tighter than a cast (PHP precedence). `(int)$x ** 2` must parse as
+/// `(int)($x ** 2)` — a top-level `Cast` wrapping a `Pow` — since exponentiation outranks casts.
+#[test]
+fn test_cast_binds_looser_than_exponent() {
+    let stmts = parse_source("<?php echo (int)$x ** 2;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::Cast { expr: inner, .. } => {
+                assert!(
+                    matches!(inner.kind, ExprKind::BinaryOp { op: BinOp::Pow, .. }),
+                    "cast operand should be a Pow, got {:?}",
+                    inner.kind
+                );
+            }
+            other => panic!("expected top-level Cast, got {:?}", other),
+        },
+        other => panic!("expected echo statement, got {:?}", other),
+    }
+}
+
 // --- Float ---
 
 /// Verifies that `<?php echo 3.14;` parses as `Stmt::echo(Expr::float_lit(3.14))`.

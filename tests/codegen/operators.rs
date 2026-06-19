@@ -450,3 +450,22 @@ fn test_greater_equal() {
     let out = compile_and_run("<?php echo 1 >= 2;");
     assert_eq!(out, "");
 }
+
+/// Regression: a loose `==` between a plain integer and a boxed `Mixed` integer must hold in both
+/// operand orders. Loading a Mixed operand unboxes it through a runtime call that clobbers the
+/// scratch registers; without saving the already-loaded left operand, `Int == Mixed` lost its left
+/// value and compared wrong, while `Mixed == Int` happened to work. The Mixed here comes from a
+/// heterogeneous associative array element.
+#[test]
+fn test_loose_eq_int_and_mixed_both_orders() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["n" => 100, "s" => "x"];
+$m = $h["n"];
+$i = 100;
+echo ($i == $m ? "y" : "n"), ($m == $i ? "y" : "n"), ($i == $h["n"] ? "y" : "n"),
+     ($i == 101 ? "y" : "n");
+"#,
+    );
+    assert_eq!(out, "yyyn");
+}

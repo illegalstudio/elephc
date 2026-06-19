@@ -154,11 +154,28 @@ fn test_error_date_no_args() {
     expect_error("<?php date();", "date() takes 1 or 2 arguments");
 }
 
-/// Verifies that `mktime()` with only three arguments yields a wrong-args diagnostic.
+/// Verifies that `gmdate()` with no arguments yields a wrong-args diagnostic naming `gmdate`.
+#[test]
+fn test_error_gmdate_no_args() {
+    expect_error("<?php gmdate();", "gmdate() takes 1 or 2 arguments");
+}
+
+/// Verifies that `gmdate()` with three arguments yields a wrong-args diagnostic.
+#[test]
+fn test_error_gmdate_too_many_args() {
+    expect_error(
+        "<?php gmdate(\"Y\", 0, 1);",
+        "gmdate() takes 1 or 2 arguments",
+    );
+}
+
+/// Verifies `mktime()` arity: PHP 8.0+ accepts 0–6 arguments (omitted ones default to the
+/// corresponding current-time component via the procedural-alias desugar), so seven arguments is
+/// out of range and yields the fixed-arity diagnostic.
 #[test]
 fn test_error_mktime_wrong_args() {
     expect_error(
-        "<?php mktime(1, 2, 3);",
+        "<?php mktime(1, 2, 3, 4, 5, 6, 7);",
         "mktime() takes exactly 6 arguments",
     );
 }
@@ -166,7 +183,90 @@ fn test_error_mktime_wrong_args() {
 /// Verifies that `strtotime()` with no arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_strtotime_no_args() {
-    expect_error("<?php strtotime();", "strtotime() takes exactly 1 argument");
+    expect_error("<?php strtotime();", "strtotime() takes 1 or 2 arguments");
+}
+
+/// Verifies that `strtotime()` with three arguments yields a wrong-args diagnostic
+/// (the optional `baseTimestamp` is the only second argument).
+#[test]
+fn test_error_strtotime_too_many_args() {
+    expect_error(
+        "<?php strtotime(\"now\", 0, 1);",
+        "strtotime() takes 1 or 2 arguments",
+    );
+}
+
+/// Verifies that `checkdate()` with two arguments yields a wrong-args diagnostic
+/// (it requires exactly month, day, and year).
+#[test]
+fn test_error_checkdate_wrong_args() {
+    expect_error(
+        "<?php checkdate(1, 2);",
+        "checkdate() takes exactly 3 arguments",
+    );
+}
+
+// -- date/time alias arity diagnostics --
+// Procedural date/time aliases are desugared by the name resolver only at their supported
+// arities. A wrong-arity call must report a precise arity error (matching `function_exists()`,
+// which recognizes these names) rather than the misleading "Undefined function". Each test below
+// covers a distinct message shape produced by the checker's alias-arity diagnostic.
+
+/// `idate()` accepts 1 or 2 arguments; a zero-arg call reports the "N or M" message shape.
+#[test]
+fn test_error_idate_too_few_args() {
+    expect_error("<?php idate();", "idate() takes 1 or 2 arguments");
+}
+
+/// A date alias called with too MANY arguments is diagnosed by arity, not as undefined.
+#[test]
+fn test_error_idate_too_many_args() {
+    expect_error("<?php idate(\"Y\", 0, 1);", "idate() takes 1 or 2 arguments");
+}
+
+/// `gregoriantojd()` requires exactly 3 arguments (the "exactly N" message shape).
+#[test]
+fn test_error_gregoriantojd_wrong_args() {
+    expect_error(
+        "<?php gregoriantojd(1, 2);",
+        "gregoriantojd() takes exactly 3 arguments",
+    );
+}
+
+/// `jdtogregorian()` requires exactly 1 argument (singular wording in the message).
+#[test]
+fn test_error_jdtogregorian_wrong_args() {
+    expect_error(
+        "<?php jdtogregorian();",
+        "jdtogregorian() takes exactly 1 argument",
+    );
+}
+
+/// `easter_date()` accepts 0 to 2 arguments (the "N to M" message shape).
+#[test]
+fn test_error_easter_date_too_many_args() {
+    expect_error(
+        "<?php easter_date(1, 2, 3);",
+        "easter_date() takes 0 to 2 arguments",
+    );
+}
+
+/// `date_sunrise()` accepts 1 to 6 arguments; a zero-arg call reports the wide "N to M" range.
+#[test]
+fn test_error_date_sunrise_too_few_args() {
+    expect_error(
+        "<?php date_sunrise();",
+        "date_sunrise() takes 1 to 6 arguments",
+    );
+}
+
+/// `timezone_version_get()` takes no arguments (the "exactly 0" message shape).
+#[test]
+fn test_error_timezone_version_get_wrong_args() {
+    expect_error(
+        "<?php timezone_version_get(1);",
+        "timezone_version_get() takes exactly 0 arguments",
+    );
 }
 
 // -- JSON error tests --

@@ -1227,11 +1227,11 @@ echo strtotime("garbage");
 echo "|";
 echo time() > 0 ? "T" : "F";
 echo "|";
-echo microtime() > 0.0 ? "M" : "N";
+echo microtime(true) > 0.0 ? "M" : "N";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("date_time_builtins", source),
-        "2023-11-14|2000-01-01|2024-06-15 12:30:45|-1|T|M"
+        "2023-11-14|2000-01-01|2024-06-15 12:30:45||T|M"
     );
 }
 
@@ -1631,7 +1631,7 @@ var_dump([1, 2, 3]);
 var_dump(["a" => 1, "b" => 2]);
 "#;
     let expected =
-        "42|hi|1||Array\n---\nint(42)\nstring(2) \"hi\"\nbool(true)\nbool(false)\nNULL\nfloat(3.14)\narray(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\narray(2) {\n}\n";
+        "42|hi|1||Array\n(\n    [0] => 1\n    [1] => 2\n)\n---\nint(42)\nstring(2) \"hi\"\nbool(true)\nbool(false)\nNULL\nfloat(3.14)\narray(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\narray(2) {\n  [\"a\"]=>\n  int(1)\n  [\"b\"]=>\n  int(2)\n}\n";
     assert_eq!(
         compile_and_run_ir_backend("debug_output_builtins", source),
         expected
@@ -4970,9 +4970,10 @@ fn ir_backend_handles_indexed_in_array() {
             "1",
         ),
         (
+            // `in_array` returns bool; `echo false` is the empty string, not "0".
             "in_array_int_missing",
             "<?php $a = [10, 20, 30]; echo in_array(99, $a);",
-            "0",
+            "",
         ),
         (
             "in_array_string_found",
@@ -4982,7 +4983,7 @@ fn ir_backend_handles_indexed_in_array() {
         (
             "in_array_string_missing",
             "<?php $a = [\"a\", \"b\", \"c\"]; echo in_array(\"x\", $a);",
-            "0",
+            "",
         ),
         (
             "in_array_empty",

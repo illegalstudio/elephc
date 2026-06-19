@@ -98,9 +98,11 @@ impl Checker {
                 Ok(PhpType::Bool)
             }
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                let lt_ok = is_numeric_operand_type(self, &lt);
-                let rt_ok = is_numeric_operand_type(self, &rt);
-                if !lt_ok || !rt_ok {
+                let numeric_ok =
+                    is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
+                let datetime_ok =
+                    is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
+                if !numeric_ok && !datetime_ok {
                     return Err(CompileError::new(
                         expr.span,
                         "Comparison operators require numeric operands",
@@ -126,9 +128,11 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             BinOp::Spaceship => {
-                let lt_ok = is_numeric_operand_type(self, &lt);
-                let rt_ok = is_numeric_operand_type(self, &rt);
-                if !lt_ok || !rt_ok {
+                let numeric_ok =
+                    is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
+                let datetime_ok =
+                    is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
+                if !numeric_ok && !datetime_ok {
                     return Err(CompileError::new(
                         expr.span,
                         "Spaceship operator requires numeric operands",
@@ -299,12 +303,46 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        let mut closure_sig = self.prepare_closure_signature_context(
+        self.infer_closure_type_with_param_hints(
+            params,
+            variadic,
+            return_type,
+            body,
+            captures,
+            capture_refs,
+            expr,
+            env,
+            &[],
+        )
+    }
+
+    /// Infers a closure type while typing unannotated parameters from `param_hints`.
+    ///
+    /// Used by callback builtins (such as `usort`/`uasort` over an array of
+    /// objects) that know the value type their comparator receives: the hint lets
+    /// an unannotated parameter's body be checked against the real element type so
+    /// object comparisons (`<=>`) and property/method access type-check instead of
+    /// falling back to the default `Int` placeholder. Annotated parameters keep
+    /// their declared type.
+    pub(crate) fn infer_closure_type_with_param_hints(
+        &mut self,
+        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+        variadic: &Option<String>,
+        return_type: &Option<TypeExpr>,
+        body: &[Stmt],
+        captures: &[String],
+        capture_refs: &[String],
+        expr: &Expr,
+        env: &TypeEnv,
+        param_hints: &[PhpType],
+    ) -> Result<PhpType, CompileError> {
+        let mut closure_sig = self.prepare_closure_signature_context_with_param_hints(
             params,
             variadic,
             captures,
             expr.span,
             env,
+            param_hints,
         )?;
         let mut closure_ref_params: Vec<String> = params
             .iter()
@@ -1142,6 +1180,17 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
         ty,
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Mixed
     ) || checker.is_union_with_mixed_int_dispatch(ty)
+}
+
+/// Returns `true` if `ty` is a concrete `DateTime`/`DateTimeImmutable` object, the family PHP orders
+/// and compares by its absolute instant. Used to allow relational and spaceship operators on these
+/// objects; EIR lowering then reduces each operand to its `timestamp`/`microsecond` instant key.
+fn is_datetime_family_object(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Object(name)
+            if matches!(name.trim_start_matches('\\'), "DateTime" | "DateTimeImmutable")
+    )
 }
 
 /// Returns `true` if `ty` is a valid operand type for bitwise binary operators.

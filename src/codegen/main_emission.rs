@@ -150,7 +150,7 @@ pub(super) fn emit_main_and_finalize(
     functions::emit_local_ref_cell_flag_zero_init(&mut emitter, &ctx);
     emit_main_activation_record_push(&mut emitter, &ctx, &main_cleanup_label);
     emit_enum_singleton_initializers(&mut emitter, &mut data, &ctx, emitted_class_names);
-    emit_static_property_initializers(&mut emitter, &mut data, &mut ctx);
+    emit_static_property_initializers(&mut emitter, &mut data, &mut ctx, emitted_class_names);
 
     emit_top_level_statements(program, &mut emitter, &mut ctx, &mut data);
     emit_main_epilogue(

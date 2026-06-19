@@ -675,6 +675,22 @@ binaries never link the bridge.
 - [x] Tagged null representation behind `--null-repr=tagged` / `ELEPHC_NULL_REPR` — inline two-word `{payload, tag}` `TaggedScalar` for null-capable scalars (miss-capable int array reads, empty `array_pop`/`array_shift`), tag-aware consumers (`echo`, `var_dump`, `is_null`, `??`, `??=`, `isset`, `empty`, `gettype`, casts, arithmetic narrowing, `===` via Mixed boxing), plain-int sentinel checks removed (full 64-bit int range round-trips, including `9223372036854775806`), local inference and untyped-param widening aligned; covered on all three targets in `tests/codegen/null_sentinel/tagged.rs`
 - [x] Flip the default null representation to `Tagged` (the collision bullet in `docs/php/types.md` now documents only the `--null-repr=sentinel` opt-out); the `{payload, tag}` shape is the convergence point for runtime int-overflow→float promotion
 
+### Date/time and calendar parity
+
+Full OOP + procedural date/time surface (`DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, and ~45 procedural functions/aliases), plus the complete `ext/calendar` extension, implemented as synthetic classes/methods over the `date()`/`mktime()`/`gmmktime()` runtime — no new codegen or assembly.
+
+- [x] `DateTime` / `DateTimeImmutable` — construct (string + `?DateTimeZone`), `format`, `getTimestamp` / `setTimestamp`, `getTimezone` / `setTimezone`, `getOffset`, `getMicrosecond` / `setMicrosecond`, `setTime`, `setDate`, `setISODate`, `add` / `sub`, `modify`, `diff`, `createFromFormat`, `createFromInterface`, `createFromMutable` / `createFromImmutable`, `createFromTimestamp`, `getLastErrors`; per-object timezone honored in `format()`
+- [x] `DateTimeInterface` format constants (`ATOM`, `COOKIE`, `ISO8601`, `ISO8601_EXPANDED`, the `RFC*` family, `RSS`, `W3C`) on the interface and both classes
+- [x] `DateInterval` — ISO 8601 duration parsing, `format()` (`%y %m %d %h %i %s %a %R %r %f %F` …), `createFromDateString`
+- [x] `DatePeriod` — `Iterator` over a date range, end-date and recurrence-count forms, `EXCLUDE_START_DATE` / `INCLUDE_END_DATE`, `createFromISO8601String`
+- [x] PHP 8.3 date exception hierarchy — `DateError` / `DateObjectError` / `DateRangeError` (extend `Error`); `DateException` / `DateInvalidTimeZoneException` / `DateInvalidOperationException` / `DateMalformed{String,IntervalString,PeriodString}Exception` (extend `Exception`)
+- [x] `date()` / `gmdate()` specifiers including `O P Z T e I c r u v p B X x`; `createFromFormat()` specifiers including `D l S F M z v O P Z T e X x` and the `! | # ? * +` metas with strict trailing-data rejection
+- [x] `strtotime()` returns `int|false` (PHP-compatible failure value; `-1` stays a valid pre-epoch timestamp); broad relative/ISO/keyword/timezone-suffix grammar
+- [x] Procedural date/time functions — `mktime` / `gmmktime`, `checkdate`, `getdate`, `localtime`, `gettimeofday`, `microtime`, `hrtime`, `idate`, `strftime` / `gmstrftime`, `strptime`, `date_parse` / `date_parse_from_format`, `date_default_timezone_get/set`, the `date_*` OOP aliases, and `timezone_open` / `timezone_identifiers_list` / `timezone_name_get` / `timezone_offset_get` / `timezone_name_from_abbr` / `timezone_version_get`
+- [x] Solar functions — `date_sun_info()`, and the deprecated `date_sunrise()` / `date_sunset()` (with `SUNFUNCS_RET_*`), a faithful bit-exact port of PHP's timelib astronomical algorithm
+- [x] `ext/calendar` — `gregoriantojd` / `juliantojd` / `frenchtojd` / `jewishtojd` and inverses, `cal_to_jd` / `cal_from_jd` / `cal_days_in_month` / `cal_info`, `jddayofweek`, `jdmonthname`, `easter_days` / `easter_date`, `unixtojd` / `jdtounix`, and the `CAL_*` constants (Gregorian, Julian, French Republican, and Jewish calendars; bit-exact vs PHP across the full Serial-Day-Number range)
+- [x] Bundled IANA timezone-database introspection — `DateTimeZone::getLocation()` / `getTransitions()` / `listAbbreviations()` and `timezone_location_get` / `timezone_transitions_get` / `timezone_abbreviations_list`. The three tables are baked from PHP's own timelib data (byte-for-byte identical to PHP) into the pure-Rust `crates/elephc-tz` bridge staticlib, linked **only** into programs that use one of these methods (pay-for-use, like the TLS/PDO/crypto bridges); the transition `time` string is recomputed at runtime by a proleptic-Gregorian formatter exact to `PHP_INT_MIN`
+
 ## v0.24.x — EIR introduction and register allocation
 
 Introduce a domain-specific intermediate representation (EIR) between the

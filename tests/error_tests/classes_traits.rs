@@ -230,6 +230,42 @@ fn test_error_new_static_validates_child_constructor() {
     );
 }
 
+/// Verifies the builtin `DatePeriod` constructor enforces its 3-to-4 argument arity.
+#[test]
+fn test_error_date_period_too_few_args() {
+    expect_error(
+        "<?php $p = new DatePeriod(new DateTime(\"2024-01-01\"));",
+        "Constructor 'DatePeriod::__construct' expects 3 to 4 arguments, got 1",
+    );
+}
+
+/// Verifies the builtin `DateTime` constructor rejects more than its 0-to-2 arguments.
+#[test]
+fn test_error_datetime_too_many_args() {
+    expect_error(
+        "<?php $d = new DateTime(\"now\", null, 3);",
+        "Constructor 'DateTime::__construct' expects 0 to 2 arguments, got 3",
+    );
+}
+
+/// Verifies the builtin `DateTimeImmutable` constructor rejects more than its 0-to-2 arguments.
+#[test]
+fn test_error_datetime_immutable_too_many_args() {
+    expect_error(
+        "<?php $d = new DateTimeImmutable(\"now\", null, 3);",
+        "Constructor 'DateTimeImmutable::__construct' expects 0 to 2 arguments, got 3",
+    );
+}
+
+/// Verifies the builtin `DateInterval` constructor requires its single duration-string argument.
+#[test]
+fn test_error_date_interval_too_few_args() {
+    expect_error(
+        "<?php $i = new DateInterval();",
+        "Constructor 'DateInterval::__construct' expects 1 arguments, got 0",
+    );
+}
+
 // --- #[\Override] enforcement (PHP 8.3) ---
 
 /// Verifies that `#[Override]` on a method with no matching parent method reports

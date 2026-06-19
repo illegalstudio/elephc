@@ -113,7 +113,7 @@ jobs:
         run: cargo build --release
 
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz
 
       - name: Strip binary
         run: strip target/release/elephc
@@ -130,7 +130,8 @@ jobs:
             libelephc_tls.a \
             libelephc_pdo.a \
             libelephc_crypto.a \
-            libelephc_phar.a
+            libelephc_phar.a \
+            libelephc_tz.a
           shasum -a 256 elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz > elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
 
       - name: Create GitHub Release
@@ -174,6 +175,7 @@ jobs:
               lib.install "libelephc_pdo.a"
               lib.install "libelephc_crypto.a"
               lib.install "libelephc_phar.a"
+              lib.install "libelephc_tz.a"
             end
 
             test do
@@ -202,6 +204,12 @@ jobs:
               (testpath/"phar.php").write('<?php file_put_contents("phar://brew.phar/entry.txt", "phar-ok"); \$p = "brew.phar"; echo file_get_contents("phar://" . \$p . "/entry.txt");')
               system bin/"elephc", "phar.php"
               assert_equal "phar-ok", shell_output("#{testpath}/phar")
+
+              # Exercise the timezone-database bridge (DateTimeZone introspection)
+              # from the Homebrew lib/ layout; getLocation() reads libelephc_tz.a.
+              (testpath/"tz.php").write('<?php echo (new DateTimeZone("Europe/Rome"))->getLocation()["country_code"];')
+              system bin/"elephc", "tz.php"
+              assert_equal "IT", shell_output("#{testpath}/tz")
             end
           end
           EOF

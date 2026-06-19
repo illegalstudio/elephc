@@ -13,12 +13,13 @@ categories = ["compilers", "command-line-utilities"]
 # The bridge staticlibs are default workspace members so plain `cargo build` /
 # `cargo test` materialize libelephc_tls.a (https:// wrapper),
 # libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_crypto.a
-# (hash/HMAC family), and libelephc_phar.a (runtime phar:// archive reads) into
-# target/<profile>/, where linker.rs locates them for programs that use those
-# features.
+# (hash/HMAC family), libelephc_phar.a (runtime phar:// archive reads), and
+# libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
+# listAbbreviations) into target/<profile>/, where linker.rs locates them for
+# programs that use those features.
 [workspace]
-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar"]
-default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar"]
+members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz"]
+default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz"]
 resolver = "2"
 
 [[bin]]
@@ -48,6 +49,7 @@ elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
 elephc-crypto = { path = "crates/elephc-crypto" }
 elephc-phar = { path = "crates/elephc-phar" }
+elephc-tz = { path = "crates/elephc-tz" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.

@@ -24,6 +24,73 @@ var_dump($a);
     assert_eq!(out, "array(3) {\n  [0]=>\n  int(10)\n  [1]=>\n  int(20)\n  [2]=>\n  int(30)\n}\n");
 }
 
+/// Regression: `var_dump` on an associative array (hash) used to print just
+/// `array(N) {\n}\n` with no entries. It now walks the hash via
+/// `__rt_var_dump_hash`, formatting string keys as `["key"]=>` and the scalar
+/// value beneath. Output matches PHP exactly (cross-checked with `php -r`).
+#[test]
+fn test_var_dump_hash_string_keys() {
+    let out = compile_and_run(r#"<?php var_dump(["a" => 1, "b" => 2, "c" => 3]);"#);
+    assert_eq!(
+        out,
+        "array(3) {\n  [\"a\"]=>\n  int(1)\n  [\"b\"]=>\n  int(2)\n  [\"c\"]=>\n  int(3)\n}\n"
+    );
+}
+
+/// Regression: `var_dump` on an integer-keyed hash renders keys as `[N]=>`
+/// (no quotes), matching PHP.
+#[test]
+fn test_var_dump_hash_int_keys() {
+    let out = compile_and_run(r#"<?php var_dump([10 => "x", 20 => "y"]);"#);
+    assert_eq!(
+        out,
+        "array(2) {\n  [10]=>\n  string(1) \"x\"\n  [20]=>\n  string(1) \"y\"\n}\n"
+    );
+}
+
+/// Regression: `var_dump` on a heterogeneous hash formats each scalar value by
+/// its runtime tag (int/string/float/bool) and renders null entries as `NULL`.
+#[test]
+fn test_var_dump_hash_heterogeneous_values() {
+    let out = compile_and_run(
+        r#"<?php var_dump(["name" => "Alice", "age" => 30, "score" => 4.5, "ok" => true, "nil" => null]);"#,
+    );
+    assert_eq!(
+        out,
+        "array(5) {\n  [\"name\"]=>\n  string(5) \"Alice\"\n  [\"age\"]=>\n  int(30)\n  [\"score\"]=>\n  float(4.5)\n  [\"ok\"]=>\n  bool(true)\n  [\"nil\"]=>\n  NULL\n}\n"
+    );
+}
+
+/// Regression: a nested array value inside a hash falls back to `NULL` (the
+/// same limitation as the indexed Mixed walker) instead of crashing or
+/// emitting garbage. The surrounding scalar entries still format correctly.
+#[test]
+fn test_var_dump_hash_nested_value_falls_back_to_null() {
+    let out = compile_and_run(r#"<?php var_dump(["x" => 5, "inner" => [1, 2], "y" => 7]);"#);
+    assert_eq!(
+        out,
+        "array(3) {\n  [\"x\"]=>\n  int(5)\n  [\"inner\"]=>\n  NULL\n  [\"y\"]=>\n  int(7)\n}\n"
+    );
+}
+
+/// Regression: a hash reached through a boxed `Mixed` value (e.g. an associative
+/// array read out of a heterogeneous array, the shape that builtins like
+/// `getdate()`/`DateTimeZone::getLocation()` return) is walked by the hash
+/// formatter after the Mixed unbox, instead of printing the empty array shell.
+#[test]
+fn test_var_dump_mixed_boxed_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$outer = ["h" => ["a" => 1, "b" => 2], "n" => 9];
+var_dump($outer["h"]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [\"a\"]=>\n  int(1)\n  [\"b\"]=>\n  int(2)\n}\n"
+    );
+}
+
 /// Verifies compiled PHP output for var dump array bool elements.
 #[test]
 fn test_var_dump_array_bool_elements() {
@@ -285,4 +352,20 @@ fn test_is_numeric_mixed_array_element() {
         r#"<?php $a = [2.5, "3.14", 5, "x", true, "-7", "."]; foreach ($a as $v) { echo (is_numeric($v) ? "1" : "0"); }"#,
     );
     assert_eq!(out, "1110010");
+}
+
+/// Regression: a user-defined function in a namespace whose name collides with a procedural
+/// date/time alias (e.g. `date_diff`) must NOT be hijacked into the OOP desugaring. The name
+/// resolver only rewrites the alias when no user function of that name is declared.
+#[test]
+fn test_namespaced_user_function_shadows_date_alias() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+function date_diff($a, $b) { return "user:" . ($a + $b); }
+function timezone_name_get($x) { return "tz:" . $x; }
+echo date_diff(1, 2), "|", timezone_name_get(5);
+"#,
+    );
+    assert_eq!(out, "user:3|tz:5");
 }

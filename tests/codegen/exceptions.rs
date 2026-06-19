@@ -396,3 +396,53 @@ fn test_exception_finally_allows_local_loop_break() {
     );
     assert_eq!(out, "1234");
 }
+
+/// Regression: a `try`/`catch` whose body calls a function that can throw, nested inside a
+/// `foreach` loop, must compile and run. The catch handler is reachable only through an implicit
+/// exception edge; without modelling that edge in the IR validator's predecessor graph the
+/// handler looked unreachable, and the foreach back-edge then stripped the entry block out of the
+/// loop header's dominators, so the iterator value (defined in the entry block) was rejected with
+/// a spurious `UseNotDominated` error at compile time. Each iteration must observe whether its
+/// element threw.
+#[test]
+fn test_try_catch_in_foreach_with_throwing_callee() {
+    let out = compile_and_run(
+        r#"<?php
+function mayThrow($s) {
+    if ($s === "bad") { throw new Exception("boom"); }
+    return $s;
+}
+$log = "";
+foreach (["ok", "bad", "ok"] as $item) {
+    try { mayThrow($item); $log .= "0"; }
+    catch (Exception $e) { $log .= "1"; }
+}
+echo $log;
+"#,
+    );
+    assert_eq!(out, "010");
+}
+
+/// Regression companion: the same implicit-handler-edge fix must keep a `try`/`catch` that catches
+/// a thrown exception inside a `while` loop working, with the catch body mutating a loop-carried
+/// accumulator. Confirms the dominator fix is not specific to `foreach`'s iterator lowering.
+#[test]
+fn test_try_catch_in_while_loop_accumulates() {
+    let out = compile_and_run(
+        r#"<?php
+function check($n) {
+    if ($n % 2 === 0) { throw new Exception("even"); }
+    return $n;
+}
+$out = "";
+$i = 0;
+while ($i < 4) {
+    try { check($i); $out .= "o"; }
+    catch (Exception $e) { $out .= "x"; }
+    $i++;
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "xoxo");
+}

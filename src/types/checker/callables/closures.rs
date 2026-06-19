@@ -42,6 +42,29 @@ impl Checker {
         span: Span,
         env: &TypeEnv,
     ) -> Result<ClosureSignatureContext, CompileError> {
+        self.prepare_closure_signature_context_with_param_hints(
+            params, variadic, captures, span, env, &[],
+        )
+    }
+
+    /// Builds the closure signature/environment, typing unannotated parameters
+    /// from `contextual_param_types` when a hint is available at that position.
+    ///
+    /// Callback builtins that know the argument types their comparator/visitor
+    /// receives (for example `usort`/`uasort` over an array of objects) pass the
+    /// element type as a hint so an unannotated parameter is checked against the
+    /// real value type instead of the default `Int`/`Mixed` placeholder. An
+    /// explicitly annotated parameter always keeps its declared type; the hint is
+    /// only consulted for parameters with no type annotation.
+    pub(crate) fn prepare_closure_signature_context_with_param_hints(
+        &mut self,
+        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+        variadic: &Option<String>,
+        captures: &[String],
+        span: Span,
+        env: &TypeEnv,
+        contextual_param_types: &[PhpType],
+    ) -> Result<ClosureSignatureContext, CompileError> {
         for cap in captures {
             if !env.contains_key(cap) {
                 return Err(CompileError::new(
@@ -57,7 +80,7 @@ impl Checker {
         let mut ref_params = Vec::new();
         let mut declared_params = Vec::new();
 
-        for (name, type_ann, default, is_ref) in params {
+        for (idx, (name, type_ann, default, is_ref)) in params.iter().enumerate() {
             let (env_ty, sig_ty) = match type_ann {
                 Some(type_ann) => {
                     let declared_ty = self.resolve_declared_param_type_hint(
@@ -73,7 +96,10 @@ impl Checker {
                     )?;
                     (declared_ty.clone(), declared_ty)
                 }
-                None => (PhpType::Int, PhpType::Mixed),
+                None => match contextual_param_types.get(idx) {
+                    Some(hint) => (hint.clone(), hint.clone()),
+                    None => (PhpType::Int, PhpType::Mixed),
+                },
             };
 
             closure_env.insert(name.clone(), env_ty);

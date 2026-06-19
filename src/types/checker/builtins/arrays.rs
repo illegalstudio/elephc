@@ -87,7 +87,9 @@ pub(super) fn check_builtin(
                     "in_array() second argument must be array",
                 ));
             }
-            Ok(Some(PhpType::Int))
+            // PHP `in_array()` returns bool. The runtime result is 0/1 either way, but
+            // the static type drives echo/var_dump: `echo false` is "" (not "0").
+            Ok(Some(PhpType::Bool))
         }
         "array_keys" | "array_values" => {
             if args.len() != 1 {
@@ -394,10 +396,11 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             checker.infer_type(&args[1], env)?;
             let val_ty = checker.infer_type(&args[2], env)?;
-            // A non-literal-zero start (keys start..start+count-1) or a string value builds a
-            // keyed Mixed-valued hash; both must match the codegen emitter and infer_local_type.
+            // A non-literal-zero start (keys start..start+count-1) builds a keyed Mixed-valued
+            // hash; a literal-zero start builds the indexed path (str for string values, scalar
+            // otherwise). Both branches must match the codegen emitter and infer_local_type.
             let start_is_literal_zero = matches!(args[0].kind, ExprKind::IntLiteral(0));
-            if !start_is_literal_zero || matches!(val_ty.codegen_repr(), PhpType::Str) {
+            if !start_is_literal_zero {
                 Ok(Some(PhpType::AssocArray {
                     key: Box::new(PhpType::Int),
                     value: Box::new(PhpType::Mixed),

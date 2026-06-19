@@ -182,6 +182,18 @@ impl Checker {
                     if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
                         continue;
                     }
+                    // The user-sort comparator is type-checked by `check_builtin`
+                    // with its parameters typed from the array element (so an
+                    // unannotated object comparator type-checks). Skip the eager
+                    // pass here, which would otherwise check the comparator body
+                    // with default `Int` parameters and reject object access.
+                    if idx == 1
+                        && (builtin_name.eq_ignore_ascii_case("usort")
+                            || builtin_name.eq_ignore_ascii_case("uasort")
+                            || builtin_name.eq_ignore_ascii_case("uksort"))
+                    {
+                        continue;
+                    }
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;

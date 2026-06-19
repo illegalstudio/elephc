@@ -64,6 +64,15 @@ impl Symbols {
             .or_else(|| canonical_builtin_function_name(name))
     }
 
+    /// Returns whether `name` resolves to a user-declared (or extern) function,
+    /// ignoring compiler builtins. Used to stop procedural date/time alias
+    /// rewriting from hijacking a user function whose name collides with an
+    /// alias (e.g. a namespaced `App\date_diff`).
+    pub(super) fn declares_function(&self, name: &str) -> bool {
+        let key = php_symbol_key(name);
+        self.functions.contains_key(&key) || self.extern_functions.contains_key(&key)
+    }
+
     /// canonical_class_like
     pub(super) fn canonical_class_like(&self, name: &str) -> Option<String> {
         let key = php_symbol_key(name);
@@ -79,6 +88,18 @@ impl Symbols {
                     .find(|builtin| php_symbol_key(builtin) == key)
                     .map(|builtin| (*builtin).to_string())
             })
+    }
+
+    /// Returns whether `name` resolves to a user-declared (or extern) class,
+    /// interface, or trait, ignoring compiler builtins. Used to stop builtin
+    /// static-method desugaring (e.g. `DateTimeZone::listIdentifiers`) from
+    /// hijacking a user class that happens to share the name.
+    pub(super) fn declares_class_like(&self, name: &str) -> bool {
+        let key = php_symbol_key(name);
+        self.classes.contains_key(&key)
+            || self.interfaces.contains_key(&key)
+            || self.traits.contains_key(&key)
+            || self.extern_classes.contains_key(&key)
     }
 
     /// has_constant

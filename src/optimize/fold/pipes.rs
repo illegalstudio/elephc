@@ -89,10 +89,42 @@ pub(super) fn try_fold_pure_pipe(value: &Expr, callable: &Expr) -> Option<ExprKi
         ("is_string", value_kind) => Some(ExprKind::BoolLiteral(matches!(value_kind, ExprKind::StringLiteral(_)))),
         ("is_bool", value_kind) => Some(ExprKind::BoolLiteral(matches!(value_kind, ExprKind::BoolLiteral(_)))),
         ("is_null", value_kind) => Some(ExprKind::BoolLiteral(matches!(value_kind, ExprKind::Null))),
-        ("is_array", value_kind) => Some(ExprKind::BoolLiteral(matches!(
-            value_kind,
-            ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
-        ))),
+        // `is_array`/`is_object`/`is_scalar` fold only when the piped value is a
+        // recognized constant literal. A non-literal (e.g. a variable) must NOT
+        // fold — its runtime kind is unknown, so we fall through and let codegen
+        // emit the runtime check rather than guessing the result.
+        ("is_array", ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) => {
+            Some(ExprKind::BoolLiteral(true))
+        }
+        (
+            "is_array",
+            ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null,
+        ) => Some(ExprKind::BoolLiteral(false)),
+        (
+            "is_object",
+            ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+            | ExprKind::ArrayLiteral(_)
+            | ExprKind::ArrayLiteralAssoc(_),
+        ) => Some(ExprKind::BoolLiteral(false)),
+        (
+            "is_scalar",
+            ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BoolLiteral(_),
+        ) => Some(ExprKind::BoolLiteral(true)),
+        (
+            "is_scalar",
+            ExprKind::Null | ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_),
+        ) => Some(ExprKind::BoolLiteral(false)),
         // PHP `is_numeric` accepts ints, floats, and numeric strings. Reject
         // strings we cannot reliably classify here; the runtime fallback
         // handles them with the canonical parser.

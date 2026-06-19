@@ -291,10 +291,21 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_executable" => io::lower_is_executable(ctx, inst),
         "is_link" => io::lower_is_link(ctx, inst),
         "date" => system::lower_date(ctx, inst),
+        "gmdate" => system::lower_gmdate(ctx, inst),
+        "date_default_timezone_get" => system::lower_date_default_timezone_get(ctx, inst),
+        "date_default_timezone_set" => system::lower_date_default_timezone_set(ctx, inst),
         "microtime" => system::lower_microtime(ctx, inst),
         "mktime" => system::lower_mktime(ctx, inst),
+        "gmmktime" => system::lower_gmmktime(ctx, inst),
+        "__elephc_mktime_raw" => system::lower_mktime(ctx, inst),
+        "__elephc_gmmktime_raw" => system::lower_gmmktime(ctx, inst),
+        "checkdate" => system::lower_checkdate(ctx, inst),
+        "getdate" => system::lower_getdate(ctx, inst),
+        "localtime" => system::lower_localtime(ctx, inst),
+        "hrtime" => system::lower_hrtime(ctx, inst),
         "sleep" => system::lower_sleep(ctx, inst),
         "strtotime" => system::lower_strtotime(ctx, inst),
+        "__elephc_strtotime_raw" => system::lower_elephc_strtotime_raw(ctx, inst),
         "time" => system::lower_time(ctx, inst),
         "usleep" => system::lower_usleep(ctx, inst),
         "exit" | "die" => system::lower_exit(ctx, inst),
@@ -341,6 +352,9 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_string" => lower_static_type_predicate(ctx, inst, "is_string", PhpType::Str),
         "is_resource" => types::lower_is_resource(ctx, inst),
         "is_iterable" => lower_is_iterable(ctx, inst),
+        "is_array" => lower_is_array(ctx, inst),
+        "is_object" => lower_is_object(ctx, inst),
+        "is_scalar" => lower_is_scalar(ctx, inst),
         "get_resource_type" => types::lower_get_resource_type(ctx, inst),
         "get_resource_id" => types::lower_get_resource_id(ctx, inst),
         "is_numeric" => is_numeric::lower_is_numeric(ctx, inst),
@@ -723,6 +737,12 @@ fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()
 }
 
 /// Lowers `function_exists("name")` for compile-time string names.
+///
+/// Recognizes user functions, externs, catalog builtins, and the date/time procedural aliases
+/// that `name_resolver` desugars (including the injected timezone-introspection prelude
+/// functions). The aliases are matched through `is_date_procedural_alias` rather than the catalog
+/// because their call sites are rewritten before codegen, so they never reach the builtin catalog
+/// yet must still report as existing to match PHP.
 fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "function_exists", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -732,7 +752,8 @@ fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     } else {
         let exists = ctx.function_by_name(&function_name).is_some()
             || ctx.has_extern_function(&function_name)
-            || is_php_visible_builtin_function(function_name.trim_start_matches('\\'));
+            || is_php_visible_builtin_function(function_name.trim_start_matches('\\'))
+            || crate::name_resolver::is_date_procedural_alias(&function_name);
         emit_static_bool(ctx, exists);
     }
     store_if_result(ctx, inst)
@@ -1414,6 +1435,56 @@ fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     ensure_arg_count(inst, "is_null", 1)?;
     let value = expect_operand(inst, 0)?;
     predicates::emit_is_null_result(ctx, value)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value
+/// whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is
+/// not treated as a definite array here (it may hold a Traversable); use `is_iterable` for that.
+fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_array", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)? {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => emit_static_bool(ctx, true),
+        PhpType::Mixed | PhpType::Union(_) => {
+            predicates::emit_mixed_tag_membership(ctx, value, &[4, 5])?;
+        }
+        _ => emit_static_bool(ctx, false),
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose
+/// runtime tag is an object (6).
+fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_object", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)? {
+        PhpType::Object(_) => emit_static_bool(ctx, true),
+        PhpType::Mixed | PhpType::Union(_) => {
+            predicates::emit_mixed_tag_membership(ctx, value, &[6])?;
+        }
+        _ => emit_static_bool(ctx, false),
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed
+/// Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,
+/// arrays, objects, and resources are not scalars, matching PHP.
+fn lower_is_scalar(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_scalar", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)? {
+        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool => {
+            emit_static_bool(ctx, true)
+        }
+        PhpType::TaggedScalar => emit_tagged_scalar_int_predicate(ctx, value)?,
+        PhpType::Mixed | PhpType::Union(_) => {
+            predicates::emit_mixed_tag_membership(ctx, value, &[0, 1, 2, 3])?;
+        }
+        _ => emit_static_bool(ctx, false),
+    }
     store_if_result(ctx, inst)
 }
 

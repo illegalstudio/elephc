@@ -39,6 +39,8 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "boolval"
             | "gettype"
             | "is_array"
+            | "is_object"
+            | "is_scalar"
             | "is_bool"
             | "is_float"
             | "is_int"

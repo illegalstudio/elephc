@@ -87,16 +87,23 @@ fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Res
             ctx.emitter.label(&skip_label);
             Ok(())
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+        PhpType::Array(_) => emit_print_r_array(ctx, "__rt_print_r_indexed"),
+        PhpType::AssocArray { .. } => emit_print_r_array(ctx, "__rt_print_r_hash"),
+        PhpType::Iterable => {
+            // Iterable's runtime representation is ambiguous (a direct indexed
+            // array or a hash), so render only the `Array\n` header rather than
+            // risk walking the wrong layout.
             emit_write_literal(ctx, b"Array\n");
+            Ok(())
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_print_r_mixed(ctx);
             Ok(())
         }
         PhpType::TaggedScalar => emit_print_r_tagged_scalar(ctx),
         PhpType::Int
         | PhpType::Float
         | PhpType::Str
-        | PhpType::Mixed
-        | PhpType::Union(_)
         | PhpType::Resource(_)
         | PhpType::Pointer(_)
         | PhpType::Buffer(_)
@@ -120,6 +127,50 @@ fn emit_print_r_tagged_scalar(ctx: &mut FunctionContext<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Emits `print_r` output for an array/hash: the `Array\n` header followed by
+/// the recursive `(\n ... )\n` body emitted by the runtime `walker`. The array
+/// pointer is preserved across the header write (the write syscall clobbers the
+/// integer result register), then passed with a base indent of 0.
+fn emit_print_r_array(ctx: &mut FunctionContext<'_>, walker: &str) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    emit_write_literal(ctx, b"Array\n");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, #0");                              // base indent = 0 for the top-level array
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // array pointer → SysV first argument register
+            ctx.emitter.instruction("mov esi, 0");                              // base indent = 0 for the top-level array
+        }
+    }
+    abi::emit_call_label(ctx.emitter, walker);
+    Ok(())
+}
+
+/// Emits `print_r` output for a boxed Mixed payload by delegating to the runtime
+/// `__rt_print_r_value` single-value renderer with tag 7 (Mixed cell) and a base
+/// indent of 0, so a held array prints its full body and a held scalar prints
+/// raw (PHP `print_r` semantics: no type wrapper, `1`/empty for bool, empty for null).
+fn emit_print_r_mixed(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // boxed Mixed cell pointer → value low argument
+            ctx.emitter.instruction("mov x0, #7");                              // tag 7 = boxed Mixed cell
+            ctx.emitter.instruction("mov x2, #0");                              // high word unused for the cell pointer
+            ctx.emitter.instruction("mov x3, #0");                              // nested base indent = 0
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // boxed Mixed cell pointer → value low argument
+            ctx.emitter.instruction("mov edi, 7");                              // tag 7 = boxed Mixed cell
+            ctx.emitter.instruction("mov edx, 0");                              // high word unused for the cell pointer
+            ctx.emitter.instruction("mov ecx, 0");                              // nested base indent = 0
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_print_r_value");
+}
+
 /// Emits `var_dump` output for a boxed Mixed payload in the integer result register.
 fn emit_var_dump_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let int_case = ctx.next_label("var_dump_mixed_int");
@@ -128,6 +179,7 @@ fn emit_var_dump_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let bool_case = ctx.next_label("var_dump_mixed_bool");
     let resource_case = ctx.next_label("var_dump_mixed_resource");
     let array_case = ctx.next_label("var_dump_mixed_array");
+    let assoc_case = ctx.next_label("var_dump_mixed_assoc");
     let object_case = ctx.next_label("var_dump_mixed_object");
     let null_case = ctx.next_label("var_dump_mixed_null");
     let done = ctx.next_label("var_dump_mixed_done");
@@ -138,7 +190,7 @@ fn emit_var_dump_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
     emit_branch_on_mixed_tag(ctx, 3, &bool_case);
     emit_branch_on_mixed_tag(ctx, 9, &resource_case);
     emit_branch_on_mixed_tag(ctx, 4, &array_case);
-    emit_branch_on_mixed_tag(ctx, 5, &array_case);
+    emit_branch_on_mixed_tag(ctx, 5, &assoc_case);
     emit_branch_on_mixed_tag(ctx, 6, &object_case);
     abi::emit_jump(ctx.emitter, &null_case);
 
@@ -169,7 +221,18 @@ fn emit_var_dump_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
     ctx.emitter.label(&array_case);
     move_mixed_payload_to_int_result(ctx);
-    emit_var_dump_array(ctx, &PhpType::Mixed)?;
+    emit_var_dump_array(ctx, &PhpType::Array(Box::new(PhpType::Mixed)))?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&assoc_case);
+    move_mixed_payload_to_int_result(ctx);
+    emit_var_dump_array(
+        ctx,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        },
+    )?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&object_case);
@@ -331,16 +394,23 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
     Ok(())
 }
 
-/// Returns the runtime var_dump walker for homogeneous indexed array element types.
+/// Returns the runtime var_dump walker for an array/hash element layout.
+///
+/// Homogeneous indexed arrays use a per-element-type walker; `Array(Mixed)` uses the
+/// boxed-cell walker; associative arrays (hashes) use `__rt_var_dump_hash`, which iterates
+/// entries and formats string/integer keys plus scalar values (nested containers fall back
+/// to `NULL`, matching the indexed Mixed walker).
 fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
-    let PhpType::Array(elem_ty) = ty else {
-        return None;
-    };
-    match elem_ty.as_ref() {
-        PhpType::Int => Some("__rt_var_dump_array_int"),
-        PhpType::Str => Some("__rt_var_dump_array_str"),
-        PhpType::Bool => Some("__rt_var_dump_array_bool"),
-        PhpType::Float => Some("__rt_var_dump_array_float"),
+    match ty {
+        PhpType::Array(elem_ty) => match elem_ty.as_ref() {
+            PhpType::Int => Some("__rt_var_dump_array_int"),
+            PhpType::Str => Some("__rt_var_dump_array_str"),
+            PhpType::Bool => Some("__rt_var_dump_array_bool"),
+            PhpType::Float => Some("__rt_var_dump_array_float"),
+            PhpType::Mixed => Some("__rt_var_dump_array_mixed"),
+            _ => None,
+        },
+        PhpType::AssocArray { .. } => Some("__rt_var_dump_hash"),
         _ => None,
     }
 }

@@ -185,13 +185,21 @@ echo $b[1.2];
 }
 
 /// Verifies nullable integer array literals preserve null tags when boxed as mixed values.
+///
+/// Elements are dumped individually rather than `var_dump($items)`: the EIR backend now renders the
+/// full Mixed-array body, while the frozen legacy backend only emits the header (its Mixed-array
+/// walker was never implemented and is being removed in v0.26). Per-element `var_dump` exercises the
+/// same null-tag preservation and stays identical across both backends; the full-body Mixed `var_dump`
+/// output is covered by `codegen::io::printing::test_var_dump_mixed_indexed_array`.
 #[test]
 fn parity_nullable_int_array_literal_preserves_nulls() {
     assert_backend_parity(
         "nullable_int_array_literal_preserves_nulls",
         r#"<?php
 $items = [1, null, 3];
-var_dump($items);
+var_dump($items[0]);
+var_dump($items[1]);
+var_dump($items[2]);
 echo json_encode($items);
 "#,
         &[],
@@ -296,9 +304,15 @@ foreach ($c as $value) { echo $value; }
     );
 }
 
-/// Verifies untyped numeric ordering, unary negation, and direct `in_array()` output match legacy codegen.
+/// Verifies untyped numeric ordering and unary negation match legacy codegen.
+///
+/// The former `in_array_direct_echo_false` parity case was removed: the EIR backend now
+/// types `in_array()` as `bool` (PHP-correct), so a false result echoes as "" while the
+/// frozen legacy backend still echoes "0". This is a deliberate EIR improvement, not a
+/// regression — the bool behavior is covered by `array_basics::test_in_array_returns_bool`
+/// and the `in_array_*_missing` cases in `ir_backend_smoke_test`.
 #[test]
-fn parity_untyped_numeric_ordering_and_in_array_echo() {
+fn parity_untyped_numeric_ordering_negation() {
     assert_backend_parity(
         "untyped_numeric_ordering_negation",
         r#"<?php
@@ -309,17 +323,6 @@ function abs_val($x) {
     return $x;
 }
 echo abs_val(-5) . " " . abs_val(3);
-"#,
-        &[],
-    );
-    assert_backend_parity(
-        "in_array_direct_echo_false",
-        r#"<?php
-$a = [10, 20, 30];
-echo in_array(99, $a);
-echo ":";
-$b = ["a", "b", "c"];
-echo in_array("x", $b);
 "#,
         &[],
     );

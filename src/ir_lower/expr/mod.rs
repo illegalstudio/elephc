@@ -752,6 +752,24 @@ fn lower_compare(
 ) -> LoweredValue {
     let mut lhs = lower_expr(ctx, left);
     let mut rhs = lower_expr(ctx, right);
+    // DateTime-family value comparison: PHP orders `DateTime`/`DateTimeImmutable` by their absolute
+    // instant (timestamp seconds + microsecond), independent of the stored timezone. Replace each
+    // object operand with a monotonic integer instant key so `==`, `!=`, `<`, `<=`, `>`, `>=`, and
+    // `<=>` reduce to ordinary integer comparison. Identity `===`/`!==` is deliberately excluded so
+    // it keeps comparing object references.
+    if datetime_instant_compare_operator(op)
+        && is_datetime_family_value(ctx, lhs.value)
+        && is_datetime_family_value(ctx, rhs.value)
+    {
+        let lhs_key = lower_datetime_instant_key(ctx, lhs, expr);
+        let rhs_key = lower_datetime_instant_key(ctx, rhs, expr);
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        lhs = lhs_key;
+        rhs = rhs_key;
+    }
     let opcode = match op {
         BinOp::StrictEq => Op::StrictEq,
         BinOp::StrictNotEq => Op::StrictNotEq,
@@ -770,7 +788,7 @@ fn lower_compare(
         lhs = coerce_to_int(ctx, lhs, left);
         rhs = coerce_to_int(ctx, rhs, right);
     }
-    let immediate = if matches!(opcode, Op::ICmp | Op::FCmp) {
+    let immediate = if matches!(opcode, Op::ICmp | Op::FCmp | Op::StrCmp) {
         Some(Immediate::CmpPredicate(cmp_predicate(op)))
     } else {
         None
@@ -800,6 +818,70 @@ fn release_binary_operand_temporary(
     if ctx.value_is_owning_temporary(operand) {
         crate::ir_lower::ownership::release_if_owned(ctx, operand, Some(span));
     }
+}
+
+/// Returns true for the comparison operators PHP evaluates against a `DateTime`'s instant.
+///
+/// Identity `===`/`!==` is excluded: PHP keeps those as object-reference comparisons, so they must
+/// not be rewritten into the instant-key integer comparison.
+fn datetime_instant_compare_operator(op: &BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::Eq
+            | BinOp::NotEq
+            | BinOp::Lt
+            | BinOp::LtEq
+            | BinOp::Gt
+            | BinOp::GtEq
+            | BinOp::Spaceship
+    )
+}
+
+/// Returns true when `value` is a non-nullable `DateTime`/`DateTimeImmutable` instance whose instant
+/// can be compared through its `timestamp`/`microsecond` integer properties.
+///
+/// Nullable operands (`?DateTime`) are excluded: reading the `timestamp`/`microsecond` properties off
+/// a possible `null` would be invalid, so those fall through to the normal comparison path where
+/// PHP's null-vs-object ordering applies.
+fn is_datetime_family_value(ctx: &LoweringContext<'_, '_>, value: ValueId) -> bool {
+    let ty = ctx.builder.value_php_type(value);
+    matches!(
+        singular_object_class(&ty),
+        Some((name, false))
+            if matches!(name.trim_start_matches('\\'), "DateTime" | "DateTimeImmutable")
+    )
+}
+
+/// Lowers a `DateTime`/`DateTimeImmutable` object to a monotonic integer instant key,
+/// `timestamp * 1_000_000 + microsecond`.
+///
+/// Both components are stored as `int` properties, so the key is an exact ordering of the absolute
+/// instant including the sub-second part. Reducing each operand to this key lets the family's
+/// comparison operators reuse ordinary signed-integer comparison without any object-aware codegen.
+fn lower_datetime_instant_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let timestamp = lower_property_get_from_value(ctx, object, "timestamp", Op::PropGet, expr);
+    let microsecond = lower_property_get_from_value(ctx, object, "microsecond", Op::PropGet, expr);
+    let million = lower_int_literal(ctx, 1_000_000, expr);
+    let scaled = ctx.emit_value(
+        Op::IMul,
+        vec![timestamp.value, million.value],
+        None,
+        PhpType::Int,
+        Op::IMul.default_effects(),
+        Some(expr.span),
+    );
+    ctx.emit_value(
+        Op::IAdd,
+        vec![scaled.value, microsecond.value],
+        None,
+        PhpType::Int,
+        Op::IAdd.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Maps an AST comparison operator to an EIR predicate.
@@ -3150,8 +3232,91 @@ fn lower_builtin_call_args(
         {
             lower_args(ctx, args)
         }
+        "usort" | "uasort"
+            if !crate::types::call_args::has_named_args(args)
+                && !args.iter().any(is_spread_arg) =>
+        {
+            lower_user_value_sort_args(ctx, sig, args)
+        }
         _ => lower_args_with_signature(ctx, sig, args),
     }
+}
+
+/// Lowers `usort`/`uasort` arguments, typing an unannotated comparator closure
+/// against the array's object element type.
+///
+/// `usort`/`uasort` compare values, so a comparator over an array of objects must
+/// see each element as the object handle — for `<=>` instant comparison and for
+/// property/method access — not the raw pointer-sized integer the runtime stores
+/// in each slot. The array operand is lowered exactly as the default positional
+/// path would (positional builtin calls reach here with no signature); only an
+/// unannotated closure comparator over an object-element array is specialized,
+/// matching the element-type hint the checker applied to the comparator body.
+fn lower_user_value_sort_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    if args.len() != 2 || !matches!(&args[1].kind, ExprKind::Closure { .. }) {
+        return lower_args_with_signature(ctx, sig, args);
+    }
+    // The mutating sort keeps its by-reference local storeback in the EIR backend,
+    // so the array operand only has to resolve to the array's value here.
+    let array = match sig {
+        Some(sig) => lower_arg_with_signature(ctx, sig, 0, &args[0]),
+        None => lower_expr(ctx, &args[0]).value,
+    };
+    let elem_ty = match ctx.builder.value_php_type(array).codegen_repr() {
+        PhpType::Array(elem) => elem.codegen_repr(),
+        _ => PhpType::Int,
+    };
+    // Only an object-element array needs the comparator parameters re-typed; scalar
+    // comparators already lower correctly through the default path.
+    let callback = if matches!(elem_ty, PhpType::Object(_)) {
+        lower_value_sort_comparator_closure(ctx, &args[1], elem_ty)
+    } else {
+        match sig {
+            Some(sig) => lower_arg_with_signature(ctx, sig, 1, &args[1]),
+            None => lower_expr(ctx, &args[1]).value,
+        }
+    };
+    vec![array, callback]
+}
+
+/// Lowers a value-sort comparator closure with both parameters typed as the array element.
+///
+/// Falls back to the plain closure lowering for any non-closure callback operand,
+/// though callers only reach this path with a closure comparator.
+fn lower_value_sort_comparator_closure(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: &Expr,
+    elem_ty: PhpType,
+) -> crate::ir::ValueId {
+    let ExprKind::Closure {
+        params,
+        variadic,
+        return_type,
+        body,
+        captures,
+        capture_refs,
+        ..
+    } = &callback.kind
+    else {
+        return lower_expr(ctx, callback).value;
+    };
+    lower_closure_with_context(
+        ctx,
+        params,
+        variadic.as_deref(),
+        return_type.as_ref(),
+        body,
+        captures,
+        capture_refs,
+        callback,
+        &[elem_ty.clone(), elem_ty],
+        None,
+    )
+    .value
 }
 
 /// Returns true when the call uses exactly one static empty indexed spread.
@@ -3419,7 +3584,32 @@ fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
-    lower_expr(ctx, arg).value
+    let lowered = lower_expr(ctx, arg);
+    coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Coerces a positional argument's storage to match a declared scalar parameter type.
+///
+/// EIR passes each call argument in its natural storage. A declared `float` parameter is
+/// materialized into the callee's floating-point register/slot, so an integer argument must be
+/// converted with `IToF` first: without it the raw 64-bit integer bit-pattern lands in the
+/// float slot and the callee reads garbage (and, when other float arguments are present, the
+/// unconverted slot is overwritten by a neighbouring float argument). Only the int→float case
+/// is adjusted; every other argument/parameter storage combination is passed through unchanged.
+fn coerce_scalar_arg_to_param_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    arg: &Expr,
+) -> LoweredValue {
+    let Some((_, param_ty)) = sig.params.get(index) else {
+        return value;
+    };
+    if value.ir_type == IrType::I64 && param_ty.codegen_repr() == PhpType::Float {
+        return coerce_to_float(ctx, value, arg);
+    }
+    value
 }
 
 /// Widens local indexed-array storage before passing it to an `array<mixed>` ref parameter.
@@ -4752,7 +4942,25 @@ fn call_return_type_for_args(
         "array_fill" => array_fill_builtin_return_type_for_args(ctx, args, operands),
         "array_map" => array_map_builtin_return_type(ctx, args, operands),
         "iterator_to_array" => iterator_to_array_builtin_return_type(ctx, args, operands),
+        "microtime" => microtime_builtin_return_type_for_args(args),
         _ => None,
+    }
+}
+
+/// Returns `microtime()` metadata when the literal `as_float` flag is still available.
+///
+/// `microtime(true)` is a float; `microtime()` / `microtime(false)` is the "0.NNNNNNNN sec"
+/// string; a non-literal flag returns `None` so the result type falls back to the `string|float`
+/// union (boxed `Mixed`) declared in `call_return_type`. This must match the checker
+/// (`src/types/checker/builtins/system.rs`) and the EIR backend dispatch in `lower_microtime`.
+fn microtime_builtin_return_type_for_args(args: &[Expr]) -> Option<PhpType> {
+    match args.first() {
+        Some(arg) => match &arg.kind {
+            ExprKind::BoolLiteral(true) => Some(PhpType::Float),
+            ExprKind::BoolLiteral(false) => Some(PhpType::Str),
+            _ => None,
+        },
+        None => Some(PhpType::Str),
     }
 }
 
@@ -4768,7 +4976,12 @@ fn array_fill_builtin_return_type_for_args(
     let value = operands.get(2)?;
     let value_ty = ctx.builder.value_php_type(*value).codegen_repr();
     let start_is_literal_zero = matches!(args[0].kind, ExprKind::IntLiteral(0));
-    if !start_is_literal_zero || matches!(value_ty, PhpType::Str) {
+    // A non-literal-zero start builds a keyed Mixed-valued hash (`__rt_array_fill_assoc`,
+    // keys start..start+count-1). A literal-zero start builds the 0-indexed path: string
+    // values use the dedicated 16-byte-slot `__rt_array_fill_str` helper, scalars use the
+    // single-word `__rt_array_fill` / `__rt_array_fill_refcounted` helpers. This must match
+    // the checker (`src/types/checker/builtins/arrays.rs`) and `infer_local_type`.
+    if !start_is_literal_zero {
         return Some(PhpType::AssocArray {
             key: Box::new(PhpType::Int),
             value: Box::new(PhpType::Mixed),
@@ -5007,7 +5220,7 @@ fn array_builtin_return_type(
         "array_merge" => array_merge_builtin_return_type(ctx, operands),
         "array_splice" | "array_filter" | "array_diff" | "array_intersect" | "array_diff_key"
         | "array_intersect_key" => array_preserve_first_builtin_return_type(ctx, operands),
-        "in_array" => Some(PhpType::Int),
+        "in_array" => Some(PhpType::Bool),
         "range" => Some(PhpType::Array(Box::new(PhpType::Int))),
         "array_values" => {
             let array = operands.first()?;
@@ -5177,9 +5390,10 @@ fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
 /// Returns precise builtin return types needed by EIR value materialization.
 fn builtin_return_type_override(name: &str) -> Option<PhpType> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "chdir" | "chgrp" | "chmod" | "chown" | "lchgrp" | "lchown"
+        "chdir" | "checkdate" | "chgrp" | "chmod" | "chown" | "lchgrp" | "lchown"
         | "class_alias" | "class_exists" | "copy" | "define" | "defined"
         | "empty" | "file_exists" | "fnmatch" | "function_exists" | "is_a" | "is_callable"
+        | "is_array" | "is_object" | "is_scalar"
         | "fdatasync" | "fflush" | "flock" | "fsync" | "ftruncate" | "interface_exists" | "is_dir"
         | "is_executable" | "is_file" | "is_link" | "is_numeric" | "link" | "mkdir" | "rename"
         | "enum_exists" | "trait_exists" | "putenv" | "rmdir" | "is_readable"
@@ -5193,25 +5407,38 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "unlink" => {
             Some(PhpType::Bool)
         }
-        "basename" | "date" | "dirname" | "exec" | "get_class" | "get_parent_class"
+        "basename" | "date" | "gmdate" | "dirname" | "exec" | "get_class" | "get_parent_class"
         | "getcwd" | "getenv" | "gethostname" | "gethostbyname" | "php_uname"
         | "readline" | "shell_exec" | "sys_get_temp_dir"
         | "fread" | "get_resource_type" | "gzcompress" | "gzdeflate" | "hash" | "hash_final" | "hash_hmac" | "long2ip"
         | "stream_get_line" | "system" | "spl_autoload_extensions" | "tempnam" | "vsprintf" => {
             Some(PhpType::Str)
         }
-        "disk_free_space" | "disk_total_space" | "microtime" => Some(PhpType::Float),
+        "disk_free_space" | "disk_total_space" => Some(PhpType::Float),
         "clearstatcache" | "closedir" | "exit" | "die" | "passthru" | "rewinddir"
         | "stream_bucket_append" | "stream_bucket_prepend" | "unset" => Some(PhpType::Void),
         "fclose" | "feof" | "rewind" => Some(PhpType::Bool),
         "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filemtime"
         | "filesize" | "fprintf" | "fpassthru" | "fputcsv" | "fseek" | "ftell" | "fwrite"
-        | "crc32" | "get_resource_id" | "isset" | "linkinfo" | "mktime" | "sleep"
+        | "crc32" | "get_resource_id" | "isset" | "linkinfo" | "mktime" | "gmmktime" | "sleep"
+        | "__elephc_mktime_raw" | "__elephc_gmmktime_raw"
         | "pclose" | "spl_object_id" | "stream_select" | "stream_set_chunk_size"
-        | "stream_set_read_buffer" | "stream_set_write_buffer" | "strtotime" | "time"
+        | "stream_set_read_buffer" | "stream_set_write_buffer"
+        | "__elephc_strtotime_raw" | "time"
         | "umask" | "vfprintf" | "vprintf" | "realpath_cache_size" => {
             Some(PhpType::Int)
         }
+        // strtotime() is `int|false`: a real timestamp (including a valid -1 pre-epoch) on success,
+        // or boolean false when the string cannot be parsed. The backend boxes the result so
+        // `=== false` and `echo` observe the distinct false; `__elephc_strtotime_raw` (the DateTime
+        // internal alias above) stays a plain Int that maps the failure sentinel to -1.
+        "strtotime" => Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])),
+        // microtime() with a non-literal `as_float` flag yields `string|float` (boxed `Mixed`):
+        // the runtime branches on the flag and boxes either the "0.NNNNNNNN sec" string or the
+        // float. Literal-true / literal-false / omitted cases are resolved earlier by
+        // `call_return_type_for_args` (Float / Str), so this entry is only reached for a
+        // non-literal flag.
+        "microtime" => Some(PhpType::Union(vec![PhpType::Str, PhpType::Float])),
         "spl_object_hash" => Some(PhpType::Str),
         "spl_autoload" | "spl_autoload_call" | "usleep" => Some(PhpType::Void),
         "stream_context_create" | "stream_context_get_default" | "stream_context_set_default" => {
@@ -5222,7 +5449,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
             key: Box::new(PhpType::Str),
             value: Box::new(PhpType::Mixed),
         }),
-        "file_get_contents" | "fileatime" | "filectime" | "filegroup" | "fileinode"
+        "getdate" | "localtime" | "hrtime" | "file_get_contents" | "fileatime" | "filectime" | "filegroup" | "fileinode"
         | "fileowner" | "fileperms" | "filetype" | "readfile" | "readlink" | "realpath"
         | "fgetc" | "fgets" | "fopen" | "fstat" | "hash_copy" | "hash_file" | "hash_init"
         | "gethostbyaddr" | "getprotobyname" | "getprotobynumber" | "getservbyname"
@@ -8074,6 +8301,12 @@ fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) 
             let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
             let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
             wider_type_for_merge(&value_ty, &default_ty)
+        }
+        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
+            .unwrap_or_else(|| fallback_expr_type(expr)),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| fallback_expr_type(expr))
         }
         _ => fallback_expr_type(expr),
     }

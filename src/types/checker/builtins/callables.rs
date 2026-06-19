@@ -126,6 +126,48 @@ fn dummy_arg_for_array_scalar_elem(arr_ty: &PhpType, span: crate::span::Span) ->
     }
 }
 
+/// Returns the element type carried by an array/associative-array type.
+///
+/// Falls back to `Int` for non-array types so callers can build a placeholder
+/// comparator argument without special-casing every caller.
+fn array_element_type(arr_ty: &PhpType) -> PhpType {
+    match arr_ty {
+        PhpType::Array(elem_ty) => (**elem_ty).clone(),
+        PhpType::AssocArray { value, .. } => (**value).clone(),
+        _ => PhpType::Int,
+    }
+}
+
+/// Reserved synthetic variable name used to give a comparator's dummy argument an
+/// object element type. It begins with a digit, so it can never collide with a
+/// real PHP variable name (`[A-Za-z_]\w*`).
+const COMPARATOR_ELEM_PLACEHOLDER: &str = "0__elephc_cmp_elem";
+
+/// Builds a dummy comparator argument for one array element, plus an optional
+/// `(name, type)` environment binding for element types that have no literal form.
+///
+/// Scalar elements use a literal placeholder, exactly like
+/// [`dummy_arg_for_array_scalar_elem`]. Object elements have no literal, so a
+/// reserved synthetic variable (see [`COMPARATOR_ELEM_PLACEHOLDER`]) is bound to
+/// the element type and returned as the binding; the caller must insert it into
+/// the environment used for callback validation so a typed comparator parameter
+/// (`function (DateTime $a, DateTime $b)`) is checked against the real type.
+fn comparator_dummy_arg_for_elem(
+    elem_ty: &PhpType,
+    span: crate::span::Span,
+) -> (Expr, Option<(String, PhpType)>) {
+    match elem_ty {
+        PhpType::Str => (Expr::new(ExprKind::StringLiteral(String::new()), span), None),
+        PhpType::Float => (Expr::new(ExprKind::FloatLiteral(0.0), span), None),
+        PhpType::Bool => (Expr::new(ExprKind::BoolLiteral(false), span), None),
+        PhpType::Object(_) => (
+            Expr::new(ExprKind::Variable(COMPARATOR_ELEM_PLACEHOLDER.to_string()), span),
+            Some((COMPARATOR_ELEM_PLACEHOLDER.to_string(), elem_ty.clone())),
+        ),
+        _ => (Expr::new(ExprKind::IntLiteral(0), span), None),
+    }
+}
+
 /// Checks object or array callable call and reports a compile error when it is invalid.
 fn check_object_or_array_callable_call(
     checker: &mut Checker,
@@ -886,24 +928,70 @@ pub(super) fn check_builtin(
                     &format!("{}() takes exactly 2 arguments", name),
                 ));
             }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
+            // Infer the array first so a value comparator can be typed from the
+            // element. `usort`/`uasort` compare values; `uksort` compares keys.
             let arr_ty = checker.infer_type(&args[0], env)?;
-            let cmp_arg = if name == "uksort" {
-                Expr::new(ExprKind::IntLiteral(0), span)
+            let cmp_ty = if name == "uksort" {
+                PhpType::Int
             } else {
-                dummy_arg_for_array_scalar_elem(&arr_ty, span)
+                array_element_type(&arr_ty)
             };
-            let dummy_args = vec![cmp_arg.clone(), cmp_arg];
-            check_callback_builtin_call(
-                checker,
-                &args[1],
-                &dummy_args,
-                span,
-                env,
-                &format!("{}() callback", name),
-            )?;
+            let label = format!("{}() callback", name);
+            if let PhpType::Object(_) = cmp_ty {
+                // Object-element value comparators receive the object handle: type
+                // both comparator parameters as that object so an unannotated
+                // comparator (`$a <=> $b`, `$a->method()`) checks against the real
+                // type instead of the default `Int` placeholder.
+                if let ExprKind::Closure {
+                    params,
+                    variadic,
+                    return_type,
+                    body,
+                    captures,
+                    capture_refs,
+                    ..
+                } = &args[1].kind
+                {
+                    checker.infer_closure_type_with_param_hints(
+                        params,
+                        variadic,
+                        return_type,
+                        body,
+                        captures,
+                        capture_refs,
+                        &args[1],
+                        env,
+                        &[cmp_ty.clone(), cmp_ty.clone()],
+                    )?;
+                } else {
+                    checker.infer_type(&args[1], env)?;
+                    let (cmp_arg, elem_binding) = comparator_dummy_arg_for_elem(&cmp_ty, span);
+                    let dummy_args = vec![cmp_arg.clone(), cmp_arg];
+                    let mut env_with_elem;
+                    let cb_env: &TypeEnv = match &elem_binding {
+                        Some((binding_name, binding_ty)) => {
+                            env_with_elem = env.clone();
+                            env_with_elem.insert(binding_name.clone(), binding_ty.clone());
+                            &env_with_elem
+                        }
+                        None => env,
+                    };
+                    check_callback_builtin_call(checker, &args[1], &dummy_args, span, cb_env, &label)?;
+                }
+            } else {
+                // Scalar (and unsupported) element comparators keep the original
+                // validation: the comparator body is checked against the default
+                // placeholder element and the EIR backend decides which element
+                // payloads it can actually sort.
+                checker.infer_type(&args[1], env)?;
+                let cmp_arg = if name == "uksort" {
+                    Expr::new(ExprKind::IntLiteral(0), span)
+                } else {
+                    dummy_arg_for_array_scalar_elem(&arr_ty, span)
+                };
+                let dummy_args = vec![cmp_arg.clone(), cmp_arg];
+                check_callback_builtin_call(checker, &args[1], &dummy_args, span, env, &label)?;
+            }
             Ok(Some(PhpType::Void))
         }
         "call_user_func_array" => {

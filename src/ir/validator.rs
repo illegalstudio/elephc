@@ -881,13 +881,33 @@ fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>>
     dominators
 }
 
-/// Builds predecessor lists from every terminator edge.
+/// Builds predecessor lists from every terminator edge plus implicit exception edges.
+///
+/// A `try_push_handler <token>` instruction installs an exception handler whose block id equals
+/// `<token>` (the backend recovers it the same way, `BlockId::from_raw(token as u32)`). Control can
+/// reach that handler from anywhere in the protected region, but the push block dominates the whole
+/// region, so the push block is the handler's immediate dominator. The terminator graph alone never
+/// names the handler as a successor, so without this edge the handler looks unreachable: its
+/// dominator set collapses to itself and corrupts every block reached from the catch body — for a
+/// `try`/`catch` inside a loop the back-edge then strips the entry block out of the loop header's
+/// dominators, yielding spurious `UseNotDominated` errors for values defined in the entry block.
 fn compute_predecessors(function: &Function) -> HashMap<BlockId, Vec<BlockId>> {
     let mut predecessors: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
     for block in &function.blocks {
         if let Some(term) = &block.terminator {
             for successor in successors(term) {
                 predecessors.entry(successor).or_default().push(block.id);
+            }
+        }
+        for inst_id in &block.instructions {
+            let Some(inst) = function.instruction(*inst_id) else {
+                continue;
+            };
+            if inst.op == Op::TryPushHandler {
+                if let Some(Immediate::I64(token)) = inst.immediate {
+                    let handler = BlockId::from_raw(token as u32);
+                    predecessors.entry(handler).or_default().push(block.id);
+                }
             }
         }
     }

@@ -23,7 +23,7 @@ sidebar:
 | `object`         | Yes              | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)`                                                    |
 | `enum`           | Yes              | Pure and backed enums. Cases are singletons. Backed enums support `->value`, `::from()`, `::tryFrom()`, `::cases()`.   |
 | `int|string`     | Yes              | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime.                                    |
-| `?int`           | Yes              | Nullable shorthand — sugar for `int|null`.                                                                             |
+| `?int`           | Yes              | Nullable shorthand — sugar for `int|null`. The explicit `T|null` form (e.g. `A|null`) is also accepted.                |
 | `string|null`    | Yes              | Union with the `null` literal type. Folds to the nullable shorthand `?string`, so `string|null` and `?string` are identical. |
 | `int|false`      | Yes              | Union with the `false` literal type (PHP's `strpos`-style return). `false`/`true` widen to `bool`; the runtime value is a real boolean. |
 | `void`           | Return only      | Valid as a function, method, closure, arrow, or extern return type. Internally, `null` is represented as `Void`.        |
@@ -130,6 +130,7 @@ Rules:
 - nullable shorthand `?T` is supported as sugar for `T|null`
 - at runtime these values are lowered to the compiler's boxed tagged representation
 - `?T|U` is not accepted; write `T|U|null` explicitly instead
+- method calls and property access work on object unions — a single object class plus scalars (`A|false`, `A|null`) and unions of two or more distinct object classes (`A|B`, `A|B|false`). The method/property must exist on **every** object member; codegen dispatches on the runtime class id, and a non-object runtime value faults like PHP
 
 ### Property type declarations
 
@@ -193,6 +194,9 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `is_string()`   | `is_string($val): bool`      | Returns true if string         |
 | `is_numeric()`  | `is_numeric($val): bool`     | Returns true if int or float   |
 | `is_bool()`     | `is_bool($val): bool`        | Returns true if bool           |
+| `is_array()`    | `is_array($val): bool`       | Returns true if indexed or associative array |
+| `is_object()`   | `is_object($val): bool`      | Returns true if value is an object |
+| `is_scalar()`   | `is_scalar($val): bool`      | Returns true for int, float, string, or bool (not null, array, object, or resource) |
 | `is_iterable()` | `is_iterable($val): bool`    | Returns true if array or Traversable-compatible iterable |
 | `is_callable()` | `is_callable($val): bool`    | Returns true for closures, first-class callables, strings case-insensitively naming known builtins, user functions, or public static methods (`"Class::method"`), `[$obj, "method"]` arrays with public methods, `[ClassName::class, "method"]` static method arrays, and objects with public `__invoke()`. |
 | `is_resource()` | `is_resource($val): bool`    | Returns true if value is an open resource handle |

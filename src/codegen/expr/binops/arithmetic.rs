@@ -16,7 +16,8 @@ use super::target::{
     emit_float_binop, emit_promote_int_to_float, emit_set_bool_from_flags,
 };
 use super::super::{
-    coerce_null_to_zero, coerce_to_string_releasing_owned, coerce_to_truthiness, emit_expr,
+    coerce_null_to_zero, coerce_to_int, coerce_to_string_releasing_owned, coerce_to_truthiness,
+    emit_expr,
     expr_result_heap_ownership, string_result_is_owned_call_temp,
     string_result_uses_transient_concat_buffer, BinOp, Expr, PhpType,
 };
@@ -93,7 +94,7 @@ pub(super) fn emit_pow_binop(
     data: &mut DataSection,
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
-    coerce_numeric_mixed_to_int(emitter, &left_ty);
+    coerce_to_int(emitter, &left_ty);
     if left_ty != PhpType::Float {
         emit_promote_int_to_float(
             emitter,
@@ -103,7 +104,7 @@ pub(super) fn emit_pow_binop(
     }
     abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));
     let right_ty = emit_expr(right, emitter, ctx, data);
-    coerce_numeric_mixed_to_int(emitter, &right_ty);
+    coerce_to_int(emitter, &right_ty);
     if right_ty != PhpType::Float {
         emit_promote_int_to_float(
             emitter,
@@ -149,7 +150,7 @@ pub(super) fn emit_numeric_binop(
     } else if dynamic_candidate {
         left_ty.clone()
     } else {
-        coerce_numeric_mixed_to_int(emitter, &left_ty);
+        coerce_to_int(emitter, &left_ty);
         left_ty.clone()
     };
     let use_float = left_stack_ty == PhpType::Float;
@@ -171,7 +172,7 @@ pub(super) fn emit_numeric_binop(
         );
     }
 
-    coerce_numeric_mixed_to_int(emitter, &right_ty);
+    coerce_to_int(emitter, &right_ty);
 
     if left_stack_ty == PhpType::Float || right_ty == PhpType::Float || *op == BinOp::Div {
         if right_ty != PhpType::Float {
@@ -482,10 +483,10 @@ pub(super) fn emit_bitwise_binop(
     data: &mut DataSection,
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
-    coerce_numeric_mixed_to_int(emitter, &left_ty);
+    coerce_to_int(emitter, &left_ty);
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     let right_ty = emit_expr(right, emitter, ctx, data);
-    coerce_numeric_mixed_to_int(emitter, &right_ty);
+    coerce_to_int(emitter, &right_ty);
     let left_reg = match emitter.target.arch {
         Arch::AArch64 => "x1",
         Arch::X86_64 => "r10",
@@ -533,16 +534,6 @@ pub(super) fn emit_bitwise_binop(
         _ => unreachable!(),
     }
     PhpType::Int
-}
-
-/// Coerces a typed expression result to a numeric integer for arithmetic or bitwise operations.
-/// Null is coerced to zero; Mixed/Union values are normalized via `__rt_mixed_cast_int` which
-/// unboxes and converts string/bool/float representations to a plain int before the operation.
-fn coerce_numeric_mixed_to_int(emitter: &mut Emitter, ty: &PhpType) {
-    coerce_null_to_zero(emitter, ty);
-    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-        abi::emit_call_label(emitter, "__rt_mixed_cast_int");                   // normalize boxed int|bool|string values before numeric/bitwise operations
-    }
 }
 
 /// Emits signed integer modulo (left % right) with a divisor-is-zero guard.

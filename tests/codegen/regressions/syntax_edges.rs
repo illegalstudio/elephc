@@ -122,3 +122,16 @@ else echo "small";
 }
 
 // --- Bug regression tests ---
+
+/// Regression: a class whose only instantiation appears inside a multi-value `echo` must still
+/// be collected for method emission. PHP's multi-argument `echo a, b;` lowers to a `Synthetic`
+/// statement sequence; `collect_required_class_names` previously skipped `Synthetic` bodies, so
+/// the class (here `SplObjectStorage`, an injected builtin emitted on demand) had its
+/// `__construct` referenced by the `new` call site but never emitted → undefined-symbol link
+/// failure. A user-declared class is unaffected because its `ClassDecl` always seeds the set;
+/// only on-demand/injected classes exposed the gap.
+#[test]
+fn test_class_used_only_in_multi_value_echo_is_emitted() {
+    let out = compile_and_run(r#"<?php echo "x", (new SplObjectStorage())->count();"#);
+    assert_eq!(out, "x0");
+}

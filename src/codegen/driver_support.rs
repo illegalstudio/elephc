@@ -184,16 +184,27 @@ pub(super) fn emit_enum_singleton_initializers(
 }
 
 /// Emits initialization for static properties, including uninitialized sentinels.
+///
+/// `allowed_class_names` must match the filter used when emitting static-property *storage*
+/// (`emit_runtime_data_user`): classes outside that set get no `.comm` slot, so initializing their
+/// statics here would reference an undefined symbol. This matters for builtin/synthetic classes,
+/// which are only emitted when actually used (unlike declared user classes); without the filter, a
+/// declared-but-unused synthetic class carrying a static property (e.g. `DateTime`/`DateTimeImmutable`
+/// sharing one) would emit an initializer for a slot that was never defined.
 pub(super) fn emit_static_property_initializers(
     emitter: &mut Emitter,
     data: &mut DataSection,
     ctx: &mut Context,
+    allowed_class_names: Option<&std::collections::HashSet<String>>,
 ) {
     let mut initializers = Vec::new();
     let mut uninitialized_static_properties = Vec::new();
     let mut sorted_classes: Vec<(&String, &ClassInfo)> = ctx.classes.iter().collect();
     sorted_classes.sort_by_key(|(class_name, _)| class_name.as_str());
     for (class_name, class_info) in sorted_classes {
+        if allowed_class_names.is_some_and(|allowed| !allowed.contains(class_name.as_str())) {
+            continue;
+        }
         for (index, (property_name, prop_ty)) in class_info.static_properties.iter().enumerate() {
             let declaring_class = class_info
                 .static_property_declaring_classes

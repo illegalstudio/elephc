@@ -56,6 +56,32 @@ impl Checker {
     ///
     /// Emits a deprecation warning if the function is deprecated.
     /// Re-specializes resolved function parameters when the call site demands it.
+    /// Builds the diagnostic for a call that resolved to no declared function, builtin signature,
+    /// variant group, or extern. When `name` is a procedural date/time alias (which the name
+    /// resolver desugars only at its supported arities), reaching this point means the call's
+    /// argument count was out of range, so report a precise arity error — matching
+    /// `function_exists()`, which already recognizes these names — instead of the misleading
+    /// "Undefined function". Non-alias names keep the plain "Undefined function" diagnostic.
+    fn unresolved_function_call_error(&self, name: &str, span: crate::span::Span) -> CompileError {
+        if let Some((min, max)) = crate::name_resolver::date_procedural_alias_arity(name) {
+            let bare = name.rsplit('\\').next().unwrap_or(name);
+            let message = if min == max {
+                format!(
+                    "{}() takes exactly {} argument{}",
+                    bare,
+                    min,
+                    if min == 1 { "" } else { "s" }
+                )
+            } else if max == min + 1 {
+                format!("{}() takes {} or {} arguments", bare, min, max)
+            } else {
+                format!("{}() takes {} to {} arguments", bare, min, max)
+            };
+            return CompileError::new(span, &message);
+        }
+        CompileError::new(span, &format!("Undefined function: {}", name))
+    }
+
     pub fn check_function_call(
         &mut self,
         name: &str,
@@ -134,7 +160,7 @@ impl Checker {
             .fn_decls
             .get(name)
             .cloned()
-            .ok_or_else(|| CompileError::new(span, &format!("Undefined function: {}", name)))?;
+            .ok_or_else(|| self.unresolved_function_call_error(name, span))?;
         let normalization_sig = FunctionSig {
             params: decl
                 .params
@@ -397,7 +423,7 @@ impl Checker {
             .functions
             .get(name)
             .cloned()
-            .ok_or_else(|| CompileError::new(span, &format!("Undefined function: {}", name)))?;
+            .ok_or_else(|| self.unresolved_function_call_error(name, span))?;
         let effective_sig = Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
         self.check_normalized_resolved_function_call(
             name,

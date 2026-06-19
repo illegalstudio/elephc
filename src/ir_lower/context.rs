@@ -520,11 +520,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             let previous = self.load_local(name, span);
             crate::ir_lower::ownership::release_if_owned(self, previous, span);
         }
-        // A first syntactic store inside a main loop can still overwrite a prior
-        // runtime iteration's value. Main cleanup locals are zero-initialized, so
-        // the first iteration safely releases an empty slot.
-        if self.in_main
-            && !uses_global
+        // A first syntactic store inside a loop body (main or function) can still
+        // overwrite a prior runtime iteration's value: the slot has no straight-line
+        // predecessor store so it is not in `initialized_slots`, but the loop back-edge
+        // makes it live on iterations 2+. Release the previous occupant so the old value
+        // is freed on reassign. Function cleanup locals (including returned slots) are
+        // zero-initialized in the prologue, so the first iteration safely releases a null
+        // slot; subsequent iterations release the prior value.
+        if !uses_global
             && previous_kind == LocalKind::PhpLocal
             && previous_slot.is_none()
             && !self.loop_stack.is_empty()
@@ -1033,14 +1036,40 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 }
 
 /// Returns true when a builtin result must be released after a retaining consumer.
+///
+/// The result of a `BuiltinCall` is only released as a temporary when the callee OWNS its
+/// storage — i.e. it returns a freshly allocated refcounted value (array/string) whose
+/// lifetime is independent of its arguments. Adding a builtin here must not include any
+/// BORROWING builtin (current/end/reset/next/prev/key/each and similar element-access
+/// helpers return a pointer into a live argument array); releasing such a result would
+/// free storage still owned by the caller and corrupt the heap.
 fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "array_column"
+        // Array-returning builtins that allocate a fresh result array.
+        "array_chunk"
+            | "array_column"
+            | "array_combine"
+            | "array_diff"
             | "array_fill"
             | "array_fill_keys"
+            | "array_intersect"
+            | "array_keys"
+            | "array_map"
+            | "array_merge"
+            | "array_pad"
+            | "array_replace"
+            | "array_replace_recursive"
+            | "array_reverse"
+            | "array_slice"
+            | "array_unique"
+            | "array_values"
             | "explode"
             | "iterator_to_array"
+            | "preg_split"
+            | "range"
+            | "str_split"
+            // String-returning builtins that allocate fresh owned string storage.
             | "ptr_read_string"
             | "strpos"
             | "strrpos"

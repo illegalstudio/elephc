@@ -64,8 +64,25 @@ impl Checker {
                 }
                 return self.infer_method_call_on_class_type(&class_name, method, args, expr, env);
             }
-            // No single object class: re-run the strict check to surface its
-            // diagnostic (e.g. a union of two distinct object classes).
+            // Union of two or more distinct object classes (`A|B`, `A|B|false`):
+            // the method must exist on every object member; codegen dispatches on
+            // the runtime class id and the result is the union of each member's
+            // return type. A non-object runtime value faults like PHP.
+            let object_classes = self.union_object_classes(&obj_ty);
+            if object_classes.len() >= 2 {
+                let mut return_types = Vec::with_capacity(object_classes.len());
+                for class_name in &object_classes {
+                    let return_ty = if self.interfaces.contains_key(class_name) {
+                        self.infer_method_call_on_interface_type(class_name, method, args, expr, env)?
+                    } else {
+                        self.infer_method_call_on_class_type(class_name, method, args, expr, env)?
+                    };
+                    return_types.push(return_ty);
+                }
+                return Ok(self.normalize_union_type(return_types));
+            }
+            // No object class at all: re-run the strict check to surface its
+            // diagnostic.
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?;
         }
         Ok(PhpType::Int)

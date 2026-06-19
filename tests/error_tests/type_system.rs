@@ -258,6 +258,21 @@ fn test_error_increment_string() {
     expect_error("<?php $x = \"hi\"; $x++;", "Cannot increment/decrement");
 }
 
+/// Verifies the kind predicates `is_array`/`is_object`/`is_scalar` reject a wrong argument
+/// count, matching the other single-argument type predicates.
+#[test]
+fn test_error_is_kind_predicates_arity() {
+    expect_error(
+        "<?php is_array([1], [2]);",
+        "is_array() takes exactly 1 argument",
+    );
+    expect_error("<?php is_object();", "is_object() takes exactly 1 argument");
+    expect_error(
+        "<?php is_scalar(1, 2, 3);",
+        "is_scalar() takes exactly 1 argument",
+    );
+}
+
 // --- Error positions ---
 
 /// Verifies that the null coalesce operator widens the inferred return type to float

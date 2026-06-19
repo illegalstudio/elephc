@@ -48,7 +48,9 @@ fn emit_keywords_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: kw_now ---");
     emitter.label("__rt_strtotime_kw_now");
-    emitter.instruction("bl __rt_time");                                        // x0 = current Unix timestamp
+    emitter.adrp("x0", "_strtotime_clock");                                     // page of the effective-clock global
+    emitter.add_lo12("x0", "x0", "_strtotime_clock");                           // resolve the clock global address
+    emitter.instruction("ldr x0, [x0]");                                        // x0 = effective clock (base timestamp or current time)
     emitter.instruction("b __rt_strtotime_ret");                                // return through shared epilogue
 
     emitter.blank();
@@ -56,7 +58,7 @@ fn emit_keywords_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_strtotime_kw_today");
     emitter.instruction("bl __rt_strtotime_today_tm");                          // populate [sp+0..36] with today midnight tm
     emitter.instruction("mov x0, sp");                                          // x0 = &tm for libc mktime
-    emitter.bl_c("mktime");                                                     // → x0 = Unix timestamp
+    emitter.instruction("bl __rt_mktime_shifted");                              // → x0 = Unix timestamp
     emitter.instruction("b __rt_strtotime_ret");                                // return
 
     emitter.blank();
@@ -67,7 +69,7 @@ fn emit_keywords_arm64(emitter: &mut Emitter) {
     emitter.instruction("add w9, w9, #1");                                      // tm_mday + 1 (mktime normalizes overflow)
     emitter.instruction("str w9, [sp, #12]");                                   // store updated tm_mday
     emitter.instruction("mov x0, sp");                                          // x0 = &tm
-    emitter.bl_c("mktime");                                                     // → x0 = ts
+    emitter.instruction("bl __rt_mktime_shifted");                              // → x0 = ts
     emitter.instruction("b __rt_strtotime_ret");                                // return
 
     emitter.blank();
@@ -78,7 +80,7 @@ fn emit_keywords_arm64(emitter: &mut Emitter) {
     emitter.instruction("sub w9, w9, #1");                                      // tm_mday - 1 (mktime normalizes underflow)
     emitter.instruction("str w9, [sp, #12]");                                   // store updated tm_mday
     emitter.instruction("mov x0, sp");                                          // x0 = &tm
-    emitter.bl_c("mktime");                                                     // → x0 = ts
+    emitter.instruction("bl __rt_mktime_shifted");                              // → x0 = ts
     emitter.instruction("b __rt_strtotime_ret");                                // return
 
     emitter.blank();
@@ -88,7 +90,7 @@ fn emit_keywords_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov w9, #12");                                         // hour = 12
     emitter.instruction("str w9, [sp, #8]");                                    // tm_hour = 12
     emitter.instruction("mov x0, sp");                                          // x0 = &tm
-    emitter.bl_c("mktime");                                                     // → x0 = ts
+    emitter.instruction("bl __rt_mktime_shifted");                              // → x0 = ts
     emitter.instruction("b __rt_strtotime_ret");                                // return
 
     emit_today_tm_arm64(emitter);
@@ -99,7 +101,8 @@ fn emit_keywords_arm64(emitter: &mut Emitter) {
 /// localtime fields at `[sp+0..36]` with `tm_sec`, `tm_min`, `tm_hour` zeroed, and
 /// `tm_isdst=-1`. Allocates a 16-byte sub-frame (saves link register at `[sp+0]`);
 /// while the sub-frame is active the caller's tm is accessible at `[sp+16..52]`.
-/// Calls `__rt_time` and `localtime`; restores link register and deallocates sub-frame
+/// Reads the `_strtotime_clock` global (the base timestamp, or the current time) and calls
+/// `localtime`; restores link register and deallocates sub-frame
 /// before returning to the caller (strategy body) via `ret`.
 fn emit_today_tm_arm64(emitter: &mut Emitter) {
     emitter.blank();
@@ -109,7 +112,9 @@ fn emit_today_tm_arm64(emitter: &mut Emitter) {
     // Caller's `[sp+0..36]` is accessed as `[sp+16..52]` while the sub-frame is in place.
     emitter.instruction("sub sp, sp, #16");                                     // allocate today_tm sub-frame
     emitter.instruction("str x30, [sp, #0]");                                   // save link register before nested calls
-    emitter.instruction("bl __rt_time");                                        // x0 = current Unix timestamp
+    emitter.adrp("x0", "_strtotime_clock");                                     // page of the effective-clock global
+    emitter.add_lo12("x0", "x0", "_strtotime_clock");                           // resolve the clock global address
+    emitter.instruction("ldr x0, [x0]");                                        // x0 = effective clock (base timestamp or current time)
     emitter.instruction("str x0, [sp, #8]");                                    // save ts into local slot
     emitter.instruction("add x0, sp, #8");                                      // x0 = &ts (libc localtime takes time_t*)
     emitter.bl_c("localtime");                                                  // x0 = static struct tm*
@@ -144,7 +149,9 @@ fn emit_now_tm_arm64(emitter: &mut Emitter) {
     // the base time is "now", not "today midnight".
     emitter.instruction("sub sp, sp, #16");                                     // allocate now_tm sub-frame
     emitter.instruction("str x30, [sp, #0]");                                   // save link register before nested calls
-    emitter.instruction("bl __rt_time");                                        // x0 = current Unix timestamp
+    emitter.adrp("x0", "_strtotime_clock");                                     // page of the effective-clock global
+    emitter.add_lo12("x0", "x0", "_strtotime_clock");                           // resolve the clock global address
+    emitter.instruction("ldr x0, [x0]");                                        // x0 = effective clock (base timestamp or current time)
     emitter.instruction("str x0, [sp, #8]");                                    // save ts into local slot
     emitter.instruction("add x0, sp, #8");                                      // x0 = &ts (libc localtime takes time_t*)
     emitter.bl_c("localtime");                                                  // x0 = static struct tm*
@@ -186,7 +193,7 @@ fn emit_keywords_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: kw_now ---");
     emitter.label("__rt_strtotime_kw_now_linux_x86_64");
-    emitter.instruction("call __rt_time");                                      // rax = current Unix timestamp
+    emitter.instruction("mov rax, QWORD PTR [rip + _strtotime_clock]");         // rax = effective clock (base timestamp or current time)
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return through shared epilogue
 
     emitter.blank();
@@ -194,7 +201,7 @@ fn emit_keywords_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_strtotime_kw_today_linux_x86_64");
     emitter.instruction("call __rt_strtotime_today_tm_linux_x86_64");           // populate [rsp+0..36] with today midnight
     emitter.instruction("mov rdi, rsp");                                        // rdi = &tm for libc mktime
-    emitter.instruction("call mktime");                                         // → rax = ts
+    emitter.instruction("call __rt_mktime_shifted");                            // → rax = ts
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return
 
     emitter.blank();
@@ -205,7 +212,7 @@ fn emit_keywords_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc eax");                                             // tm_mday + 1
     emitter.instruction("mov DWORD PTR [rsp + 12], eax");                       // store updated tm_mday
     emitter.instruction("mov rdi, rsp");                                        // rdi = &tm
-    emitter.instruction("call mktime");                                         // → rax = ts
+    emitter.instruction("call __rt_mktime_shifted");                            // → rax = ts
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return
 
     emitter.blank();
@@ -216,7 +223,7 @@ fn emit_keywords_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("dec eax");                                             // tm_mday - 1
     emitter.instruction("mov DWORD PTR [rsp + 12], eax");                       // store updated tm_mday
     emitter.instruction("mov rdi, rsp");                                        // rdi = &tm
-    emitter.instruction("call mktime");                                         // → rax = ts
+    emitter.instruction("call __rt_mktime_shifted");                            // → rax = ts
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return
 
     emitter.blank();
@@ -225,7 +232,7 @@ fn emit_keywords_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_strtotime_today_tm_linux_x86_64");           // populate today midnight tm
     emitter.instruction("mov DWORD PTR [rsp + 8], 12");                         // tm_hour = 12
     emitter.instruction("mov rdi, rsp");                                        // rdi = &tm
-    emitter.instruction("call mktime");                                         // → rax = ts
+    emitter.instruction("call __rt_mktime_shifted");                            // → rax = ts
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return
 
     emit_today_tm_linux_x86_64(emitter);
@@ -237,7 +244,8 @@ fn emit_keywords_linux_x86_64(emitter: &mut Emitter) {
 /// with `tm_sec`, `tm_min`, `tm_hour` zeroed and `tm_isdst=-1`. Allocates an 8-byte
 /// sub-frame via `sub rsp, 8` (keeps rsp 16-aligned for nested libc calls); does NOT
 /// touch `rbp` so the caller's scratch remains accessible via `rbp`-relative addressing.
-/// Calls `__rt_time` and `localtime`; releases sub-frame via `add rsp, 8` before returning.
+/// Reads the `_strtotime_clock` global (the base timestamp, or the current time) and calls
+/// `localtime`; releases sub-frame via `add rsp, 8` before returning.
 fn emit_today_tm_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: populate dispatcher tm with today @ midnight ---");
@@ -246,7 +254,7 @@ fn emit_today_tm_linux_x86_64(emitter: &mut Emitter) {
     // We push 1 callee-saved (rbx is unused here) — instead use plain `sub rsp` to keep rsp 16-aligned for nested libc calls.
     // Caller's `[rbp - 128]` (struct tm tm_sec) stays accessible by absolute rbp-relative addressing because this helper does NOT touch rbp.
     emitter.instruction("sub rsp, 8");                                          // reserve 8 bytes for ts; entry rsp ≡ 8 mod 16, after sub rsp ≡ 0 mod 16 (aligned for libc call)
-    emitter.instruction("call __rt_time");                                      // rax = current Unix timestamp
+    emitter.instruction("mov rax, QWORD PTR [rip + _strtotime_clock]");         // rax = effective clock (base timestamp or current time)
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // save ts at top of sub-frame
     emitter.instruction("mov rdi, rsp");                                        // rdi = &ts for libc localtime
     emitter.instruction("call localtime");                                      // rax = static struct tm*
@@ -281,7 +289,7 @@ fn emit_now_tm_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_strtotime_now_tm_linux_x86_64");
     // Same as today_tm_linux_x86_64 but does NOT zero h/m/s — used by the offsets strategy.
     emitter.instruction("sub rsp, 8");                                          // reserve 8 bytes for ts (aligns rsp to 16 for libc)
-    emitter.instruction("call __rt_time");                                      // rax = current Unix timestamp
+    emitter.instruction("mov rax, QWORD PTR [rip + _strtotime_clock]");         // rax = effective clock (base timestamp or current time)
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // save ts at top of sub-frame
     emitter.instruction("mov rdi, rsp");                                        // rdi = &ts for libc localtime
     emitter.instruction("call localtime");                                      // rax = static struct tm*

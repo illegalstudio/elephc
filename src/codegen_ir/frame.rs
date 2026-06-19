@@ -384,29 +384,28 @@ fn promoted_ref_cell_local_slots(function: &Function) -> HashSet<LocalSlotId> {
         .collect()
 }
 
-/// Releases a string local when its length proves it owns heap-backed storage.
+/// Releases a string local through the validating heap-free helper.
+///
+/// `__rt_heap_free_safe` skips non-heap pointers (null for uninitialized locals,
+/// .rodata, out-of-range) and frees plausible live heap blocks, so it safely handles
+/// the zero-length owned strings that `__rt_str_persist` now allocates. The previous
+/// `cbz len` guard skipped them and leaked every owned empty string at scope exit.
 fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let done = ctx.next_label("main_string_cleanup_done");
     abi::load_at_offset(ctx.emitter, ptr_reg, offset);
-    abi::load_at_offset(ctx.emitter, len_reg, offset - 8);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", len_reg, done));     // skip empty or uninitialized string locals
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the owned string pointer to the heap-free helper
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", len_reg, len_reg)); // check whether this string local has owned bytes
-            ctx.emitter.instruction(&format!("je {}", done));                   // skip empty or uninitialized string locals
             if ptr_reg != result_reg {
-                ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the owned string pointer to the heap-free helper
+                ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
     }
-    ctx.emitter.label(&done);
 }
 
 /// Releases a refcounted local when the slot contains a non-null heap pointer.
@@ -429,7 +428,7 @@ fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty
 
 /// Zero-initializes function locals that may be released by the shared epilogue.
 fn zero_initialize_function_cleanup_locals(ctx: &mut FunctionContext<'_>) {
-    for (_, _, ty, offset) in function_cleanup_locals(ctx) {
+    for (_, _, ty, offset) in function_cleanup_locals(ctx, true) {
         match ty {
             PhpType::Str => {
                 abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
@@ -444,7 +443,7 @@ fn zero_initialize_function_cleanup_locals(ctx: &mut FunctionContext<'_>) {
 
 /// Releases owned function locals that do not directly provide the return value.
 fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
-    let cleanup_locals = function_cleanup_locals(ctx);
+    let cleanup_locals = function_cleanup_locals(ctx, false);
     let ref_cell_owners = ref_cell_owner_locals(ctx);
     if cleanup_locals.is_empty() && ref_cell_owners.is_empty() {
         return;
@@ -470,7 +469,17 @@ fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Returns function local slots that receive owned refcounted values through `StoreLocal`.
-fn function_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, PhpType, usize)> {
+///
+/// `include_returned` controls whether slots directly returned by a `Return` terminator are
+/// part of the set. The zero-initialization pass requests them (`true`) so a returned slot
+/// that is first assigned inside a loop body is null before its first store — the loop-store
+/// old-release path (`store_local` Path 2) then safely releases a null pointer on iteration 1.
+/// The epilogue cleanup pass excludes them (`false`) because the return path already owns the
+/// value; cleaning them at epilogue would double-free.
+fn function_cleanup_locals(
+    ctx: &FunctionContext<'_>,
+    include_returned: bool,
+) -> Vec<(String, LocalSlotId, PhpType, usize)> {
     let param_names = ctx
         .function
         .params
@@ -490,7 +499,7 @@ fn function_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotI
                 .as_deref()
                 .is_none_or(|name| !param_names.contains(name))
         })
-        .filter(|local| !returned_slots.contains(&local.id))
+        .filter(|local| include_returned || !returned_slots.contains(&local.id))
         .filter(|local| local_slot_has_store(ctx.function, local.id))
         .filter_map(|local| {
             let ty = local.php_type.codegen_repr();

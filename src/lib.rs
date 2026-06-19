@@ -29,6 +29,8 @@ pub mod ir_lower;
 pub mod ir_passes;
 /// Lexer for tokenizing PHP source.
 pub mod lexer;
+/// Conditionally-injected `DateTimeZone::listIdentifiers` filtering prelude.
+pub mod list_id_prelude;
 /// Magic constant substitution.
 pub mod magic_constants;
 /// Name resolution and mangling.
@@ -50,3 +52,7 @@ mod string_bytes;
 pub mod termination;
 /// Type system and checking.
 pub mod types;
+/// Conditionally-injected timezone-introspection prelude (extern + marshalling).
+pub mod tz_prelude;
+/// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
+pub mod var_export_prelude;

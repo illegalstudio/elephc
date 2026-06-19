@@ -183,3 +183,44 @@ echo true ? $b->get() : "fallback";
     );
     assert_eq!(out, "hello");
 }
+
+/// Regression: ternary branches that index string-typed arrays must keep the
+/// result string-typed. The branch merge type was inferred syntactically (no
+/// element-type lookup), defaulting `$arr[$i]` to int and coercing the chosen
+/// string through `str_to_i` to "0" (broke `jdmonthname(.., CAL_MONTH_JEWISH)`).
+#[test]
+fn test_ternary_string_array_index_branches() {
+    let out = compile_and_run(
+        r#"<?php
+$leap = ["", "Tishri", "Heshvan"];
+$reg  = ["", "Apple", "Banana"];
+$month = 1;
+$isLeap = true;
+echo $isLeap ? $leap[$month] : $reg[$month];
+echo ",";
+echo $isLeap ? $leap[1] : $reg[1];
+echo ",";
+$isLeap = false;
+echo $isLeap ? $leap[2] : $reg[2];
+"#,
+    );
+    assert_eq!(out, "Tishri,Tishri,Banana");
+}
+
+/// Regression: ternary branches reading string-typed object properties must
+/// keep the result string-typed, mirroring the array-index branch-merge fix.
+#[test]
+fn test_ternary_string_property_branches() {
+    let out = compile_and_run(
+        r#"<?php
+class Names {
+    public string $a = "Tishri";
+    public string $b = "Heshvan";
+}
+$n = new Names();
+$pick = true;
+echo $pick ? $n->a : $n->b;
+"#,
+    );
+    assert_eq!(out, "Tishri");
+}

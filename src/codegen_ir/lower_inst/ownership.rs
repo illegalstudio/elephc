@@ -120,26 +120,25 @@ pub(super) fn lower_forward(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
-/// Releases a loaded string result while treating zero-length strings as non-owning.
+/// Releases a loaded string result through the validating heap-free helper.
+///
+/// `__rt_heap_free_safe` skips non-heap pointers (null, .rodata, out-of-range) and
+/// only frees plausible live heap blocks, so it safely handles the zero-length owned
+/// strings that `__rt_str_persist` now allocates as independent blocks. The previous
+/// `cbz len` guard skipped them and leaked every owned empty string on reassignment.
 fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let skip_label = ctx.next_label("release_empty_str");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", len_reg, skip_label)); // skip release for zero-length strings without owned heap storage
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the loaded string pointer to the heap-free helper
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the loaded string pointer to the validating heap-free helper
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-            ctx.emitter.label(&skip_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", len_reg, len_reg)); // check whether the loaded string has any owned bytes
-            ctx.emitter.instruction(&format!("je {}", skip_label));             // skip release for zero-length strings without owned heap storage
             if ptr_reg != result_reg {
-                ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the loaded string pointer to the heap-free helper
+                ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the loaded string pointer to the validating heap-free helper
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-            ctx.emitter.label(&skip_label);
         }
     }
 }

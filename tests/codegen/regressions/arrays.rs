@@ -781,3 +781,20 @@ echo $r["a"];
     );
     assert_eq!(out, "10");
 }
+
+/// Regression: `array_fill()` with a negative count must terminate and yield an empty array on
+/// every target. The ARM64 string-value path used an unsigned `cbz` loop guard, so a negative
+/// count never reached zero and looped until heap exhaustion; it now matches the x86_64 signed
+/// guard.
+#[test]
+fn test_array_fill_negative_count_string_value() {
+    let out = compile_and_run(
+        r#"<?php
+$r = @array_fill(0, -1, "x");
+echo is_array($r) ? "arr" : "no", ":", count($r);
+$ok = array_fill(0, 3, "ab");
+echo "|", count($ok), ":", $ok[0], $ok[2];
+"#,
+    );
+    assert_eq!(out, "arr:0|3:abab");
+}

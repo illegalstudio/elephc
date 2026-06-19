@@ -26,8 +26,8 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_persist ---");
     emitter.label_global("__rt_str_persist");
 
-    // -- handle zero-length strings (no allocation needed) --
-    emitter.instruction("cbz x2, __rt_str_persist_done");                       // empty string, return as-is
+    // -- zero-length strings still get an owned heap block so callers never alias a borrowed source pointer --
+    // (the old early-return let explode()'s empty segment alias the subject string and double-free it on release)
 
     // -- set up stack frame (we call heap_alloc which may clobber regs) --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
@@ -90,9 +90,7 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_persist ---");
     emitter.label_global("__rt_str_persist");
 
-    // -- empty strings can be returned without taking ownership --
-    emitter.instruction("test rdx, rdx");                                       // check whether the input string has any payload bytes to duplicate
-    emitter.instruction("jz __rt_str_persist_done");                            // empty strings do not need heap-backed ownership
+    // -- zero-length strings still get an owned heap block so callers never alias a borrowed source pointer --
 
     // -- preserve the source payload across the heap allocation helper call --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving spill slots

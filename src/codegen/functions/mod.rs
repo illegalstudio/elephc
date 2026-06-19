@@ -305,9 +305,23 @@ fn emit_function_with_label(
 ///
 /// For reference parameters (`is_ref` true), allocates an `Int` slot and registers the
 /// parameter name in `ctx.ref_params`. For `$this` and `__elephc_fcc_*` hidden params,
-/// disables epilogue cleanup. For `Str` types, uses borrowed ownership; otherwise uses
-/// local ownership for the given `PhpType`.
-fn allocate_incoming_param(ctx: &mut Context, pname: &str, pty: &PhpType, is_ref: bool) {
+/// disables epilogue cleanup. For static methods on DateTime/DateTimeImmutable (the
+/// synthetic `createFromFormat` factory), uses borrowed ownership for all params: the
+/// factory's body only inspects the args (`$format`, `$datetime`, `$timezone`) and chains
+/// `setTimezone`/`setMicrosecond` on the freshly constructed object, so the caller's
+/// refcount already owns them. Treating them as local owners in the callee would lead to
+/// a double-decref (the call site pushed a ref for the callee, the callee would also
+/// treat the pushed ref as a new local-owner ref and decref in its epilogue). For
+/// non-DateTime/DateTimeImmutable methods, uses the previous split: `Str` is borrowed,
+/// everything else is local-owned (Fiber::start() and similar storage-keeping methods
+/// rely on the callee taking ownership so the values stay alive across suspend/resume).
+fn allocate_incoming_param(
+    ctx: &mut Context,
+    pname: &str,
+    pty: &PhpType,
+    is_ref: bool,
+    method_class: Option<&str>,
+) {
     if is_ref {
         ctx.ref_params.insert(pname.to_string());
         ctx.alloc_var_with_static_type(pname, PhpType::Int, pty.clone());
@@ -323,7 +337,11 @@ fn allocate_incoming_param(ctx: &mut Context, pname: &str, pty: &PhpType, is_ref
         ctx.disable_epilogue_cleanup(pname);
     } else {
         ctx.alloc_var_with_static_type(pname, pty.codegen_repr(), pty.clone());
-        if matches!(pty.codegen_repr(), PhpType::Str) {
+        let is_dt_factory = matches!(
+            method_class,
+            Some("DateTime") | Some("DateTimeImmutable")
+        );
+        if is_dt_factory || matches!(pty.codegen_repr(), PhpType::Str) {
             ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(pty));
         } else {
             ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(pty));
@@ -426,11 +444,23 @@ fn emit_function_with_label_and_class(
 
     for (i, (pname, pty)) in sig.params.iter().enumerate() {
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
-        allocate_incoming_param(&mut ctx, pname, pty, is_ref);
+        allocate_incoming_param(
+            &mut ctx,
+            pname,
+            pty,
+            is_ref,
+            class_context.map(|(_, n)| n).as_ref().copied(),
+        );
     }
     seed_callable_param_sigs(&mut ctx, callable_param_scope, sig);
     for (pname, pty, is_ref) in hidden_params {
-        allocate_incoming_param(&mut ctx, pname, pty, *is_ref);
+        allocate_incoming_param(
+            &mut ctx,
+            pname,
+            pty,
+            *is_ref,
+            class_context.map(|(_, n)| n).as_ref().copied(),
+        );
         if *is_ref && matches!(pty, PhpType::Callable) {
             ctx.closure_sigs.insert(pname.clone(), sig.clone());
             ctx.closure_captures

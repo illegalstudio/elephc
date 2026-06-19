@@ -30,9 +30,13 @@ jobs:
 
       - name: Build bridge staticlibs
         # The codegen test runner links compiled programs against bridge
-        # staticlibs (TLS, PDO, crypto, PHAR), which `cargo test` / nextest do
-        # not produce on their own. Build them explicitly first.
-        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar
+        # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR), and
+        # libelephc_tz.a (DateTimeZone introspection), which `cargo test` /
+        # nextest do not produce on their own (the crates are pulled in as rlib
+        # dev-dependencies, not the staticlibs the external linker needs).
+        # Build them explicitly first.
+        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz
 
       - name: Run non-codegen tests
         run: cargo nextest run --workspace -E 'not binary(codegen_tests)' --no-fail-fast -j 8
@@ -64,9 +68,13 @@ jobs:
 
       - name: Build bridge staticlibs
         # The codegen test runner links compiled programs against bridge
-        # staticlibs (TLS, PDO, crypto, PHAR), which `cargo test` / nextest do
-        # not produce on their own. Build them explicitly first.
-        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar
+        # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR), and
+        # libelephc_tz.a (DateTimeZone introspection), which `cargo test` /
+        # nextest do not produce on their own (the crates are pulled in as rlib
+        # dev-dependencies, not the staticlibs the external linker needs).
+        # Build them explicitly first.
+        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz
 
       - name: Run codegen test shard
         run: cargo nextest run --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast -j 8

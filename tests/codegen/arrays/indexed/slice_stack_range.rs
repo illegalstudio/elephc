@@ -100,3 +100,62 @@ foreach ($a as $v) { echo $v; }
     );
     assert_eq!(out, "1:3");
 }
+
+/// Regression: `range()` and `array_slice()` must unbox a `Mixed`/`Union` integer argument
+/// (range end, slice offset) instead of using the boxed heap pointer as a raw int. The int args
+/// here are read from a heterogeneous (Mixed-valued) associative array. Before the fix these
+/// produced empty results or "heap memory exhausted" (a pointer used as a count).
+#[test]
+fn test_range_and_slice_unbox_mixed_int_args() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["n" => 2, "t" => "x"];
+echo implode(",", range(1, $m["n"])), "|", implode(",", array_slice([10, 20, 30, 40], $m["n"]));
+"#,
+    );
+    assert_eq!(out, "1,2|30,40");
+}
+
+/// Regression: the shared slice/splice/range argument marshaling must unbox a `Mixed` length and a
+/// `Mixed` offset on `array_splice` (which mutates its source), and unbox both endpoints of
+/// `range()`. The integers are read from a heterogeneous (`Mixed`-valued) associative array, so the
+/// boxed-pointer-as-int bug would corrupt the offset, length, removed slice, and remaining array.
+#[test]
+fn test_slice_splice_range_unbox_mixed_offset_and_length() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["off" => 1, "len" => 2, "t" => "x"];
+echo implode(",", array_slice([10, 20, 30, 40, 50], $m["off"], $m["len"])), "|";
+$a = [1, 2, 3, 4, 5];
+$removed = array_splice($a, $m["off"], $m["len"]);
+echo implode(",", $removed), "|", implode(",", $a), "|";
+echo implode(",", range($m["off"], $m["len"]));
+"#,
+    );
+    assert_eq!(out, "20,30|2,3|1,4,5|1,2");
+}
+
+/// Regression: when the *array itself* is a boxed `Mixed` cell (read from a heterogeneous associative
+/// array), `array_slice`/`array_splice` must still unbox a `Mixed` offset and a `Mixed` length instead
+/// of passing the boxed heap pointer as a raw integer. A `Mixed` length previously hard-errored at
+/// codegen ("array_slice length PHP type Mixed") and a `Mixed` offset silently corrupted the result.
+/// Covers offset+length both Mixed (slice), offset Mixed with length absent (slice), and offset+length
+/// both Mixed with source mutation (splice).
+#[test]
+fn test_mixed_array_slice_splice_unbox_mixed_offset_and_length() {
+    let out = compile_and_run(
+        r#"<?php
+$d = ["arr" => [10, 20, 30, 40, 50], "off" => 1, "len" => 2];
+$a = $d["arr"];
+echo implode(",", array_slice($a, $d["off"], $d["len"])), "|";
+$d2 = ["arr" => [10, 20, 30, 40, 50], "off" => 2];
+$a2 = $d2["arr"];
+echo implode(",", array_slice($a2, $d2["off"])), "|";
+$d3 = ["arr" => [1, 2, 3, 4, 5], "off" => 1, "len" => 2];
+$a3 = $d3["arr"];
+$removed = array_splice($a3, $d3["off"], $d3["len"]);
+echo implode(",", $removed), "|", implode(",", $a3);
+"#,
+    );
+    assert_eq!(out, "20,30|30,40,50|2,3|1,4,5");
+}

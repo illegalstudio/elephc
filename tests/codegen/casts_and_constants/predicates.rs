@@ -133,4 +133,91 @@ foreach ($args as $arg) {
     assert_eq!(out, "__b_");
 }
 
+/// Verifies `is_array` on statically-known arrays/hashes and non-arrays, matching PHP's
+/// `bool` result type (not int). Indexed and associative literals are both arrays.
+#[test]
+fn test_is_array_static() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(is_array([1, 2, 3]));
+var_dump(is_array(["a" => 1]));
+var_dump(is_array("nope"));
+var_dump(is_array(5));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(false)\nbool(false)\n");
+}
+
+/// Verifies `is_object` is true only for object values and false for scalars, returning `bool`.
+#[test]
+fn test_is_object_static() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $v = 1; }
+var_dump(is_object(new Box()));
+var_dump(is_object("nope"));
+var_dump(is_object(42));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\n");
+}
+
+/// Verifies `is_scalar` is true for int/float/string/bool and false for null/array/object,
+/// matching PHP's classification (resources and null are not scalars).
+#[test]
+fn test_is_scalar_static() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public int $v = 1; }
+var_dump(is_scalar(5));
+var_dump(is_scalar(3.5));
+var_dump(is_scalar("hi"));
+var_dump(is_scalar(true));
+var_dump(is_scalar(null));
+var_dump(is_scalar([1]));
+var_dump(is_scalar(new Box()));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Verifies `is_array`/`is_object`/`is_scalar` dispatch on the runtime tag of a boxed `Mixed`
+/// value (read from a heterogeneous associative array), not the static union member.
+#[test]
+fn test_is_kind_predicates_on_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$het = ["arr" => [1, 2], "num" => 7, "str" => "x", "flo" => 2.5];
+var_dump(is_array($het["arr"]));
+var_dump(is_array($het["num"]));
+var_dump(is_scalar($het["num"]));
+var_dump(is_scalar($het["str"]));
+var_dump(is_scalar($het["flo"]));
+var_dump(is_scalar($het["arr"]));
+var_dump(is_object($het["num"]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Verifies the new kind predicates honor PHP case-insensitive and namespace-qualified
+/// call forms, and that `function_exists` recognizes them through the catalog.
+#[test]
+fn test_is_kind_predicates_case_and_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+echo IS_ARRAY([1]) ? "A" : "_";
+echo \is_object(new \stdClass()) ? "O" : "_";
+echo function_exists("is_scalar") ? "S" : "_";
+"#,
+    );
+    assert_eq!(out, "AOS");
+}
+
 // --- Exponentiation operator ** ---

@@ -29,6 +29,38 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".data\n");
     out.push_str(".comm _concat_buf, 65536, 3\n");
     out.push_str(".comm _concat_off, 8, 3\n");
+    out.push_str(".comm _strtotime_clock, 8, 3\n");
+    // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
+    // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
+    // "UTC" literal returned in that default case.
+    out.push_str(".comm _php_tz_env, 264, 3\n");
+    out.push_str(".comm _php_default_tz_len, 8, 3\n");
+    out.push_str(".comm _php_tz_save, 264, 3\n");
+    out.push_str(".globl _php_tz_utc\n");
+    out.push_str("_php_tz_utc:\n");
+    out.push_str("    .ascii \"UTC\"\n");
+    // getdate() associative-array key strings (read by __rt_getdate).
+    for (sym, key) in [
+        ("_gd_k_seconds", "seconds"),
+        ("_gd_k_minutes", "minutes"),
+        ("_gd_k_hours", "hours"),
+        ("_gd_k_mday", "mday"),
+        ("_gd_k_wday", "wday"),
+        ("_gd_k_mon", "mon"),
+        ("_gd_k_year", "year"),
+        ("_gd_k_yday", "yday"),
+        ("_gd_k_weekday", "weekday"),
+        ("_gd_k_month", "month"),
+    ] {
+        out.push_str(&format!(".globl {sym}\n{sym}:\n    .ascii \"{key}\"\n"));
+    }
+    // localtime() associative-array key strings (read by __rt_localtime).
+    for key in [
+        "tm_sec", "tm_min", "tm_hour", "tm_mday", "tm_mon", "tm_year", "tm_wday", "tm_yday",
+        "tm_isdst",
+    ] {
+        out.push_str(&format!(".globl _lt_k_{key}\n_lt_k_{key}:\n    .ascii \"{key}\"\n"));
+    }
     out.push_str(".comm _global_argc, 8, 3\n");
     out.push_str(".comm _global_argv, 8, 3\n");
     out.push_str(".comm _exc_handler_top, 8, 3\n");
@@ -619,6 +651,22 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _vd_bool_false_line\n_vd_bool_false_line:\n    .ascii \"  bool(false)\\n\"\n");
     out.push_str(".globl _vd_float_prefix\n_vd_float_prefix:\n    .ascii \"  float(\"\n");
     out.push_str(".globl _vd_null_line\n_vd_null_line:\n    .ascii \"  NULL\\n\"\n");
+    // var_dump hash (associative array) string-key delimiters: `  ["` before the
+    // key bytes and `"]=>\n` after, matching PHP's `  ["key"]=>` line format.
+    out.push_str(".globl _vd_str_key_open\n_vd_str_key_open:\n    .ascii \"  [\\\"\"\n");
+    out.push_str(".globl _vd_str_key_close\n_vd_str_key_close:\n    .ascii \"\\\"]=>\\n\"\n");
+    // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
+    // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
+    // newline, the `1` rendered for boolean true, and a 64-space pad used by
+    // the recursive indentation helper (written in <=64-byte chunks).
+    out.push_str(".globl _pr_array_hdr\n_pr_array_hdr:\n    .ascii \"Array\\n\"\n");
+    out.push_str(".globl _pr_open\n_pr_open:\n    .ascii \"(\\n\"\n");
+    out.push_str(".globl _pr_close\n_pr_close:\n    .ascii \")\\n\"\n");
+    out.push_str(".globl _pr_lbrack\n_pr_lbrack:\n    .ascii \"[\"\n");
+    out.push_str(".globl _pr_arrow\n_pr_arrow:\n    .ascii \"] => \"\n");
+    out.push_str(".globl _pr_nl\n_pr_nl:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _pr_one\n_pr_one:\n    .ascii \"1\"\n");
+    out.push_str(".globl _pr_spaces\n_pr_spaces:\n    .ascii \"                                                                \"\n");
     out.push_str(".globl _ftp_user_cmd\n_ftp_user_cmd:\n    .ascii \"USER anonymous\\x0d\\n\"\n");
     out.push_str(".globl _ftp_pass_cmd\n_ftp_pass_cmd:\n    .ascii \"PASS anonymous@\\x0d\\n\"\n");
     out.push_str(".globl _ftp_type_cmd\n_ftp_type_cmd:\n    .ascii \"TYPE I\\x0d\\n\"\n");
@@ -650,6 +698,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
+    out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
+    out.push_str(".globl _fmt_star_f\n_fmt_star_f:\n    .asciz \"%.*f\"\n");
     out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
     out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
 

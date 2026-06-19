@@ -2191,6 +2191,42 @@ fn test_microtime() {
     assert_eq!(out, "ok");
 }
 
+// Tests `microtime()` / `microtime(false)` return the "0.NNNNNNNN sec" string form.
+/// Verifies that the string form begins with "0." and carries the separating space at the fixed
+/// position 10 (after "0." plus eight fractional digits), for both the omitted-argument and
+/// explicit-`false` call shapes. Exercises the `__rt_microtime_str` runtime.
+#[test]
+fn test_microtime_string_form() {
+    let out = compile_and_run("<?php
+$s = microtime();
+echo substr($s, 0, 2);
+echo substr($s, 10, 1);
+$f = microtime(false);
+echo substr($f, 0, 2);
+echo substr($f, 10, 1);
+");
+    assert_eq!(out, "0. 0. ");
+}
+
+// Tests `is_string`/`is_float` resolve the literal and non-literal `microtime()` flag.
+/// Verifies that `microtime()` / `microtime(false)` are strings, `microtime(true)` is a float,
+/// and a non-literal flag dispatches to the `string|float` Mixed box whose runtime tag the type
+/// predicates read (`__rt_microtime_mixed` builds the string for a false flag and boxes the float
+/// for a true flag).
+#[test]
+fn test_microtime_type_predicates() {
+    let out = compile_and_run("<?php
+echo is_string(microtime()) ? \"S\" : \"N\";
+echo is_float(microtime(true)) ? \"F\" : \"N\";
+echo is_string(microtime(false)) ? \"S\" : \"N\";
+$flag = false;
+echo is_string(microtime($flag)) ? \"S\" : \"N\";
+$flag = true;
+echo is_float(microtime($flag)) ? \"F\" : \"N\";
+");
+    assert_eq!(out, "SFSSF");
+}
+
 // -- v0.8 sleep / usleep --
 
 // Tests `sleep(0)` succeeds (no-op sleep) and outputs "ok".

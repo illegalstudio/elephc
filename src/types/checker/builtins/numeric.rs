@@ -25,7 +25,8 @@ type BuiltinResult = Result<Option<PhpType>, CompileError>;
 ///
 /// ## Supported builtins
 /// - Type checks: `is_bool`, `boolval`, `is_callable`, `is_null`, `is_float`, `is_int`,
-///   `is_iterable`, `is_string`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`
+///   `is_iterable`, `is_string`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`,
+///   `is_resource`, `is_array`, `is_object`, `is_scalar`
 /// - Numeric: `abs`, `floor`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
 ///   `sinh`, `cosh`, `tanh`, `log2`, `log10`, `exp`, `deg2rad`, `rad2deg`, `atan2`, `hypot`,
 ///   `pi`, `round`, `pow`, `intdiv`, `fmod`, `fdiv`, `log`
@@ -68,7 +69,7 @@ pub(super) fn check_builtin(
         }
         "is_bool" | "boolval" | "is_callable" | "is_null" | "is_float" | "is_int"
         | "is_iterable" | "is_string" | "is_numeric" | "is_nan" | "is_finite"
-        | "is_infinite" | "is_resource" => {
+        | "is_infinite" | "is_resource" | "is_array" | "is_object" | "is_scalar" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,

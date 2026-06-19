@@ -20,6 +20,46 @@ use super::super::context::FunctionContext;
 use super::{expect_operand, secondary_float_reg, store_if_result};
 use crate::codegen_ir::{CodegenIrError, Result};
 
+/// Lowers ordered string comparison (`<`, `<=`, `>`, `>=`) via lexicographic `__rt_strcmp`.
+///
+/// Loads both operands into the runtime comparator's string registers, calls `__rt_strcmp`
+/// (result `< 0` / `0` / `> 0`), then reduces it to a PHP boolean by applying the EIR
+/// comparison predicate against zero — mirroring the integer-compare path. Comparison is by
+/// byte sequence and length; PHP's numeric-string ordering rule is not applied here (the
+/// synthetic date/time methods compare single format characters, for which the two agree).
+pub(super) fn lower_str_cmp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let predicate = super::expect_cmp_predicate(inst)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(lhs, "x1", "x2")?;
+            ctx.load_string_value_to_regs(rhs, "x3", "x4")?;
+            abi::emit_call_label(ctx.emitter, "__rt_strcmp");
+            ctx.emitter
+                .instruction(&format!("cmp {}, #0", result_reg));               // compare the lexicographic result against zero
+            ctx.emitter.instruction(&format!(
+                "cset {}, {}",
+                result_reg,
+                super::aarch64_condition(predicate)?
+            )); // materialize the ordered predicate as 0 or 1
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(lhs, "rdi", "rsi")?;
+            ctx.load_string_value_to_regs(rhs, "rdx", "rcx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_strcmp");
+            ctx.emitter
+                .instruction(&format!("cmp {}, 0", result_reg));                // compare the lexicographic result against zero
+            ctx.emitter
+                .instruction(&format!("set{} al", super::x86_64_condition(predicate)?)); // materialize the ordered predicate in the low byte
+            ctx.emitter
+                .instruction(&format!("movzx {}, al", result_reg));             // widen the predicate byte into the integer result register
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers strict equality or inequality for scalar values.
 pub(super) fn lower_strict_eq(
     ctx: &mut FunctionContext<'_>,
@@ -462,7 +502,12 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 fn intish_or_null(ty: &PhpType) -> bool {
     matches!(
         ty,
-        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::Mixed
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::Mixed
+            | PhpType::TaggedScalar
     )
 }
 
@@ -639,8 +684,14 @@ fn emit_intish_compare(
 ) -> Result<()> {
     let lhs_reg = abi::secondary_scratch_reg(ctx.emitter);
     let rhs_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    // Loading a Mixed operand unboxes it through `__rt_mixed_cast_int`/`__rt_mixed_cast_bool`,
+    // whose call clobbers the caller-saved scratch registers. Without saving the already-loaded
+    // left operand across the right-operand load, an `Int == Mixed` comparison lost its left value
+    // (while `Mixed == Int` happened to work, because the call ran before the int was loaded).
     load_intish_value(ctx, lhs, lhs_reg, compare_truthiness)?;
+    abi::emit_push_reg(ctx.emitter, lhs_reg);
     load_intish_value(ctx, rhs, rhs_reg, compare_truthiness)?;
+    abi::emit_pop_reg(ctx.emitter, lhs_reg);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp {}, {}", lhs_reg, rhs_reg));  // compare scalar equality operands
@@ -668,6 +719,17 @@ fn load_intish_value(
         }
         PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_reg(value, reg)?;
+            if truthy {
+                emit_reg_nonzero_bool(ctx, reg);
+            }
+        }
+        PhpType::TaggedScalar => {
+            // A miss-capable read materializes as a TaggedScalar; narrow it to a plain int
+            // (null sentinel → 0) exactly once so loose equality compares the int payload,
+            // matching PHP's `null == 0` / `null == <nonzero>` semantics.
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            move_int_result_to_reg(ctx, reg);
             if truthy {
                 emit_reg_nonzero_bool(ctx, reg);
             }

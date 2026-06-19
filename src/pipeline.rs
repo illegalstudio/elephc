@@ -19,8 +19,8 @@ use crate::codegen::Emit;
 use crate::timings::CompileTimings;
 use crate::{
     autoload, codegen, codegen_ir, conditional, errors, exports, ir, ir_lower, ir_passes, lexer,
-    linker, magic_constants, name_resolver, optimize, parser, pdo_prelude, resolver, runtime_cache,
-    source_map, types,
+    linker, list_id_prelude, magic_constants, name_resolver, optimize, parser, pdo_prelude,
+    resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude,
 };
 
 /// Holds the paths for all compilation output files (assembly, object, binary, source map).
@@ -125,6 +125,32 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     let ast = pdo_prelude::inject_if_used(ast);
     timings.record_since("pdo-prelude", phase_started);
+
+    // Inject the timezone-introspection prelude (extern block + array marshalling,
+    // written in elephc-PHP) only when the program references getLocation /
+    // getTransitions / listAbbreviations or their procedural aliases, so other
+    // binaries never declare the elephc_tz externs or link the bridge. Runs after
+    // include resolution so usage inside includes is detected.
+    let phase_started = Instant::now();
+    let ast = tz_prelude::inject_if_used(ast);
+    timings.record_since("tz-prelude", phase_started);
+
+    // Inject the listIdentifiers-filtering prelude (a pure elephc-PHP function over
+    // a baked group/country table) only when the program references
+    // DateTimeZone::listIdentifiers or timezone_identifiers_list, so other binaries
+    // never carry the table. Runs after include resolution so usage inside includes
+    // is detected, and before name resolution, which desugars both call forms to it.
+    let phase_started = Instant::now();
+    let ast = list_id_prelude::inject_if_used(ast);
+    timings.record_since("list-id-prelude", phase_started);
+
+    // Inject the var_export prelude (a pure elephc-PHP function) only when the program
+    // references var_export and does not declare its own, so other binaries carry
+    // nothing. Runs after include resolution so usage inside includes is detected, and
+    // before name resolution so the call resolves to the injected function.
+    let phase_started = Instant::now();
+    let ast = var_export_prelude::inject_if_used(ast);
+    timings.record_since("var-export-prelude", phase_started);
 
     let phase_started = Instant::now();
     let ast = match name_resolver::resolve(ast) {

@@ -844,6 +844,53 @@ foreach ($uasorted as $value) {
 }
 
 /// Verifies runtime-selected static callable arrays route fixed-return callbacks through descriptors.
+/// Verifies `usort` over an array of objects with an explicitly typed comparator:
+/// the comparator reads an integer property from each object handle and the array
+/// is reordered by that property.
+#[test]
+fn test_usort_objects_typed_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+class Item { public int $weight; public function __construct(int $w) { $this->weight = $w; } }
+$items = [new Item(30), new Item(10), new Item(20)];
+usort($items, function (Item $a, Item $b) { return $a->weight <=> $b->weight; });
+foreach ($items as $it) { echo $it->weight, ","; }
+"#,
+    );
+    assert_eq!(out, "10,20,30,");
+}
+
+/// Verifies `usort` over an array of objects with an *unannotated* comparator:
+/// the comparator parameters are typed from the array element so `$a->prop`
+/// resolves and the `<=>` comparison reorders the objects correctly.
+#[test]
+fn test_usort_objects_untyped_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+class Item { public int $weight; public function __construct(int $w) { $this->weight = $w; } }
+$items = [new Item(30), new Item(10), new Item(20)];
+usort($items, function ($a, $b) { return $a->weight <=> $b->weight; });
+foreach ($items as $it) { echo $it->weight, ","; }
+"#,
+    );
+    assert_eq!(out, "10,20,30,");
+}
+
+/// Verifies `uasort` over an indexed array of objects: the comparator reorders the
+/// object handles by an integer property the same way `usort` does.
+#[test]
+fn test_uasort_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class Item { public int $weight; public function __construct(int $w) { $this->weight = $w; } }
+$items = [new Item(30), new Item(10), new Item(20)];
+uasort($items, fn ($a, $b) => $a->weight <=> $b->weight);
+foreach ($items as $it) { echo $it->weight, ","; }
+"#,
+    );
+    assert_eq!(out, "10,20,30,");
+}
+
 #[test]
 fn test_dynamic_static_callable_array_variable_fixed_callback_runtimes() {
     let out = compile_and_run(

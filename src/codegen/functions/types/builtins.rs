@@ -40,8 +40,9 @@ pub(super) fn infer_function_call_type(
         | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
         | "base64_decode" | "bin2hex" | "hex2bin" | "md5" | "sha1" | "hash" | "hash_hmac"
         | "gettype"
-        | "strstr" | "readline" | "date"
+        | "strstr" | "readline" | "date" | "gmdate"
         | "json_last_error_msg" | "php_uname" | "phpversion"
+        | "date_default_timezone_get"
         | "tempnam" | "getcwd" | "shell_exec" | "preg_replace_callback"
         | "ptr_read_string"
         | "fread" | "fgets" | "stream_get_line"
@@ -50,6 +51,9 @@ pub(super) fn infer_function_call_type(
         | "get_class" | "get_parent_class" | "get_resource_type"
         | "exec" | "system" | "preg_replace" => PhpType::Str,
         "json_decode" => PhpType::Mixed,
+        // strtotime boxes int|false as a Mixed cell; the internal raw alias stays a plain int.
+        "strtotime" => PhpType::Mixed,
+        "__elephc_strtotime_raw" => PhpType::Int,
         "call_user_func" | "call_user_func_array" => {
             infer_dynamic_callback_builtin_type(args, ctx).unwrap_or(PhpType::Mixed)
         }
@@ -126,16 +130,17 @@ pub(super) fn infer_function_call_type(
             .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int))),
         "array_merge" => infer_array_merge_type(args, sig, ctx),
         "array_fill" => {
-            // Mirrors the emitter dispatch: a non-literal-zero start, or a string value,
-            // produces a keyed Mixed-valued hash (`__rt_array_fill_assoc`); otherwise a
-            // 0-based indexed array of the value type.
+            // Mirrors the emitter dispatch: a non-literal-zero start produces a keyed
+            // Mixed-valued hash (`__rt_array_fill_assoc`); a literal-zero start uses the
+            // indexed path (the dedicated `__rt_array_fill_str` for string values, or
+            // `__rt_array_fill` / `__rt_array_fill_refcounted` for scalars).
             let value_ty = args
                 .get(2)
                 .map(|arg| infer_local_type(arg, sig, ctx))
                 .unwrap_or(PhpType::Int);
             let start_is_literal_zero =
                 matches!(args.first().map(|arg| &arg.kind), Some(ExprKind::IntLiteral(0)));
-            if !start_is_literal_zero || matches!(value_ty.codegen_repr(), PhpType::Str) {
+            if !start_is_literal_zero {
                 PhpType::AssocArray {
                     key: Box::new(PhpType::Int),
                     value: Box::new(PhpType::Mixed),
@@ -204,6 +209,11 @@ pub(super) fn infer_function_call_type(
             PhpType::Bool
         }
         "define" => PhpType::Bool,
+        "date_default_timezone_set" => PhpType::Bool,
+        "checkdate" => PhpType::Bool,
+        "getdate" => PhpType::Mixed,
+        "localtime" => PhpType::Mixed,
+        "hrtime" => PhpType::Mixed,
         "umask" | "fpassthru" | "linkinfo" | "fprintf" | "vprintf" | "vfprintf"
         | "fseek" | "ftell" | "fwrite" | "fputcsv" => PhpType::Int,
         "strpos" | "strrpos" | "array_search" | "file_get_contents" | "json_encode"
