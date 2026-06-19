@@ -7990,8 +7990,7 @@ fn property_get_result_type(
             property_ty
         };
     }
-    let Some((_, (_, property_ty))) = class_info.visible_property(property)
-    else {
+    let Some((_, (_, property_ty))) = class_info.visible_property(property) else {
         if let Some(magic_ty) = magic_get_result_type(ctx, normalized) {
             return if nullable {
                 nullable_result_type(magic_ty)
@@ -8283,7 +8282,7 @@ fn lower_method_call(
         return lower_nullable_regular_method_call(ctx, object, method, args, expr);
     }
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
-        return lower_reflection_class_new_instance(ctx, object, args, expr);
+        return lower_reflection_class_new_instance(ctx, Some(object_expr), object, args, expr);
     }
     let magic_args;
     let (dispatch_method, args) = if let Some(args) =
@@ -8414,17 +8413,26 @@ fn lower_nullable_regular_method_call(
 /// Lowers `ReflectionClass::newInstance()` by constructing the reflected class name.
 fn lower_reflection_class_new_instance(
     ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
     object: LoweredValue,
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
     let args = reflection_class_new_instance_args(args);
-    if args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(&args) {
+    let constructor_sig =
+        reflection_class_new_instance_constructor_signature(ctx, object_expr, &args).cloned();
+    if args.iter().any(is_spread_arg)
+        || (crate::types::call_args::has_named_args(&args) && constructor_sig.is_none())
+    {
         return lower_reflection_class_new_instance_unsupported(ctx, expr);
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
     let mut operands = vec![class_name.value];
-    operands.extend(lower_args(ctx, &args));
+    operands.extend(lower_args_with_signature(
+        ctx,
+        constructor_sig.as_ref(),
+        &args,
+    ));
     ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
@@ -8441,6 +8449,99 @@ fn reflection_class_new_instance_args(args: &[Expr]) -> Vec<Expr> {
         return expand_static_call_spread_args(args);
     }
     args.to_vec()
+}
+
+/// Returns the reflected constructor signature when the ReflectionClass receiver
+/// is an inline `new ReflectionClass(Known::class)` expression.
+fn reflection_class_new_instance_constructor_signature<'a>(
+    ctx: &'a LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    forwarded_args: &[Expr],
+) -> Option<&'a FunctionSig> {
+    let class_name = reflection_class_new_instance_reflected_class(ctx, object_expr?)?;
+    if forwarded_args.is_empty() && constructor_signature_for_class_name(ctx, &class_name).is_none()
+    {
+        return None;
+    }
+    constructor_signature_for_class_name(ctx, &class_name)
+}
+
+/// Resolves the target class from an inline `ReflectionClass` construction when
+/// its constructor argument is a literal class string or `ClassName::class`.
+fn reflection_class_new_instance_reflected_class(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<String> {
+    let ExprKind::NewObject { class_name, args } = &object_expr.kind else {
+        return None;
+    };
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionclass" {
+        return None;
+    }
+    let reflected_arg = reflection_class_constructor_class_arg(ctx, args)?;
+    let raw_class_name = match &reflected_arg.kind {
+        ExprKind::StringLiteral(value) => value.clone(),
+        ExprKind::ClassConstant { receiver } => static_receiver_class_name(ctx, receiver)?,
+        _ => return None,
+    };
+    resolve_known_class_name(ctx, &raw_class_name)
+}
+
+/// Returns the `ReflectionClass::__construct()` class-name argument after static
+/// spread and named-argument normalization.
+fn reflection_class_constructor_class_arg(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Expr> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if !crate::types::call_args::has_named_args(&args) {
+        return args.first().cloned();
+    }
+    let sig = ctx
+        .classes
+        .get("ReflectionClass")
+        .and_then(|class_info| class_info.methods.get("__construct"))?;
+    let call_span = args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        sig,
+        &args,
+        call_span,
+        crate::types::call_args::regular_param_count(sig),
+        false,
+        true,
+        &assoc_spread_sources(ctx, &args),
+    )
+    .ok()?;
+    if plan.has_spread_args() {
+        return None;
+    }
+    planned_regular_arg_expr(plan.regular_args.first()?).cloned()
+}
+
+/// Resolves a PHP class name case-insensitively against known class metadata.
+fn resolve_known_class_name(ctx: &LoweringContext<'_, '_>, class_name: &str) -> Option<String> {
+    let key = php_symbol_key(class_name.trim_start_matches('\\'));
+    ctx.classes
+        .keys()
+        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .cloned()
+}
+
+/// Returns constructor signature metadata for a known class name.
+fn constructor_signature_for_class_name<'a>(
+    ctx: &'a LoweringContext<'_, '_>,
+    class_name: &str,
+) -> Option<&'a FunctionSig> {
+    let key = php_symbol_key("__construct");
+    ctx.classes
+        .get(class_name.trim_start_matches('\\'))
+        .and_then(|class_info| class_info.methods.get(&key))
 }
 
 /// Emits a runtime fatal for ReflectionClass newInstance argument forms not yet lowered.
@@ -8570,7 +8671,7 @@ fn lower_method_call_with_receiver(
     expr: &Expr,
 ) -> LoweredValue {
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
-        return lower_reflection_class_new_instance(ctx, object, args, expr);
+        return lower_reflection_class_new_instance(ctx, None, object, args, expr);
     }
     let magic_args;
     let (dispatch_method, args) =

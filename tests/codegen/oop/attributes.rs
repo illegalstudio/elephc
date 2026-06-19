@@ -1747,6 +1747,52 @@ echo $second->label();
     assert_eq!(out, "AB:CD");
 }
 
+/// Verifies inline `ReflectionClass::newInstance()` forwards named constructor
+/// arguments through the reflected constructor signature.
+#[test]
+fn test_reflection_class_new_instance_forwards_named_constructor_args() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectNamedNewTarget {
+    public string $label = "";
+    public function __construct(string $left, string $right) {
+        $this->label = $left . $right;
+    }
+    public function label(): string {
+        return $this->label;
+    }
+}
+$first = (new ReflectionClass(ReflectNamedNewTarget::class))->newInstance(right: "B", left: "A");
+echo $first->label() . ":";
+$second = (new ReflectionClass(class_name: "reflectnamednewtarget"))->newInstance(...["right" => "D", "left" => "C"]);
+echo $second->label();
+"#,
+    );
+    assert_eq!(out, "AB:CD");
+}
+
+/// Verifies inline `ReflectionClass::newInstance()` uses constructor defaults
+/// when named arguments leave optional parameters unspecified.
+#[test]
+fn test_reflection_class_new_instance_named_args_use_constructor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectDefaultNewTarget {
+    public string $label = "";
+    public function __construct(string $left = "L", string $right = "R") {
+        $this->label = $left . $right;
+    }
+    public function label(): string {
+        return $this->label;
+    }
+}
+$value = (new ReflectionClass(ReflectDefaultNewTarget::class))->newInstance(right: "B");
+echo $value->label();
+"#,
+    );
+    assert_eq!(out, "LB");
+}
+
 /// Verifies that `ReflectionClassConstant` and enum-case reflectors expose
 /// attribute name, arguments, `getName()`, and `newInstance()` data.
 #[test]
