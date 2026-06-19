@@ -1413,6 +1413,13 @@ class EvalReflectListTarget {
 $ref = new ReflectionClass("EvalReflectListTarget");
 $methods = $ref->getMethods();
 $properties = $ref->getProperties();
+$staticMethods = $ref->getMethods(ReflectionMethod::IS_STATIC);
+$privateMethods = $ref->getMethods(filter: ReflectionMethod::IS_PRIVATE);
+$noMethods = $ref->getMethods(0);
+$nullMethods = $ref->getMethods(null);
+$staticProperties = $ref->getProperties(ReflectionProperty::IS_STATIC);
+$protectedProperties = $ref->getProperties(filter: ReflectionProperty::IS_PROTECTED);
+$noProperties = $ref->getProperties(0);
 echo count($methods); echo ":"; echo count($properties); echo ":";
 echo ReflectionMethod::IS_STATIC; echo ":"; echo ReflectionMethod::IS_PRIVATE; echo ":";
 $direct = new ReflectionMethod("EvalReflectListTarget", "helper");
@@ -1441,6 +1448,13 @@ foreach ($properties as $property) {
         echo "M"; echo $property->getModifiers();
     }
 }
+echo ":";
+echo count($staticMethods); echo $staticMethods[0]->getName(); echo ":";
+echo count($privateMethods); echo $privateMethods[0]->getName(); echo ":";
+echo count($noMethods); echo ":"; echo count($nullMethods); echo ":";
+echo count($staticProperties); echo $staticProperties[0]->getName(); echo ":";
+echo count($protectedProperties); echo $protectedProperties[0]->getName(); echo ":";
+echo count($noProperties);
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -1449,7 +1463,10 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "2:2:16:4:D20:F1M1SRM20:V1PM2TRM20");
+    assert_eq!(
+        values.output,
+        "2:2:16:4:D20:F1M1SRM20:V1PM2TRM20:1helper:1helper:0:2:1token:1visible:0"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

@@ -208,11 +208,12 @@ lookups return `false` when no constant or case is visible.
 materialized `ReflectionMethod` and `ReflectionProperty` objects for the same
 visible member metadata, including supported member attributes and predicate
 flags. For generated/AOT classes, `ReflectionClass::getMethod()` /
-`getProperty()` and no-filter `getMethods()` / `getProperties()` materialize
-reflection objects from emitted member-name and predicate metadata. AOT member
-reflection currently exposes names, declaring classes, and predicate flags, but
-does not expose full AOT parameter, attribute, property type, or property
-default-value metadata. `ReflectionMethod::getDeclaringClass()` and
+`getProperty()` and `getMethods()` / `getProperties()` materialize reflection
+objects from emitted member-name and predicate metadata, including optional
+modifier filters. AOT member reflection currently exposes names, declaring
+classes, and predicate flags, but does not expose full AOT parameter,
+attribute, property type, or property default-value metadata.
+`ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the symbol that declares the reflected
 member. `ReflectionClass::getConstructor()` returns a materialized

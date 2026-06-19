@@ -6620,6 +6620,11 @@ foreach ($properties as $property) {
 }
 echo $listedId ? "I" : "i";
 echo $listedName ? "N" : "n";
+$publicProperties = $class->getProperties(ReflectionProperty::IS_PUBLIC);
+$protectedProperties = $class->getProperties(filter: ReflectionProperty::IS_PROTECTED);
+echo ":" . count($publicProperties) . $publicProperties[0]->getName();
+echo ":" . count($protectedProperties) . $protectedProperties[0]->getName();
+echo ":" . count($class->getProperties(0));
 try {
     $class->getProperty("missing");
     echo "bad";
@@ -6635,7 +6640,7 @@ try {
     );
     assert_eq!(
         out.stdout,
-        "IINCpsHmGEvalAotPromotedBaseN:2IN:Property EvalAotPromotedBase::$missing does not exist"
+        "IINCpsHmGEvalAotPromotedBaseN:2IN:1id:1name:0:Property EvalAotPromotedBase::$missing does not exist"
     );
 }
 
@@ -6689,6 +6694,23 @@ echo ":" . count($methods);
 echo $seenRun ? "R" : "r";
 echo $seenBase ? "B" : "b";
 echo $seenLocked ? "L" : "l";
+$staticMethods = $class->getMethods(ReflectionMethod::IS_STATIC);
+$privateMethods = $class->getMethods(filter: ReflectionMethod::IS_PRIVATE);
+$seenStatic = false;
+$seenHidden = false;
+foreach ($staticMethods as $method) {
+    if (strtolower($method->getName()) === "basestatic") {
+        $seenStatic = $method->isProtected();
+    }
+}
+foreach ($privateMethods as $method) {
+    if (strtolower($method->getName()) === "hidden") {
+        $seenHidden = $method->isPrivate();
+    }
+}
+echo ":" . count($staticMethods) . ($seenStatic ? "S" : "s");
+echo ":" . count($privateMethods) . ($seenHidden ? "H" : "h");
+echo ":" . count($class->getMethods(0));
 try {
     $class->getMethod("missing");
     echo "bad";
@@ -6704,7 +6726,7 @@ try {
     );
     assert_eq!(
         out.stdout,
-        "RBm:runUsEvalAotReflectMethodChild:SP:lockedFUEvalAotReflectMethodBase:4RBL:Method EvalAotReflectMethodChild::missing() does not exist"
+        "RBm:runUsEvalAotReflectMethodChild:SP:lockedFUEvalAotReflectMethodBase:4RBL:1S:1H:0:Method EvalAotReflectMethodChild::missing() does not exist"
     );
 }
 
@@ -6820,6 +6842,13 @@ class EvalReflectListTarget {
 $ref = new ReflectionClass("EvalReflectListTarget");
 $methods = $ref->getMethods();
 $properties = $ref->getProperties();
+$staticMethods = $ref->getMethods(ReflectionMethod::IS_STATIC);
+$privateMethods = $ref->getMethods(filter: ReflectionMethod::IS_PRIVATE);
+$noMethods = $ref->getMethods(0);
+$nullMethods = $ref->getMethods(null);
+$staticProperties = $ref->getProperties(ReflectionProperty::IS_STATIC);
+$protectedProperties = $ref->getProperties(filter: ReflectionProperty::IS_PROTECTED);
+$noProperties = $ref->getProperties(0);
 echo count($methods) . ":" . count($properties) . ":";
 echo ReflectionMethod::IS_STATIC . ":" . ReflectionMethod::IS_PRIVATE . ":";
 $direct = new ReflectionMethod("EvalReflectListTarget", "helper");
@@ -6847,7 +6876,14 @@ foreach ($properties as $property) {
         echo $property->isPrivate() ? "R" : "r";
         echo "M" . $property->getModifiers();
     }
-}');
+}
+echo ":";
+echo count($staticMethods) . $staticMethods[0]->getName() . ":";
+echo count($privateMethods) . $privateMethods[0]->getName() . ":";
+echo count($noMethods) . ":" . count($nullMethods) . ":";
+echo count($staticProperties) . $staticProperties[0]->getName() . ":";
+echo count($protectedProperties) . $protectedProperties[0]->getName() . ":";
+echo count($noProperties);');
 "#,
     );
     assert!(
@@ -6855,7 +6891,10 @@ foreach ($properties as $property) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:2:16:4:D20:F1M1SRM20:V1PM2TRM20");
+    assert_eq!(
+        out.stdout,
+        "2:2:16:4:D20:F1M1SRM20:V1PM2TRM20:1helper:1helper:0:2:1token:1visible:0"
+    );
 }
 
 /// Verifies eval ReflectionClass getMethod/getProperty return single member objects.
