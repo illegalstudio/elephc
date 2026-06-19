@@ -394,6 +394,60 @@ return $box->base;"#,
     );
     assert_eq!(values.get(result), FakeValue::Int(3));
 }
+
+/// Verifies eval `instanceof` uses eval class, interface, and dynamic-target metadata.
+#[test]
+fn execute_program_evaluates_eval_instanceof_targets() {
+    let program = parse_fragment(
+        br#"interface EvalInstanceIface {}
+class EvalInstanceBase {}
+class EvalInstanceChild extends EvalInstanceBase implements EvalInstanceIface {}
+class EvalInstanceOther {}
+$box = new EvalInstanceChild();
+$class = "EvalInstanceChild";
+$target = ["EvalInstanceIface"];
+$prefix = "EvalInstance";
+$suffix = "Base";
+$targetObject = new EvalInstanceChild();
+echo $box instanceof EvalInstanceChild ? "C" : "c";
+echo $box instanceof EvalInstanceBase ? "B" : "b";
+echo $box instanceof EvalInstanceIface ? "I" : "i";
+echo $box instanceof $class ? "D" : "d";
+echo $box instanceof $target[0] ? "A" : "a";
+echo $box instanceof ($prefix . $suffix) ? "P" : "p";
+echo $box instanceof $targetObject ? "O" : "o";
+echo 7 instanceof MissingEvalClass ? "bad" : "S";
+return $box instanceof EvalInstanceOther;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "CBIDAPOS");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
+/// Verifies dynamic `instanceof` rejects targets that are not strings or objects.
+#[test]
+fn execute_program_rejects_invalid_dynamic_instanceof_target() {
+    let program = parse_fragment(
+        br#"class EvalInvalidInstanceTarget {}
+$box = new EvalInvalidInstanceTarget();
+$target = 42;
+return $box instanceof $target;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("invalid instanceof target should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval-declared classes can implement eval-declared interfaces.
 #[test]
 fn execute_program_constructs_eval_declared_class_with_dynamic_interface() {

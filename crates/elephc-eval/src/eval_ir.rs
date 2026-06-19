@@ -1701,6 +1701,10 @@ pub enum EvalExpr {
         required: bool,
         once: bool,
     },
+    InstanceOf {
+        value: Box<EvalExpr>,
+        target: EvalInstanceOfTarget,
+    },
     LoadVar(String),
     Match {
         subject: Box<EvalExpr>,
@@ -1770,6 +1774,13 @@ pub enum EvalExpr {
         left: Box<EvalExpr>,
         right: Box<EvalExpr>,
     },
+}
+
+/// The right-hand side accepted by PHP's `instanceof` operator.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalInstanceOfTarget {
+    ClassName(String),
+    Expr(Box<EvalExpr>),
 }
 
 /// One source-order function or method call argument parsed from eval code.
