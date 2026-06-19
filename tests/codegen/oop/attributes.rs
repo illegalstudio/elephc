@@ -1036,6 +1036,33 @@ echo (new ReflectionClass(StaticReadonlyTrait::class))->isReadOnly() ? "R" : "r"
     assert_eq!(out, "rRRrrr");
 }
 
+/// Verifies that `ReflectionClass::isInstantiable()` reports PHP constructor
+/// visibility and class-kind rules for static metadata.
+#[test]
+fn test_reflection_class_is_instantiable() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class ReflectInstAbstract {}
+class ReflectInstPublic {}
+final class ReflectInstFinal {}
+class ReflectInstPrivate { private function __construct() {} }
+class ReflectInstProtected { protected function __construct() {} }
+interface ReflectInstIface {}
+trait ReflectInstTrait {}
+enum ReflectInstEnum { case Ready; }
+echo (new ReflectionClass(ReflectInstAbstract::class))->isInstantiable() ? "A" : "a";
+echo (new ReflectionClass(ReflectInstPublic::class))->isInstantiable() ? "B" : "b";
+echo (new ReflectionClass(ReflectInstFinal::class))->isInstantiable() ? "C" : "c";
+echo (new ReflectionClass(ReflectInstPrivate::class))->isInstantiable() ? "P" : "p";
+echo (new ReflectionClass(ReflectInstProtected::class))->isInstantiable() ? "R" : "r";
+echo (new ReflectionClass(ReflectInstIface::class))->isInstantiable() ? "I" : "i";
+echo (new ReflectionClass(ReflectInstTrait::class))->isInstantiable() ? "T" : "t";
+echo (new ReflectionClass(ReflectInstEnum::class))->isInstantiable() ? "E" : "e";
+"#,
+    );
+    assert_eq!(out, "aBCprite");
+}
+
 /// Verifies that `ReflectionClass::hasMethod()` and `hasProperty()` report
 /// PHP-visible members for static class-like metadata.
 #[test]

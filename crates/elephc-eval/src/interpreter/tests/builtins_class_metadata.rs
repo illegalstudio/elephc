@@ -362,6 +362,38 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass exposes eval class instantiability metadata.
+#[test]
+fn execute_program_reflects_eval_class_instantiable_predicate() {
+    let program = parse_fragment(
+        br#"abstract class EvalInstAbstract {}
+class EvalInstPublic {}
+final class EvalInstFinal {}
+class EvalInstPrivate { private function __construct() {} }
+class EvalInstProtected { protected function __construct() {} }
+interface EvalInstIface {}
+trait EvalInstTrait {}
+enum EvalInstEnum { case Ready; }
+echo (new ReflectionClass("EvalInstAbstract"))->isInstantiable() ? "A" : "a";
+echo (new ReflectionClass("EvalInstPublic"))->isInstantiable() ? "B" : "b";
+echo (new ReflectionClass("EvalInstFinal"))->isInstantiable() ? "C" : "c";
+echo (new ReflectionClass("EvalInstPrivate"))->isInstantiable() ? "P" : "p";
+echo (new ReflectionClass("EvalInstProtected"))->isInstantiable() ? "R" : "r";
+echo (new ReflectionClass("EvalInstIface"))->isInstantiable() ? "I" : "i";
+echo (new ReflectionClass("EvalInstTrait"))->isInstantiable() ? "T" : "t";
+echo (new ReflectionClass("EvalInstEnum"))->isInstantiable() ? "E" : "e";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "aBCprite");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass reports eval class-like method and property membership.
 #[test]
 fn execute_program_reflects_eval_class_member_existence() {

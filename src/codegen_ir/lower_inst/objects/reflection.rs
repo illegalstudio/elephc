@@ -42,6 +42,7 @@ struct ReflectionOwnerMetadata {
     is_trait: bool,
     is_enum: bool,
     is_readonly: bool,
+    is_instantiable: bool,
     modifiers: i64,
     member_flags: ReflectionMemberFlags,
 }
@@ -178,6 +179,7 @@ fn emit_reflection_owner_object(
         emit_reflection_bool_property(ctx, "__is_trait", metadata.is_trait)?;
         emit_reflection_bool_property(ctx, "__is_enum", metadata.is_enum)?;
         emit_reflection_bool_property(ctx, "__is_readonly", metadata.is_readonly)?;
+        emit_reflection_bool_property(ctx, "__is_instantiable", metadata.is_instantiable)?;
         emit_reflection_int_property(ctx, "__modifiers", metadata.modifiers)?;
     }
     if class_name == "ReflectionMethod" {
@@ -264,6 +266,8 @@ fn reflection_class_metadata_for_name(
         let property_members =
             reflection_class_property_members(ctx, class_name, info, &property_names);
         let constructor_member = reflection_constructor_member(&method_members);
+        let is_instantiable =
+            reflection_class_is_instantiable(info, is_enum, constructor_member.as_ref());
         return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
@@ -284,6 +288,7 @@ fn reflection_class_metadata_for_name(
             is_trait: false,
             is_enum,
             is_readonly: info.is_readonly_class && !is_enum,
+            is_instantiable,
             modifiers: reflection_class_modifiers(
                 info.is_final,
                 info.is_abstract,
@@ -324,6 +329,7 @@ fn reflection_class_metadata_for_name(
             is_trait: false,
             is_enum: false,
             is_readonly: false,
+            is_instantiable: false,
             modifiers: 0,
             member_flags: ReflectionMemberFlags::default(),
         });
@@ -365,6 +371,7 @@ fn reflection_class_metadata_for_name(
             is_trait: true,
             is_enum: false,
             is_readonly: false,
+            is_instantiable: false,
             modifiers: 0,
             member_flags: ReflectionMemberFlags::default(),
         });
@@ -433,6 +440,7 @@ fn reflection_method_owner_metadata(
         is_trait: false,
         is_enum: false,
         is_readonly: false,
+        is_instantiable: false,
         modifiers: 0,
         member_flags: member.flags,
     }
@@ -473,6 +481,7 @@ fn reflection_property_metadata(
                 is_trait: false,
                 is_enum: false,
                 is_readonly: false,
+                is_instantiable: false,
                 modifiers: 0,
                 member_flags: reflection_property_member_flags(info, &property_name)?,
             })
@@ -516,6 +525,7 @@ fn reflection_class_constant_metadata(
             is_trait: false,
             is_enum: false,
             is_readonly: false,
+            is_instantiable: false,
             modifiers: 0,
             member_flags: ReflectionMemberFlags::default(),
         });
@@ -553,6 +563,7 @@ fn reflection_class_constant_metadata(
                     is_trait: false,
                     is_enum: false,
                     is_readonly: false,
+                    is_instantiable: false,
                     modifiers: 0,
                     member_flags: ReflectionMemberFlags::default(),
                 }
@@ -597,6 +608,7 @@ fn reflection_enum_case_metadata(
                 is_trait: false,
                 is_enum: false,
                 is_readonly: false,
+                is_instantiable: false,
                 modifiers: 0,
                 member_flags: ReflectionMemberFlags::default(),
             })
@@ -659,6 +671,20 @@ fn reflection_parent_class_name(
     resolve_reflection_class(ctx, parent)
         .map(|(parent_name, _)| parent_name.to_string())
         .or_else(|| Some(parent.trim_start_matches('\\').to_string()))
+}
+
+/// Returns PHP's `ReflectionClass::isInstantiable()` value for static class metadata.
+fn reflection_class_is_instantiable(
+    info: &crate::types::ClassInfo,
+    is_enum: bool,
+    constructor_member: Option<&ReflectionListedMember>,
+) -> bool {
+    if info.is_abstract || is_enum {
+        return false;
+    }
+    constructor_member
+        .map(|member| member.flags.is_public)
+        .unwrap_or(true)
 }
 
 /// Collects direct and inherited parent interfaces for a reflected interface.
@@ -1210,6 +1236,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         is_trait: false,
         is_enum: false,
         is_readonly: false,
+        is_instantiable: false,
         modifiers: 0,
         member_flags: ReflectionMemberFlags::default(),
     }

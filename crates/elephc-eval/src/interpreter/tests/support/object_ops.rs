@@ -149,6 +149,10 @@ impl FakeOps {
                 Self::object_property(&properties, "__is_readonly")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "isinstantiable") if args.is_empty() => {
+                Self::object_property(&properties, "__is_instantiable")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "getparentclass") if args.is_empty() => {
                 Self::object_property(&properties, "__parent_class")
                     .map_or_else(|| self.bool_value(false), Ok)
@@ -372,6 +376,7 @@ impl FakeOps {
         let is_trait = self.bool_value((flags & 8) != 0)?;
         let is_enum = self.bool_value((flags & 16) != 0)?;
         let is_readonly = self.bool_value((flags & 32) != 0)?;
+        let is_instantiable = self.bool_value((flags & 64) != 0)?;
         let modifiers_cell = self.int(modifiers as i64)?;
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
         if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
@@ -386,6 +391,7 @@ impl FakeOps {
             properties.push(("__is_trait".to_string(), is_trait));
             properties.push(("__is_enum".to_string(), is_enum));
             properties.push(("__is_readonly".to_string(), is_readonly));
+            properties.push(("__is_instantiable".to_string(), is_instantiable));
             properties.push(("__modifiers".to_string(), modifiers_cell));
             properties.push(("__short_name".to_string(), short_name));
             properties.push(("__namespace_name".to_string(), namespace_name));

@@ -18,6 +18,7 @@ const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
 const EVAL_REFLECTION_CLASS_FLAG_TRAIT: u64 = 8;
 const EVAL_REFLECTION_CLASS_FLAG_ENUM: u64 = 16;
 const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
+const EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE: u64 = 64;
 const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
@@ -540,6 +541,9 @@ fn eval_reflection_class_like_attributes(
         if class.is_readonly_class() && !is_enum {
             flags |= EVAL_REFLECTION_CLASS_FLAG_READONLY;
         }
+        if eval_reflection_class_is_instantiable(class, is_enum, context) {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE;
+        }
         let modifiers = eval_reflection_class_modifiers(
             class.is_final(),
             class.is_abstract(),
@@ -609,6 +613,21 @@ fn eval_reflection_parent_class_name(
         .class(parent)
         .map(|parent_class| parent_class.name().trim_start_matches('\\').to_string())
         .or_else(|| Some(parent.trim_start_matches('\\').to_string()))
+}
+
+/// Returns PHP's `ReflectionClass::isInstantiable()` value for eval class metadata.
+fn eval_reflection_class_is_instantiable(
+    class: &EvalClass,
+    is_enum: bool,
+    context: &ElephcEvalContext,
+) -> bool {
+    if class.is_abstract() || is_enum {
+        return false;
+    }
+    context
+        .class_method(class.name(), "__construct")
+        .map(|(_, method)| method.visibility() == EvalVisibility::Public)
+        .unwrap_or(true)
 }
 
 /// Computes PHP's `ReflectionClass::getModifiers()` bitmask for eval metadata.

@@ -5865,6 +5865,37 @@ echo (new ReflectionClass("EvalReadonlyTrait"))->isReadOnly() ? "R" : "r";');
     assert_eq!(out.stdout, "rRRrrr");
 }
 
+/// Verifies eval ReflectionClass reports instantiability through the bridge.
+#[test]
+fn test_eval_reflection_class_instantiable_predicate() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('abstract class EvalInstAbstract {}
+class EvalInstPublic {}
+final class EvalInstFinal {}
+class EvalInstPrivate { private function __construct() {} }
+class EvalInstProtected { protected function __construct() {} }
+interface EvalInstIface {}
+trait EvalInstTrait {}
+enum EvalInstEnum { case Ready; }
+echo (new ReflectionClass("EvalInstAbstract"))->isInstantiable() ? "A" : "a";
+echo (new ReflectionClass("EvalInstPublic"))->isInstantiable() ? "B" : "b";
+echo (new ReflectionClass("EvalInstFinal"))->isInstantiable() ? "C" : "c";
+echo (new ReflectionClass("EvalInstPrivate"))->isInstantiable() ? "P" : "p";
+echo (new ReflectionClass("EvalInstProtected"))->isInstantiable() ? "R" : "r";
+echo (new ReflectionClass("EvalInstIface"))->isInstantiable() ? "I" : "i";
+echo (new ReflectionClass("EvalInstTrait"))->isInstantiable() ? "T" : "t";
+echo (new ReflectionClass("EvalInstEnum"))->isInstantiable() ? "E" : "e";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "aBCprite");
+}
+
 /// Verifies eval ReflectionClass reports method and property membership through the bridge.
 #[test]
 fn test_eval_reflection_class_member_existence() {
