@@ -149,6 +149,10 @@ impl FakeOps {
                 Self::object_property(&properties, "__is_readonly")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "getparentclass") if args.is_empty() => {
+                Self::object_property(&properties, "__parent_class")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "getmodifiers") if args.is_empty() => {
                 Self::object_property(&properties, "__modifiers").map_or_else(|| self.int(0), Ok)
             }
@@ -347,6 +351,7 @@ impl FakeOps {
         property_names: RuntimeCellHandle,
         method_objects: RuntimeCellHandle,
         property_objects: RuntimeCellHandle,
+        parent_class: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -390,6 +395,7 @@ impl FakeOps {
             properties.push(("__method_names".to_string(), method_names));
             properties.push(("__property_names".to_string(), property_names));
             properties.push(("__methods".to_string(), method_objects));
+            properties.push(("__parent_class".to_string(), parent_class));
             properties.push(("__properties".to_string(), property_objects));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_METHOD

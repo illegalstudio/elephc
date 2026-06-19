@@ -33,6 +33,7 @@ struct ReflectionOwnerMetadata {
     method_members: Vec<ReflectionListedMember>,
     property_members: Vec<ReflectionListedMember>,
     constructor_member: Option<ReflectionListedMember>,
+    parent_class_name: Option<String>,
     parameter_members: Vec<ReflectionParameterMember>,
     required_parameter_count: i64,
     is_final: bool,
@@ -98,6 +99,19 @@ pub(super) fn lower_reflection_owner_new(
     class_name: &str,
 ) -> Result<()> {
     let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
+    emit_reflection_owner_object(ctx, class_name, &metadata)?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
+    ctx.store_result_value(result)
+}
+
+/// Allocates and populates one builtin Reflection owner object from metadata.
+fn emit_reflection_owner_object(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> Result<()> {
     let (class_id, property_count, uninitialized_marker_offsets) = {
         let class_info = ctx
             .module
@@ -149,6 +163,7 @@ pub(super) fn lower_reflection_owner_new(
                 &metadata.method_members,
             )?;
             emit_reflection_constructor_property(ctx, metadata.constructor_member.as_ref())?;
+            emit_reflection_parent_class_property(ctx, metadata.parent_class_name.as_deref())?;
             emit_reflection_member_array_property_by_name(
                 ctx,
                 "__properties",
@@ -187,10 +202,7 @@ pub(super) fn lower_reflection_owner_new(
         )?;
     }
     emit_reflection_member_flag_properties(ctx, class_name, metadata.member_flags)?;
-    let result = inst
-        .result
-        .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
-    ctx.store_result_value(result)
+    Ok(())
 }
 
 /// Lowers `new ReflectionFunction("name")` by populating its name and
@@ -607,6 +619,14 @@ fn reflection_class_metadata(
         return Ok(empty_reflection_metadata());
     };
     let reflected_class = const_string_or_class_operand(ctx, class_operand, "ReflectionClass")?;
+    reflection_class_metadata_for_name(ctx, &reflected_class)
+}
+
+/// Resolves `ReflectionClass(name)` metadata for a known class-like name.
+fn reflection_class_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+) -> Result<ReflectionOwnerMetadata> {
     if let Some((class_name, info)) = resolve_reflection_class(ctx, &reflected_class) {
         let is_enum = is_reflection_enum(ctx, class_name);
         let method_names = reflection_class_method_names(ctx, class_name);
@@ -626,6 +646,7 @@ fn reflection_class_metadata(
             method_members,
             property_members,
             constructor_member,
+            parent_class_name: reflection_parent_class_name(ctx, info),
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: info.is_final,
@@ -665,6 +686,7 @@ fn reflection_class_metadata(
             method_members,
             property_members,
             constructor_member,
+            parent_class_name: None,
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: false,
@@ -705,6 +727,7 @@ fn reflection_class_metadata(
             method_members,
             property_members,
             constructor_member,
+            parent_class_name: None,
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: false,
@@ -772,6 +795,7 @@ fn reflection_method_owner_metadata(
         method_members: Vec::new(),
         property_members: Vec::new(),
         constructor_member: None,
+        parent_class_name: None,
         parameter_members: member.parameters,
         required_parameter_count: member.required_parameter_count,
         is_final: false,
@@ -811,6 +835,7 @@ fn reflection_property_metadata(
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
+                parent_class_name: None,
                 parameter_members: Vec::new(),
                 required_parameter_count: 0,
                 is_final: false,
@@ -853,6 +878,7 @@ fn reflection_class_constant_metadata(
             method_members: Vec::new(),
             property_members: Vec::new(),
             constructor_member: None,
+            parent_class_name: None,
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: false,
@@ -889,6 +915,7 @@ fn reflection_class_constant_metadata(
                     method_members: Vec::new(),
                     property_members: Vec::new(),
                     constructor_member: None,
+                    parent_class_name: None,
                     parameter_members: Vec::new(),
                     required_parameter_count: 0,
                     is_final: false,
@@ -932,6 +959,7 @@ fn reflection_enum_case_metadata(
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
+                parent_class_name: None,
                 parameter_members: Vec::new(),
                 required_parameter_count: 0,
                 is_final: false,
@@ -991,6 +1019,17 @@ fn is_reflection_enum(ctx: &FunctionContext<'_>, enum_name: &str) -> bool {
         .enum_infos
         .keys()
         .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == enum_key)
+}
+
+/// Returns the canonical parent class name for a reflected class, if any.
+fn reflection_parent_class_name(
+    ctx: &FunctionContext<'_>,
+    info: &crate::types::ClassInfo,
+) -> Option<String> {
+    let parent = info.parent.as_ref()?;
+    resolve_reflection_class(ctx, parent)
+        .map(|(parent_name, _)| parent_name.to_string())
+        .or_else(|| Some(parent.trim_start_matches('\\').to_string()))
 }
 
 /// Collects direct and inherited parent interfaces for a reflected interface.
@@ -1533,6 +1572,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         method_members: Vec::new(),
         property_members: Vec::new(),
         constructor_member: None,
+        parent_class_name: None,
         parameter_members: Vec::new(),
         required_parameter_count: 0,
         is_final: false,
@@ -1799,6 +1839,39 @@ fn emit_reflection_constructor_property(
     Ok(())
 }
 
+/// Replaces the ReflectionClass private parent slot with `ReflectionClass|false`.
+fn emit_reflection_parent_class_property(
+    ctx: &mut FunctionContext<'_>,
+    parent_class_name: Option<&str>,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, "__parent_class")?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if let Some(parent_class_name) = parent_class_name {
+        let parent_metadata = reflection_class_metadata_for_name(ctx, parent_class_name)?;
+        emit_reflection_owner_object(ctx, "ReflectionClass", &parent_metadata)?;
+        emit_box_current_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Object("ReflectionClass".to_string()),
+        );
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    }
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
+}
+
 /// Replaces a ReflectionMethod private array slot with ReflectionParameter objects.
 fn emit_reflection_parameter_array_property_by_name(
     ctx: &mut FunctionContext<'_>,
@@ -2054,32 +2127,32 @@ fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String])
 
 /// Appends ReflectionClass metadata names to the current ARM64 result array.
 fn emit_reflection_string_array_fill_aarch64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("str x0, [sp, #-16]!"); // park the metadata-name array while appending strings
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the metadata-name array while appending strings
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("ldr x0, [sp]"); // reload the metadata-name array for this append
+        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "x1", &label);
         abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("str x0, [sp]"); // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("ldr x0, [sp], #16"); // restore the final metadata-name array as the result
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final metadata-name array as the result
 }
 
 /// Appends ReflectionClass metadata names to the current x86_64 result array.
 fn emit_reflection_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("push rax"); // park the metadata-name array while appending strings
-    ctx.emitter.instruction("sub rsp, 8"); // keep stack alignment stable across append helper calls
+    ctx.emitter.instruction("push rax");                                        // park the metadata-name array while appending strings
+    ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across append helper calls
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]"); // reload the metadata-name array for this append
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "rsi", &label);
         abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax"); // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("add rsp, 8"); // drop the temporary alignment slot
-    ctx.emitter.instruction("pop rax"); // restore the final metadata-name array as the result
+    ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
+    ctx.emitter.instruction("pop rax");                                         // restore the final metadata-name array as the result
 }
 
 /// Stores ReflectionMethod/ReflectionProperty boolean predicate slots when supported.

@@ -42,6 +42,8 @@ struct ReflectionOwnerLayout {
     method_objects_hi: Option<usize>,
     property_objects_lo: Option<usize>,
     property_objects_hi: Option<usize>,
+    parent_class_lo: Option<usize>,
+    parent_class_hi: Option<usize>,
     attrs_lo: usize,
     attrs_hi: usize,
     is_final_lo: Option<usize>,
@@ -176,6 +178,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let method_objects_lo = reflection_property_offset(info, "__methods")
         .or_else(|| reflection_property_offset(info, "__parameters"));
     let property_objects_lo = reflection_property_offset(info, "__properties");
+    let parent_class_lo = reflection_property_offset(info, "__parent_class");
     let is_final_lo = reflection_property_offset(info, "__is_final");
     let is_abstract_lo = reflection_property_offset(info, "__is_abstract");
     let is_interface_lo = reflection_property_offset(info, "__is_interface");
@@ -215,6 +218,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         method_objects_hi: method_objects_lo.map(|offset| offset + 8),
         property_objects_lo,
         property_objects_hi: property_objects_lo.map(|offset| offset + 8),
+        parent_class_lo,
+        parent_class_hi: parent_class_lo.map(|offset| offset + 8),
         attrs_lo,
         attrs_hi: attrs_lo + 8,
         is_final_lo,
@@ -302,9 +307,11 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("str x8, [sp, #120]");                                  // save the boxed ReflectionClass method objects array
     emitter.instruction("ldr x8, [sp, #168]");                                  // load the boxed ReflectionClass property objects array from the second stack argument
     emitter.instruction("str x8, [sp, #128]");                                  // save the boxed ReflectionClass property objects array
-    emitter.instruction("ldr x8, [sp, #176]");                                  // load ReflectionClass modifier flags from the third stack argument
+    emitter.instruction("ldr x8, [sp, #176]");                                  // load the boxed ReflectionClass parent value from the third stack argument
+    emitter.instruction("str x8, [sp, #136]");                                  // save the boxed ReflectionClass parent value
+    emitter.instruction("ldr x8, [sp, #184]");                                  // load ReflectionClass modifier flags from the fourth stack argument
     emitter.instruction("str x8, [sp, #48]");                                   // save ReflectionClass modifier flags
-    emitter.instruction("ldr x8, [sp, #184]");                                  // load ReflectionClass getModifiers bitmask from the fourth stack argument
+    emitter.instruction("ldr x8, [sp, #192]");                                  // load ReflectionClass getModifiers bitmask from the fifth stack argument
     emitter.instruction("str x8, [sp, #96]");                                   // save ReflectionClass getModifiers bitmask
     emitter.instruction("cmp x0, #0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("b.eq {}", class_label));                      // allocate a ReflectionClass owner
@@ -420,9 +427,11 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("mov QWORD PTR [rbp - 128], rax");                      // save the boxed ReflectionClass method objects array
     emitter.instruction("mov rax, QWORD PTR [rbp + 40]");                       // load the boxed ReflectionClass property objects array from the fourth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 136], rax");                      // save the boxed ReflectionClass property objects array
-    emitter.instruction("mov rax, QWORD PTR [rbp + 48]");                       // load ReflectionClass modifier flags from the fifth stack argument
+    emitter.instruction("mov rax, QWORD PTR [rbp + 48]");                       // load the boxed ReflectionClass parent value from the fifth stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 144], rax");                      // save the boxed ReflectionClass parent value
+    emitter.instruction("mov rax, QWORD PTR [rbp + 56]");                       // load ReflectionClass modifier flags from the sixth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save ReflectionClass modifier flags
-    emitter.instruction("mov rax, QWORD PTR [rbp + 56]");                       // load ReflectionClass getModifiers bitmask from the sixth stack argument
+    emitter.instruction("mov rax, QWORD PTR [rbp + 64]");                       // load ReflectionClass getModifiers bitmask from the seventh stack argument
     emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // save ReflectionClass getModifiers bitmask
     emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
@@ -529,6 +538,7 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_required_parameter_count_property_aarch64(emitter, layout);
     emit_set_owner_parameter_property_aarch64(emitter, layout);
     emit_set_owner_metadata_arrays_property_aarch64(emitter, layout, fail_label);
+    emit_set_owner_parent_class_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_aarch64(emitter, layout, fail_label);
     emitter.instruction(&format!("b {}", box_label));                           // box this populated Reflection owner object
 }
@@ -553,6 +563,7 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_required_parameter_count_property_x86_64(emitter, layout);
     emit_set_owner_parameter_property_x86_64(emitter, layout);
     emit_set_owner_metadata_arrays_property_x86_64(emitter, layout, fail_label);
+    emit_set_owner_parent_class_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_x86_64(emitter, layout, fail_label);
     emitter.instruction(&format!("jmp {}", box_label));                         // box this populated Reflection owner object
 }
@@ -1276,6 +1287,45 @@ fn emit_set_owner_metadata_array_slot_x86_64(
     abi::emit_store_to_address(emitter, "rdi", "r10", low_offset);
     abi::emit_load_int_immediate(emitter, "r11", 4);
     abi::emit_store_to_address(emitter, "r11", "r10", high_offset);
+}
+
+/// Stores a retained ARM64 boxed parent ReflectionClass-or-false cell.
+fn emit_set_owner_parent_class_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(low), Some(high)) = (layout.parent_class_lo, layout.parent_class_hi) else {
+        return;
+    };
+    emitter.instruction("ldr x0, [sp, #136]");                                  // reload the boxed ReflectionClass parent value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null parent metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed parent value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed parent value for ReflectionClass storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed parent value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", low);
+    abi::emit_store_zero_to_address(emitter, "x9", high);
+}
+
+/// Stores a retained x86_64 boxed parent ReflectionClass-or-false cell.
+fn emit_set_owner_parent_class_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(low), Some(high)) = (layout.parent_class_lo, layout.parent_class_hi) else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp - 144]");                      // reload the boxed ReflectionClass parent value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed parent value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null parent metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed parent value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed parent value for ReflectionClass storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed parent value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "rdi", "r10", low);
+    abi::emit_store_zero_to_address(emitter, "r10", high);
 }
 
 /// Stores a retained ARM64 attribute-array payload into the owner private slot.

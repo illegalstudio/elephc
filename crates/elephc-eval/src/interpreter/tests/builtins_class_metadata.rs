@@ -603,6 +603,33 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::getParentClass returns eval parent metadata or false.
+#[test]
+fn execute_program_reflection_class_get_parent_class() {
+    let program = parse_fragment(
+        br#"class EvalReflectParentBase {}
+class EvalReflectParentChild extends EvalReflectParentBase {}
+$parent = (new ReflectionClass("EvalReflectParentChild"))->getParentClass();
+echo $parent->getName();
+echo ":";
+$root = (new ReflectionClass("EvalReflectParentBase"))->getParentClass();
+if ($root === false) {
+    echo "false";
+} else {
+    echo "bad";
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "EvalReflectParentBase:false");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::newInstance constructs eval-declared classes.
 #[test]
 fn execute_program_reflection_class_new_instance_constructs_eval_class() {

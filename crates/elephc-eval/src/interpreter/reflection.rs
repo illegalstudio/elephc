@@ -39,6 +39,7 @@ struct EvalReflectionClassMetadata {
     trait_names: Vec<String>,
     method_names: Vec<String>,
     property_names: Vec<String>,
+    parent_class_name: Option<String>,
 }
 
 /// Eval metadata needed to materialize one `ReflectionMethod` or `ReflectionProperty` owner object.
@@ -118,6 +119,7 @@ fn eval_reflection_class_new(
         &metadata.trait_names,
         &metadata.method_names,
         &metadata.property_names,
+        metadata.parent_class_name.as_deref(),
         &[],
         metadata.flags,
         metadata.modifiers,
@@ -158,6 +160,7 @@ fn eval_reflection_method_new(
         &[],
         &[],
         &[],
+        None,
         &method.parameters,
         flags,
         method.required_parameter_count as u64,
@@ -193,6 +196,7 @@ fn eval_reflection_property_new(
         &[],
         &[],
         &[],
+        None,
         &[],
         flags,
         0,
@@ -228,6 +232,7 @@ fn eval_reflection_class_constant_new(
         &[],
         &[],
         &[],
+        None,
         &[],
         0,
         0,
@@ -272,6 +277,7 @@ fn eval_reflection_enum_case_new(
         &[],
         &[],
         &[],
+        None,
         &[],
         0,
         0,
@@ -290,6 +296,7 @@ fn eval_reflection_owner_object(
     trait_names: &[String],
     method_names: &[String],
     property_names: &[String],
+    parent_class_name: Option<&str>,
     parameter_metadata: &[EvalReflectionParameterMetadata],
     flags: u64,
     modifiers: u64,
@@ -325,6 +332,8 @@ fn eval_reflection_owner_object(
     } else {
         values.array_new(0)?
     };
+    let parent_class =
+        eval_reflection_parent_class_result(owner_kind, parent_class_name, context, values)?;
     let object = values.reflection_owner_new(
         owner_kind,
         reflected_name,
@@ -335,6 +344,7 @@ fn eval_reflection_owner_object(
         property_names_array,
         method_objects,
         property_objects,
+        parent_class,
         flags,
         modifiers,
     )?;
@@ -349,7 +359,41 @@ fn eval_reflection_owner_object(
     values.release(property_names_array)?;
     values.release(method_objects)?;
     values.release(property_objects)?;
+    values.release(parent_class)?;
     Ok(object)
+}
+
+/// Builds the `ReflectionClass|false` value stored in one ReflectionClass parent slot.
+fn eval_reflection_parent_class_result(
+    owner_kind: u64,
+    parent_class_name: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if owner_kind != EVAL_REFLECTION_OWNER_CLASS {
+        return values.bool_value(false);
+    }
+    let Some(parent_class_name) = parent_class_name else {
+        return values.bool_value(false);
+    };
+    let Some(metadata) = eval_reflection_class_like_attributes(parent_class_name, context) else {
+        return values.bool_value(false);
+    };
+    eval_reflection_owner_object(
+        EVAL_REFLECTION_OWNER_CLASS,
+        &metadata.resolved_name,
+        &metadata.attributes,
+        &metadata.interface_names,
+        &metadata.trait_names,
+        &metadata.method_names,
+        &metadata.property_names,
+        metadata.parent_class_name.as_deref(),
+        &[],
+        metadata.flags,
+        metadata.modifiers,
+        context,
+        values,
+    )
 }
 
 /// Builds an indexed PHP string array for ReflectionClass metadata names.
@@ -390,6 +434,7 @@ fn eval_reflection_parameter_object_result(
     let property_names = values.array_new(0)?;
     let method_objects = values.array_new(0)?;
     let property_objects = values.array_new(0)?;
+    let parent_class = values.bool_value(false)?;
     let flags = eval_reflection_parameter_flags(parameter);
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_PARAMETER,
@@ -401,6 +446,7 @@ fn eval_reflection_parameter_object_result(
         property_names,
         method_objects,
         property_objects,
+        parent_class,
         flags,
         parameter.position as u64,
     )?;
@@ -411,6 +457,7 @@ fn eval_reflection_parameter_object_result(
     values.release(property_names)?;
     values.release(method_objects)?;
     values.release(property_objects)?;
+    values.release(parent_class)?;
     Ok(object)
 }
 
@@ -443,6 +490,7 @@ fn eval_reflection_member_object_array_result(
             &[],
             &[],
             &[],
+            None,
             &member.parameters,
             flags,
             member.required_parameter_count as u64,
@@ -505,6 +553,7 @@ fn eval_reflection_class_like_attributes(
             trait_names: context.class_trait_names(class.name()),
             method_names: context.class_method_names(class.name()),
             property_names: context.class_property_names(class.name()),
+            parent_class_name: eval_reflection_parent_class_name(class, context),
             flags,
             modifiers,
         });
@@ -517,6 +566,7 @@ fn eval_reflection_class_like_attributes(
             trait_names: Vec::new(),
             method_names: context.interface_method_names(interface.name()),
             property_names: context.interface_property_names(interface.name()),
+            parent_class_name: None,
             flags: EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
             modifiers: 0,
         });
@@ -529,6 +579,7 @@ fn eval_reflection_class_like_attributes(
             trait_names: Vec::new(),
             method_names: context.trait_method_names(trait_decl.name()),
             property_names: context.trait_property_names(trait_decl.name()),
+            parent_class_name: None,
             flags: EVAL_REFLECTION_CLASS_FLAG_TRAIT,
             modifiers: 0,
         });
@@ -542,9 +593,22 @@ fn eval_reflection_class_like_attributes(
             trait_names: Vec::new(),
             method_names: context.class_method_names(enum_decl.name()),
             property_names: context.class_property_names(enum_decl.name()),
+            parent_class_name: None,
             flags: EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM,
             modifiers: 32,
         })
+}
+
+/// Returns the canonical eval parent class name for ReflectionClass metadata.
+fn eval_reflection_parent_class_name(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Option<String> {
+    let parent = class.parent()?;
+    context
+        .class(parent)
+        .map(|parent_class| parent_class.name().trim_start_matches('\\').to_string())
+        .or_else(|| Some(parent.trim_start_matches('\\').to_string()))
 }
 
 /// Computes PHP's `ReflectionClass::getModifiers()` bitmask for eval metadata.

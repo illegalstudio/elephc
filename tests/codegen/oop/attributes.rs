@@ -1302,6 +1302,24 @@ echo count($parentInterfaces) . ":" . $parentInterfaces[0];
     );
 }
 
+/// Verifies that `ReflectionClass::getParentClass()` returns a ReflectionClass
+/// object for subclasses and `false` for parentless classes.
+#[test]
+fn test_reflection_class_get_parent_class() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticParentBase {}
+class StaticParentChild extends StaticParentBase {}
+$parent = (new ReflectionClass(StaticParentChild::class))->getParentClass();
+echo $parent instanceof ReflectionClass ? $parent->getName() : "missing";
+echo ":";
+$root = (new ReflectionClass(StaticParentBase::class))->getParentClass();
+echo $root === false ? "false" : "bad";
+"#,
+    );
+    assert_eq!(out, "StaticParentBase:false");
+}
+
 /// Verifies that `ReflectionClass::getName()` returns the canonical declared
 /// name after case-insensitive class-string construction.
 #[test]
