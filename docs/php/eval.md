@@ -242,8 +242,10 @@ when the variadic container itself is not rebound, and are reported through
 and enum-case attributes through the same materialized `ReflectionAttribute`
 shape; their `getName()` methods return the reflected constant or case name,
 and `getDeclaringClass()` returns the declaring class or enum as a
-`ReflectionClass`. `ReflectionClassConstant::isFinal()` reports final
-class/interface/trait/enum constants and returns `false` for enum cases.
+`ReflectionClass`. `ReflectionClassConstant::isPublic()`, `isProtected()`,
+`isPrivate()`, `isFinal()`, and `getModifiers()` report visibility/finality
+metadata with PHP's `ReflectionClassConstant::IS_*` bitmasks; enum cases report
+public, non-final constants.
 Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the

@@ -157,6 +157,8 @@ pub struct ClassInfo {
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// Class constant visibilities keyed by case-sensitive constant name.
+    pub constant_visibilities: HashMap<String, Visibility>,
     /// Class constants declared with PHP 8.1+ `final`, keyed by constant name.
     pub final_constants: HashSet<String>,
     /// Names of PHP 8 attributes attached to this class declaration, in

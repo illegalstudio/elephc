@@ -1055,8 +1055,6 @@ fn emit_set_owner_member_flags_property_aarch64(
     layout: &ReflectionOwnerLayout,
 ) {
     let (
-        Some(is_static_lo),
-        Some(is_static_hi),
         Some(is_public_lo),
         Some(is_public_hi),
         Some(is_protected_lo),
@@ -1064,8 +1062,6 @@ fn emit_set_owner_member_flags_property_aarch64(
         Some(is_private_lo),
         Some(is_private_hi),
     ) = (
-        layout.is_static_lo,
-        layout.is_static_hi,
         layout.is_public_lo,
         layout.is_public_hi,
         layout.is_protected_lo,
@@ -1078,9 +1074,11 @@ fn emit_set_owner_member_flags_property_aarch64(
     };
     emitter.instruction("ldr x11, [sp, #48]");                                  // reload Reflection member predicate flags
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
-    emitter.instruction("and x10, x11, #1");                                    // extract the static-member flag as a boolean
-    abi::emit_store_to_address(emitter, "x10", "x9", is_static_lo);
-    abi::emit_store_zero_to_address(emitter, "x9", is_static_hi);
+    if let (Some(is_static_lo), Some(is_static_hi)) = (layout.is_static_lo, layout.is_static_hi) {
+        emitter.instruction("and x10, x11, #1");                                // extract the static-member flag as a boolean
+        abi::emit_store_to_address(emitter, "x10", "x9", is_static_lo);
+        abi::emit_store_zero_to_address(emitter, "x9", is_static_hi);
+    }
     emitter.instruction("lsr x10, x11, #1");                                    // move the public-member bit into position
     emitter.instruction("and x10, x10, #1");                                    // extract the public-member flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_public_lo);
@@ -1101,22 +1099,25 @@ fn emit_set_owner_member_flags_property_aarch64(
         abi::emit_store_to_address(emitter, "x10", "x9", is_readonly_lo);
         abi::emit_store_zero_to_address(emitter, "x9", is_readonly_hi);
     }
-    let (Some(is_final_lo), Some(is_final_hi), Some(is_abstract_lo), Some(is_abstract_hi)) = (
-        layout.is_final_lo,
-        layout.is_final_hi,
-        layout.is_abstract_lo,
-        layout.is_abstract_hi,
-    ) else {
-        return;
-    };
-    emitter.instruction("lsr x10, x11, #4");                                    // move the final-method bit into position
-    emitter.instruction("and x10, x10, #1");                                    // extract the final-method flag as a boolean
-    abi::emit_store_to_address(emitter, "x10", "x9", is_final_lo);
-    abi::emit_store_zero_to_address(emitter, "x9", is_final_hi);
-    emitter.instruction("lsr x10, x11, #5");                                    // move the abstract-method bit into position
-    emitter.instruction("and x10, x10, #1");                                    // extract the abstract-method flag as a boolean
-    abi::emit_store_to_address(emitter, "x10", "x9", is_abstract_lo);
-    abi::emit_store_zero_to_address(emitter, "x9", is_abstract_hi);
+    if let (Some(modifiers_lo), Some(modifiers_hi)) = (layout.modifiers_lo, layout.modifiers_hi) {
+        emitter.instruction("ldr x10, [sp, #96]");                              // reload PHP Reflection member getModifiers() bitmask
+        abi::emit_store_to_address(emitter, "x10", "x9", modifiers_lo);
+        abi::emit_store_zero_to_address(emitter, "x9", modifiers_hi);
+    }
+    if let (Some(is_final_lo), Some(is_final_hi)) = (layout.is_final_lo, layout.is_final_hi) {
+        emitter.instruction("lsr x10, x11, #4");                                // move the final-member bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the final-member flag as a boolean
+        abi::emit_store_to_address(emitter, "x10", "x9", is_final_lo);
+        abi::emit_store_zero_to_address(emitter, "x9", is_final_hi);
+    }
+    if let (Some(is_abstract_lo), Some(is_abstract_hi)) =
+        (layout.is_abstract_lo, layout.is_abstract_hi)
+    {
+        emitter.instruction("lsr x10, x11, #5");                                // move the abstract-member bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the abstract-member flag as a boolean
+        abi::emit_store_to_address(emitter, "x10", "x9", is_abstract_lo);
+        abi::emit_store_zero_to_address(emitter, "x9", is_abstract_hi);
+    }
 }
 
 /// Stores incoming bit-zero finality for ARM64 owners without full member flags.
@@ -1140,8 +1141,6 @@ fn emit_set_owner_member_flags_property_x86_64(
     layout: &ReflectionOwnerLayout,
 ) {
     let (
-        Some(is_static_lo),
-        Some(is_static_hi),
         Some(is_public_lo),
         Some(is_public_hi),
         Some(is_protected_lo),
@@ -1149,8 +1148,6 @@ fn emit_set_owner_member_flags_property_x86_64(
         Some(is_private_lo),
         Some(is_private_hi),
     ) = (
-        layout.is_static_lo,
-        layout.is_static_hi,
         layout.is_public_lo,
         layout.is_public_hi,
         layout.is_protected_lo,
@@ -1164,10 +1161,12 @@ fn emit_set_owner_member_flags_property_x86_64(
     };
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload Reflection member predicate flags
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
-    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the static bit
-    emitter.instruction("and rax, 1");                                          // extract the static-member flag as a boolean
-    abi::emit_store_to_address(emitter, "rax", "r10", is_static_lo);
-    abi::emit_store_zero_to_address(emitter, "r10", is_static_hi);
+    if let (Some(is_static_lo), Some(is_static_hi)) = (layout.is_static_lo, layout.is_static_hi) {
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the static bit
+        emitter.instruction("and rax, 1");                                      // extract the static-member flag as a boolean
+        abi::emit_store_to_address(emitter, "rax", "r10", is_static_lo);
+        abi::emit_store_zero_to_address(emitter, "r10", is_static_hi);
+    }
     emitter.instruction("mov rax, r11");                                        // copy flags before extracting the public bit
     emitter.instruction("shr rax, 1");                                          // move the public-member bit into position
     emitter.instruction("and rax, 1");                                          // extract the public-member flag as a boolean
@@ -1192,24 +1191,27 @@ fn emit_set_owner_member_flags_property_x86_64(
         abi::emit_store_to_address(emitter, "rax", "r10", is_readonly_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_readonly_hi);
     }
-    let (Some(is_final_lo), Some(is_final_hi), Some(is_abstract_lo), Some(is_abstract_hi)) = (
-        layout.is_final_lo,
-        layout.is_final_hi,
-        layout.is_abstract_lo,
-        layout.is_abstract_hi,
-    ) else {
-        return;
-    };
-    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the final bit
-    emitter.instruction("shr rax, 4");                                          // move the final-method bit into position
-    emitter.instruction("and rax, 1");                                          // extract the final-method flag as a boolean
-    abi::emit_store_to_address(emitter, "rax", "r10", is_final_lo);
-    abi::emit_store_zero_to_address(emitter, "r10", is_final_hi);
-    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the abstract bit
-    emitter.instruction("shr rax, 5");                                          // move the abstract-method bit into position
-    emitter.instruction("and rax, 1");                                          // extract the abstract-method flag as a boolean
-    abi::emit_store_to_address(emitter, "rax", "r10", is_abstract_lo);
-    abi::emit_store_zero_to_address(emitter, "r10", is_abstract_hi);
+    if let (Some(modifiers_lo), Some(modifiers_hi)) = (layout.modifiers_lo, layout.modifiers_hi) {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                  // reload PHP Reflection member getModifiers() bitmask
+        abi::emit_store_to_address(emitter, "rax", "r10", modifiers_lo);
+        abi::emit_store_zero_to_address(emitter, "r10", modifiers_hi);
+    }
+    if let (Some(is_final_lo), Some(is_final_hi)) = (layout.is_final_lo, layout.is_final_hi) {
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the final bit
+        emitter.instruction("shr rax, 4");                                      // move the final-member bit into position
+        emitter.instruction("and rax, 1");                                      // extract the final-member flag as a boolean
+        abi::emit_store_to_address(emitter, "rax", "r10", is_final_lo);
+        abi::emit_store_zero_to_address(emitter, "r10", is_final_hi);
+    }
+    if let (Some(is_abstract_lo), Some(is_abstract_hi)) =
+        (layout.is_abstract_lo, layout.is_abstract_hi)
+    {
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the abstract bit
+        emitter.instruction("shr rax, 5");                                      // move the abstract-member bit into position
+        emitter.instruction("and rax, 1");                                      // extract the abstract-member flag as a boolean
+        abi::emit_store_to_address(emitter, "rax", "r10", is_abstract_lo);
+        abi::emit_store_zero_to_address(emitter, "r10", is_abstract_hi);
+    }
 }
 
 /// Stores incoming bit-zero finality for x86_64 owners without full member flags.

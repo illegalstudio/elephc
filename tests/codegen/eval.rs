@@ -6699,6 +6699,64 @@ echo $backedAttrs[0]->newInstance()->label();');
     );
 }
 
+/// Verifies eval ReflectionClassConstant exposes visibility predicates and modifiers.
+#[test]
+fn test_eval_reflection_class_constant_visibility_and_modifiers() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalConstVisibilityTarget {
+    private const SECRET = 1;
+    protected const LIMIT = 2;
+    final public const ANSWER = 3;
+}
+enum EvalConstVisibilityEnum {
+    case Ready;
+}
+$secret = new ReflectionClassConstant("EvalConstVisibilityTarget", "SECRET");
+echo "SECRET:";
+echo $secret->isPrivate() ? "R" : "r";
+echo $secret->isProtected() ? "P" : "p";
+echo $secret->isPublic() ? "U" : "u";
+echo $secret->isFinal() ? "F" : "f";
+echo ":" . $secret->getModifiers() . "\n";
+$limit = new ReflectionClassConstant("EvalConstVisibilityTarget", "LIMIT");
+echo "LIMIT:";
+echo $limit->isPrivate() ? "R" : "r";
+echo $limit->isProtected() ? "P" : "p";
+echo $limit->isPublic() ? "U" : "u";
+echo $limit->isFinal() ? "F" : "f";
+echo ":" . $limit->getModifiers() . "\n";
+$answer = new ReflectionClassConstant("EvalConstVisibilityTarget", "ANSWER");
+echo "ANSWER:";
+echo $answer->isPrivate() ? "R" : "r";
+echo $answer->isProtected() ? "P" : "p";
+echo $answer->isPublic() ? "U" : "u";
+echo $answer->isFinal() ? "F" : "f";
+echo ":" . $answer->getModifiers() . "\n";
+$case = new ReflectionClassConstant("EvalConstVisibilityEnum", "Ready");
+echo "Ready:";
+echo $case->isPrivate() ? "R" : "r";
+echo $case->isProtected() ? "P" : "p";
+echo $case->isPublic() ? "U" : "u";
+echo $case->isFinal() ? "F" : "f";
+echo ":" . $case->getModifiers() . "\n";');
+echo ReflectionClassConstant::IS_PUBLIC . ":";
+echo ReflectionClassConstant::IS_PROTECTED . ":";
+echo ReflectionClassConstant::IS_PRIVATE . ":";
+echo ReflectionClassConstant::IS_FINAL;
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "SECRET:Rpuf:4\nLIMIT:rPuf:2\nANSWER:rpUF:33\nReady:rpUf:1\n1:2:4:32"
+    );
+}
+
 /// Verifies eval interface and trait constants work through the bridge.
 #[test]
 fn test_eval_declared_interface_and_trait_constants() {
