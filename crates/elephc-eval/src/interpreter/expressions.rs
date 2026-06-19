@@ -147,6 +147,7 @@ pub(in crate::interpreter) fn eval_expr(
         }
         EvalExpr::Print(inner) => {
             let value = eval_expr(inner, context, scope, values)?;
+            let value = eval_string_context_value(value, context, values)?;
             values.echo(value)?;
             values.int(1)
         }
@@ -217,7 +218,11 @@ pub(in crate::interpreter) fn eval_expr(
                 | EvalBinOp::BitXor
                 | EvalBinOp::ShiftLeft
                 | EvalBinOp::ShiftRight => values.bitwise(*op, left, right),
-                EvalBinOp::Concat => values.concat(left, right),
+                EvalBinOp::Concat => {
+                    let left = eval_string_context_value(left, context, values)?;
+                    let right = eval_string_context_value(right, context, values)?;
+                    values.concat(left, right)
+                }
                 EvalBinOp::LogicalXor => {
                     let left_truthy = values.truthy(left)?;
                     let right_truthy = values.truthy(right)?;

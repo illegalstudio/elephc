@@ -22,19 +22,23 @@ pub(in crate::interpreter) fn eval_builtin_cast(
         return Err(EvalStatus::RuntimeFatal);
     };
     let value = eval_expr(value, context, scope, values)?;
-    eval_cast_result(name, value, values)
+    eval_cast_result(name, value, context, values)
 }
 
 /// Dispatches an already evaluated value through the matching PHP cast hook.
 pub(in crate::interpreter) fn eval_cast_result(
     name: &str,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "intval" => values.cast_int(value),
         "floatval" => values.cast_float(value),
-        "strval" => values.cast_string(value),
+        "strval" => {
+            let value = eval_string_context_value(value, context, values)?;
+            values.cast_string(value)
+        }
         "boolval" => values.cast_bool(value),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }

@@ -1114,6 +1114,11 @@ impl ElephcEvalContext {
         if !exclude_self && normalize_class_name(class.name()) == target {
             return true;
         }
+        if target == normalize_class_name("Stringable")
+            && self.class_has_valid_tostring(class.name())
+        {
+            return true;
+        }
         self.class_parent_names(class.name())
             .iter()
             .any(|parent| normalize_class_name(parent) == target)
@@ -1121,6 +1126,17 @@ impl ElephcEvalContext {
                 .class_interface_names(class.name())
                 .iter()
                 .any(|interface| normalize_class_name(interface) == target)
+    }
+
+    /// Returns whether one eval class exposes a PHP-compatible `__toString()` method.
+    fn class_has_valid_tostring(&self, class_name: &str) -> bool {
+        self.class_method(class_name, "__toString")
+            .is_some_and(|(_, method)| {
+                method.visibility() == EvalVisibility::Public
+                    && !method.is_static()
+                    && !method.is_abstract()
+                    && method.params().is_empty()
+            })
     }
 
     /// Defines an eval dynamic constant value, failing if the name is invalid or already present.

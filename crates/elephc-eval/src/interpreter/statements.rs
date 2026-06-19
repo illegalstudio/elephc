@@ -89,6 +89,7 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::Echo(expr) => {
             let value = eval_expr(expr, context, scope, values)?;
+            let value = eval_string_context_value(value, context, values)?;
             values.echo(value)?;
             Ok(EvalControl::None)
         }
