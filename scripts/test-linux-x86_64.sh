@@ -6,15 +6,23 @@
 #   ./scripts/test-linux-x86_64.sh test_fizz      # run tests matching a pattern
 #   ./scripts/test-linux-x86_64.sh --rebuild      # force rebuild the Docker image
 #
+# The Cargo target volume is derived from the worktree path so parallel worktrees
+# do not share stale test binaries. Override with ELEPHC_DOCKER_TARGET_VOLUME.
+#
 set -euo pipefail
 
 IMAGE="elephc-test-linux-x86_64"
 PLATFORM="linux/amd64"
-TARGET_VOLUME="elephc-target-linux-x86_64"
 CONTAINER_NAME="elephc-test-linux-x86_64-$$"
 TEST_THREADS="${ELEPHC_TEST_THREADS:-1}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+if command -v sha256sum >/dev/null 2>&1; then
+    WORKTREE_SHA="$(printf '%s' "$PROJECT_DIR" | sha256sum | awk '{print substr($1, 1, 16)}')"
+else
+    WORKTREE_SHA="$(printf '%s' "$PROJECT_DIR" | shasum -a 256 | awk '{print substr($1, 1, 16)}')"
+fi
+TARGET_VOLUME="${ELEPHC_DOCKER_TARGET_VOLUME:-elephc-target-linux-x86_64-$WORKTREE_SHA}"
 DOCKERFILE="$PROJECT_DIR/Dockerfile.test-linux-x86_64"
 if command -v sha256sum >/dev/null 2>&1; then
     DOCKERFILE_SHA="$(sha256sum "$DOCKERFILE" | awk '{print $1}')"
@@ -56,7 +64,7 @@ trap cleanup EXIT INT TERM
 # never emits the staticlib crate-type.
 # Cached after the first run, so it is a no-op for unrelated test runs.
 if [ ${#TEST_ARGS[@]} -eq 0 ]; then
-    echo "Running all tests on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS..."
+    echo "Running all tests on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using target volume '$TARGET_VOLUME'..."
     docker run \
         --platform "$PLATFORM" \
         --name "$CONTAINER_NAME" \
@@ -70,7 +78,7 @@ if [ ${#TEST_ARGS[@]} -eq 0 ]; then
         "$IMAGE" \
         sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz && cargo test'
 else
-    echo "Running tests matching '${TEST_ARGS[*]}' on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS..."
+    echo "Running tests matching '${TEST_ARGS[*]}' on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using target volume '$TARGET_VOLUME'..."
     docker run \
         --platform "$PLATFORM" \
         --name "$CONTAINER_NAME" \
