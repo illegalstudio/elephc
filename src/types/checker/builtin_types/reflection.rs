@@ -1776,6 +1776,43 @@ fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> Cl
     }
 }
 
+/// Returns `ReflectionProperty::hasType()` backed by a nullable private `__type` slot.
+fn builtin_reflection_property_has_type_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "hasType".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(Expr::new(
+                        ExprKind::PropertyAccess {
+                            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                            property: "__type".to_string(),
+                        },
+                        dummy_span,
+                    )),
+                    op: BinOp::StrictNotEq,
+                    right: Box::new(Expr::new(ExprKind::Null, dummy_span)),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds a `FlattenedClass` for simple reflection owner classes
 /// with a private `__attrs` array property and two methods: `__construct`
 /// (public, accepting the supplied params) and `getAttributes` (public,
@@ -1988,6 +2025,12 @@ fn add_reflection_member_flag_methods(
     }
     if class_name == "ReflectionProperty" {
         properties.push(builtin_property(
+            "__type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        properties.push(builtin_property(
             "__modifiers",
             Visibility::Private,
             Some(TypeExpr::Int),
@@ -1997,6 +2040,8 @@ fn add_reflection_member_flag_methods(
             "getModifiers",
             "__modifiers",
         ));
+        methods.push(builtin_reflection_property_has_type_method());
+        methods.push(builtin_reflection_class_mixed_method("getType", "__type"));
         for (property, method) in [("__is_final", "isFinal"), ("__is_abstract", "isAbstract")] {
             properties.push(builtin_property(
                 property,

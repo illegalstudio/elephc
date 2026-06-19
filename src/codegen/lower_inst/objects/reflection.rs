@@ -49,6 +49,7 @@ struct ReflectionOwnerMetadata {
     backing_value: Option<ReflectionConstantValue>,
     is_enum_case: bool,
     parameter_members: Vec<ReflectionParameterMember>,
+    type_metadata: Option<ReflectionParameterTypeMetadata>,
     required_parameter_count: i64,
     is_final: bool,
     is_abstract: bool,
@@ -82,6 +83,7 @@ struct ReflectionListedMember {
     is_enum_case: bool,
     flags: ReflectionMemberFlags,
     modifiers: i64,
+    type_metadata: Option<ReflectionParameterTypeMetadata>,
     required_parameter_count: i64,
     parameters: Vec<ReflectionParameterMember>,
 }
@@ -384,6 +386,7 @@ fn emit_reflection_owner_object(
     }
     if class_name == "ReflectionProperty" {
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
+        emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
     }
     if class_name == "ReflectionParameter" {
         if let Some(parameter) = metadata.parameter_members.first() {
@@ -502,6 +505,7 @@ fn reflection_class_metadata_for_name(
             backing_value: None,
             is_enum_case: false,
             parameter_members: Vec::new(),
+            type_metadata: None,
             required_parameter_count: 0,
             is_final: info.is_final,
             is_abstract: info.is_abstract,
@@ -553,6 +557,7 @@ fn reflection_class_metadata_for_name(
             backing_value: None,
             is_enum_case: false,
             parameter_members: Vec::new(),
+            type_metadata: None,
             required_parameter_count: 0,
             is_final: false,
             is_abstract: false,
@@ -605,6 +610,7 @@ fn reflection_class_metadata_for_name(
             backing_value: None,
             is_enum_case: false,
             parameter_members: Vec::new(),
+            type_metadata: None,
             required_parameter_count: 0,
             is_final: false,
             is_abstract: false,
@@ -734,6 +740,7 @@ fn reflection_method_owner_metadata(
         backing_value: None,
         is_enum_case: member.is_enum_case,
         parameter_members: member.parameters,
+        type_metadata: None,
         required_parameter_count: member.required_parameter_count,
         is_final: false,
         is_abstract: false,
@@ -785,6 +792,7 @@ fn reflection_property_metadata(
                 backing_value: None,
                 is_enum_case: false,
                 parameter_members: Vec::new(),
+                type_metadata: reflection_property_type_metadata(info, &property_name),
                 required_parameter_count: 0,
                 is_final: false,
                 is_abstract: false,
@@ -957,6 +965,7 @@ fn reflection_class_constant_metadata(
             backing_value: None,
             is_enum_case: true,
             parameter_members: Vec::new(),
+            type_metadata: None,
             required_parameter_count: 0,
             is_final: false,
             is_abstract: false,
@@ -1012,6 +1021,7 @@ fn reflection_enum_case_metadata(
                 backing_value: reflection_enum_case_backing_value(case),
                 is_enum_case: true,
                 parameter_members: Vec::new(),
+                type_metadata: None,
                 required_parameter_count: 0,
                 is_final: false,
                 is_abstract: false,
@@ -1054,6 +1064,7 @@ fn reflection_class_constant_owner_metadata(
         backing_value: None,
         is_enum_case: false,
         parameter_members: Vec::new(),
+        type_metadata: None,
         required_parameter_count: 0,
         is_final,
         is_abstract: false,
@@ -1658,6 +1669,7 @@ fn push_unique_constant_reflection_member(
         is_enum_case,
         flags: reflection_member_flags(false, &visibility, is_final, false, false),
         modifiers: reflection_class_constant_modifiers(&visibility, is_final),
+        type_metadata: None,
         required_parameter_count: 0,
         parameters: Vec::new(),
     });
@@ -1853,6 +1865,7 @@ fn reflection_class_method_member(
         is_enum_case: false,
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
+        type_metadata: None,
         required_parameter_count,
         parameters,
     })
@@ -1914,6 +1927,7 @@ fn reflection_interface_method_member(
         is_enum_case: false,
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
+        type_metadata: None,
         required_parameter_count,
         parameters,
     })
@@ -1964,6 +1978,7 @@ fn reflection_trait_method_member(
         is_enum_case: false,
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
+        type_metadata: None,
         required_parameter_count,
         parameters: reflection_parameter_members_with_declaring_class(
             &info.signature,
@@ -2000,6 +2015,7 @@ fn reflection_class_property_member(
             reflection_member_flags(false, &Visibility::Public, false, false, true),
         )
     })?;
+    let type_metadata = reflection_property_type_metadata(info, property_name);
     Some(ReflectionListedMember {
         name: property_name.to_string(),
         declaring_class_name: reflection_property_declaring_class_name(info, property_name)
@@ -2022,9 +2038,22 @@ fn reflection_class_property_member(
         flags,
         modifiers: reflection_property_modifiers_for_info(info, property_name)
             .unwrap_or_else(|| reflection_property_modifiers_from_flags(flags)),
+        type_metadata,
         required_parameter_count: 0,
         parameters: Vec::new(),
     })
+}
+
+/// Returns reflection type metadata for one typed property visible on a class.
+fn reflection_property_type_metadata(
+    info: &crate::types::ClassInfo,
+    property_name: &str,
+) -> Option<ReflectionParameterTypeMetadata> {
+    if !info.visible_property_is_declared(property_name) {
+        return None;
+    }
+    let (_, (_, property_type)) = info.visible_property(property_name)?;
+    reflection_parameter_type_metadata(None, property_type)
 }
 
 /// Builds placeholder ReflectionMethod entries for class-like metadata without full method schemas.
@@ -2050,6 +2079,7 @@ fn default_method_members(
                 is_interface,
                 false,
             )),
+            type_metadata: None,
             required_parameter_count: 0,
             parameters: Vec::new(),
         })
@@ -2081,6 +2111,7 @@ fn default_property_members(
                 is_interface,
                 None,
             ),
+            type_metadata: None,
             required_parameter_count: 0,
             parameters: Vec::new(),
         })
@@ -2736,6 +2767,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         backing_value: None,
         is_enum_case: false,
         parameter_members: Vec::new(),
+        type_metadata: None,
         required_parameter_count: 0,
         is_final: false,
         is_abstract: false,
@@ -3372,6 +3404,11 @@ fn emit_reflection_member_object(
             "__modifiers",
             member.modifiers,
         )?;
+        emit_reflection_owner_type_property(
+            ctx,
+            member_class_name,
+            member.type_metadata.as_ref(),
+        )?;
     }
     if member_class_name == "ReflectionClassConstant" {
         if let Some(value) = &member.constant_value {
@@ -3587,18 +3624,27 @@ fn emit_reflection_parameter_type_property(
     ctx: &mut FunctionContext<'_>,
     parameter: &ReflectionParameterMember,
 ) -> Result<()> {
+    emit_reflection_owner_type_property(ctx, "ReflectionParameter", parameter.type_metadata.as_ref())
+}
+
+/// Writes one reflection owner's nullable type slot.
+fn emit_reflection_owner_type_property(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    type_metadata: Option<&ReflectionParameterTypeMetadata>,
+) -> Result<()> {
     let type_offset = {
         let class_info = ctx
             .module
             .class_infos
-            .get("ReflectionParameter")
+            .get(class_name)
             .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
         reflection_property_offset(class_info, "__type")?
     };
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    match parameter.type_metadata.as_ref() {
+    match type_metadata {
         Some(ReflectionParameterTypeMetadata::Named(type_metadata)) => {
             emit_reflection_named_type_object(ctx, type_metadata)?;
             emit_box_current_value_as_mixed(

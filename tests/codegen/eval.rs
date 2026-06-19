@@ -6658,6 +6658,58 @@ foreach ($params as $param) {
     );
 }
 
+/// Verifies eval ReflectionProperty materializes property type metadata through the bridge.
+#[test]
+fn test_eval_reflection_property_get_type_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectPropertyTypeDep {}
+class EvalReflectPropertyTypeTarget {
+    public int $id;
+    public ?string $name;
+    public EvalReflectPropertyTypeDep $dep;
+    public $plain;
+    public int|string $union;
+}
+$properties = (new ReflectionClass("EvalReflectPropertyTypeTarget"))->getProperties();
+foreach ($properties as $property) {
+    echo $property->getName() . ":";
+    echo $property->hasType() ? "T:" : "t:";
+    $type = $property->getType();
+    if ($property->getName() == "union") {
+        echo "union";
+        echo $type->allowsNull() ? "?" : "!";
+        foreach ($type->getTypes() as $memberType) {
+            echo ":" . $memberType->getName();
+            echo $memberType->isBuiltin() ? "B" : "C";
+        }
+    } elseif ($type) {
+        echo $type->getName();
+        echo $type->allowsNull() ? "?" : "!";
+        echo $type->isBuiltin() ? "B" : "C";
+    } else {
+        echo "null";
+    }
+    echo "|";
+}
+$direct = new ReflectionProperty("EvalReflectPropertyTypeTarget", "dep");
+$directType = $direct->getType();
+echo "direct:";
+echo $direct->hasType() ? "T:" : "t:";
+echo $directType->getName();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep"
+    );
+}
+
 /// Verifies eval ReflectionParameter exposes the declaring class for method parameters.
 #[test]
 fn test_eval_reflection_parameter_reports_declaring_class() {

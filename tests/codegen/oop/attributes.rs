@@ -2143,6 +2143,58 @@ if ($directType instanceof ReflectionNamedType) {
     );
 }
 
+/// Verifies that `ReflectionProperty::getType()` returns named and union metadata.
+#[test]
+fn test_reflection_property_get_type_returns_type_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectPropertyTypeDep {}
+class ReflectPropertyTypeTarget {
+    public int $id;
+    public ?string $name;
+    public ReflectPropertyTypeDep $dep;
+    public $plain;
+    public int|string $union;
+}
+$properties = (new ReflectionClass(ReflectPropertyTypeTarget::class))->getProperties();
+foreach ($properties as $property) {
+    echo $property->getName() . ":";
+    echo $property->hasType() ? "T:" : "t:";
+    $type = $property->getType();
+    if ($type instanceof ReflectionNamedType) {
+        echo $type->getName();
+        echo $type->allowsNull() ? "?" : "!";
+        echo $type->isBuiltin() ? "B" : "C";
+    } elseif ($type instanceof ReflectionUnionType) {
+        echo "union";
+        echo $type->allowsNull() ? "?" : "!";
+        foreach ($type->getTypes() as $memberType) {
+            echo ":" . $memberType->getName();
+            echo $memberType->isBuiltin() ? "B" : "C";
+        }
+    } else {
+        echo "null";
+    }
+    echo "|";
+}
+$direct = new ReflectionProperty(ReflectPropertyTypeTarget::class, "dep");
+$directType = $direct->getType();
+if ($directType instanceof ReflectionNamedType) {
+    echo "direct:" . $directType->getName();
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "id:T:int!B|name:T:string?B|dep:T:ReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:ReflectPropertyTypeDep"
+    );
+}
+
 /// Verifies `ReflectionParameter::getAttributes()` exposes parameter attributes.
 #[test]
 fn test_reflection_parameter_get_attributes_returns_parameter_metadata() {

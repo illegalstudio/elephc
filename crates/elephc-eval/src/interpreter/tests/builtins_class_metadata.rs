@@ -964,6 +964,58 @@ return true;"##,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionProperty exposes eval property type metadata.
+#[test]
+fn execute_program_reflection_property_get_type_metadata() {
+    let program = parse_fragment(
+br##"class EvalReflectPropertyTypeDep {}
+class EvalReflectPropertyTypeTarget {
+    public int $id;
+    public ?string $name;
+    public EvalReflectPropertyTypeDep $dep;
+    public $plain;
+    public int|string $union;
+}
+$properties = (new ReflectionClass("EvalReflectPropertyTypeTarget"))->getProperties();
+foreach ($properties as $property) {
+    echo $property->getName(); echo ":";
+    echo $property->hasType() ? "T:" : "t:";
+    $type = $property->getType();
+    if ($property->getName() == "union") {
+        echo "union";
+        echo $type->allowsNull() ? "?" : "!";
+        foreach ($type->getTypes() as $memberType) {
+            echo ":"; echo $memberType->getName();
+            echo $memberType->isBuiltin() ? "B" : "C";
+        }
+    } elseif ($type) {
+        echo $type->getName();
+        echo $type->allowsNull() ? "?" : "!";
+        echo $type->isBuiltin() ? "B" : "C";
+    } else {
+        echo "null";
+    }
+    echo "|";
+}
+$direct = new ReflectionProperty("EvalReflectPropertyTypeTarget", "dep");
+$directType = $direct->getType();
+echo "direct:"; echo $direct->hasType() ? "T:" : "t:";
+echo $directType->getName();
+return true;"##,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval ReflectionParameter exposes declaring class metadata.
 #[test]
 fn execute_program_reflects_eval_parameter_declaring_class() {
