@@ -695,7 +695,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Str],
             PhpType::Bool,
         )),
-        "gettype" | "get_debug_type" => Some(typed_first_class_builtin_sig(
+        "gettype" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Mixed],
             PhpType::Str,

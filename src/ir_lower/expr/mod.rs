@@ -5828,7 +5828,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "unlink" => {
             Some(PhpType::Bool)
         }
-        "basename" | "date" | "gmdate" | "dirname" | "exec" | "get_class" | "get_parent_class"
+        "basename" | "date" | "gmdate" | "dirname" | "exec" | "get_class" | "get_debug_type"
+        | "get_parent_class"
         | "getcwd" | "getenv" | "gethostname" | "gethostbyname" | "php_uname"
         | "readline" | "shell_exec" | "sys_get_temp_dir"
         | "fread" | "get_resource_type" | "gzcompress" | "gzdeflate" | "hash" | "hash_final" | "hash_hmac" | "long2ip"
