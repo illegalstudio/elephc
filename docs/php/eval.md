@@ -156,6 +156,10 @@ Eval-declared objects in string contexts dispatch through public
 parameterless `__toString()` for `echo`, `print`, concatenation, `strval()`,
 callable `strval()` dispatch, and weak `string` parameter coercion. Classes
 with a compatible `__toString()` satisfy `Stringable` implicitly.
+Eval validates magic method staticness, visibility, and arity contracts for
+`__toString()`, `__get()`, `__set()`, `__isset()`, `__unset()`, `__call()`,
+`__callStatic()`, `__invoke()`, `__clone()`, `__destruct()`, and `__construct()`
+when dynamic classes or traits are declared.
 Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,

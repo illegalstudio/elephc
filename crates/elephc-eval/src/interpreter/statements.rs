@@ -705,6 +705,7 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
         return Err(EvalStatus::RuntimeFatal);
     }
     validate_eval_declared_constants(trait_decl.constants())?;
+    validate_eval_magic_methods(trait_decl.methods())?;
     if context.define_trait(trait_decl.clone()) {
         initialize_eval_declared_constants(
             trait_decl.name(),
@@ -1016,6 +1017,7 @@ fn validate_eval_class_modifiers(
         validate_property_parent_redeclaration(class, property, context)?;
     }
     for method in class.methods() {
+        validate_eval_magic_method(method)?;
         if method.is_abstract() && method.is_final() {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -1031,6 +1033,95 @@ fn validate_eval_class_modifiers(
         validate_method_parent_override(class, method, context)?;
     }
     Ok(())
+}
+
+/// Validates PHP magic-method contracts for one eval class-like method list.
+fn validate_eval_magic_methods(methods: &[EvalClassMethod]) -> Result<(), EvalStatus> {
+    for method in methods {
+        validate_eval_magic_method(method)?;
+    }
+    Ok(())
+}
+
+/// Validates staticness, visibility, and arity for one eval magic method.
+fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus> {
+    match method.name().to_ascii_lowercase().as_str() {
+        "__tostring" => {
+            validate_magic_non_static(method)?;
+            validate_magic_public(method)?;
+            validate_magic_arity(method, 0)?;
+        }
+        "__get" | "__isset" | "__unset" => {
+            validate_magic_non_static(method)?;
+            validate_magic_public(method)?;
+            validate_magic_arity(method, 1)?;
+        }
+        "__set" | "__call" => {
+            validate_magic_non_static(method)?;
+            validate_magic_public(method)?;
+            validate_magic_arity(method, 2)?;
+        }
+        "__callstatic" => {
+            validate_magic_static(method)?;
+            validate_magic_public(method)?;
+            validate_magic_arity(method, 2)?;
+        }
+        "__invoke" => {
+            validate_magic_non_static(method)?;
+            validate_magic_public(method)?;
+        }
+        "__clone" | "__destruct" => {
+            validate_magic_non_static(method)?;
+            validate_magic_arity(method, 0)?;
+        }
+        "__construct" => {
+            if method.is_static() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Rejects static declarations for magic methods that must be instance methods.
+fn validate_magic_non_static(method: &EvalClassMethod) -> Result<(), EvalStatus> {
+    if method.is_static() {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
+    }
+}
+
+/// Rejects instance declarations for magic methods that must be static methods.
+fn validate_magic_static(method: &EvalClassMethod) -> Result<(), EvalStatus> {
+    if method.is_static() {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Rejects non-public declarations for public-only PHP magic methods.
+fn validate_magic_public(method: &EvalClassMethod) -> Result<(), EvalStatus> {
+    if method.visibility() == EvalVisibility::Public {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Rejects magic methods whose arity differs from PHP's required shape.
+fn validate_magic_arity(method: &EvalClassMethod, expected: usize) -> Result<(), EvalStatus> {
+    let has_variadic = method
+        .parameter_is_variadic()
+        .iter()
+        .any(|is_variadic| *is_variadic);
+    if method.params().len() == expected && !has_variadic {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
 }
 
 /// Validates property declarations that can be checked before class registration.
