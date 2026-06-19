@@ -165,6 +165,10 @@ impl FakeOps {
                 Self::object_property(&properties, "__is_cloneable")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "isiterable" | "isiterateable") if args.is_empty() => {
+                Self::object_property(&properties, "__is_iterable")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "isinternal") if args.is_empty() => {
                 Self::object_property(&properties, "__is_internal")
                     .map_or_else(|| self.bool_value(false), Ok)
@@ -543,6 +547,7 @@ impl FakeOps {
         let is_cloneable = self.bool_value((flags & 128) != 0)?;
         let is_internal = self.bool_value((flags & 256) != 0)?;
         let is_user_defined = self.bool_value((flags & 512) != 0)?;
+        let is_iterable = self.bool_value((flags & 1024) != 0)?;
         let is_anonymous = self.bool_value(false)?;
         let modifiers_cell = self.int(modifiers as i64)?;
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
@@ -564,6 +569,7 @@ impl FakeOps {
             properties.push(("__is_anonymous".to_string(), is_anonymous));
             properties.push(("__is_instantiable".to_string(), is_instantiable));
             properties.push(("__is_cloneable".to_string(), is_cloneable));
+            properties.push(("__is_iterable".to_string(), is_iterable));
             properties.push(("__is_internal".to_string(), is_internal));
             properties.push(("__is_user_defined".to_string(), is_user_defined));
             properties.push(("__modifiers".to_string(), modifiers_cell));
@@ -846,7 +852,14 @@ impl FakeOps {
     }
     /// Reports one fake AOT interface for eval `interface_exists` unit tests.
     pub(super) fn runtime_interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(name.eq_ignore_ascii_case("KnownInterface"))
+        Ok([
+            "KnownInterface",
+            "Iterator",
+            "IteratorAggregate",
+            "Traversable",
+        ]
+        .iter()
+        .any(|known| name.eq_ignore_ascii_case(known)))
     }
     /// Reports one fake AOT trait for eval `trait_exists` unit tests.
     pub(super) fn runtime_trait_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {

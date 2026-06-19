@@ -1130,6 +1130,44 @@ echo (new ReflectionClass(ReflectionClass::class))->isCloneable() ? "C" : "c";
     assert_eq!(out, "aPFvrUiteSc");
 }
 
+/// Verifies that `ReflectionClass::isIterable()` and its historical alias
+/// report PHP Traversable-compatible class metadata.
+#[test]
+fn test_reflection_class_is_iterable() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectIterablePlain {}
+abstract class ReflectIterableAbstract implements Iterator {}
+interface ReflectIterableIface extends Iterator {}
+trait ReflectIterableTrait {}
+enum ReflectIterableEnum { case Ready; }
+class ReflectIterableIterator implements Iterator {
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+    public function valid(): bool { return false; }
+    public function rewind(): void {}
+}
+class ReflectIterableAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable { return $this; }
+}
+echo (new ReflectionClass(ReflectIterablePlain::class))->isIterable() ? "P" : "p";
+$iter = new ReflectionClass(ReflectIterableIterator::class);
+echo $iter->isIterable() ? "I" : "i";
+echo $iter->isIterateable() ? "A" : "a";
+echo (new ReflectionClass(ReflectIterableAggregate::class))->isIterable() ? "G" : "g";
+echo (new ReflectionClass(ReflectIterableAbstract::class))->isIterable() ? "B" : "b";
+echo (new ReflectionClass(ReflectIterableIface::class))->isIterable() ? "F" : "f";
+echo (new ReflectionClass(Iterator::class))->isIterable() ? "T" : "t";
+echo (new ReflectionClass(ArrayIterator::class))->isIterable() ? "R" : "r";
+echo (new ReflectionClass(stdClass::class))->isIterable() ? "S" : "s";
+echo (new ReflectionClass(ReflectIterableEnum::class))->isIterable() ? "E" : "e";
+echo (new ReflectionClass(ReflectIterableTrait::class))->isIterable() ? "H" : "h";
+"#,
+    );
+    assert_eq!(out, "pIAGbftRseh");
+}
+
 /// Verifies that `ReflectionClass::isInternal()` and `isUserDefined()` report
 /// whether class-like metadata came from compiler built-ins or user code.
 #[test]

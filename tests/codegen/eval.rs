@@ -7030,6 +7030,43 @@ echo (new ReflectionClass("EvalCloneEnum"))->isCloneable() ? "E" : "e";');
     assert_eq!(out, "aPFvrUite");
 }
 
+/// Verifies eval ReflectionClass::isIterable reports eval and builtin class metadata.
+#[test]
+fn test_eval_reflection_class_iterable_predicate() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalIterablePlain {}
+abstract class EvalIterableAbstract implements Iterator {}
+interface EvalIterableIface extends Iterator {}
+trait EvalIterableTrait {}
+enum EvalIterableEnum { case Ready; }
+class EvalIterableIterator implements Iterator {
+    public function current() { return null; }
+    public function key() { return null; }
+    public function next() {}
+    public function valid() { return false; }
+    public function rewind() {}
+}
+class EvalIterableAggregate implements IteratorAggregate {
+    public function getIterator() { return $this; }
+}
+echo (new ReflectionClass("EvalIterablePlain"))->isIterable() ? "P" : "p";
+$iter = new ReflectionClass("EvalIterableIterator");
+echo $iter->isIterable() ? "I" : "i";
+echo $iter->isIterateable() ? "A" : "a";
+echo (new ReflectionClass("EvalIterableAggregate"))->isIterable() ? "G" : "g";
+echo (new ReflectionClass("EvalIterableAbstract"))->isIterable() ? "B" : "b";
+echo (new ReflectionClass("EvalIterableIface"))->isIterable() ? "F" : "f";
+echo (new ReflectionClass("Iterator"))->isIterable() ? "T" : "t";
+echo (new ReflectionClass("ArrayIterator"))->isIterable() ? "R" : "r";
+echo (new ReflectionClass("stdClass"))->isIterable() ? "S" : "s";
+echo (new ReflectionClass("EvalIterableEnum"))->isIterable() ? "E" : "e";
+echo (new ReflectionClass("EvalIterableTrait"))->isIterable() ? "H" : "h";');
+"#,
+    );
+    assert_eq!(out, "pIAGbftRseh");
+}
+
 /// Verifies eval ReflectionClass origin predicates distinguish eval symbols from built-ins.
 #[test]
 fn test_eval_reflection_class_internal_user_defined_predicates() {

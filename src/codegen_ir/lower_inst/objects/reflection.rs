@@ -64,6 +64,7 @@ struct ReflectionOwnerMetadata {
     is_anonymous: bool,
     is_instantiable: bool,
     is_cloneable: bool,
+    is_iterable: bool,
     modifiers: i64,
     member_flags: ReflectionMemberFlags,
 }
@@ -346,6 +347,7 @@ fn emit_reflection_owner_object(
         emit_reflection_bool_property(ctx, "__is_anonymous", metadata.is_anonymous)?;
         emit_reflection_bool_property(ctx, "__is_instantiable", metadata.is_instantiable)?;
         emit_reflection_bool_property(ctx, "__is_cloneable", metadata.is_cloneable)?;
+        emit_reflection_bool_property(ctx, "__is_iterable", metadata.is_iterable)?;
         let is_internal = metadata
             .reflected_name
             .as_deref()
@@ -516,6 +518,7 @@ fn reflection_class_metadata_for_name(
         let is_instantiable =
             reflection_class_is_instantiable(info, is_enum, constructor_member.as_ref());
         let is_cloneable = reflection_class_is_cloneable(class_name, info, is_enum);
+        let is_iterable = reflection_class_is_iterable(info, is_enum);
         return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
@@ -549,6 +552,7 @@ fn reflection_class_metadata_for_name(
             is_anonymous: is_reflection_anonymous_class_name(class_name),
             is_instantiable,
             is_cloneable,
+            is_iterable,
             modifiers: reflection_class_modifiers(
                 info.is_final,
                 info.is_abstract,
@@ -606,6 +610,7 @@ fn reflection_class_metadata_for_name(
             is_anonymous: false,
             is_instantiable: false,
             is_cloneable: false,
+            is_iterable: false,
             modifiers: 0,
             member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
         });
@@ -664,6 +669,7 @@ fn reflection_class_metadata_for_name(
             is_anonymous: false,
             is_instantiable: false,
             is_cloneable: false,
+            is_iterable: false,
             modifiers: 0,
             member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
         });
@@ -801,6 +807,7 @@ fn reflection_method_owner_metadata(
         is_anonymous: false,
         is_instantiable: false,
         is_cloneable: false,
+        is_iterable: false,
         modifiers: reflection_method_modifiers_from_flags(member.flags),
         member_flags: member.flags,
     }
@@ -856,6 +863,7 @@ fn reflection_property_metadata(
                 is_anonymous: false,
                 is_instantiable: false,
                 is_cloneable: false,
+                is_iterable: false,
                 modifiers: reflection_property_modifiers_for_info(info, &property_name)?,
                 member_flags: reflection_property_member_flags(info, &property_name)?,
             })
@@ -1037,6 +1045,7 @@ fn reflection_class_constant_metadata(
             is_anonymous: false,
             is_instantiable: false,
             is_cloneable: false,
+            is_iterable: false,
             modifiers: reflection_class_constant_modifiers(&Visibility::Public, false),
             member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
         });
@@ -1100,6 +1109,7 @@ fn reflection_enum_case_metadata(
                 is_anonymous: false,
                 is_instantiable: false,
                 is_cloneable: false,
+                is_iterable: false,
                 modifiers: 0,
                 member_flags: ReflectionMemberFlags::default(),
             })
@@ -1148,6 +1158,7 @@ fn reflection_class_constant_owner_metadata(
         is_anonymous: false,
         is_instantiable: false,
         is_cloneable: false,
+        is_iterable: false,
         modifiers,
         member_flags,
     }
@@ -1393,6 +1404,16 @@ fn reflection_class_is_cloneable(
     info.method_visibilities
         .get(&clone_key)
         .is_none_or(|visibility| matches!(visibility, Visibility::Public))
+}
+
+/// Returns PHP's `ReflectionClass::isIterable()` value for static class metadata.
+fn reflection_class_is_iterable(info: &crate::types::ClassInfo, is_enum: bool) -> bool {
+    if info.is_abstract || is_enum {
+        return false;
+    }
+    info.interfaces
+        .iter()
+        .any(|name| name == "Iterator" || name == "IteratorAggregate")
 }
 
 /// Returns whether a builtin's object layout is outside ordinary declared slots.
@@ -3099,6 +3120,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         is_anonymous: false,
         is_instantiable: false,
         is_cloneable: false,
+        is_iterable: false,
         modifiers: 0,
         member_flags: ReflectionMemberFlags::default(),
     }

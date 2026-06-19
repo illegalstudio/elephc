@@ -170,6 +170,9 @@ named class-like symbols. `ReflectionClass::isInstantiable()` reports whether
 eval class-like metadata describes a concrete class with no constructor or a public constructor.
 `ReflectionClass::isCloneable()` reports whether eval class metadata describes
 a concrete class with no `__clone()` or a public `__clone()`.
+`ReflectionClass::isIterable()` and `isIterateable()` report whether eval or
+generated class metadata describes a concrete `Iterator` or `IteratorAggregate`
+class.
 `ReflectionClass::isInternal()` and `isUserDefined()` distinguish
 compiler-injected class-like metadata from eval-declared or generated
 user-defined class-like symbols.
