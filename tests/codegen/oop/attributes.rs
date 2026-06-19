@@ -1726,6 +1726,35 @@ echo ":" . $named->getName();
     );
 }
 
+/// Verifies `ReflectionFunction::getAttributes()` exposes function attributes
+/// and assigns factory ids that make `ReflectionAttribute::newInstance()` work.
+#[test]
+fn test_reflection_function_get_attributes_returns_function_attributes() {
+    let out = compile_and_run(
+        r##"<?php
+class FunctionMarker {
+    public function __construct(public string $name, public int $rank) {}
+    public function label(): string { return $this->name . "#" . $this->rank; }
+}
+class FlagMarker {}
+
+#[FunctionMarker("target", 7), FlagMarker]
+function reflected_function_attrs() {}
+
+$ref = new ReflectionFunction("REFLECTED_FUNCTION_ATTRS");
+$attrs = $ref->getAttributes();
+echo count($attrs) . "/";
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0] . "/";
+echo $attrs[0]->getArguments()[1] . "/";
+echo $attrs[0]->newInstance()->label() . "/";
+echo $attrs[1]->getName() . "/";
+echo count($attrs[1]->getArguments());
+"##,
+    );
+    assert_eq!(out, "2/FunctionMarker/target/7/target#7/FlagMarker/0");
+}
+
 /// Verifies that ReflectionMethod objects returned from `ReflectionClass::getMethods()`
 /// carry the same parameter metadata as directly constructed method reflectors.
 #[test]

@@ -13,7 +13,10 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::traits::FlattenedClass;
-use crate::types::{ClassInfo, FunctionSig, PhpType, PropertyHookContract};
+use crate::types::{
+    collect_attribute_args, collect_attribute_names, ClassInfo, FunctionSig, PhpType,
+    PropertyHookContract,
+};
 
 use super::constants::resolve_lexical_class_constant_value;
 
@@ -189,74 +192,6 @@ impl ClassBuildState {
             constructor_param_to_prop,
         })
     }
-}
-
-/// Collect attribute names from a class's attribute groups, preserving source
-/// order. Name resolution has already canonicalised fully-qualified names by
-/// the time this runs, so names are emitted in ReflectionAttribute::getName()
-/// shape without a synthetic leading backslash.
-pub(in crate::types::checker::schema) fn collect_attribute_names(
-    groups: &[crate::parser::ast::AttributeGroup],
-) -> Vec<String> {
-    let mut out = Vec::new();
-    for group in groups {
-        for attr in &group.attributes {
-            // Name resolution normalises attribute references to the canonical
-            // class-like text (no leading backslash), so emit it as-is and let
-            // `class_attribute_names()` callers see PHP's `ReflectionAttribute::
-            // getName()` shape — namespace-qualified or bare identifier, never a
-            // synthetic leading `\`.
-            out.push(attr.name.as_str().to_string());
-        }
-    }
-    out
-}
-
-/// Collect the positional literal arguments of every attribute, in the
-/// same order as `collect_attribute_names`. Captures strings, ints, bools,
-/// and null directly. Negation (`-N`) of an int literal is folded so PHP's
-/// `#[Status(-1)]` survives parsing. Unsupported metadata is marked as
-/// `None` so legal PHP attribute syntax can still compile until a runtime
-/// reflection helper needs the missing argument payload.
-pub(in crate::types::checker::schema) fn collect_attribute_args(
-    groups: &[crate::parser::ast::AttributeGroup],
-) -> Vec<Option<Vec<crate::types::AttrArgValue>>> {
-    use crate::parser::ast::ExprKind;
-    use crate::types::AttrArgValue;
-
-    let mut out = Vec::new();
-    for group in groups {
-        for attr in &group.attributes {
-            let mut args = Vec::new();
-            let mut supported = true;
-            for arg_expr in &attr.args {
-                match &arg_expr.kind {
-                    ExprKind::StringLiteral(value) => args.push(AttrArgValue::Str(value.clone())),
-                    ExprKind::IntLiteral(value) => args.push(AttrArgValue::Int(*value)),
-                    ExprKind::BoolLiteral(value) => args.push(AttrArgValue::Bool(*value)),
-                    ExprKind::Null => args.push(AttrArgValue::Null),
-                    ExprKind::Negate(inner) => {
-                        if let ExprKind::IntLiteral(n) = &inner.kind {
-                            args.push(AttrArgValue::Int(n.wrapping_neg()));
-                        } else {
-                            supported = false;
-                            break;
-                        }
-                    }
-                    ExprKind::NamedArg { .. } => {
-                        supported = false;
-                        break;
-                    }
-                    _ => {
-                        supported = false;
-                        break;
-                    }
-                }
-            }
-            out.push(if supported { Some(args) } else { None });
-        }
-    }
-    out
 }
 
 /// Returns `true` if the class declaration carries the PHP 8.2

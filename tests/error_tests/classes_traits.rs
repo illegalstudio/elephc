@@ -586,6 +586,16 @@ fn test_error_reflection_function_constructor_dynamic_function_name() {
     );
 }
 
+/// Verifies `ReflectionFunction` rejects attributes whose arguments cannot yet
+/// be materialized into `ReflectionAttribute` metadata.
+#[test]
+fn test_error_reflection_function_get_attributes_unsupported_arg_metadata() {
+    expect_error(
+        "<?php $name = 'x'; #[FuncAttr($name)] function reflected_function_attr() {} $r = new ReflectionFunction('reflected_function_attr');",
+        "function has attribute argument metadata that is not supported yet",
+    );
+}
+
 /// Verifies that accessing `ReflectionAttribute::__name` property reports
 /// "Cannot access private property: ReflectionAttribute::__name".
 #[test]

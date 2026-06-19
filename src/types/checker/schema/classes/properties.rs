@@ -17,7 +17,8 @@ use crate::types::PhpType;
 use super::super::super::{infer_expr_type_syntactic, Checker};
 use super::super::validation::visibility_rank;
 use super::super::interfaces::{build_property_contract, merge_property_contract};
-use super::state::{collect_attribute_args, collect_attribute_names, ClassBuildState};
+use super::state::ClassBuildState;
+use super::{collect_attribute_args, collect_attribute_names};
 
 /// Applies property schema validation and metadata for all static and instance
 /// properties declared in `class`. Static properties are validated for PHP

@@ -12,7 +12,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, Module, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::types::{AttrArgValue, ClassInfo, PhpType};
 
@@ -131,11 +131,15 @@ pub(in crate::codegen_ir::lower_inst) fn emit_reflection_attribute_array(
             .get(idx)
             .and_then(|args| args.as_deref())
             .unwrap_or(&[]);
-        let factory_id = crate::codegen::reflection::attribute_factory_id(
-            &ctx.module.class_infos,
-            attr_name,
-            attr_arg_list,
-        );
+        let factory_id = {
+            let function_attrs = function_attribute_sources(ctx.module);
+            crate::codegen::reflection::attribute_factory_id_with_extra(
+                &ctx.module.class_infos,
+                &function_attrs,
+                attr_name,
+                attr_arg_list,
+            )
+        };
 
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_attribute_object(ctx, &layout);
@@ -147,6 +151,23 @@ pub(in crate::codegen_ir::lower_inst) fn emit_reflection_attribute_array(
     }
 
     Ok(())
+}
+
+/// Returns reflection-visible top-level function attribute metadata sources.
+fn function_attribute_sources(
+    module: &Module,
+) -> Vec<crate::codegen::reflection::AttributeMetadataSource<'_>> {
+    module
+        .functions
+        .iter()
+        .filter(|function| !function.attribute_names.is_empty())
+        .map(|function| {
+            (
+                function.attribute_names.as_slice(),
+                function.attribute_args.as_slice(),
+            )
+        })
+        .collect()
 }
 
 /// Returns the synthetic `ReflectionAttribute` class layout from EIR metadata.

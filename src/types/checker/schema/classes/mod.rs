@@ -25,7 +25,7 @@ use super::super::Checker;
 use super::validation::build_constructor_param_map;
 use state::ClassBuildState;
 
-pub(super) use state::{collect_attribute_args, collect_attribute_names};
+pub(super) use crate::types::{collect_attribute_args, collect_attribute_names};
 
 /// Recursively builds and registers `ClassInfo` for `class_name` and its inheritance chain.
 ///

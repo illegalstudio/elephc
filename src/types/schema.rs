@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{ClassMethod, Expr, Visibility};
+use crate::parser::ast::{AttributeGroup, ClassMethod, Expr, ExprKind, Visibility};
 use crate::span::Span;
 
 use super::{FunctionSig, PhpType};
@@ -25,6 +25,64 @@ pub enum AttrArgValue {
     Int(i64),
     Bool(bool),
     Str(String),
+}
+
+/// Collects attribute names from attribute groups while preserving source order.
+///
+/// Name resolution has already canonicalized fully-qualified names by the time
+/// checker/codegen metadata uses this helper, so returned names match
+/// `ReflectionAttribute::getName()` shape without synthetic leading slashes.
+pub(crate) fn collect_attribute_names(groups: &[AttributeGroup]) -> Vec<String> {
+    let mut out = Vec::new();
+    for group in groups {
+        for attr in &group.attributes {
+            out.push(attr.name.as_str().to_string());
+        }
+    }
+    out
+}
+
+/// Collects materializable positional attribute arguments in source order.
+///
+/// Legal PHP attribute expressions outside the current literal subset are
+/// represented as `None` so compilation can proceed until a reflection query
+/// needs the missing payload and reports the unsupported metadata.
+pub(crate) fn collect_attribute_args(
+    groups: &[AttributeGroup],
+) -> Vec<Option<Vec<AttrArgValue>>> {
+    let mut out = Vec::new();
+    for group in groups {
+        for attr in &group.attributes {
+            let mut args = Vec::new();
+            let mut supported = true;
+            for arg_expr in &attr.args {
+                match &arg_expr.kind {
+                    ExprKind::StringLiteral(value) => args.push(AttrArgValue::Str(value.clone())),
+                    ExprKind::IntLiteral(value) => args.push(AttrArgValue::Int(*value)),
+                    ExprKind::BoolLiteral(value) => args.push(AttrArgValue::Bool(*value)),
+                    ExprKind::Null => args.push(AttrArgValue::Null),
+                    ExprKind::Negate(inner) => {
+                        if let ExprKind::IntLiteral(n) = &inner.kind {
+                            args.push(AttrArgValue::Int(n.wrapping_neg()));
+                        } else {
+                            supported = false;
+                            break;
+                        }
+                    }
+                    ExprKind::NamedArg { .. } => {
+                        supported = false;
+                        break;
+                    }
+                    _ => {
+                        supported = false;
+                        break;
+                    }
+                }
+            }
+            out.push(if supported { Some(args) } else { None });
+        }
+    }
+    out
 }
 
 /// Property hook contract for `get`/`set` hook declarations in classes and interfaces.

@@ -1123,15 +1123,13 @@ fn builtin_reflection_owner_class(
             "__required_parameter_count",
         ));
     }
-    if name != "ReflectionFunction" {
-        properties.push(builtin_property(
-            "__attrs",
-            Visibility::Private,
-            Some(array_type()),
-            empty_array(),
-        ));
-        methods.push(builtin_reflection_owner_get_attributes_method());
-    }
+    properties.push(builtin_property(
+        "__attrs",
+        Visibility::Private,
+        Some(array_type()),
+        empty_array(),
+    ));
+    methods.push(builtin_reflection_owner_get_attributes_method());
     FlattenedClass {
         name: name.to_string(),
         extends: None,
