@@ -81,6 +81,7 @@ pub(super) fn check_types_impl(
     substitute_relative_class_types_in_flattened_enums(&mut flattened_enums);
     let declared_traits = collect_declared_trait_names(program);
     let declared_trait_methods = collect_declared_trait_methods(program);
+    let declared_trait_constants = collect_declared_trait_constants(program);
     let mut seen_classes = HashSet::new();
     let mut class_map = HashMap::new();
     for class in &flattened_classes {
@@ -171,6 +172,7 @@ pub(super) fn check_types_impl(
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();
     checker.declared_trait_methods = declared_trait_methods;
+    checker.declared_trait_constants = declared_trait_constants;
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
@@ -332,6 +334,33 @@ fn collect_declared_trait_methods(
         }
     }
     methods
+}
+
+/// Collects source-declared trait constant names recursively, including namespace blocks.
+fn collect_declared_trait_constants(program: &Program) -> HashMap<String, HashSet<String>> {
+    let mut constants = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl {
+                name,
+                constants: trait_constants,
+                ..
+            } => {
+                constants.insert(
+                    name.clone(),
+                    trait_constants
+                        .iter()
+                        .map(|constant| constant.name.clone())
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                constants.extend(collect_declared_trait_constants(body));
+            }
+            _ => {}
+        }
+    }
+    constants
 }
 
 /// Builds the reflection-visible signature for a direct trait method.

@@ -9,7 +9,7 @@
 //! - Runtime helper bodies remain outside EIR; modules reference runtime
 //!   features and metadata needed to select/link helpers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
@@ -74,6 +74,7 @@ pub struct Module {
     pub declared_trait_property_names: HashMap<String, Vec<String>>,
     pub declared_trait_constant_names: HashMap<String, Vec<String>>,
     pub declared_trait_constants: HashMap<String, HashMap<String, crate::parser::ast::Expr>>,
+    pub declared_trait_final_constants: HashMap<String, HashSet<String>>,
     pub class_infos: HashMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
     pub enum_infos: HashMap<String, EnumInfo>,
@@ -112,6 +113,7 @@ impl Module {
             declared_trait_property_names: HashMap::new(),
             declared_trait_constant_names: HashMap::new(),
             declared_trait_constants: HashMap::new(),
+            declared_trait_final_constants: HashMap::new(),
             class_infos: HashMap::new(),
             interface_infos: HashMap::new(),
             enum_infos: HashMap::new(),

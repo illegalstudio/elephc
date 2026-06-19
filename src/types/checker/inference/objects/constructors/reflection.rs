@@ -231,8 +231,10 @@ impl Checker {
                 "ReflectionClassConstant::getAttributes(): enum case has attribute argument metadata that is not supported yet",
             );
         }
-        let Some((names, args)) =
-            self.reflection_class_constant_attribute_metadata(class_name, constant_name)
+        let Some((names, args)) = self
+            .reflection_class_constant_attribute_metadata(class_name, constant_name)
+            .or_else(|| self.reflection_interface_constant_metadata(class_name, constant_name))
+            .or_else(|| self.reflection_trait_constant_metadata(class_name, constant_name))
         else {
             return Err(CompileError::new(
                 expr.span,
@@ -318,6 +320,30 @@ impl Checker {
         }
         let parent = class_info.parent.as_deref()?;
         self.reflection_class_constant_attribute_metadata(parent, constant_name)
+    }
+
+    /// Returns empty attribute metadata when an interface constant exists.
+    fn reflection_interface_constant_metadata(
+        &self,
+        interface_name: &str,
+        constant_name: &str,
+    ) -> Option<(Vec<String>, ReflectionAttributeArgs)> {
+        self.interfaces
+            .get(interface_name)
+            .filter(|info| info.constants.contains_key(constant_name))
+            .map(|_| (Vec::new(), Vec::new()))
+    }
+
+    /// Returns empty attribute metadata when a trait constant exists.
+    fn reflection_trait_constant_metadata(
+        &self,
+        trait_name: &str,
+        constant_name: &str,
+    ) -> Option<(Vec<String>, ReflectionAttributeArgs)> {
+        self.declared_trait_constants
+            .get(trait_name)
+            .filter(|constants| constants.contains(constant_name))
+            .map(|_| (Vec::new(), Vec::new()))
     }
 
     /// Returns cloned enum-case attribute metadata for one case.
