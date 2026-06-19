@@ -1625,6 +1625,14 @@ echo ($byPosition->isOptional() ? "O" : "R");
 echo ($byPosition->isPassedByReference() ? "B" : "b");
 echo ($byPosition->isVariadic() ? "V" : "v");
 echo "|";
+$object = new ReflectDirectParamTarget();
+$byObject = new ReflectionParameter([$object, "run"], "mode");
+echo $byObject->getName() . "#" . $byObject->getPosition();
+echo ($byObject->hasType() ? "T" : "t");
+echo ($byObject->isOptional() ? "O" : "R");
+echo ($byObject->isPassedByReference() ? "B" : "b");
+echo ($byObject->isVariadic() ? "V" : "v");
+echo "|";
 $iface = new ReflectionParameter([ReflectDirectParamInterface::class, "build"], 1);
 echo $iface->getName() . "#" . $iface->getPosition();
 echo ($iface->isOptional() ? "O" : "R");
@@ -1644,7 +1652,10 @@ echo $named->getName() . "#" . $named->getPosition();
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "name#1tRBv|rest#3tObV|name#1O|rest#2TOV|id#0");
+    assert_eq!(
+        out.stdout,
+        "name#1tRBv|rest#3tObV|mode#2TObv|name#1O|rest#2TOV|id#0"
+    );
 }
 
 /// Verifies direct `new ReflectionParameter()` construction for statically known

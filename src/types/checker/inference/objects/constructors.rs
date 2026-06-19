@@ -405,8 +405,7 @@ impl Checker {
                 "ReflectionParameter::__construct() expects array(class, method) as first argument",
             ));
         }
-        let class_name =
-            self.reflection_class_literal_arg("ReflectionParameter", &items[0], env)?;
+        let class_name = self.reflection_parameter_owner_class_name(&items[0], env)?;
         let method_name = self.reflection_string_literal_arg(
             "ReflectionParameter",
             "method name",
@@ -417,6 +416,39 @@ impl Checker {
             class_name,
             method_name,
         })
+    }
+
+    /// Resolves the class-like name from a class literal or statically known object target.
+    fn reflection_parameter_owner_class_name(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<String, CompileError> {
+        match &arg.kind {
+            ExprKind::StringLiteral(_) | ExprKind::ClassConstant { .. } => {
+                self.reflection_class_literal_arg("ReflectionParameter", arg, env)
+            }
+            ExprKind::Variable(_) | ExprKind::This => {
+                let target_ty = self.infer_type(arg, env)?.codegen_repr();
+                let PhpType::Object(class_name) = target_ty else {
+                    return Err(CompileError::new(
+                        arg.span,
+                        "ReflectionParameter::__construct() object target must have a concrete class type",
+                    ));
+                };
+                if class_name.is_empty() || !self.classes.contains_key(class_name.as_str()) {
+                    return Err(CompileError::new(
+                        arg.span,
+                        "ReflectionParameter::__construct() object target must have a concrete class type",
+                    ));
+                }
+                Ok(class_name)
+            }
+            _ => Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() requires a literal class name or statically typed object target",
+            )),
+        }
     }
 
     /// Returns the reflected signature for a statically declared user function.
