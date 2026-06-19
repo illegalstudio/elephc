@@ -2195,6 +2195,57 @@ echo $listed->getDefaultValue() === null ? "null" : "bad";
     );
 }
 
+/// Verifies that `ReflectionClass::getDefaultProperties()` exposes supported property defaults.
+#[test]
+fn test_reflection_class_get_default_properties_returns_property_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectClassDefaultBase {
+    public int $base = 1;
+    protected string $prot = "p";
+    private int $shadow = 3;
+    public $implicit;
+    public int $typed;
+    public static string $baseStatic = "bs";
+}
+class ReflectClassDefaultChild extends ReflectClassDefaultBase {
+    public int $child = 5;
+    private int $shadow = 9;
+    public static int $childStatic = 7;
+    public $explicitNull = null;
+}
+$defaults = (new ReflectionClass(ReflectClassDefaultChild::class))->getDefaultProperties();
+echo $defaults["childStatic"] . ":";
+echo $defaults["baseStatic"] . ":";
+echo $defaults["child"] . ":";
+echo $defaults["shadow"] . ":";
+echo $defaults["base"] . ":";
+echo $defaults["prot"] . ":";
+$implicit = "i";
+$explicitNull = "e";
+$typed = "t";
+foreach ($defaults as $key => $value) {
+    if ($key === "implicit" && $value === null) {
+        $implicit = "I";
+    }
+    if ($key === "explicitNull" && $value === null) {
+        $explicitNull = "E";
+    }
+    if ($key === "typed") {
+        $typed = "T";
+    }
+}
+echo $implicit . ":" . $explicitNull . ":" . $typed . ":" . count($defaults);
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7:bs:5:9:1:p:I:E:t:8");
+}
+
 /// Verifies `ReflectionParameter::getAttributes()` exposes parameter attributes.
 #[test]
 fn test_reflection_parameter_get_attributes_returns_parameter_metadata() {

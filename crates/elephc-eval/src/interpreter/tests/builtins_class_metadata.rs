@@ -1165,6 +1165,46 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass exposes eval property default metadata as an associative map.
+#[test]
+fn execute_program_reflection_class_get_default_properties_metadata() {
+    let program = parse_fragment(
+        br#"class EvalReflectDefaultBase {
+    public int $base = 1;
+    protected string $prot = "p";
+    private int $shadow = 3;
+    public $implicit;
+    public int $typed;
+    public static string $baseStatic = "bs";
+}
+class EvalReflectDefaultChild extends EvalReflectDefaultBase {
+    public int $child = 5;
+    private int $shadow = 9;
+    public static int $childStatic = 7;
+    public ?int $nullable = null;
+}
+$defaults = (new ReflectionClass("EvalReflectDefaultChild"))->getDefaultProperties();
+echo $defaults["childStatic"]; echo ":";
+echo $defaults["baseStatic"]; echo ":";
+echo $defaults["child"]; echo ":";
+echo $defaults["shadow"]; echo ":";
+echo $defaults["base"]; echo ":";
+echo $defaults["prot"]; echo ":";
+echo array_key_exists("implicit", $defaults) && $defaults["implicit"] === null ? "I:" : "i:";
+echo array_key_exists("nullable", $defaults) && $defaults["nullable"] === null ? "N:" : "n:";
+echo array_key_exists("typed", $defaults) ? "T" : "t";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "7:bs:5:9:1:p:I:N:t");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval ReflectionParameter exposes declaring class metadata.
 #[test]
 fn execute_program_reflects_eval_parameter_declaring_class() {

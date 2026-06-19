@@ -1082,7 +1082,8 @@ fn validate_interface_constant_parent_redeclarations(
 ) -> Result<(), EvalStatus> {
     for constant in interface.constants() {
         for parent in interface.parents() {
-            if let Some((_, parent_constant)) = context.interface_constant(parent, constant.name()) {
+            if let Some((_, parent_constant)) = context.interface_constant(parent, constant.name())
+            {
                 if parent_constant.is_final() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
@@ -1107,7 +1108,8 @@ fn validate_constant_parent_redeclaration(
         }
     }
     for interface in class.interfaces() {
-        if let Some((_, interface_constant)) = context.interface_constant(interface, constant.name())
+        if let Some((_, interface_constant)) =
+            context.interface_constant(interface, constant.name())
         {
             if interface_constant.is_final() {
                 return Err(EvalStatus::RuntimeFatal);
@@ -2354,6 +2356,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return Ok(result);
     }
     if let Some(result) = eval_reflection_class_get_constants_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_class_get_default_properties_result(
         identity,
         method_name,
         evaluated_args.clone(),

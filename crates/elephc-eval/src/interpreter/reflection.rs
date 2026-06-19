@@ -356,6 +356,43 @@ pub(in crate::interpreter) fn eval_reflection_class_get_constants_result(
     Ok(Some(result))
 }
 
+/// Handles eval-backed `ReflectionClass::getDefaultProperties()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_get_default_properties_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getDefaultProperties") {
+        return Ok(None);
+    }
+    if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let property_names = eval_reflection_default_property_names(&reflected_name, context);
+    let mut result = values.assoc_new(property_names.len())?;
+    for name in property_names {
+        let Some(member) = eval_reflection_property_metadata(&reflected_name, &name, context)
+        else {
+            continue;
+        };
+        let Some(default) = member.default_value.as_ref() else {
+            continue;
+        };
+        let key = values.string(&name)?;
+        let value = eval_method_parameter_default(default, context, values)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(Some(result))
+}
+
 /// Handles eval-backed `ReflectionClass::getReflectionConstant()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constant_result(
     identity: u64,
@@ -2088,6 +2125,20 @@ fn eval_reflection_property_metadata(
                 }
             })
     })
+}
+
+/// Returns property names that can contribute to `ReflectionClass::getDefaultProperties()`.
+fn eval_reflection_default_property_names(
+    reflected_name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<String> {
+    if context.has_trait(reflected_name) {
+        return context.trait_property_names(reflected_name);
+    }
+    if context.has_interface(reflected_name) {
+        return context.interface_property_names(reflected_name);
+    }
+    context.class_property_names(reflected_name)
 }
 
 /// Returns ReflectionProperty default metadata for concrete eval properties.
