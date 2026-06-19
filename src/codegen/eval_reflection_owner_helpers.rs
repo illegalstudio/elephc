@@ -1095,6 +1095,14 @@ fn emit_set_owner_member_flags_property_aarch64(
     emitter.instruction("and x10, x10, #1");                                    // extract the private-member flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_private_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_private_hi);
+    if let (Some(is_readonly_lo), Some(is_readonly_hi)) =
+        (layout.is_readonly_lo, layout.is_readonly_hi)
+    {
+        emitter.instruction("lsr x10, x11, #6");                                // move the readonly-property bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the readonly-property flag as a boolean
+        abi::emit_store_to_address(emitter, "x10", "x9", is_readonly_lo);
+        abi::emit_store_zero_to_address(emitter, "x9", is_readonly_hi);
+    }
     let (Some(is_final_lo), Some(is_final_hi), Some(is_abstract_lo), Some(is_abstract_hi)) = (
         layout.is_final_lo,
         layout.is_final_hi,
@@ -1161,6 +1169,15 @@ fn emit_set_owner_member_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the private-member flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_private_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_private_hi);
+    if let (Some(is_readonly_lo), Some(is_readonly_hi)) =
+        (layout.is_readonly_lo, layout.is_readonly_hi)
+    {
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the readonly bit
+        emitter.instruction("shr rax, 6");                                      // move the readonly-property bit into position
+        emitter.instruction("and rax, 1");                                      // extract the readonly-property flag as a boolean
+        abi::emit_store_to_address(emitter, "rax", "r10", is_readonly_lo);
+        abi::emit_store_zero_to_address(emitter, "r10", is_readonly_hi);
+    }
     let (Some(is_final_lo), Some(is_final_hi), Some(is_abstract_lo), Some(is_abstract_hi)) = (
         layout.is_final_lo,
         layout.is_final_hi,

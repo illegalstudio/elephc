@@ -6257,10 +6257,14 @@ eval('abstract class EvalReflectMemberBase {
     abstract protected function mustImplement();
     final public function locked() {}
 }
+readonly class EvalReflectReadonlyClass {
+    public int $classReadonly;
+}
 class EvalReflectMemberChild extends EvalReflectMemberBase {
     public function mustImplement() {}
     private static $token;
     protected $visible;
+    public readonly int $locked;
 }
 $baseStatic = new ReflectionMethod("EvalReflectMemberChild", "baseStatic");
 echo $baseStatic->isStatic() ? "S" : "s";
@@ -6284,11 +6288,20 @@ $staticProp = new ReflectionProperty("EvalReflectMemberChild", "token");
 echo $staticProp->isStatic() ? "S" : "s";
 echo $staticProp->isPrivate() ? "R" : "r";
 echo $staticProp->isProtected() ? "P" : "p";
+echo $staticProp->isReadOnly() ? "R" : "r";
 echo ":";
 $visibleProp = new ReflectionProperty("EvalReflectMemberChild", "visible");
 echo $visibleProp->isStatic() ? "S" : "s";
 echo $visibleProp->isProtected() ? "P" : "p";
-echo $visibleProp->isPublic() ? "U" : "u";');
+echo $visibleProp->isPublic() ? "U" : "u";
+echo $visibleProp->isReadOnly() ? "R" : "r";
+echo ":";
+$readonlyProp = new ReflectionProperty("EvalReflectMemberChild", "locked");
+echo $readonlyProp->isReadOnly() ? "R" : "r";
+echo $readonlyProp->isPublic() ? "U" : "u";
+echo ":";
+$classReadonlyProp = new ReflectionProperty("EvalReflectReadonlyClass", "classReadonly");
+echo $classReadonlyProp->isReadOnly() ? "C" : "c";');
 "#,
     );
     assert!(
@@ -6296,7 +6309,7 @@ echo $visibleProp->isPublic() ? "U" : "u";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "SPurfa:APs:FUs:SRp:sPu");
+    assert_eq!(out.stdout, "SPurfa:APs:FUs:SRpr:sPur:RU:C");
 }
 
 /// Verifies eval reflectors expose their declaring class through the bridge.

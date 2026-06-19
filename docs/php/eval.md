@@ -233,8 +233,8 @@ direct variable, array-element, and object-property arguments, write back fixed
 parameters after method execution, write back mutated `&...$items` elements
 when the variadic container itself is not rebound, and are reported through
 `ReflectionParameter::isPassedByReference()`.
-`ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, and
-`isPrivate()` report eval property metadata.
+`ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
+and `isReadOnly()` report eval property metadata.
 `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant

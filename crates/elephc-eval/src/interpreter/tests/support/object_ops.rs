@@ -15,6 +15,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
 const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -520,6 +521,11 @@ impl FakeOps {
             properties.push(("__is_public".to_string(), is_public));
             properties.push(("__is_protected".to_string(), is_protected));
             properties.push(("__is_private".to_string(), is_private));
+            if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+                let is_readonly =
+                    self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY) != 0)?;
+                properties.push(("__is_readonly".to_string(), is_readonly));
+            }
         }
         if matches!(
             owner_kind,

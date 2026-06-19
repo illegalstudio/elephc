@@ -1735,10 +1735,14 @@ abstract class ReflectMemberBase {
     abstract protected function mustImplement();
     final public function locked() {}
 }
+readonly class ReflectReadonlyClass {
+    public int $classReadonly;
+}
 class ReflectMemberChild extends ReflectMemberBase {
     public function mustImplement() {}
     private static string $token = "x";
     protected int $visible = 2;
+    public readonly int $locked;
 }
 $baseStatic = new ReflectionMethod(ReflectMemberChild::class, "baseStatic");
 echo $baseStatic->isStatic() ? "S" : "s";
@@ -1762,14 +1766,23 @@ $staticProp = new ReflectionProperty(ReflectMemberChild::class, "token");
 echo $staticProp->isStatic() ? "S" : "s";
 echo $staticProp->isPrivate() ? "R" : "r";
 echo $staticProp->isProtected() ? "P" : "p";
+echo $staticProp->isReadOnly() ? "R" : "r";
 echo ":";
 $visibleProp = new ReflectionProperty(ReflectMemberChild::class, "visible");
 echo $visibleProp->isStatic() ? "S" : "s";
 echo $visibleProp->isProtected() ? "P" : "p";
 echo $visibleProp->isPublic() ? "U" : "u";
+echo $visibleProp->isReadOnly() ? "R" : "r";
+echo ":";
+$readonlyProp = new ReflectionProperty(ReflectMemberChild::class, "locked");
+echo $readonlyProp->isReadOnly() ? "R" : "r";
+echo $readonlyProp->isPublic() ? "U" : "u";
+echo ":";
+$classReadonlyProp = new ReflectionProperty(ReflectReadonlyClass::class, "classReadonly");
+echo $classReadonlyProp->isReadOnly() ? "C" : "c";
 "#,
     );
-    assert_eq!(out, "SPurfa:APs:FUs:SRp:sPu");
+    assert_eq!(out, "SPurfa:APs:FUs:SRpr:sPur:RU:C");
 }
 
 /// Verifies member and enum-case reflectors expose their declaring class object.
