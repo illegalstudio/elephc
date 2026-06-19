@@ -6197,6 +6197,56 @@ echo ":" . $enum->getConstant("LEVEL") . ":" . $enumAll["LEVEL"] . ":" . count($
     );
 }
 
+/// Verifies eval ReflectionClass returns class-constant reflector objects through the bridge.
+#[test]
+fn test_eval_reflection_class_constant_reflector_objects() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectConstMarker {
+    public $label;
+    public function __construct($label) {
+        $this->label = $label;
+    }
+    public function label() {
+        return $this->label;
+    }
+}
+class EvalReflectConstObjectTarget {
+    #[EvalReflectConstMarker("const")]
+    public const ANSWER = 42;
+}
+enum EvalReflectConstObjectEnum {
+    #[EvalReflectConstMarker("case")]
+    case Ready;
+    public const LEVEL = 7;
+}
+$ref = new ReflectionClass("EvalReflectConstObjectTarget");
+$single = $ref->getReflectionConstant("ANSWER");
+$all = $ref->getReflectionConstants();
+echo $single->getName() . ":";
+echo count($all) . ":" . $all[0]->getName() . ":";
+echo $single->getAttributes()[0]->newInstance()->label() . ":";
+echo $ref->getReflectionConstant("answer") ? "bad" : "missing";
+$enum = new ReflectionClass("EvalReflectConstObjectEnum");
+$enumAll = $enum->getReflectionConstants();
+$case = $enum->getReflectionConstant("Ready");
+$level = $enum->getReflectionConstant("LEVEL");
+echo ":" . count($enumAll) . ":" . $enumAll[0]->getName() . ":" . $enumAll[1]->getName();
+echo ":" . $case->getAttributes()[0]->newInstance()->label() . ":";
+echo count($level->getAttributes());');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ANSWER:1:ANSWER:const:missing:2:Ready:LEVEL:case:0"
+    );
+}
+
 /// Verifies eval ReflectionMethod and ReflectionProperty expose member predicates through the bridge.
 #[test]
 fn test_eval_reflection_member_predicates() {

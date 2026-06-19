@@ -250,6 +250,17 @@ impl FakeOps {
                 Self::object_property(&properties, "__constants")
                     .map_or_else(|| self.runtime_assoc_new(0), Ok)
             }
+            (FakeValue::Object(properties), "getreflectionconstants") if args.is_empty() => {
+                Self::object_property(&properties, "__reflection_constants")
+                    .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
+            (FakeValue::Object(properties), "getreflectionconstant") if args.len() == 1 => self
+                .object_named_member_or_false(
+                    &properties,
+                    "__reflection_constants",
+                    args[0],
+                    false,
+                ),
             (FakeValue::Object(properties), "getarguments") if args.is_empty() => {
                 Self::object_property(&properties, "__args")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
@@ -439,6 +450,7 @@ impl FakeOps {
             let in_namespace = self.bool_value(has_namespace)?;
             let constant_names = self.runtime_array_new(0)?;
             let constants = self.runtime_assoc_new(0)?;
+            let reflection_constants = self.runtime_array_new(0)?;
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__is_abstract".to_string(), is_abstract));
             properties.push(("__is_interface".to_string(), is_interface));
@@ -456,6 +468,7 @@ impl FakeOps {
             properties.push(("__property_names".to_string(), property_names));
             properties.push(("__constant_names".to_string(), constant_names));
             properties.push(("__constants".to_string(), constants));
+            properties.push(("__reflection_constants".to_string(), reflection_constants));
             properties.push(("__methods".to_string(), method_objects));
             properties.push(("__parent_class".to_string(), parent_class));
             properties.push(("__properties".to_string(), property_objects));
@@ -574,6 +587,21 @@ impl FakeOps {
             }
         }
         Err(EvalStatus::RuntimeFatal)
+    }
+
+    /// Finds one fake reflection member by name, returning PHP `false` when absent.
+    fn object_named_member_or_false(
+        &mut self,
+        properties: &[(String, RuntimeCellHandle)],
+        property: &str,
+        needle: RuntimeCellHandle,
+        case_insensitive: bool,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        match self.object_named_member(properties, property, needle, case_insensitive) {
+            Ok(member) => Ok(member),
+            Err(EvalStatus::RuntimeFatal) => self.bool_value(false),
+            Err(status) => Err(status),
+        }
     }
 
     /// Creates one fake object for eval `new` unit tests.

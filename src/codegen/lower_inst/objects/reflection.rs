@@ -38,6 +38,7 @@ struct ReflectionOwnerMetadata {
     property_names: Vec<String>,
     constant_names: Vec<String>,
     constant_members: Vec<ReflectionConstantMember>,
+    constant_reflection_members: Vec<ReflectionListedMember>,
     method_members: Vec<ReflectionListedMember>,
     property_members: Vec<ReflectionListedMember>,
     constructor_member: Option<ReflectionListedMember>,
@@ -203,6 +204,12 @@ fn emit_reflection_owner_object(
                 ctx,
                 "__constants",
                 &metadata.constant_members,
+            )?;
+            emit_reflection_member_array_property_by_name(
+                ctx,
+                "__reflection_constants",
+                "ReflectionClassConstant",
+                &metadata.constant_reflection_members,
             )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
@@ -684,6 +691,8 @@ fn reflection_class_metadata_for_name(
         let property_names = reflection_class_property_names(ctx, class_name, info);
         let constant_names = reflection_class_constant_names(ctx, class_name, info);
         let constant_members = reflection_class_constant_members(ctx, class_name, info)?;
+        let constant_reflection_members =
+            reflection_class_constant_reflection_members(ctx, class_name, info)?;
         let method_members = reflection_class_method_members(info, &method_names);
         let property_members =
             reflection_class_property_members(ctx, class_name, info, &property_names);
@@ -700,6 +709,7 @@ fn reflection_class_metadata_for_name(
             property_names,
             constant_names,
             constant_members,
+            constant_reflection_members,
             method_members,
             property_members,
             constructor_member,
@@ -727,6 +737,8 @@ fn reflection_class_metadata_for_name(
         let property_names = reflection_interface_property_names(ctx, interface_name);
         let constant_names = reflection_interface_constant_names(ctx, interface_name);
         let constant_members = reflection_interface_constant_members(ctx, interface_name)?;
+        let constant_reflection_members =
+            reflection_interface_constant_reflection_members(ctx, interface_name);
         let method_members = ctx
             .module
             .interface_infos
@@ -745,6 +757,7 @@ fn reflection_class_metadata_for_name(
             property_names,
             constant_names,
             constant_members,
+            constant_reflection_members,
             method_members,
             property_members,
             constructor_member,
@@ -773,6 +786,8 @@ fn reflection_class_metadata_for_name(
         let property_names = reflection_trait_property_names(ctx, trait_name);
         let constant_names = reflection_trait_constant_names(ctx, trait_name);
         let constant_members = reflection_trait_constant_members(ctx, trait_name)?;
+        let constant_reflection_members =
+            reflection_trait_constant_reflection_members(ctx, trait_name);
         let method_members = ctx
             .module
             .declared_trait_methods
@@ -791,6 +806,7 @@ fn reflection_class_metadata_for_name(
             property_names,
             constant_names,
             constant_members,
+            constant_reflection_members,
             method_members,
             property_members,
             constructor_member,
@@ -886,6 +902,7 @@ fn reflection_method_owner_metadata(
         property_names: Vec::new(),
         constant_names: Vec::new(),
         constant_members: Vec::new(),
+        constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
         constructor_member: None,
@@ -929,6 +946,7 @@ fn reflection_property_metadata(
                 property_names: Vec::new(),
                 constant_names: Vec::new(),
                 constant_members: Vec::new(),
+                constant_reflection_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
@@ -1084,6 +1102,7 @@ fn reflection_class_constant_metadata(
             property_names: Vec::new(),
             constant_names: Vec::new(),
             constant_members: Vec::new(),
+            constant_reflection_members: Vec::new(),
             method_members: Vec::new(),
             property_members: Vec::new(),
             constructor_member: None,
@@ -1124,6 +1143,7 @@ fn reflection_class_constant_metadata(
                     property_names: Vec::new(),
                     constant_names: Vec::new(),
                     constant_members: Vec::new(),
+                    constant_reflection_members: Vec::new(),
                     method_members: Vec::new(),
                     property_members: Vec::new(),
                     constructor_member: None,
@@ -1171,6 +1191,7 @@ fn reflection_enum_case_metadata(
                 property_names: Vec::new(),
                 constant_names: Vec::new(),
                 constant_members: Vec::new(),
+                constant_reflection_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
@@ -1472,6 +1493,156 @@ fn reflection_trait_constant_members(
         }
     }
     Ok(members)
+}
+
+/// Returns materializable constant-reflector objects for `ReflectionClass::getReflectionConstants()`.
+fn reflection_class_constant_reflection_members(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    _info: &crate::types::ClassInfo,
+) -> Result<Vec<ReflectionListedMember>> {
+    let mut members = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(enum_info) = ctx.module.enum_infos.get(class_name) {
+        for case in &enum_info.cases {
+            push_unique_constant_reflection_member(
+                &case.name,
+                case.attribute_names.clone(),
+                case.attribute_args.clone(),
+                &mut members,
+                &mut seen,
+            );
+        }
+    }
+    let mut current = Some(class_name.to_string());
+    while let Some(current_name) = current {
+        let Some((resolved_name, current_info)) = resolve_reflection_class(ctx, &current_name)
+        else {
+            break;
+        };
+        for constant_name in current_info.constants.keys() {
+            if seen.contains(constant_name) {
+                continue;
+            }
+            push_unique_constant_reflection_member(
+                constant_name,
+                current_info
+                    .constant_attribute_names
+                    .get(constant_name)
+                    .cloned()
+                    .unwrap_or_default(),
+                current_info
+                    .constant_attribute_args
+                    .get(constant_name)
+                    .cloned()
+                    .unwrap_or_default(),
+                &mut members,
+                &mut seen,
+            );
+        }
+        for interface_name in &current_info.interfaces {
+            for member in reflection_interface_constant_reflection_members(ctx, interface_name) {
+                push_unique_listed_constant_member(member, &mut members, &mut seen);
+            }
+        }
+        current = current_info.parent.clone();
+        if current.as_deref() == Some(resolved_name) {
+            break;
+        }
+    }
+    Ok(members)
+}
+
+/// Returns constant-reflector objects for interface constants.
+fn reflection_interface_constant_reflection_members(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+) -> Vec<ReflectionListedMember> {
+    let mut members = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    collect_interface_constant_reflection_members(ctx, interface_name, &mut members, &mut seen);
+    members
+}
+
+/// Recursively appends interface constant-reflector objects.
+fn collect_interface_constant_reflection_members(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+    members: &mut Vec<ReflectionListedMember>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
+        return;
+    };
+    for parent in &interface_info.parents {
+        collect_interface_constant_reflection_members(ctx, parent, members, seen);
+    }
+    for constant_name in interface_info.constants.keys() {
+        push_unique_constant_reflection_member(
+            constant_name,
+            Vec::new(),
+            Vec::new(),
+            members,
+            seen,
+        );
+    }
+}
+
+/// Returns constant-reflector objects for direct trait constants.
+fn reflection_trait_constant_reflection_members(
+    ctx: &FunctionContext<'_>,
+    trait_name: &str,
+) -> Vec<ReflectionListedMember> {
+    ctx.module
+        .declared_trait_constants
+        .get(trait_name)
+        .map(|constants| {
+            let mut members = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for constant_name in constants.keys() {
+                push_unique_constant_reflection_member(
+                    constant_name,
+                    Vec::new(),
+                    Vec::new(),
+                    &mut members,
+                    &mut seen,
+                );
+            }
+            members
+        })
+        .unwrap_or_default()
+}
+
+/// Appends one constant-reflector member if a constant with this name was not already visible.
+fn push_unique_constant_reflection_member(
+    name: &str,
+    attr_names: Vec<String>,
+    attr_args: Vec<Option<Vec<AttrArgValue>>>,
+    members: &mut Vec<ReflectionListedMember>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if !seen.insert(name.to_string()) {
+        return;
+    }
+    members.push(ReflectionListedMember {
+        name: name.to_string(),
+        attr_names,
+        attr_args,
+        flags: ReflectionMemberFlags::default(),
+        required_parameter_count: 0,
+        parameters: Vec::new(),
+    });
+}
+
+/// Appends a prebuilt constant-reflector member if its name was not already visible.
+fn push_unique_listed_constant_member(
+    member: ReflectionListedMember,
+    members: &mut Vec<ReflectionListedMember>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if seen.insert(member.name.clone()) {
+        members.push(member);
+    }
 }
 
 /// Returns true when a property should be visible for `ReflectionClass::hasProperty()`.
@@ -2204,6 +2375,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         property_names: Vec::new(),
         constant_names: Vec::new(),
         constant_members: Vec::new(),
+        constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
         constructor_member: None,

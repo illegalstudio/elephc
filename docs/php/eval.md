@@ -177,6 +177,11 @@ returns traits used directly by eval classes.
 `ReflectionClass::hasMethod()` and `ReflectionClass::hasProperty()` report
 method and property membership for eval classes, interfaces, traits, and enums;
 method lookup is case-insensitive, while property lookup is case-sensitive.
+`ReflectionClass::hasConstant()`, `getConstant()`, `getConstants()`,
+`getReflectionConstant()`, and `getReflectionConstants()` expose eval-visible
+class constants, interface constants, trait constants, and enum cases.
+Constant lookup is case-sensitive; single-value lookups return `false` when no
+constant or case is visible.
 `ReflectionClass::getMethods()` and `ReflectionClass::getProperties()` return
 materialized `ReflectionMethod` and `ReflectionProperty` objects for the same
 visible member metadata, including supported member attributes and predicate

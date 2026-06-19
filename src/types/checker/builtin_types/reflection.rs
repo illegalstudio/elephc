@@ -752,6 +752,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__reflection_constants",
+                Visibility::Private,
+                Some(object_array_type("ReflectionClassConstant")),
+                empty_array(),
+            ),
+            builtin_property(
                 "__methods",
                 Visibility::Private,
                 Some(object_array_type("ReflectionMethod")),
@@ -810,6 +816,12 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_has_name_method("hasConstant", "__constant_names", false),
             builtin_reflection_class_get_constant_method(),
             builtin_reflection_class_mixed_method("getConstants", "__constants"),
+            builtin_reflection_class_array_method(
+                "getReflectionConstants",
+                "__reflection_constants",
+                object_array_type("ReflectionClassConstant"),
+            ),
+            builtin_reflection_class_get_reflection_constant_method(),
             builtin_reflection_class_implements_interface_method(),
             builtin_reflection_class_array_method(
                 "getMethods",
@@ -1031,6 +1043,61 @@ fn builtin_reflection_class_get_constant_method() -> ClassMethod {
                 StmtKind::Return(Some(Expr::new(ExprKind::BoolLiteral(false), dummy_span))),
                 dummy_span,
             ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::getReflectionConstant()` backed by reflected constant objects.
+fn builtin_reflection_class_get_reflection_constant_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name = variable_expr("name", dummy_span);
+    let member = variable_expr("member", dummy_span);
+    let exists = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(method_call_expr(
+                member.clone(),
+                "getName",
+                Vec::new(),
+                dummy_span,
+            )),
+            op: BinOp::StrictEq,
+            right: Box::new(name.clone()),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "getReflectionConstant".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        body: vec![
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property("__reflection_constants", dummy_span),
+                    key_var: None,
+                    value_var: "member".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: exists,
+                            then_body: vec![Stmt::new(StmtKind::Return(Some(member)), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(false_bool()), dummy_span),
         ],
         span: dummy_span,
         attributes: Vec::new(),
@@ -1371,7 +1438,14 @@ fn builtin_reflection_class_get_member_method(
         )
     };
     let message = concat_expr(
-        string_lit(if return_class == "ReflectionMethod" { "Method " } else { "Property " }, dummy_span),
+        string_lit(
+            if return_class == "ReflectionMethod" {
+                "Method "
+            } else {
+                "Property "
+            },
+            dummy_span,
+        ),
         message,
         dummy_span,
     );
@@ -1784,6 +1858,20 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getMethod")) {
                     sig.return_type = PhpType::Object("ReflectionMethod".to_string());
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getReflectionConstants"))
+                {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionClassConstant".to_string(),
+                    )));
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getReflectionConstant"))
+                {
+                    sig.return_type = PhpType::Mixed;
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getProperties")) {
                     sig.return_type =
