@@ -305,6 +305,11 @@ impl Parser {
 
     /// Parses right-associative unary prefix expressions.
     pub(super) fn parse_unary(&mut self) -> Result<EvalExpr, EvalParseError> {
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "clone")) {
+            self.advance();
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Clone(Box::new(expr)));
+        }
         if self.consume(TokenKind::Plus) {
             let expr = self.parse_unary()?;
             return Ok(EvalExpr::Unary {

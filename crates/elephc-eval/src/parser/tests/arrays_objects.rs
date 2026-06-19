@@ -160,6 +160,18 @@ fn parse_fragment_accepts_qualified_new_object_source() {
     );
 }
 
+/// Verifies clone expressions parse as unary object expressions.
+#[test]
+fn parse_fragment_accepts_clone_expression_source() {
+    let program = parse_fragment(br#"return clone $box;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Clone(Box::new(
+            EvalExpr::LoadVar("box".to_string())
+        ))))]
+    );
+}
+
 /// Verifies anonymous class expressions parse as executable eval class metadata.
 #[test]
 fn parse_fragment_accepts_anonymous_class_source() {

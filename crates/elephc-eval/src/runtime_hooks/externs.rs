@@ -51,6 +51,10 @@ unsafe extern "C" {
         name_len: u64,
         value: *mut RuntimeCell,
     ) -> u64;
+    /// Returns a boxed shallow clone for stdClass/eval object storage.
+    pub(super) fn __elephc_eval_value_object_clone_shallow(
+        object: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_object_property_len(object: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_object_property_iter_key(
         object: *mut RuntimeCell,

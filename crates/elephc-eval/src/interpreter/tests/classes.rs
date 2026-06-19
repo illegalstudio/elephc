@@ -245,6 +245,77 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval object cloning copies properties before running `__clone()`.
+#[test]
+fn execute_program_clones_eval_object_and_runs_clone_hook() {
+    let program = parse_fragment(
+        br#"class EvalCloneRuntimeBox {
+    public string $name;
+    public function __construct($name) { $this->name = $name; }
+    public function __clone() { $this->name = $this->name . ":clone"; }
+}
+$first = new EvalCloneRuntimeBox("A");
+$second = clone $first;
+echo $first->name; echo ":";
+echo $second->name;
+$second->name = "B";
+return $first->name . ":" . $second->name;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "A:A:clone");
+    assert_eq!(values.get(result), FakeValue::String("A:B".to_string()));
+}
+
+/// Verifies private `__clone()` can be invoked from inside the declaring eval class.
+#[test]
+fn execute_program_allows_private_clone_hook_inside_declaring_class() {
+    let program = parse_fragment(
+        br#"class EvalCloneRuntimePrivateBox {
+    public string $name = "A";
+    private function __clone() { $this->name = $this->name . ":copy"; }
+    public function copy() { return clone $this; }
+}
+$first = new EvalCloneRuntimePrivateBox();
+$second = $first->copy();
+echo $first->name; echo ":";
+echo $second->name;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "A:A:copy");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies private `__clone()` is not callable through a global clone expression.
+#[test]
+fn execute_program_rejects_private_clone_hook_outside_declaring_class() {
+    let program = parse_fragment(
+        br#"class EvalCloneRuntimePrivateFail {
+    private function __clone() {}
+}
+$box = new EvalCloneRuntimePrivateFail();
+clone $box;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("private clone hook should be inaccessible outside the class");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies a get-only property hook computes a virtual eval property.
 #[test]
 fn execute_program_reads_eval_property_get_hook() {

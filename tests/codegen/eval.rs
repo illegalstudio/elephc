@@ -7347,6 +7347,28 @@ echo (new ReflectionClass("EvalCloneEnum"))->isCloneable() ? "E" : "e";');
     assert_eq!(out, "aPFvrUite");
 }
 
+/// Verifies eval `clone` shallow-copies eval-declared objects and runs `__clone()`.
+#[test]
+fn test_eval_clone_object_expression_runtime_and_hook() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalCloneRuntimeBox {
+    public string $name;
+    public function __construct($name) { $this->name = $name; }
+    public function __clone() { $this->name = $this->name . ":clone"; }
+}
+$first = new EvalCloneRuntimeBox("A");
+$second = clone $first;
+echo $first->name; echo ":";
+echo $second->name; echo ":";
+$second->name = "B";
+echo $first->name; echo ":";
+echo $second->name;');
+"#,
+    );
+    assert_eq!(out, "A:A:clone:A:B");
+}
+
 /// Verifies eval ReflectionClass::isIterable reports eval and builtin class metadata.
 #[test]
 fn test_eval_reflection_class_iterable_predicate() {

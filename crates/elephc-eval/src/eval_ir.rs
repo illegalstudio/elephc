@@ -1703,6 +1703,7 @@ pub enum EvalExpr {
         arms: Vec<EvalMatchArm>,
         default: Option<Box<EvalExpr>>,
     },
+    Clone(Box<EvalExpr>),
     NamespacedCall {
         name: String,
         fallback_name: String,

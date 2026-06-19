@@ -60,6 +60,23 @@ impl FakeOps {
         }
         Ok(())
     }
+    /// Creates one shallow fake object clone, preserving stored property handles.
+    pub(super) fn runtime_object_clone_shallow(
+        &mut self,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let id = object.as_ptr() as usize;
+        let properties = match self.get(object) {
+            FakeValue::Object(properties) => properties.clone(),
+            _ => return Err(EvalStatus::UnsupportedConstruct),
+        };
+        let clone = self.alloc(FakeValue::Object(properties));
+        if let Some(class_name) = self.object_classes.get(&id).cloned() {
+            self.object_classes
+                .insert(clone.as_ptr() as usize, class_name);
+        }
+        Ok(clone)
+    }
     /// Returns the number of fake object properties in insertion order.
     pub(super) fn runtime_object_property_len(
         &mut self,

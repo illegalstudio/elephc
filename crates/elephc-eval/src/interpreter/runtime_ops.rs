@@ -79,6 +79,12 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus>;
 
+    /// Creates a shallow clone of a runtime object held in a boxed Mixed cell.
+    fn object_clone_shallow(
+        &mut self,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Returns the number of public JSON-visible properties on a runtime object.
     fn object_property_len(&mut self, object: RuntimeCellHandle) -> Result<usize, EvalStatus>;
 

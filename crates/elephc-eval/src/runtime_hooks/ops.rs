@@ -125,6 +125,14 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         }
     }
 
+    /// Creates a shallow clone of a boxed Mixed stdClass/eval object through the generated wrapper.
+    fn object_clone_shallow(
+        &mut self,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_object_clone_shallow(object.as_ptr()) })
+    }
+
     /// Returns the JSON-visible public property count for a boxed Mixed object.
     fn object_property_len(&mut self, object: RuntimeCellHandle) -> Result<usize, EvalStatus> {
         let len = unsafe { __elephc_eval_value_object_property_len(object.as_ptr()) };

@@ -919,10 +919,7 @@ fn parse_fragment_rejects_new_without_class_name() {
 /// Verifies unsupported expression keywords report the unsupported construct status.
 #[test]
 fn parse_fragment_rejects_expression_keywords_as_unsupported_constructs() {
-    for source in [
-        b"return clone $value;" as &[u8],
-        b"return yield 1;" as &[u8],
-    ] {
+    for source in [b"return yield 1;" as &[u8]] {
         assert_eq!(
             parse_fragment(source),
             Err(EvalParseError::UnsupportedConstruct)

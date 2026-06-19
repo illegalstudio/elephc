@@ -2269,6 +2269,42 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
     Ok(object)
 }
 
+/// Creates a PHP shallow clone and invokes an eval-declared `__clone()` hook when present.
+pub(in crate::interpreter) fn eval_object_clone_result(
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    let dynamic_class_name = context
+        .dynamic_object_class(identity)
+        .map(|class| class.name().to_string());
+    let clone_method = dynamic_class_name
+        .as_deref()
+        .and_then(|class_name| context.class_method(class_name, "__clone"));
+    if let Some((declaring_class, method)) = &clone_method {
+        validate_eval_member_access(declaring_class, method.visibility(), context)?;
+    }
+
+    let clone = values.object_clone_shallow(object)?;
+    if let Some(class_name) = dynamic_class_name {
+        let clone_identity = values.object_identity(clone)?;
+        context.register_dynamic_object(clone_identity, &class_name);
+        if let Some((declaring_class, method)) = clone_method {
+            eval_dynamic_method_with_values(
+                &declaring_class,
+                &class_name,
+                &method,
+                clone,
+                Vec::new(),
+                context,
+                values,
+            )?;
+        }
+    }
+    Ok(clone)
+}
+
 /// Creates a backing object for an eval-declared class without running its constructor.
 fn eval_dynamic_class_allocate_object(
     class: &EvalClass,

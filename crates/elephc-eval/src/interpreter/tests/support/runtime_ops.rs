@@ -83,6 +83,13 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<(), EvalStatus> {
         self.runtime_property_set(object, property, value)
     }
+    /// Creates one shallow fake object clone.
+    fn object_clone_shallow(
+        &mut self,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_object_clone_shallow(object)
+    }
     /// Returns the number of fake object properties in insertion order.
     fn object_property_len(&mut self, object: RuntimeCellHandle) -> Result<usize, EvalStatus> {
         self.runtime_object_property_len(object)

@@ -161,7 +161,7 @@ pub(super) fn join_grouped_use_name(prefix: &str, member: &str) -> String {
 
 /// Returns true for PHP expression forms that the eval subset intentionally does not parse yet.
 pub(super) fn is_unsupported_expression_keyword(name: &str) -> bool {
-    ["clone", "yield"]
+    ["yield"]
         .iter()
         .any(|keyword| ident_eq(name, keyword))
 }
