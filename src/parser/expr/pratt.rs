@@ -336,11 +336,18 @@ pub(super) fn parse_expr_bp(
         }
 
         if let Some((op, l_bp, r_bp)) = assignment_bp(&tokens[*pos].0) {
-            if l_bp < min_bp {
+            // PHP binds `=` to the immediately-preceding lvalue even when the assignment sits in
+            // the right operand of a higher-precedence operator: `false !== $x = f()` parses as
+            // `false !== ($x = f())`, `1 + $b = 5` as `1 + ($b = 5)`, and `!$b = 7` as
+            // `!($b = 7)`. So a below-`min_bp` assignment is still consumed when `lhs` is a valid
+            // target; it only yields to the enclosing context (breaks) when `lhs` is not an
+            // lvalue, which then surfaces as the invalid-target error just below.
+            let lhs_is_target = is_assignment_expression_target(&lhs);
+            if l_bp < min_bp && !lhs_is_target {
                 break;
             }
 
-            if !is_assignment_expression_target(&lhs) {
+            if !lhs_is_target {
                 return Err(CompileError::new(lhs.span, "Invalid assignment target"));
             }
 

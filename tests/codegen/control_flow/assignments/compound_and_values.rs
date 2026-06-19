@@ -442,3 +442,53 @@ echo C::init();
     );
     assert_eq!(out, "84");
 }
+
+/// Verifies that `=` binds to the immediately-preceding lvalue inside a comparison:
+/// `false !== $pos = strrpos(...)` parses as `false !== ($pos = strrpos(...))`, so the
+/// assignment runs and `$pos` holds the result. This is the pervasive PHP/Composer idiom.
+/// Output cross-checked with `php -r`.
+#[test]
+fn test_assignment_in_comparison_binds_to_lvalue() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "Foo\\Bar\\Baz";
+if (false !== $pos = strrpos($s, "\\")) {
+    echo "pos=" . $pos;
+}
+"#,
+    );
+    assert_eq!(out, "pos=7");
+}
+
+/// Verifies that `=` binds to the adjacent lvalue under arithmetic: `1 + $b = 5` evaluates as
+/// `1 + ($b = 5)`, yielding 6 and storing 5 in `$b`. Output cross-checked with `php -r`.
+#[test]
+fn test_assignment_under_arithmetic_binds_to_lvalue() {
+    let out = compile_and_run("<?php $b = 0; $r = 1 + $b = 5; echo $r . \":\" . $b;");
+    assert_eq!(out, "6:5");
+}
+
+/// Verifies that `=` binds to the adjacent lvalue under the prefix `!`: `!$b = 7` evaluates as
+/// `!($b = 7)`, yielding false and storing 7 in `$b`. Output cross-checked with `php -r`.
+#[test]
+fn test_assignment_under_prefix_not_binds_to_lvalue() {
+    let out = compile_and_run("<?php $b = 0; $x = !$b = 7; echo ($x ? \"T\" : \"F\") . \":\" . $b;");
+    assert_eq!(out, "F:7");
+}
+
+/// Verifies that the lvalue-binding rule preserves right-associative chained assignment:
+/// `$a = $b = 9` still assigns 9 to both. Regression guard for the precedence change.
+#[test]
+fn test_chained_assignment_still_right_associative() {
+    let out = compile_and_run("<?php $a = 0; $b = 0; $a = $b = 9; echo $a . \":\" . $b;");
+    assert_eq!(out, "9:9");
+}
+
+/// Verifies that an assignment RHS still captures a trailing ternary: `$b = 1 ? 10 : 20`
+/// parses as `$b = (1 ? 10 : 20)`, storing 10. Regression guard that the low assignment
+/// right-binding-power is unchanged by the lvalue-binding rule. Cross-checked with `php -r`.
+#[test]
+fn test_assignment_rhs_still_captures_ternary() {
+    let out = compile_and_run("<?php $b = 0; $r = $b = 1 ? 10 : 20; echo $r . \":\" . $b;");
+    assert_eq!(out, "10:10");
+}

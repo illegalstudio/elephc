@@ -296,3 +296,54 @@ fn test_null_coalesce_assignment_expression_stabilizes_computed_mutated_index() 
         other => panic!("expected Echo, got {:?}", other),
     }
 }
+
+/// Verifies that `false !== $x = 3` binds the `=` to the adjacent lvalue, parsing as
+/// `false !== ($x = 3)` — the assignment is the right operand of the `!==` comparison, not the
+/// comparison being assigned to. This is the PHP idiom `if (false !== $pos = strrpos(...))`.
+#[test]
+fn test_assignment_binds_to_lvalue_inside_comparison() {
+    let stmts = parse_source("<?php $r = false !== $x = 3;");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::BinaryOp { op, right, .. } => {
+                assert_eq!(op, &BinOp::StrictNotEq);
+                assert!(matches!(right.kind, ExprKind::Assignment { .. }));
+            }
+            other => panic!("expected BinaryOp(StrictNotEq), got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies that `1 + $b = 5` parses as `1 + ($b = 5)` — the assignment binds to the adjacent
+/// lvalue even under the higher-precedence `+`, matching PHP.
+#[test]
+fn test_assignment_binds_to_lvalue_inside_arithmetic() {
+    let stmts = parse_source("<?php $r = 1 + $b = 5;");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::BinaryOp { op, right, .. } => {
+                assert_eq!(op, &BinOp::Add);
+                assert!(matches!(right.kind, ExprKind::Assignment { .. }));
+            }
+            other => panic!("expected BinaryOp(Add), got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies that `!$b = 7` parses as `!($b = 7)` — the prefix `!` wraps the whole assignment,
+/// since `=` binds to the adjacent lvalue rather than to `!$b`.
+#[test]
+fn test_assignment_binds_to_lvalue_under_prefix_not() {
+    let stmts = parse_source("<?php $x = !$b = 7;");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::Not(inner) => {
+                assert!(matches!(inner.kind, ExprKind::Assignment { .. }));
+            }
+            other => panic!("expected Not wrapping an assignment, got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}

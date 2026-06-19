@@ -572,3 +572,16 @@ fn test_error_long_array_missing_comma() {
         "Expected ',' between array elements",
     );
 }
+
+// --- Assignment-in-expression target errors ---
+
+/// Verifies that the lvalue-binding rule for `=` does not weaken target checking: assigning to a
+/// non-lvalue such as `($a + $b)` still produces "Invalid assignment target". The rule only lets
+/// `=` bind to an adjacent *lvalue* (e.g. `false !== $x = 3`), never to an arithmetic result.
+#[test]
+fn test_error_assignment_to_non_lvalue() {
+    expect_error(
+        "<?php $a = 1; $b = 2; ($a + $b) = 5;",
+        "Invalid assignment target",
+    );
+}
