@@ -2763,6 +2763,37 @@ echo $second->label();
     assert_eq!(out, "AB:CD");
 }
 
+/// Verifies that `ReflectionClass::newInstance()` accepts zero constructor
+/// arguments for classes with no-argument or absent constructors.
+#[test]
+fn test_reflection_class_new_instance_allows_zero_constructor_args() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectNoArgNewTarget {
+    public string $label = "default";
+    public function __construct() {
+        $this->label = "ctor";
+    }
+    public function label(): string {
+        return $this->label;
+    }
+}
+class ReflectNoCtorNewTarget {
+    public string $label = "plain";
+    public function label(): string {
+        return $this->label;
+    }
+}
+$first = (new ReflectionClass(ReflectNoArgNewTarget::class))->newInstance();
+echo $first->label() . ":";
+$ref = new ReflectionClass(ReflectNoCtorNewTarget::class);
+$second = $ref->newInstance();
+echo $second->label();
+"#,
+    );
+    assert_eq!(out, "ctor:plain");
+}
+
 /// Verifies that `ReflectionClass::newInstanceWithoutConstructor()` allocates
 /// reflected classes while preserving property defaults and skipping `__construct()`.
 #[test]
