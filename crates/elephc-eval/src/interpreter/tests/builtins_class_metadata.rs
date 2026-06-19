@@ -619,6 +619,57 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass returns eval class-constant reflector objects.
+#[test]
+fn execute_program_reflects_eval_class_constant_reflector_objects() {
+    let program = parse_fragment(
+        br#"class EvalReflectConstMarker {
+    public $label;
+    public function __construct($label) {
+        $this->label = $label;
+    }
+    public function label() {
+        return $this->label;
+    }
+}
+class EvalReflectConstObjectTarget {
+    #[EvalReflectConstMarker("const")]
+    public const ANSWER = 42;
+}
+enum EvalReflectConstObjectEnum {
+    #[EvalReflectConstMarker("case")]
+    case Ready;
+    public const LEVEL = 7;
+}
+$ref = new ReflectionClass("EvalReflectConstObjectTarget");
+$single = $ref->getReflectionConstant("ANSWER");
+$all = $ref->getReflectionConstants();
+echo $single->getName(); echo ":";
+echo count($all); echo ":"; echo $all[0]->getName(); echo ":";
+echo $single->getAttributes()[0]->newInstance()->label(); echo ":";
+echo $ref->getReflectionConstant("answer") ? "bad" : "missing";
+$enum = new ReflectionClass("EvalReflectConstObjectEnum");
+$enumAll = $enum->getReflectionConstants();
+$case = $enum->getReflectionConstant("Ready");
+$level = $enum->getReflectionConstant("LEVEL");
+echo ":"; echo count($enumAll); echo ":"; echo $enumAll[0]->getName(); echo ":"; echo $enumAll[1]->getName();
+echo ":"; echo $case->getAttributes()[0]->newInstance()->label(); echo ":";
+echo count($level->getAttributes());
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "ANSWER:1:ANSWER:const:missing:2:Ready:LEVEL:case:0"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod and ReflectionProperty expose eval member predicate metadata.
 #[test]
 fn execute_program_reflects_eval_member_predicates() {

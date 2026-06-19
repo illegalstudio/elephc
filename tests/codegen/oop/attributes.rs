@@ -1203,6 +1203,47 @@ echo ":" . $enum->getConstant("LEVEL") . ":" . $enumAll["LEVEL"] . ":" . count($
     );
 }
 
+/// Verifies that `ReflectionClass::getReflectionConstant()` and
+/// `getReflectionConstants()` expose constant and enum-case reflector objects.
+#[test]
+fn test_reflection_class_returns_constant_reflector_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectConstMarker {
+    public function __construct(public string $label) {}
+    public function label(): string { return $this->label; }
+}
+class ReflectConstObjectTarget {
+    #[ReflectConstMarker("const")]
+    public const ANSWER = 42;
+}
+enum ReflectConstObjectEnum {
+    #[ReflectConstMarker("case")]
+    case Ready;
+    public const LEVEL = 7;
+}
+$ref = new ReflectionClass(ReflectConstObjectTarget::class);
+$single = $ref->getReflectionConstant("ANSWER");
+$all = $ref->getReflectionConstants();
+echo $single->getName() . ":";
+echo count($all) . ":" . $all[0]->getName() . ":";
+$singleAttrs = $all[0]->getAttributes();
+echo $singleAttrs[0]->newInstance()->label() . ":";
+echo $ref->getReflectionConstant("answer") ? "bad" : "missing";
+$enum = new ReflectionClass(ReflectConstObjectEnum::class);
+$enumAll = $enum->getReflectionConstants();
+$case = $enum->getReflectionConstant("Ready");
+$level = $enum->getReflectionConstant("LEVEL");
+echo ":" . count($enumAll) . ":" . $enumAll[0]->getName() . ":" . $enumAll[1]->getName();
+$caseAttrs = $enumAll[0]->getAttributes();
+$levelAttrs = $enumAll[1]->getAttributes();
+echo ":" . $caseAttrs[0]->newInstance()->label() . ":";
+echo count($levelAttrs);
+"#,
+    );
+    assert_eq!(out, "ANSWER:1:ANSWER:const:missing:2:Ready:LEVEL:case:0");
+}
+
 /// Verifies that `ReflectionClass` reports implemented interface and used trait names.
 #[test]
 fn test_reflection_class_reports_relation_names() {

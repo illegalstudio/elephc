@@ -231,6 +231,66 @@ pub(in crate::interpreter) fn eval_reflection_class_get_constants_result(
     Ok(Some(result))
 }
 
+/// Handles eval-backed `ReflectionClass::getReflectionConstant()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constant_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getReflectionConstant") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
+    let requested_name = eval_reflection_string_arg(args[0], values)?;
+    if !eval_reflection_constant_names(&reflected_name, context)
+        .iter()
+        .any(|name| name == &requested_name)
+    {
+        return values.bool_value(false).map(Some);
+    }
+    eval_reflection_class_constant_object_result(&reflected_name, &requested_name, context, values)
+        .map(Some)
+}
+
+/// Handles eval-backed `ReflectionClass::getReflectionConstants()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getReflectionConstants") {
+        return Ok(None);
+    }
+    if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let names = eval_reflection_constant_names(&reflected_name, context);
+    let mut result = values.array_new(names.len())?;
+    for (index, name) in names.iter().enumerate() {
+        let object =
+            eval_reflection_class_constant_object_result(&reflected_name, name, context, values)?;
+        let key = values.int(index as i64)?;
+        result = values.array_set(result, key, object)?;
+    }
+    Ok(Some(result))
+}
+
 /// Handles eval-backed `ReflectionClass::getMethod()` and `getProperty()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
     identity: u64,
@@ -260,15 +320,13 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
         let message_name = eval_reflection_class_like_attributes(&reflected_name, context)
             .map(|metadata| metadata.resolved_name)
             .unwrap_or_else(|| reflected_name.clone());
-        let message = eval_reflection_missing_member_message(
-            owner_kind,
-            &message_name,
-            &requested_name,
-        );
+        let message =
+            eval_reflection_missing_member_message(owner_kind, &message_name, &requested_name);
         return eval_throw_reflection_exception(&message, context, values);
     };
-    let member = eval_reflection_member_metadata(owner_kind, &reflected_name, &member_name, context)
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    let member =
+        eval_reflection_member_metadata(owner_kind, &reflected_name, &member_name, context)
+            .ok_or(EvalStatus::RuntimeFatal)?;
     let flags = eval_reflection_member_flags(
         member.visibility,
         member.is_static,
@@ -320,6 +378,33 @@ fn eval_reflection_constant_value(
     context.class_constant_cell(&declaring_class, constant.name())
 }
 
+/// Builds one eval-backed `ReflectionClassConstant` object for a visible constant name.
+fn eval_reflection_class_constant_object_result(
+    reflected_name: &str,
+    constant_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let attributes =
+        eval_reflection_class_constant_attributes(reflected_name, constant_name, context)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+    eval_reflection_owner_object(
+        EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
+        constant_name,
+        &attributes,
+        &[],
+        &[],
+        &[],
+        &[],
+        None,
+        &[],
+        0,
+        0,
+        context,
+        values,
+    )
+}
+
 /// Resolves the declared member spelling for eval `ReflectionClass` single-member lookups.
 fn eval_reflection_member_name(
     owner_kind: u64,
@@ -333,13 +418,11 @@ fn eval_reflection_member_name(
     } else {
         metadata.property_names
     };
-    names
-        .into_iter()
-        .find(|name| match owner_kind {
-            EVAL_REFLECTION_OWNER_METHOD => name.eq_ignore_ascii_case(requested_name),
-            EVAL_REFLECTION_OWNER_PROPERTY => name == requested_name,
-            _ => false,
-        })
+    names.into_iter().find(|name| match owner_kind {
+        EVAL_REFLECTION_OWNER_METHOD => name.eq_ignore_ascii_case(requested_name),
+        EVAL_REFLECTION_OWNER_PROPERTY => name == requested_name,
+        _ => false,
+    })
 }
 
 /// Builds PHP-compatible missing-member messages for eval ReflectionClass lookups.
@@ -349,9 +432,15 @@ fn eval_reflection_missing_member_message(
     requested_name: &str,
 ) -> String {
     if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-        format!("Method {}::{}() does not exist", reflected_name, requested_name)
+        format!(
+            "Method {}::{}() does not exist",
+            reflected_name, requested_name
+        )
     } else {
-        format!("Property {}::${} does not exist", reflected_name, requested_name)
+        format!(
+            "Property {}::${} does not exist",
+            reflected_name, requested_name
+        )
     }
 }
 
