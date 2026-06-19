@@ -137,6 +137,7 @@ mod mixed_write_stdout;
 mod refcell_alloc;
 mod refcell_free_deep;
 mod refcell_load;
+mod refcell_store;
 mod refcount;
 mod shuffle;
 mod sort_int;
@@ -291,6 +292,8 @@ pub use refcell_free_deep::emit_refcell_free_deep;
 /// Emit reference-cell deep-free helper.
 pub use refcell_load::emit_refcell_load;
 /// Emit reference-cell dereference helper.
+pub use refcell_store::emit_refcell_store;
+/// Emit reference-cell write-through helper.
 pub use hash_count::emit_hash_count;
 /// Emit hash count helper.
 pub use hash_append::emit_hash_append;
