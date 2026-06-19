@@ -153,6 +153,9 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         StmtKind::RefAssign { target, source } => {
             assignments::emit_ref_assign_stmt(target, source, emitter, ctx);
         }
+        // Frozen legacy backend: reference-into-element assignment is an EIR-only feature and is
+        // gated in the type checker until the REFCELL runtime lands, so this is never reached here.
+        StmtKind::RefAssignTarget { .. } => {}
         StmtKind::TypedAssign {
             type_expr,
             name,

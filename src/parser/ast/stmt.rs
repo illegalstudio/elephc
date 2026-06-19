@@ -82,6 +82,10 @@ pub enum StmtKind {
         target: String,
         source: String,
     },
+    RefAssignTarget {
+        target: Expr,
+        source: String,
+    },
     If {
         condition: Expr,
         then_body: Vec<Stmt>,

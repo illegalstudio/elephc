@@ -17,6 +17,48 @@ use crate::span::Span;
 use super::super::expect_semicolon;
 use super::compound::{assignment_operator, assignment_value, AssignmentOperator};
 
+/// Detects and parses a reference assignment into a complex lvalue (`$arr[$k] =& $src;`,
+/// `$obj->prop =& $src;`) once the `=` has been consumed and `*pos` sits at what follows it.
+///
+/// Returns `Ok(Some(RefAssignTarget))` when the next token is `&` followed by a variable (the only
+/// supported source form; ref-to-expression-result is rejected). Returns `Ok(None)` when this is
+/// not a reference assignment, so the caller falls back to ordinary value parsing. Only plain `=`
+/// (not compound operators) and non-append targets can carry a reference.
+fn try_parse_complex_ref_assign(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    op: &AssignmentOperator,
+    is_append: bool,
+    lhs_expr: &Expr,
+    span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    if *op != AssignmentOperator::Assign
+        || is_append
+        || !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        return Ok(None);
+    }
+    *pos += 1;
+    let source = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Variable(source)) => source.clone(),
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Reference assignment source must be a variable",
+            ));
+        }
+    };
+    *pos += 1;
+    expect_semicolon(tokens, pos)?;
+    Ok(Some(Stmt::new(
+        StmtKind::RefAssignTarget {
+            target: lhs_expr.clone(),
+            source,
+        },
+        span,
+    )))
+}
+
 /// Parses a postfix assignment where the target involves property access, array access,
 /// or other complex expressions. Detects `+=` append style via `[]` in the target.
 /// Returns the lowered `StmtKind` directly for simple targets, or synthesizes a
@@ -63,6 +105,12 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     *pos = assign_pos + 1;
+    // `$arr[$k] =& $src;` / `$obj->prop =& $src;` — reference assignment into a complex lvalue.
+    // The `&` after `=` cannot be parsed as a value expression, so intercept it here and build a
+    // dedicated `RefAssignTarget` node (the bare-variable form `$x =& $y` is handled in compound.rs).
+    if let Some(stmt) = try_parse_complex_ref_assign(tokens, pos, &op, is_append, &lhs_expr, span)? {
+        return Ok(Some(stmt));
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {

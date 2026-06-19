@@ -363,6 +363,7 @@ fn stmt_refs_pdo(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_pdo(target) || expr_refs_pdo(value)
         }
+        StmtKind::RefAssignTarget { target, .. } => expr_refs_pdo(target),
         StmtKind::ArrayPush { value, .. } => expr_refs_pdo(value),
         StmtKind::TypedAssign {
             type_expr, value, ..

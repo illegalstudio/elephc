@@ -55,6 +55,42 @@ fn test_parse_reference_assignment() {
     }
 }
 
+/// Verifies that a reference assignment into an array element parses as a `RefAssignTarget`
+/// whose `target` is the array-access lvalue and whose `source` is the aliased variable.
+#[test]
+fn test_parse_reference_assignment_into_array_element() {
+    let stmts = parse_source("<?php $a[\"x\"] =& $v;");
+    match &stmts[0].kind {
+        StmtKind::RefAssignTarget { target, source } => {
+            assert!(
+                matches!(target.kind, ExprKind::ArrayAccess { .. }),
+                "expected ArrayAccess target, got {:?}",
+                target.kind
+            );
+            assert_eq!(source, "v");
+        }
+        other => panic!("expected RefAssignTarget, got {:?}", other),
+    }
+}
+
+/// Verifies that a reference assignment into an object property parses as a `RefAssignTarget`
+/// whose `target` is the property-access lvalue.
+#[test]
+fn test_parse_reference_assignment_into_property() {
+    let stmts = parse_source("<?php $o->p =& $v;");
+    match &stmts[0].kind {
+        StmtKind::RefAssignTarget { target, source } => {
+            assert!(
+                matches!(target.kind, ExprKind::PropertyAccess { .. }),
+                "expected PropertyAccess target, got {:?}",
+                target.kind
+            );
+            assert_eq!(source, "v");
+        }
+        other => panic!("expected RefAssignTarget, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php $items[0] += 3;` parses to an `ArrayAssign` (not a generic `Assign`).
 /// Compound assignment on an array element must produce the correct AST shape.
 #[test]

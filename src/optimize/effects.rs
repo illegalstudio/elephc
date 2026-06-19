@@ -56,6 +56,9 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             expr_effect(value).with_side_effects()
         }
         StmtKind::RefAssign { .. } => Effect::PURE.with_side_effects(),
+        StmtKind::RefAssignTarget { target, .. } => {
+            expr_effect(target).with_side_effects().with_may_throw()
+        }
         StmtKind::ArrayPush { value, .. } | StmtKind::StaticPropertyArrayPush { value, .. } => {
             expr_effect(value).with_side_effects().with_may_throw()
         }

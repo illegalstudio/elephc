@@ -92,6 +92,13 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             Stmt::new(StmtKind::RefAssign { target, source }, span),
             HashMap::new(),
         ),
+        StmtKind::RefAssignTarget { target, source } => {
+            let target = propagate_expr(target, &env);
+            (
+                Stmt::new(StmtKind::RefAssignTarget { target, source }, span),
+                HashMap::new(),
+            )
+        }
         StmtKind::TypedAssign {
             type_expr,
             name,

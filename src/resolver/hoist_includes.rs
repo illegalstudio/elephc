@@ -153,6 +153,10 @@ fn hoist_stmt_kind(kind: StmtKind, span: Span, ctx: &mut HoistCtx) -> Result<Stm
             target: rewrite_expr_includes(target, true, ctx)?,
             value: rewrite_expr_includes(value, true, ctx)?,
         },
+        StmtKind::RefAssignTarget { target, source } => StmtKind::RefAssignTarget {
+            target: rewrite_expr_includes(target, true, ctx)?,
+            source,
+        },
         StmtKind::ArrayPush { array, value } => StmtKind::ArrayPush {
             array,
             value: rewrite_expr_includes(value, true, ctx)?,

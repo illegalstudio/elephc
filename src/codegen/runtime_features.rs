@@ -217,6 +217,7 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_regex_call(target) || expr_has_regex_call(value)
         }
+        StmtKind::RefAssignTarget { target, .. } => expr_has_regex_call(target),
         StmtKind::If {
             condition,
             then_body,
@@ -528,6 +529,7 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_needs_descriptor_invoker(target) || expr_needs_descriptor_invoker(value)
         }
+        StmtKind::RefAssignTarget { target, .. } => expr_needs_descriptor_invoker(target),
         StmtKind::If {
             condition,
             then_body,

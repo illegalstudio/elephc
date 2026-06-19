@@ -37,6 +37,13 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
         StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),
         StmtKind::RefAssign { target, source } => lower_ref_assign(ctx, target, source, stmt.span),
+        // Gated in the type checker until the REFCELL runtime lands (M2+); never reached in M0.
+        StmtKind::RefAssignTarget { .. } => {
+            unreachable!(
+                "RefAssignTarget reached EIR lowering but the type checker should have rejected \
+                 reference-into-element assignment until the REFCELL runtime is implemented"
+            )
+        }
         StmtKind::If {
             condition,
             then_body,

@@ -194,6 +194,9 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
             visit_expr(target, st);
             visit_expr(value, st);
         }
+        StmtKind::RefAssignTarget { target, .. } => {
+            visit_expr(target, st);
+        }
         StmtKind::ArrayPush { value, .. } => visit_expr(value, st),
         StmtKind::Return(opt) => {
             if let Some(e) = opt {

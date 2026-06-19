@@ -61,6 +61,13 @@ impl Checker {
                 self.infer_type_with_assignment_effects(expr, env)?;
                 Ok(())
             }
+            // M0 gate: the parser accepts `$arr[$k] =& $src;` / `$obj->prop =& $src;` (so the rest of
+            // the file no longer cascades), but the REFCELL runtime that makes the element a true
+            // shared reference is not wired yet. Reject with one clean diagnostic until that lands.
+            StmtKind::RefAssignTarget { .. } => Err(CompileError::new(
+                stmt.span,
+                "Reference assignment into an array element or object property is not yet supported",
+            )),
             StmtKind::Assign { .. }
             | StmtKind::RefAssign { .. }
             | StmtKind::ArrayAssign { .. }

@@ -28,6 +28,25 @@ fn test_error_reference_assignment_requires_variable_source() {
     );
 }
 
+/// Tests that a reference assignment into an array element is gated with a clean diagnostic
+/// (the parser accepts the syntax; the REFCELL runtime is not wired yet).
+#[test]
+fn test_error_reference_assignment_into_array_element_is_gated() {
+    expect_error(
+        "<?php $v = 1; $a = []; $a[\"x\"] =& $v;",
+        "Reference assignment into an array element or object property is not yet supported",
+    );
+}
+
+/// Tests that a reference assignment into an object property is gated with the same diagnostic.
+#[test]
+fn test_error_reference_assignment_into_property_is_gated() {
+    expect_error(
+        "<?php $v = 1; $o = new stdClass(); $o->p =& $v;",
+        "Reference assignment into an array element or object property is not yet supported",
+    );
+}
+
 /// Tests that two `use` statements with the same alias name produce a
 /// "Duplicate import alias" error.
 #[test]
