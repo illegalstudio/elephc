@@ -16,6 +16,10 @@ use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{AttrArgEntry, AttrArgValue, AttrKey, ClassInfo};
 
+/// Borrowed attribute-name/argument metadata from a reflection-visible source.
+pub(crate) type AttributeMetadataSource<'a> =
+    (&'a [String], &'a [Option<Vec<AttrArgEntry>>]);
+
 #[derive(Clone)]
 /// Factory record for compile-time reflection attribute metadata.
 /// `id` is assigned sequentially and must match across all compilation units
@@ -52,6 +56,15 @@ pub(crate) fn resolve_class_name<'a>(
 pub(crate) fn collect_attribute_factories(
     classes: &HashMap<String, ClassInfo>,
 ) -> Vec<ReflectionAttributeFactory> {
+    collect_attribute_factories_with_extra(classes, &[])
+}
+
+/// Scans class metadata plus additional attribute metadata sources and collects
+/// all distinct attribute name/argument pairs into deterministic factory records.
+pub(crate) fn collect_attribute_factories_with_extra(
+    classes: &HashMap<String, ClassInfo>,
+    extra_attrs: &[AttributeMetadataSource<'_>],
+) -> Vec<ReflectionAttributeFactory> {
     let mut unique = BTreeMap::new();
     for class_info in classes.values() {
         collect_from_attribute_lists(
@@ -76,6 +89,9 @@ pub(crate) fn collect_attribute_factories(
             }
         }
     }
+    for (names, args) in extra_attrs {
+        collect_from_attribute_lists(classes, names, args, &mut unique);
+    }
 
     unique
         .into_iter()
@@ -99,13 +115,24 @@ pub(crate) fn attribute_factory_id(
     attr_name: &str,
     attr_args: &[AttrArgEntry],
 ) -> i64 {
+    attribute_factory_id_with_extra(classes, &[], attr_name, attr_args)
+}
+
+/// Returns the factory id for an attribute, considering classes plus extra
+/// metadata sources such as top-level function attributes retained by EIR.
+pub(crate) fn attribute_factory_id_with_extra(
+    classes: &HashMap<String, ClassInfo>,
+    extra_attrs: &[AttributeMetadataSource<'_>],
+    attr_name: &str,
+    attr_args: &[AttrArgEntry],
+) -> i64 {
     // Non-class attributes are registered under their raw name (see
     // `collect_from_attribute_lists`), so fall back to it when the name does
     // not resolve to a real class.
     let lookup_name = resolve_class_name(classes, attr_name)
         .map(|resolved| resolved.to_string())
         .unwrap_or_else(|| attr_name.to_string());
-    collect_attribute_factories(classes)
+    collect_attribute_factories_with_extra(classes, extra_attrs)
         .into_iter()
         .find(|factory| factory.class_name == lookup_name && factory.args == attr_args)
         .map(|factory| factory.id)
@@ -114,8 +141,17 @@ pub(crate) fn attribute_factory_id(
 
 /// Builds the synthetic dispatch body for `ReflectionAttribute::newInstance()`.
 pub(crate) fn build_attribute_new_instance_body(classes: &HashMap<String, ClassInfo>) -> Vec<Stmt> {
+    build_attribute_new_instance_body_with_extra(classes, &[])
+}
+
+/// Builds the synthetic `ReflectionAttribute::newInstance()` body using class
+/// metadata plus additional attribute metadata sources.
+pub(crate) fn build_attribute_new_instance_body_with_extra(
+    classes: &HashMap<String, ClassInfo>,
+    extra_attrs: &[AttributeMetadataSource<'_>],
+) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
-    let factories = collect_attribute_factories(classes);
+    let factories = collect_attribute_factories_with_extra(classes, extra_attrs);
     let mut body = Vec::new();
     for factory in factories {
         // Only resolvable attribute classes can be instantiated. Non-class
@@ -265,8 +301,17 @@ fn attr_key_expr(key: &AttrKey) -> Expr {
 pub(crate) fn build_attribute_get_arguments_body(
     classes: &HashMap<String, ClassInfo>,
 ) -> Vec<Stmt> {
+    build_attribute_get_arguments_body_with_extra(classes, &[])
+}
+
+/// Builds the synthetic `ReflectionAttribute::getArguments()` body using class
+/// metadata plus additional attribute metadata sources.
+pub(crate) fn build_attribute_get_arguments_body_with_extra(
+    classes: &HashMap<String, ClassInfo>,
+    extra_attrs: &[AttributeMetadataSource<'_>],
+) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
-    let factories = collect_attribute_factories(classes);
+    let factories = collect_attribute_factories_with_extra(classes, extra_attrs);
     let mut body = Vec::new();
     for factory in factories {
         let condition = factory_condition(factory.id);

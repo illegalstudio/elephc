@@ -18,7 +18,8 @@ use super::super::validation::{
     build_method_sig, matches_global_builtin_attribute, validate_override_signature,
     visibility_rank,
 };
-use super::state::{collect_attribute_args, collect_attribute_names, ClassBuildState};
+use super::state::ClassBuildState;
+use super::{collect_attribute_args, collect_attribute_names};
 
 /// Validates and registers all methods of a flattened class into the build state.
 /// Enforces abstract/final modifiers, method body presence, and delegates to

@@ -17,8 +17,8 @@ use crate::parser::ast::Program;
 use crate::span::Span;
 
 use super::{
-    checker, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
-    PackedClassInfo, PhpType, TypeEnv,
+    checker, AttrArgEntry, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
+    InterfaceInfo, PackedClassInfo, PhpType, TypeEnv,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -59,6 +59,8 @@ pub enum ThrowAccessKind {
 pub struct CheckResult {
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
+    pub function_attribute_names: HashMap<String, Vec<String>>,
+    pub function_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
     #[allow(dead_code)]
     pub callable_return_sigs: HashMap<String, FunctionSig>,

@@ -18,9 +18,14 @@ use crate::ir_lower::context::{
     StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
-use crate::parser::ast::{ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{
+    AttributeGroup, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr,
+};
 use crate::span::Span;
-use crate::types::{CheckResult, ClassInfo, FunctionSig, PackedClassInfo, PhpType, TypeEnv};
+use crate::types::{
+    collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, FunctionSig,
+    PackedClassInfo, PhpType, TypeEnv,
+};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
 type AstParams = [(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)];
@@ -176,6 +181,7 @@ pub(crate) fn lower_user_function(
     name: &str,
     params: &AstParams,
     return_type: Option<&TypeExpr>,
+    attributes: &[AttributeGroup],
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
@@ -205,6 +211,16 @@ pub(crate) fn lower_user_function(
     function.flags.by_ref_return = signature.by_ref_return;
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
+    function.attribute_names = check_result
+        .function_attribute_names
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| collect_attribute_names(attributes));
+    function.attribute_args = check_result
+        .function_attribute_args
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| collect_attribute_args(attributes));
     attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
     let closures = lower_body_into_function(
         &mut function,

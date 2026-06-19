@@ -55,6 +55,7 @@ pub use schema::{
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
     PackedFieldInfo, PropertyHookContract,
 };
+pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };

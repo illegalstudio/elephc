@@ -180,9 +180,7 @@ fn emit_reflection_owner_object(
             )?;
         }
     }
-    if class_name != "ReflectionFunction" {
-        emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
-    }
+    emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
     if class_name == "ReflectionClass" {
         emit_reflection_bool_property(ctx, "__is_final", metadata.is_final)?;
         emit_reflection_bool_property(ctx, "__is_abstract", metadata.is_abstract)?;
@@ -778,6 +776,8 @@ fn reflection_function_metadata(
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(function.name.trim_start_matches('\\').to_string());
+    metadata.attr_names = function.attribute_names.clone();
+    metadata.attr_args = function.attribute_args.clone();
     metadata.parameter_members = reflection_parameter_members(signature);
     metadata.required_parameter_count = reflection_required_parameter_count(signature);
     Ok(metadata)

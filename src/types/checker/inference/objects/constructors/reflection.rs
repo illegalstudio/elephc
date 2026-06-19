@@ -1,6 +1,6 @@
 //! Purpose:
 //! Validates builtin Reflection owner constructor metadata for object inference.
-//! Keeps ReflectionClass/Method/Property/Constant/EnumCase attribute checks out
+//! Keeps ReflectionClass/Function/Method/Property/Constant/EnumCase attribute checks out
 //! of the general constructor inference driver.
 //!
 //! Called from:
@@ -14,10 +14,45 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::Expr;
 use crate::types::checker::Checker;
+use crate::types::{collect_attribute_args, collect_attribute_names};
 
 type ReflectionAttributeArgs = Vec<Option<Vec<crate::types::AttrArgEntry>>>;
 
 impl Checker {
+    /// Validates function-level attributes for `ReflectionFunction`.
+    ///
+    /// The reflected function must be a statically declared user function; when
+    /// it has attributes, their captured argument metadata must be materializable
+    /// by `ReflectionAttribute::getArguments()`.
+    pub(super) fn validate_reflection_function_attrs(
+        &self,
+        function_name: &str,
+        expr: &Expr,
+    ) -> Result<(), CompileError> {
+        let Some(canonical) =
+            self.canonical_function_name_folded(function_name.trim_start_matches('\\'))
+        else {
+            return Err(CompileError::new(
+                expr.span,
+                &format!(
+                    "ReflectionFunction::__construct(): Function {}() does not exist",
+                    function_name
+                ),
+            ));
+        };
+        let Some(decl) = self.fn_decls.get(&canonical) else {
+            return Ok(());
+        };
+        let names = collect_attribute_names(&decl.attributes);
+        let args = collect_attribute_args(&decl.attributes);
+        self.validate_reflection_attribute_metadata(
+            &names,
+            &args,
+            expr,
+            "ReflectionFunction::getAttributes(): function has attribute argument metadata that is not supported yet",
+        )
+    }
+
     /// Validates class-level attributes for `ReflectionClass`.
     ///
     /// Returns `Ok` when the class exists and its captured attribute argument

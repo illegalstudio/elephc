@@ -585,6 +585,7 @@ fn lower_function_declarations(
                 name,
                 params,
                 return_type.as_ref(),
+                &stmt.attributes,
                 body,
                 module,
                 check_result,
@@ -821,15 +822,21 @@ fn lower_builtin_reflection_class_methods(
         let generated_body;
         let method_key = crate::names::php_symbol_key(&method.name);
         let body = if class_name == "ReflectionAttribute" && method_key == "newinstance" {
-            generated_body =
-                crate::codegen::reflection::build_attribute_new_instance_body(&check_result.classes);
+            let function_attrs = function_attribute_sources(module);
+            generated_body = crate::codegen::reflection::build_attribute_new_instance_body_with_extra(
+                &check_result.classes,
+                &function_attrs,
+            );
             generated_body.as_slice()
         } else if class_name == "ReflectionAttribute" && method_key == "getarguments" {
             // Materialize captured attribute arguments through the normal array
             // lowering (named arguments and associative arrays included) rather
             // than a bespoke codegen path.
-            generated_body =
-                crate::codegen::reflection::build_attribute_get_arguments_body(&check_result.classes);
+            let function_attrs = function_attribute_sources(module);
+            generated_body = crate::codegen::reflection::build_attribute_get_arguments_body_with_extra(
+                &check_result.classes,
+                &function_attrs,
+            );
             generated_body.as_slice()
         } else {
             &method.body
@@ -850,6 +857,23 @@ fn lower_builtin_reflection_class_methods(
     for method in module.class_methods.iter_mut().skip(before) {
         method.flags.is_synthetic = true;
     }
+}
+
+/// Returns reflection-visible top-level function attribute metadata sources.
+fn function_attribute_sources(
+    module: &Module,
+) -> Vec<crate::codegen::reflection::AttributeMetadataSource<'_>> {
+    module
+        .functions
+        .iter()
+        .filter(|function| !function.attribute_names.is_empty())
+        .map(|function| {
+            (
+                function.attribute_names.as_slice(),
+                function.attribute_args.as_slice(),
+            )
+        })
+        .collect()
 }
 
 /// Lowers the small builtin SPL method slice currently consumed by the EIR backend.

@@ -120,6 +120,8 @@ fn dummy_check_result() -> CheckResult {
     CheckResult {
         global_env: HashMap::new(),
         functions,
+        function_attribute_names: HashMap::new(),
+        function_attribute_args: HashMap::new(),
         callable_param_sigs: HashMap::new(),
         callable_return_sigs: HashMap::new(),
         callable_array_return_sigs: HashMap::new(),

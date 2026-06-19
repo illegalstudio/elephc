@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{ClassMethod, Expr, Visibility};
+use crate::parser::ast::{AttributeGroup, ClassMethod, Expr, ExprKind, StaticReceiver, Visibility};
 use crate::span::Span;
 
 use super::{FunctionSig, PhpType};
@@ -63,6 +63,120 @@ pub struct AttrArgEntry {
 pub enum AttrKey {
     Int(i64),
     Str(String),
+}
+
+/// Collects attribute names from attribute groups while preserving source order.
+///
+/// Name resolution has already canonicalized fully-qualified names by the time
+/// checker/codegen metadata uses this helper, so returned names match
+/// `ReflectionAttribute::getName()` shape without synthetic leading slashes.
+pub(crate) fn collect_attribute_names(groups: &[AttributeGroup]) -> Vec<String> {
+    let mut out = Vec::new();
+    for group in groups {
+        for attr in &group.attributes {
+            out.push(attr.name.as_str().to_string());
+        }
+    }
+    out
+}
+
+/// Collects materializable positional, named, and array attribute arguments in source order.
+///
+/// Legal PHP attribute expressions outside the current literal subset are
+/// represented as `None` so compilation can proceed until a reflection query
+/// needs the missing payload and reports the unsupported metadata.
+pub(crate) fn collect_attribute_args(
+    groups: &[AttributeGroup],
+) -> Vec<Option<Vec<AttrArgEntry>>> {
+    let mut out = Vec::new();
+    for group in groups {
+        for attr in &group.attributes {
+            let mut entries = Vec::new();
+            let mut supported = true;
+            for arg_expr in &attr.args {
+                let (key, value_expr) = match &arg_expr.kind {
+                    ExprKind::NamedArg { name, value } => {
+                        (Some(AttrKey::Str(name.clone())), value.as_ref())
+                    }
+                    _ => (None, arg_expr),
+                };
+                match fold_attr_value(value_expr) {
+                    Some(value) => entries.push(AttrArgEntry { key, value }),
+                    None => {
+                        supported = false;
+                        break;
+                    }
+                }
+            }
+            out.push(if supported { Some(entries) } else { None });
+        }
+    }
+    out
+}
+
+/// Folds one attribute argument expression to retained reflection metadata.
+fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
+    match &expr.kind {
+        ExprKind::StringLiteral(value) => Some(AttrArgValue::Str(value.clone())),
+        ExprKind::IntLiteral(value) => Some(AttrArgValue::Int(*value)),
+        ExprKind::FloatLiteral(value) => Some(AttrArgValue::Float(value.to_bits())),
+        ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
+        ExprKind::Null => Some(AttrArgValue::Null),
+        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string())),
+        ExprKind::ScopedConstantAccess { receiver, name } => scoped_receiver_type_name(receiver)
+            .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone())),
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Named(name),
+        } => Some(AttrArgValue::Str(name.as_str().to_string())),
+        ExprKind::ClassConstant { .. } => None,
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(n) => Some(AttrArgValue::Int(n.wrapping_neg())),
+            ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-*n).to_bits())),
+            _ => None,
+        },
+        ExprKind::ArrayLiteral(elements) => {
+            let mut entries = Vec::with_capacity(elements.len());
+            for element in elements {
+                entries.push(AttrArgEntry {
+                    key: None,
+                    value: fold_attr_value(element)?,
+                });
+            }
+            Some(AttrArgValue::Array(entries))
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            let mut entries = Vec::with_capacity(pairs.len());
+            for (key_expr, value_expr) in pairs {
+                entries.push(AttrArgEntry {
+                    key: Some(fold_attr_key(key_expr)?),
+                    value: fold_attr_value(value_expr)?,
+                });
+            }
+            Some(AttrArgValue::Array(entries))
+        }
+        _ => None,
+    }
+}
+
+/// Folds one supported associative attribute array key.
+fn fold_attr_key(expr: &Expr) -> Option<AttrKey> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(AttrKey::Int(*value)),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(n) => Some(AttrKey::Int(n.wrapping_neg())),
+            _ => None,
+        },
+        ExprKind::StringLiteral(value) => Some(AttrKey::Str(value.clone())),
+        _ => None,
+    }
+}
+
+/// Returns the canonical named receiver for class-constant attribute arguments.
+fn scoped_receiver_type_name(receiver: &StaticReceiver) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
+    }
 }
 
 /// Property hook contract for `get`/`set` hook declarations in classes and interfaces.

@@ -318,7 +318,7 @@ impl Checker {
             .reflection_function_signature(&function_name)?
             .is_some()
         {
-            return Ok(());
+            return self.validate_reflection_function_attrs(&function_name, expr);
         }
         Err(CompileError::new(
             expr.span,

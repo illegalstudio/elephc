@@ -40,8 +40,9 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 use crate::types::{
-    CheckResult, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
-    InterfaceInfo, PackedClassInfo, PhpType, ThrowAccessInfo, TypeEnv,
+    collect_attribute_args, collect_attribute_names, CheckResult, ClassInfo, EnumInfo,
+    ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
+    ThrowAccessInfo, TypeEnv,
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
@@ -217,11 +218,23 @@ pub fn check_types(
 
     let mut warnings = crate::types::warnings::collect_warnings(program);
     warnings.extend(checker.warnings);
+    let function_attribute_names = checker
+        .fn_decls
+        .iter()
+        .map(|(name, decl)| (name.clone(), collect_attribute_names(&decl.attributes)))
+        .collect();
+    let function_attribute_args = checker
+        .fn_decls
+        .iter()
+        .map(|(name, decl)| (name.clone(), collect_attribute_args(&decl.attributes)))
+        .collect();
     dedupe_warnings(&mut warnings);
 
     Ok(CheckResult {
         global_env,
         functions: checker.functions,
+        function_attribute_names,
+        function_attribute_args,
         callable_param_sigs: checker.callable_param_sigs,
         callable_return_sigs: checker.callable_return_sigs,
         callable_array_return_sigs: checker.callable_array_return_sigs,
