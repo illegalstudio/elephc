@@ -1426,6 +1426,12 @@ fn test_reflection_method_get_parameters_returns_parameter_metadata() {
 class ReflectParamTarget {
     public function run(int $id, &$name, string $mode = "x", ...$rest) {}
 }
+interface ReflectParamInterface {
+    public function iface(int $id, $name = "x");
+}
+trait ReflectParamTrait {
+    private static function traitRun(int $id, $name = "x", string ...$rest) {}
+}
 $method = new ReflectionMethod(ReflectParamTarget::class, "run");
 echo $method->getNumberOfParameters() . "/";
 echo $method->getNumberOfRequiredParameters() . ":";
@@ -1438,6 +1444,22 @@ foreach ($params as $param) {
     echo ($param->isVariadic() ? "V" : "v");
     echo "|";
 }
+echo "\n";
+$iface = new ReflectionMethod(ReflectParamInterface::class, "iface");
+echo $iface->getNumberOfParameters() . "/";
+echo $iface->getNumberOfRequiredParameters() . ":";
+$ifaceParams = $iface->getParameters();
+echo $ifaceParams[0]->getName() . ($ifaceParams[0]->hasType() ? "T" : "t");
+echo ":" . $ifaceParams[1]->getName() . ($ifaceParams[1]->isOptional() ? "O" : "R");
+echo "\n";
+$trait = new ReflectionMethod(ReflectParamTrait::class, "traitRun");
+echo $trait->getNumberOfParameters() . "/";
+echo $trait->getNumberOfRequiredParameters() . ":";
+echo ($trait->isStatic() ? "S" : "s");
+echo ($trait->isPrivate() ? "R" : "r");
+$traitParams = $trait->getParameters();
+echo ":" . $traitParams[2]->getName() . ($traitParams[2]->isVariadic() ? "V" : "v");
+echo ($traitParams[2]->hasType() ? "T" : "t");
 "##,
     );
     assert!(
@@ -1447,7 +1469,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "4/2:id#0TRbv|name#1tRBv|mode#2TObv|rest#3tObV|"
+        "4/2:id#0TRbv|name#1tRBv|mode#2TObv|rest#3tObV|\n2/1:idT:nameO\n3/1:SR:restVT"
     );
 }
 
@@ -1460,6 +1482,9 @@ fn test_reflection_class_get_methods_preserves_parameter_metadata() {
 class ReflectListedParamTarget {
     public function listed(int $first, $second = 2) {}
 }
+trait ReflectListedParamTrait {
+    protected static function traitListed(int $first, $second = 2, string ...$rest) {}
+}
 $methods = (new ReflectionClass(ReflectListedParamTarget::class))->getMethods();
 foreach ($methods as $method) {
     if ($method->getName() === "listed") {
@@ -1471,6 +1496,24 @@ foreach ($methods as $method) {
         echo $params[1]->getName() . ($params[1]->isOptional() ? "O" : "R");
     }
 }
+echo "|";
+$traitMethods = (new ReflectionClass(ReflectListedParamTrait::class))->getMethods();
+foreach ($traitMethods as $method) {
+    if ($method->getName() === "traitlisted") {
+        $params = $method->getParameters();
+        echo $method->getNumberOfParameters() . "/";
+        echo $method->getNumberOfRequiredParameters() . ":";
+        echo ($method->isStatic() ? "S" : "s");
+        echo ($method->isProtected() ? "P" : "p");
+        echo ":";
+        echo $params[0]->getName() . ($params[0]->hasType() ? "T" : "t");
+        echo ":";
+        echo $params[1]->getName() . ($params[1]->isOptional() ? "O" : "R");
+        echo ":";
+        echo $params[2]->getName() . ($params[2]->isVariadic() ? "V" : "v");
+        echo ($params[2]->hasType() ? "T" : "t");
+    }
+}
 "##,
     );
     assert!(
@@ -1478,7 +1521,10 @@ foreach ($methods as $method) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2/1:firstT:secondO");
+    assert_eq!(
+        out.stdout,
+        "2/1:firstT:secondO|3/1:SP:firstT:secondO:restVT"
+    );
 }
 
 /// Verifies that `ReflectionClass::getConstructor()` returns a ReflectionMethod
@@ -1549,7 +1595,7 @@ if ($trait instanceof ReflectionMethod) {
     );
     assert_eq!(
         out,
-        "__construct/2/1:__construct/2/1:null:__construct/1/1:__construct/0/0"
+        "__construct/2/1:__construct/2/1:null:__construct/1/1:__construct/3/1"
     );
 }
 

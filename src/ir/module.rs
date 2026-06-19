@@ -15,6 +15,7 @@ use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::ir::function::{Function, FunctionId};
 use crate::ir::types::IrType;
+use crate::parser::ast::Visibility;
 use crate::types::{
     ClassInfo, EnumInfo, ExternClassInfo, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
 };
@@ -33,6 +34,16 @@ impl DataId {
     pub fn as_raw(self) -> u32 {
         self.0
     }
+}
+
+/// Method metadata retained for standalone trait reflection.
+#[derive(Debug, Clone)]
+pub struct TraitMethodInfo {
+    pub signature: FunctionSig,
+    pub visibility: Visibility,
+    pub is_static: bool,
+    pub is_final: bool,
+    pub is_abstract: bool,
 }
 
 /// Complete EIR module for one compile target.
@@ -59,6 +70,7 @@ pub struct Module {
     pub declared_trait_names: Vec<String>,
     pub declared_trait_uses: HashMap<String, Vec<String>>,
     pub declared_trait_method_names: HashMap<String, Vec<String>>,
+    pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
     pub declared_trait_property_names: HashMap<String, Vec<String>>,
     pub class_infos: HashMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
@@ -94,6 +106,7 @@ impl Module {
             declared_trait_names: Vec::new(),
             declared_trait_uses: HashMap::new(),
             declared_trait_method_names: HashMap::new(),
+            declared_trait_methods: HashMap::new(),
             declared_trait_property_names: HashMap::new(),
             class_infos: HashMap::new(),
             interface_infos: HashMap::new(),

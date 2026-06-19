@@ -14,7 +14,7 @@
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::parser::ast::Visibility;
 use crate::types::{AttrArgValue, FunctionSig, InterfaceInfo, PhpType};
@@ -313,16 +313,38 @@ fn reflection_class_metadata(
             .get(trait_name)
             .cloned()
             .unwrap_or_default();
-        return Ok(class_like_reflection_metadata(
-            trait_name,
-            Vec::new(),
+        let method_names = reflection_trait_method_names(ctx, trait_name);
+        let property_names = reflection_trait_property_names(ctx, trait_name);
+        let method_members = ctx
+            .module
+            .declared_trait_methods
+            .get(trait_name)
+            .map(|methods| reflection_trait_method_members(methods, &method_names))
+            .unwrap_or_else(|| default_method_members(&method_names, false, true));
+        let property_members = default_property_members(&property_names, false);
+        let constructor_member = reflection_constructor_member(&method_members);
+        return Ok(ReflectionOwnerMetadata {
+            reflected_name: Some(trait_name.to_string()),
+            attr_names: Vec::new(),
+            attr_args: Vec::new(),
+            interface_names: Vec::new(),
             trait_names,
-            reflection_trait_method_names(ctx, trait_name),
-            reflection_trait_property_names(ctx, trait_name),
-            false,
-            true,
-            false,
-        ));
+            method_names,
+            property_names,
+            method_members,
+            property_members,
+            constructor_member,
+            parameter_members: Vec::new(),
+            required_parameter_count: 0,
+            is_final: false,
+            is_abstract: false,
+            is_interface: false,
+            is_trait: true,
+            is_enum: false,
+            is_readonly: false,
+            modifiers: 0,
+            member_flags: ReflectionMemberFlags::default(),
+        });
     }
     Ok(empty_reflection_metadata())
 }
@@ -341,33 +363,55 @@ fn reflection_method_metadata(
     let reflected_class = const_string_or_class_operand(ctx, class_operand, "ReflectionMethod")?;
     let method_name = const_required_string_operand(ctx, method_operand, "ReflectionMethod")?;
     let method_key = php_symbol_key(&method_name);
-    Ok(resolve_reflection_class(ctx, &reflected_class)
-        .and_then(|(_, info)| {
-            let member = reflection_class_method_member(info, &method_key)?;
-            Some(ReflectionOwnerMetadata {
-                reflected_name: Some(method_name.clone()),
-                attr_names: member.attr_names,
-                attr_args: member.attr_args,
-                interface_names: Vec::new(),
-                trait_names: Vec::new(),
-                method_names: Vec::new(),
-                property_names: Vec::new(),
-                method_members: Vec::new(),
-                property_members: Vec::new(),
-                constructor_member: None,
-                parameter_members: member.parameters,
-                required_parameter_count: member.required_parameter_count,
-                is_final: false,
-                is_abstract: false,
-                is_interface: false,
-                is_trait: false,
-                is_enum: false,
-                is_readonly: false,
-                modifiers: 0,
-                member_flags: member.flags,
-            })
-        })
-        .unwrap_or_else(empty_reflection_metadata))
+    if let Some((_, info)) = resolve_reflection_class(ctx, &reflected_class) {
+        if let Some(member) = reflection_class_method_member(info, &method_key) {
+            return Ok(reflection_method_owner_metadata(&method_name, member));
+        }
+    }
+    if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
+        if let Some(info) = ctx.module.interface_infos.get(interface_name) {
+            if let Some(member) = reflection_interface_method_member(info, &method_key) {
+                return Ok(reflection_method_owner_metadata(&method_name, member));
+            }
+        }
+    }
+    if let Some(trait_name) = resolve_reflection_trait(ctx, &reflected_class) {
+        if let Some(methods) = ctx.module.declared_trait_methods.get(trait_name) {
+            if let Some(member) = reflection_trait_method_member(methods, &method_key) {
+                return Ok(reflection_method_owner_metadata(&method_name, member));
+            }
+        }
+    }
+    Ok(empty_reflection_metadata())
+}
+
+/// Builds direct ReflectionMethod constructor metadata from one reflected method member.
+fn reflection_method_owner_metadata(
+    method_name: &str,
+    member: ReflectionListedMember,
+) -> ReflectionOwnerMetadata {
+    ReflectionOwnerMetadata {
+        reflected_name: Some(method_name.to_string()),
+        attr_names: member.attr_names,
+        attr_args: member.attr_args,
+        interface_names: Vec::new(),
+        trait_names: Vec::new(),
+        method_names: Vec::new(),
+        property_names: Vec::new(),
+        method_members: Vec::new(),
+        property_members: Vec::new(),
+        constructor_member: None,
+        parameter_members: member.parameters,
+        required_parameter_count: member.required_parameter_count,
+        is_final: false,
+        is_abstract: false,
+        is_interface: false,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        modifiers: 0,
+        member_flags: member.flags,
+    }
 }
 
 /// Resolves `ReflectionProperty(class, property)` metadata.
@@ -808,6 +852,39 @@ fn reflection_interface_method_member(
     })
 }
 
+/// Builds ReflectionMethod array entries for methods declared by a trait.
+fn reflection_trait_method_members(
+    methods: &std::collections::HashMap<String, TraitMethodInfo>,
+    method_names: &[String],
+) -> Vec<ReflectionListedMember> {
+    method_names
+        .iter()
+        .filter_map(|method_name| reflection_trait_method_member(methods, method_name))
+        .collect()
+}
+
+/// Builds one ReflectionMethod array entry from retained trait metadata.
+fn reflection_trait_method_member(
+    methods: &std::collections::HashMap<String, TraitMethodInfo>,
+    method_name: &str,
+) -> Option<ReflectionListedMember> {
+    let method_key = php_symbol_key(method_name);
+    let info = methods.get(&method_key)?;
+    Some(ReflectionListedMember {
+        name: method_key,
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        flags: reflection_member_flags(
+            info.is_static,
+            &info.visibility,
+            info.is_final,
+            info.is_abstract,
+        ),
+        required_parameter_count: reflection_required_parameter_count(&info.signature),
+        parameters: reflection_parameter_members(&info.signature),
+    })
+}
+
 /// Builds ReflectionProperty array entries for the properties visible on one class.
 fn reflection_class_property_members(
     ctx: &FunctionContext<'_>,
@@ -1041,44 +1118,6 @@ fn push_unique_property_name(
 ) {
     if seen.insert(property_name.to_string()) {
         names.push(property_name.to_string());
-    }
-}
-
-/// Builds empty ReflectionClass metadata for class-like symbols without stored attributes.
-fn class_like_reflection_metadata(
-    class_like_name: &str,
-    interface_names: Vec<String>,
-    trait_names: Vec<String>,
-    method_names: Vec<String>,
-    property_names: Vec<String>,
-    is_interface: bool,
-    is_trait: bool,
-    is_enum: bool,
-) -> ReflectionOwnerMetadata {
-    let method_members = default_method_members(method_names.as_slice(), is_interface, is_trait);
-    let property_members = default_property_members(property_names.as_slice(), is_interface);
-    let constructor_member = reflection_constructor_member(&method_members);
-    ReflectionOwnerMetadata {
-        reflected_name: Some(class_like_name.to_string()),
-        attr_names: Vec::new(),
-        attr_args: Vec::new(),
-        interface_names,
-        trait_names,
-        method_names,
-        property_names,
-        method_members,
-        property_members,
-        constructor_member,
-        parameter_members: Vec::new(),
-        required_parameter_count: 0,
-        is_final: false,
-        is_abstract: false,
-        is_interface,
-        is_trait,
-        is_enum,
-        is_readonly: false,
-        modifiers: if is_enum { 32 } else { 0 },
-        member_flags: ReflectionMemberFlags::default(),
     }
 }
 

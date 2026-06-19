@@ -103,6 +103,8 @@ pub(crate) struct Checker {
     /// Canonical trait names declared in the program, available for reflection
     /// and class-like metadata probes that accept traits.
     pub declared_traits: HashSet<String>,
+    /// Case-insensitive method keys declared directly on each trait.
+    pub declared_trait_methods: HashMap<String, HashSet<String>>,
     /// Name of the class currently being type-checked (used for `$this` resolution).
     pub current_class: Option<String>,
     /// Name of the current method being type-checked, when inside a class body.

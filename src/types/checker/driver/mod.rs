@@ -79,6 +79,7 @@ pub(super) fn check_types_impl(
     substitute_relative_class_types_in_flattened(&mut flattened_classes);
     substitute_relative_class_types_in_flattened_enums(&mut flattened_enums);
     let declared_traits = collect_declared_trait_names(program);
+    let declared_trait_methods = collect_declared_trait_methods(program);
     let mut seen_classes = HashSet::new();
     let mut class_map = HashMap::new();
     for class in &flattened_classes {
@@ -168,6 +169,7 @@ pub(super) fn check_types_impl(
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();
+    checker.declared_trait_methods = declared_trait_methods;
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
@@ -295,6 +297,33 @@ fn collect_declared_trait_names_into(program: &Program, names: &mut HashSet<Stri
             _ => {}
         }
     }
+}
+
+/// Collects source-declared trait method keys recursively, including namespace blocks.
+fn collect_declared_trait_methods(program: &Program) -> HashMap<String, HashSet<String>> {
+    let mut methods = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl {
+                name,
+                methods: trait_methods,
+                ..
+            } => {
+                methods.insert(
+                    name.clone(),
+                    trait_methods
+                        .iter()
+                        .map(|method| php_symbol_key(&method.name))
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                methods.extend(collect_declared_trait_methods(body));
+            }
+            _ => {}
+        }
+    }
+    methods
 }
 
 /// Builds method-checkable `FlattenedClass` units for every `enum` in the program so their method

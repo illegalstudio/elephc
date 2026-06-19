@@ -57,19 +57,40 @@ impl Checker {
         method_name: &str,
         expr: &Expr,
     ) -> Result<(), CompileError> {
-        let Some(class_info) = self.classes.get(class_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionMethod::__construct(): undefined class '{}'",
-                    class_name
-                ),
-            ));
-        };
         let method_key = php_symbol_key(method_name);
-        if !class_info.methods.contains_key(&method_key)
-            && !class_info.static_methods.contains_key(&method_key)
-        {
+        if let Some(class_info) = self.classes.get(class_name) {
+            if !class_info.methods.contains_key(&method_key)
+                && !class_info.static_methods.contains_key(&method_key)
+            {
+                return Err(CompileError::new(
+                    expr.span,
+                    &format!(
+                        "ReflectionMethod::__construct(): undefined method '{}::{}'",
+                        class_name, method_name
+                    ),
+                ));
+            }
+            let empty_names = Vec::new();
+            let empty_args = Vec::new();
+            let names = class_info
+                .method_attribute_names
+                .get(&method_key)
+                .unwrap_or(&empty_names);
+            let args = class_info
+                .method_attribute_args
+                .get(&method_key)
+                .unwrap_or(&empty_args);
+            return self.validate_reflection_attribute_metadata(
+                names,
+                args,
+                expr,
+                "ReflectionMethod::getAttributes(): method has attribute argument metadata that is not supported yet",
+            );
+        }
+        if let Some(interface_info) = self.interfaces.get(class_name) {
+            if interface_info.methods.contains_key(&method_key) {
+                return Ok(());
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!(
@@ -78,22 +99,25 @@ impl Checker {
                 ),
             ));
         }
-        let empty_names = Vec::new();
-        let empty_args = Vec::new();
-        let names = class_info
-            .method_attribute_names
-            .get(&method_key)
-            .unwrap_or(&empty_names);
-        let args = class_info
-            .method_attribute_args
-            .get(&method_key)
-            .unwrap_or(&empty_args);
-        self.validate_reflection_attribute_metadata(
-            names,
-            args,
-            expr,
-            "ReflectionMethod::getAttributes(): method has attribute argument metadata that is not supported yet",
-        )
+        if let Some(trait_methods) = self.declared_trait_methods.get(class_name) {
+            if trait_methods.contains(&method_key) {
+                return Ok(());
+            }
+            return Err(CompileError::new(
+                expr.span,
+                &format!(
+                    "ReflectionMethod::__construct(): undefined method '{}::{}'",
+                    class_name, method_name
+                ),
+            ));
+        }
+        Err(CompileError::new(
+            expr.span,
+            &format!(
+                "ReflectionMethod::__construct(): undefined class '{}'",
+                class_name
+            ),
+        ))
     }
 
     /// Validates property-level attributes for `ReflectionProperty`.

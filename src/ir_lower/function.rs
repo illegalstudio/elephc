@@ -18,7 +18,7 @@ use crate::ir_lower::context::{
     StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
-use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
 use crate::types::{CheckResult, ClassInfo, FunctionSig, PackedClassInfo, PhpType, TypeEnv};
 
@@ -308,6 +308,24 @@ pub(crate) fn lower_class_method(
     );
     add_closures(module, closures);
     module.class_methods.push(function);
+}
+
+/// Builds fallback method signature metadata from parsed class-like method syntax.
+pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
+    let mut signature = signature_from_ast_with_variadic(
+        &method.params,
+        method.return_type.as_ref(),
+        method.variadic.as_deref(),
+    );
+    if let Some(variadic_type) = &method.variadic_type {
+        if let Some((_, php_type)) = signature.params.last_mut() {
+            *php_type = type_expr_to_php_type(variadic_type);
+        }
+        if let Some(declared) = signature.declared_params.last_mut() {
+            *declared = true;
+        }
+    }
+    signature
 }
 
 /// Lowers a synthetic `_class_propinit_<id>` function for dynamic by-name allocation.

@@ -87,6 +87,7 @@ impl Checker {
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),
             declared_traits: HashSet::new(),
+            declared_trait_methods: HashMap::new(),
             current_class: None,
             current_method: None,
             current_method_is_static: false,

@@ -35,7 +35,7 @@ pub use instr::{
 };
 pub use module::{
     ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
-    Module, PackedLayoutTable,
+    Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use print::{print_function, print_module};
 pub use types::{IrHeapKind, IrType};
