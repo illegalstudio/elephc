@@ -17,6 +17,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE: u64 = 128;
+const EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -161,8 +162,7 @@ impl FakeOps {
                     .map_or_else(|| self.bool_value(false), Ok)
             }
             (FakeValue::Object(properties), "getconstructor") if args.is_empty() => {
-                Self::object_property(&properties, "__constructor")
-                    .map_or_else(|| self.null(), Ok)
+                Self::object_property(&properties, "__constructor").map_or_else(|| self.null(), Ok)
             }
             (FakeValue::Object(properties), "getdeclaringclass") if args.is_empty() => {
                 Self::object_property(&properties, "__declaring_class")
@@ -343,7 +343,9 @@ impl FakeOps {
                     None => self.bool_value(false),
                 }
             }
-            (FakeValue::Object(properties), "isdefaultvalueavailable") if args.is_empty() => {
+            (FakeValue::Object(properties), "isdefaultvalueavailable" | "hasdefaultvalue")
+                if args.is_empty() =>
+            {
                 Self::object_property(&properties, "__has_default_value")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
@@ -553,11 +555,15 @@ impl FakeOps {
                     self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT) != 0)?;
                 let is_readonly =
                     self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY) != 0)?;
+                let has_default_value =
+                    self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE) != 0)?;
                 properties.push(("__is_final".to_string(), is_final));
                 properties.push(("__is_abstract".to_string(), is_abstract));
                 properties.push(("__is_readonly".to_string(), is_readonly));
                 properties.push(("__modifiers".to_string(), modifiers_cell));
                 properties.push(("__type".to_string(), method_objects));
+                properties.push(("__has_default_value".to_string(), has_default_value));
+                properties.push(("__default_value".to_string(), property_objects));
             }
         }
         if matches!(

@@ -24,7 +24,9 @@ use crate::names::{
     enum_case_symbol, php_symbol_key, property_hook_get_method, property_hook_set_method,
 };
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
-use crate::types::{AttrArgValue, EnumCaseInfo, EnumCaseValue, FunctionSig, InterfaceInfo, PhpType};
+use crate::types::{
+    AttrArgValue, EnumCaseInfo, EnumCaseValue, FunctionSig, InterfaceInfo, PhpType,
+};
 
 use super::super::super::context::FunctionContext;
 
@@ -49,6 +51,7 @@ struct ReflectionOwnerMetadata {
     is_enum_case: bool,
     parameter_members: Vec<ReflectionParameterMember>,
     type_metadata: Option<ReflectionParameterTypeMetadata>,
+    property_default_value: Option<ReflectionParameterDefaultValue>,
     required_parameter_count: i64,
     is_final: bool,
     is_abstract: bool,
@@ -83,6 +86,7 @@ struct ReflectionListedMember {
     flags: ReflectionMemberFlags,
     modifiers: i64,
     type_metadata: Option<ReflectionParameterTypeMetadata>,
+    default_value: Option<ReflectionParameterDefaultValue>,
     required_parameter_count: i64,
     parameters: Vec<ReflectionParameterMember>,
 }
@@ -381,6 +385,17 @@ fn emit_reflection_owner_object(
     if class_name == "ReflectionProperty" {
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__has_default_value",
+            metadata.property_default_value.is_some(),
+        )?;
+        emit_reflection_owner_default_value_property(
+            ctx,
+            class_name,
+            metadata.property_default_value.as_ref(),
+        )?;
     }
     if class_name == "ReflectionParameter" {
         if let Some(parameter) = metadata.parameter_members.first() {
@@ -485,6 +500,7 @@ fn reflection_class_metadata_for_name(
             is_enum_case: false,
             parameter_members: Vec::new(),
             type_metadata: None,
+            property_default_value: None,
             required_parameter_count: 0,
             is_final: info.is_final,
             is_abstract: info.is_abstract,
@@ -537,6 +553,7 @@ fn reflection_class_metadata_for_name(
             is_enum_case: false,
             parameter_members: Vec::new(),
             type_metadata: None,
+            property_default_value: None,
             required_parameter_count: 0,
             is_final: false,
             is_abstract: false,
@@ -590,6 +607,7 @@ fn reflection_class_metadata_for_name(
             is_enum_case: false,
             parameter_members: Vec::new(),
             type_metadata: None,
+            property_default_value: None,
             required_parameter_count: 0,
             is_final: false,
             is_abstract: false,
@@ -650,8 +668,11 @@ fn reflection_function_metadata(
     metadata.reflected_name = Some(reflected_name);
     metadata.attr_names = function.attribute_names.clone();
     metadata.attr_args = function.attribute_args.clone();
-    metadata.parameter_members =
-        reflection_parameter_members_with_declaring_function(signature, None, Some(declaring_function));
+    metadata.parameter_members = reflection_parameter_members_with_declaring_function(
+        signature,
+        None,
+        Some(declaring_function),
+    );
     metadata.required_parameter_count = required_parameter_count;
     Ok(metadata)
 }
@@ -686,8 +707,7 @@ fn reflection_method_metadata(
     }
     if let Some(trait_name) = resolve_reflection_trait(ctx, &reflected_class) {
         if let Some(methods) = ctx.module.declared_trait_methods.get(trait_name) {
-            if let Some(member) = reflection_trait_method_member(methods, trait_name, &method_key)
-            {
+            if let Some(member) = reflection_trait_method_member(methods, trait_name, &method_key) {
                 return Ok(reflection_method_owner_metadata(&method_name, member));
             }
         }
@@ -720,6 +740,7 @@ fn reflection_method_owner_metadata(
         is_enum_case: member.is_enum_case,
         parameter_members: member.parameters,
         type_metadata: None,
+        property_default_value: None,
         required_parameter_count: member.required_parameter_count,
         is_final: false,
         is_abstract: false,
@@ -748,10 +769,8 @@ fn reflection_property_metadata(
     let property_name = const_required_string_operand(ctx, property_operand, "ReflectionProperty")?;
     Ok(resolve_reflection_class(ctx, &reflected_class)
         .and_then(|(_, info)| {
-            let declaring_class_name = reflection_property_declaring_class_name(
-                info,
-                &property_name,
-            );
+            let declaring_class_name =
+                reflection_property_declaring_class_name(info, &property_name);
             Some(ReflectionOwnerMetadata {
                 reflected_name: Some(property_name.clone()),
                 attr_names: info.property_attribute_names.get(&property_name)?.clone(),
@@ -772,6 +791,7 @@ fn reflection_property_metadata(
                 is_enum_case: false,
                 parameter_members: Vec::new(),
                 type_metadata: reflection_property_type_metadata(info, &property_name),
+                property_default_value: reflection_property_default_value(info, &property_name),
                 required_parameter_count: 0,
                 is_final: false,
                 is_abstract: false,
@@ -845,8 +865,11 @@ fn reflection_function_parameter_metadata(
         attr_args: function.attribute_args.clone(),
         required_parameter_count: reflection_required_parameter_count(signature),
     };
-    let parameters =
-        reflection_parameter_members_with_declaring_function(signature, None, Some(declaring_function));
+    let parameters = reflection_parameter_members_with_declaring_function(
+        signature,
+        None,
+        Some(declaring_function),
+    );
     let Some(parameter) = reflection_parameter_member_for_selector(&parameters, selector) else {
         return Ok(empty_reflection_metadata());
     };
@@ -945,6 +968,7 @@ fn reflection_class_constant_metadata(
             is_enum_case: true,
             parameter_members: Vec::new(),
             type_metadata: None,
+            property_default_value: None,
             required_parameter_count: 0,
             is_final: false,
             is_abstract: false,
@@ -957,9 +981,11 @@ fn reflection_class_constant_metadata(
             member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
         });
     }
-    Ok(reflection_class_constant_lookup(ctx, &reflected_class, &constant_name)?
-        .map(|metadata| reflection_class_constant_owner_metadata(constant_name, metadata))
-        .unwrap_or_else(empty_reflection_metadata))
+    Ok(
+        reflection_class_constant_lookup(ctx, &reflected_class, &constant_name)?
+            .map(|metadata| reflection_class_constant_owner_metadata(constant_name, metadata))
+            .unwrap_or_else(empty_reflection_metadata),
+    )
 }
 
 /// Resolves `ReflectionEnumUnitCase/BackedCase(enum, case)` metadata.
@@ -1001,6 +1027,7 @@ fn reflection_enum_case_metadata(
                 is_enum_case: true,
                 parameter_members: Vec::new(),
                 type_metadata: None,
+                property_default_value: None,
                 required_parameter_count: 0,
                 is_final: false,
                 is_abstract: false,
@@ -1044,6 +1071,7 @@ fn reflection_class_constant_owner_metadata(
         is_enum_case: false,
         parameter_members: Vec::new(),
         type_metadata: None,
+        property_default_value: None,
         required_parameter_count: 0,
         is_final,
         is_abstract: false,
@@ -1069,7 +1097,8 @@ fn reflection_class_constant_lookup(
         let Some(value_expr) = info.constants.get(constant_name) else {
             return Ok(None);
         };
-        let value = reflection_constant_value(ctx, declaring_class_name, Some(info), value_expr, 0)?;
+        let value =
+            reflection_constant_value(ctx, declaring_class_name, Some(info), value_expr, 0)?;
         return Ok(Some(ReflectionClassConstantMetadata {
             declaring_class_name: declaring_class_name.to_string(),
             attr_names: info
@@ -1649,6 +1678,7 @@ fn push_unique_constant_reflection_member(
         flags: reflection_member_flags(false, &visibility, is_final, false, false),
         modifiers: reflection_class_constant_modifiers(&visibility, is_final),
         type_metadata: None,
+        default_value: None,
         required_parameter_count: 0,
         parameters: Vec::new(),
     });
@@ -1845,6 +1875,7 @@ fn reflection_class_method_member(
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
         type_metadata: None,
+        default_value: None,
         required_parameter_count,
         parameters,
     })
@@ -1907,6 +1938,7 @@ fn reflection_interface_method_member(
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
         type_metadata: None,
+        default_value: None,
         required_parameter_count,
         parameters,
     })
@@ -1958,6 +1990,7 @@ fn reflection_trait_method_member(
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
         type_metadata: None,
+        default_value: None,
         required_parameter_count,
         parameters: reflection_parameter_members_with_declaring_class(
             &info.signature,
@@ -1995,6 +2028,7 @@ fn reflection_class_property_member(
         )
     })?;
     let type_metadata = reflection_property_type_metadata(info, property_name);
+    let default_value = reflection_property_default_value(info, property_name);
     Some(ReflectionListedMember {
         name: property_name.to_string(),
         declaring_class_name: reflection_property_declaring_class_name(info, property_name)
@@ -2018,6 +2052,7 @@ fn reflection_class_property_member(
         modifiers: reflection_property_modifiers_for_info(info, property_name)
             .unwrap_or_else(|| reflection_property_modifiers_from_flags(flags)),
         type_metadata,
+        default_value,
         required_parameter_count: 0,
         parameters: Vec::new(),
     })
@@ -2033,6 +2068,40 @@ fn reflection_property_type_metadata(
     }
     let (_, (_, property_type)) = info.visible_property(property_name)?;
     reflection_parameter_type_metadata(None, property_type)
+}
+
+/// Returns supported default metadata for one reflected property.
+fn reflection_property_default_value(
+    info: &crate::types::ClassInfo,
+    property_name: &str,
+) -> Option<ReflectionParameterDefaultValue> {
+    if let Some((index, (name, _))) = info.visible_property(property_name) {
+        return reflection_property_slot_default_value(
+            info.property_slot_is_declared(index, name),
+            info.defaults.get(index).and_then(Option::as_ref),
+        );
+    }
+    info.static_properties
+        .iter()
+        .position(|(name, _)| name == property_name)
+        .and_then(|index| {
+            reflection_property_slot_default_value(
+                info.declared_static_properties.contains(property_name),
+                info.static_defaults.get(index).and_then(Option::as_ref),
+            )
+        })
+}
+
+/// Converts one physical property slot default into PHP Reflection metadata.
+fn reflection_property_slot_default_value(
+    is_declared: bool,
+    default: Option<&Expr>,
+) -> Option<ReflectionParameterDefaultValue> {
+    match default {
+        Some(default) => reflection_parameter_default_value(default),
+        None if !is_declared => Some(ReflectionParameterDefaultValue::Null),
+        None => None,
+    }
 }
 
 /// Builds placeholder ReflectionMethod entries for class-like metadata without full method schemas.
@@ -2059,6 +2128,7 @@ fn default_method_members(
                 false,
             )),
             type_metadata: None,
+            default_value: None,
             required_parameter_count: 0,
             parameters: Vec::new(),
         })
@@ -2091,6 +2161,7 @@ fn default_property_members(
                 None,
             ),
             type_metadata: None,
+            default_value: None,
             required_parameter_count: 0,
             parameters: Vec::new(),
         })
@@ -2747,6 +2818,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         is_enum_case: false,
         parameter_members: Vec::new(),
         type_metadata: None,
+        property_default_value: None,
         required_parameter_count: 0,
         is_final: false,
         is_abstract: false,
@@ -3129,7 +3201,11 @@ fn emit_reflection_declaring_class_property(
         .class_infos
         .get(member_class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
-    let Some(low_offset) = class_info.property_offsets.get("__declaring_class").copied() else {
+    let Some(low_offset) = class_info
+        .property_offsets
+        .get("__declaring_class")
+        .copied()
+    else {
         return Ok(());
     };
     let high_offset = low_offset + 8;
@@ -3283,8 +3359,8 @@ fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>, key: &str
     let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, x0");                              // pass the boxed Reflection constant value as the hash payload
-            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash payloads do not use the high word
+            ctx.emitter.instruction("mov x3, x0"); // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("mov x4, xzr"); // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
@@ -3296,8 +3372,8 @@ fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>, key: &str
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection constant value as the hash payload
-            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
+            ctx.emitter.instruction("mov rcx, rax"); // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("xor r8, r8"); // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
@@ -3383,10 +3459,17 @@ fn emit_reflection_member_object(
             "__modifiers",
             member.modifiers,
         )?;
-        emit_reflection_owner_type_property(
+        emit_reflection_owner_type_property(ctx, member_class_name, member.type_metadata.as_ref())?;
+        emit_reflection_owner_bool_property(
             ctx,
             member_class_name,
-            member.type_metadata.as_ref(),
+            "__has_default_value",
+            member.default_value.is_some(),
+        )?;
+        emit_reflection_owner_default_value_property(
+            ctx,
+            member_class_name,
+            member.default_value.as_ref(),
         )?;
     }
     if member_class_name == "ReflectionClassConstant" {
@@ -3558,7 +3641,12 @@ fn emit_reflection_parameter_declaring_function_property(
         None => emit_boxed_null_literal_to_result(ctx),
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
-    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, declaring_function_offset);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        result_reg,
+        object_reg,
+        declaring_function_offset,
+    );
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, declaring_function_offset + 8);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
     Ok(())
@@ -3603,7 +3691,11 @@ fn emit_reflection_parameter_type_property(
     ctx: &mut FunctionContext<'_>,
     parameter: &ReflectionParameterMember,
 ) -> Result<()> {
-    emit_reflection_owner_type_property(ctx, "ReflectionParameter", parameter.type_metadata.as_ref())
+    emit_reflection_owner_type_property(
+        ctx,
+        "ReflectionParameter",
+        parameter.type_metadata.as_ref(),
+    )
 }
 
 /// Writes one reflection owner's nullable type slot.
@@ -3659,18 +3751,31 @@ fn emit_reflection_parameter_default_property(
     ctx: &mut FunctionContext<'_>,
     parameter: &ReflectionParameterMember,
 ) -> Result<()> {
+    emit_reflection_owner_default_value_property(
+        ctx,
+        "ReflectionParameter",
+        parameter.default_value.as_ref(),
+    )
+}
+
+/// Writes one reflection owner's boxed default-value slot.
+fn emit_reflection_owner_default_value_property(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    default_value: Option<&ReflectionParameterDefaultValue>,
+) -> Result<()> {
     let default_offset = {
         let class_info = ctx
             .module
             .class_infos
-            .get("ReflectionParameter")
+            .get(class_name)
             .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
         reflection_property_offset(class_info, "__default_value")?
     };
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    match parameter.default_value.as_ref() {
+    match default_value {
         Some(ReflectionParameterDefaultValue::Int(value)) => {
             emit_boxed_int_literal_to_result(ctx, *value)
         }
@@ -3933,32 +4038,32 @@ fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String])
 
 /// Appends ReflectionClass metadata names to the current ARM64 result array.
 fn emit_reflection_string_array_fill_aarch64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the metadata-name array while appending strings
+    ctx.emitter.instruction("str x0, [sp, #-16]!"); // park the metadata-name array while appending strings
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the metadata-name array for this append
+        ctx.emitter.instruction("ldr x0, [sp]"); // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "x1", &label);
         abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("str x0, [sp]"); // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final metadata-name array as the result
+    ctx.emitter.instruction("ldr x0, [sp], #16"); // restore the final metadata-name array as the result
 }
 
 /// Appends ReflectionClass metadata names to the current x86_64 result array.
 fn emit_reflection_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("push rax");                                        // park the metadata-name array while appending strings
-    ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across append helper calls
+    ctx.emitter.instruction("push rax"); // park the metadata-name array while appending strings
+    ctx.emitter.instruction("sub rsp, 8"); // keep stack alignment stable across append helper calls
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the metadata-name array for this append
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]"); // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "rsi", &label);
         abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax"); // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
-    ctx.emitter.instruction("pop rax");                                         // restore the final metadata-name array as the result
+    ctx.emitter.instruction("add rsp, 8"); // drop the temporary alignment slot
+    ctx.emitter.instruction("pop rax"); // restore the final metadata-name array as the result
 }
 
 /// Stores ReflectionMethod/ReflectionProperty boolean predicate slots when supported.

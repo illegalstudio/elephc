@@ -1145,6 +1145,14 @@ fn emit_set_owner_member_flags_property_aarch64(
         abi::emit_store_to_address(emitter, "x10", "x9", is_readonly_lo);
         abi::emit_store_zero_to_address(emitter, "x9", is_readonly_hi);
     }
+    if let (Some(has_default_value_lo), Some(has_default_value_hi)) =
+        (layout.has_default_value_lo, layout.has_default_value_hi)
+    {
+        emitter.instruction("lsr x10, x11, #8");                                // move the default-value bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the default-value flag as a boolean
+        abi::emit_store_to_address(emitter, "x10", "x9", has_default_value_lo);
+        abi::emit_store_zero_to_address(emitter, "x9", has_default_value_hi);
+    }
     if let (Some(modifiers_lo), Some(modifiers_hi)) = (layout.modifiers_lo, layout.modifiers_hi) {
         if layout.required_parameter_count_lo.is_some() {
             emitter.instruction("ldr x10, [sp, #72]");                          // reload PHP ReflectionMethod::getModifiers() bitmask
@@ -1249,6 +1257,15 @@ fn emit_set_owner_member_flags_property_x86_64(
         emitter.instruction("and rax, 1");                                      // extract the readonly-property flag as a boolean
         abi::emit_store_to_address(emitter, "rax", "r10", is_readonly_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_readonly_hi);
+    }
+    if let (Some(has_default_value_lo), Some(has_default_value_hi)) =
+        (layout.has_default_value_lo, layout.has_default_value_hi)
+    {
+        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the default-value bit
+        emitter.instruction("shr rax, 8");                                      // move the default-value bit into position
+        emitter.instruction("and rax, 1");                                      // extract the default-value flag as a boolean
+        abi::emit_store_to_address(emitter, "rax", "r10", has_default_value_lo);
+        abi::emit_store_zero_to_address(emitter, "r10", has_default_value_hi);
     }
     if let (Some(modifiers_lo), Some(modifiers_hi)) = (layout.modifiers_lo, layout.modifiers_hi) {
         if layout.required_parameter_count_lo.is_some() {
