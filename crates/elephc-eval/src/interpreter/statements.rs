@@ -2614,9 +2614,13 @@ fn eval_reflection_class_new_instance_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if !method_name.eq_ignore_ascii_case("newInstance") {
+    let constructor_args = if method_name.eq_ignore_ascii_case("newInstance") {
+        evaluated_args
+    } else if method_name.eq_ignore_ascii_case("newInstanceArgs") {
+        eval_reflection_class_new_instance_args(evaluated_args, values)?
+    } else {
         return Ok(None);
-    }
+    };
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
@@ -2625,7 +2629,7 @@ fn eval_reflection_class_new_instance_result(
     };
     if let Some(class) = context.class(&reflected_name).cloned() {
         let mut scope = ElephcEvalScope::new();
-        return eval_dynamic_class_new_object(&class, evaluated_args, context, &mut scope, values)
+        return eval_dynamic_class_new_object(&class, constructor_args, context, &mut scope, values)
             .map(Some);
     }
     let class_name = context
@@ -2633,11 +2637,20 @@ fn eval_reflection_class_new_instance_result(
         .unwrap_or(reflected_name);
     let args = bind_native_callable_args(
         context.native_constructor_signature(&class_name),
-        evaluated_args,
+        constructor_args,
     )?;
     let instance = values.new_object(&class_name)?;
     values.construct_object(instance, args)?;
     Ok(Some(instance))
+}
+
+/// Expands the single `ReflectionClass::newInstanceArgs()` array argument.
+fn eval_reflection_class_new_instance_args(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    let args = bind_evaluated_function_args(&[String::from("args")], evaluated_args)?;
+    eval_array_call_arg_values(args[0], values)
 }
 
 /// Allocates the class named by a materialized eval `ReflectionClass` without running `__construct()`.

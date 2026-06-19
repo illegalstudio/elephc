@@ -228,6 +228,8 @@ returns a materialized `ReflectionClass` for eval-declared parent classes or
 `false` when no parent class exists. `ReflectionClass::newInstance()` constructs
 eval-declared reflected classes and forwards constructor arguments through
 eval's positional, named, and unpacking-aware call binding.
+`ReflectionClass::newInstanceArgs()` constructs eval-declared reflected classes
+from an argument array, treating string keys as named constructor arguments.
 `ReflectionClass::newInstanceWithoutConstructor()` allocates eval-declared
 reflected classes, initializes supported property defaults, and skips
 `__construct()`.

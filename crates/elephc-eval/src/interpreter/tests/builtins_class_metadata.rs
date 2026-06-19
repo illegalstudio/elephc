@@ -1706,7 +1706,11 @@ $ref = new ReflectionClass("EvalReflectNewTarget");
 $first = $ref->newInstance("I", "J");
 echo $first->label(); echo ":";
 $second = $ref->newInstance(...["K", "L"]);
-echo $second->label();
+echo $second->label(); echo ":";
+$third = $ref->newInstanceArgs(["right" => "N", "left" => "M"]);
+echo $third->label(); echo ":";
+$fourth = $ref->newInstanceArgs(["O", "P"]);
+echo $fourth->label();
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -1715,7 +1719,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "IJ:KL");
+    assert_eq!(values.output, "IJ:KL:MN:OP");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

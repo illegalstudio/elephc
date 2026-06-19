@@ -7451,10 +7451,14 @@ $ref = new ReflectionClass("EvalReflectNewTarget");
 $first = $ref->newInstance("E", "F");
 echo $first->label() . ":";
 $second = $ref->newInstance(...["G", "H"]);
-echo $second->label();');
+echo $second->label() . ":";
+$third = $ref->newInstanceArgs(["right" => "J", "left" => "I"]);
+echo $third->label() . ":";
+$fourth = $ref->newInstanceArgs(["K", "L"]);
+echo $fourth->label();');
 "#,
     );
-    assert_eq!(out, "EF:GH");
+    assert_eq!(out, "EF:GH:IJ:KL");
 }
 
 /// Verifies eval ReflectionMethod::invoke and invokeArgs call eval-declared methods.
@@ -7936,6 +7940,27 @@ echo eval('$box = new EvalDynamicNewManyArgCtor(1, 2, 3, "!"); return $box->labe
 "#,
     );
     assert_eq!(out, "6!");
+}
+
+/// Verifies eval ReflectionClass::newInstanceArgs forwards named args to AOT constructors.
+#[test]
+fn test_eval_reflection_class_new_instance_args_constructs_aot_class() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalReflectNewArgsAotTarget {
+    public string $label = "";
+    public function __construct(string $left, string $right = "B") {
+        $this->label = $left . $right;
+    }
+}
+echo eval('$ref = new ReflectionClass("EvalReflectNewArgsAotTarget");
+$first = $ref->newInstanceArgs(["right" => "Y", "left" => "X"]);
+echo $first->label . ":";
+$second = $ref->newInstanceArgs(["Q", "R"]);
+return $second->label;');
+"#,
+    );
+    assert_eq!(out, "XY:QR");
 }
 
 /// Verifies eval object construction passes AOT constructor arguments on the caller stack.
