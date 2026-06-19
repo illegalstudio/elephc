@@ -11,17 +11,19 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{
-    ClassProperty, Expr, ExprKind, PropertyHooks, Stmt, StmtKind, TypeExpr, Visibility,
+    AttributeGroup, ClassProperty, Expr, ExprKind, PropertyHooks, Stmt, StmtKind, TypeExpr,
+    Visibility,
 };
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
-use super::super::params::{looks_like_typed_param, parse_type_expr};
 use super::super::expect_token;
+use super::super::params::{looks_like_typed_param, parse_type_expr};
 
 type MethodParam = (String, Option<TypeExpr>, Option<Expr>, bool);
 type ParsedMethodParams = (
     Vec<MethodParam>,
+    Vec<Vec<AttributeGroup>>,
     Option<String>,
     Option<TypeExpr>,
     Vec<ClassProperty>,
@@ -44,6 +46,7 @@ pub(super) fn parse_method_params(
     method_name: &str,
 ) -> Result<ParsedMethodParams, CompileError> {
     let mut params = Vec::new();
+    let mut param_attributes = Vec::new();
     let mut variadic = None;
     let mut variadic_type = None;
     let mut promoted_properties = Vec::new();
@@ -64,7 +67,7 @@ pub(super) fn parse_method_params(
         }
         // PHP 8.0 parameter attributes — also covers attributes preceding a
         // promoted-property modifier such as `#[Inject] public Foo $f`.
-        crate::parser::consume_attribute_lists(tokens, pos)?;
+        let attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
         if variadic.is_some() {
             return Err(CompileError::new(
                 span,
@@ -106,6 +109,7 @@ pub(super) fn parse_method_params(
                 Some(Token::Variable(n)) => {
                     variadic = Some(n.clone());
                     variadic_type = type_ann;
+                    param_attributes.push(attributes);
                     *pos += 1;
                 }
                 _ => return Err(CompileError::new(span, "Expected variable after '...'")),
@@ -147,17 +151,25 @@ pub(super) fn parse_method_params(
                         // not on the promoted property's default metadata.
                         default: None,
                         span: property_span,
-                        attributes: Vec::new(),
+                        attributes: attributes.clone(),
                     });
                     promoted_assignments.push(promoted_property_assignment(&n, param_span));
                 }
+                param_attributes.push(attributes);
                 params.push((n, type_ann, default, is_ref));
             }
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }
     }
 
-    Ok((params, variadic, variadic_type, promoted_properties, promoted_assignments))
+    Ok((
+        params,
+        param_attributes,
+        variadic,
+        variadic_type,
+        promoted_properties,
+        promoted_assignments,
+    ))
 }
 
 /// Scans the token stream for visibility modifiers (`public`/`protected`/`private`)
@@ -176,7 +188,10 @@ fn parse_promoted_param_modifiers(
         match tokens.get(*pos).map(|(t, s)| (t, *s)) {
             Some((Token::Public, token_span)) => {
                 if visibility.is_some() {
-                    return Err(CompileError::new(token_span, "Duplicate parameter visibility"));
+                    return Err(CompileError::new(
+                        token_span,
+                        "Duplicate parameter visibility",
+                    ));
                 }
                 first_span.get_or_insert(token_span);
                 visibility = Some(Visibility::Public);
@@ -184,7 +199,10 @@ fn parse_promoted_param_modifiers(
             }
             Some((Token::Protected, token_span)) => {
                 if visibility.is_some() {
-                    return Err(CompileError::new(token_span, "Duplicate parameter visibility"));
+                    return Err(CompileError::new(
+                        token_span,
+                        "Duplicate parameter visibility",
+                    ));
                 }
                 first_span.get_or_insert(token_span);
                 visibility = Some(Visibility::Protected);
@@ -192,7 +210,10 @@ fn parse_promoted_param_modifiers(
             }
             Some((Token::Private, token_span)) => {
                 if visibility.is_some() {
-                    return Err(CompileError::new(token_span, "Duplicate parameter visibility"));
+                    return Err(CompileError::new(
+                        token_span,
+                        "Duplicate parameter visibility",
+                    ));
                 }
                 first_span.get_or_insert(token_span);
                 visibility = Some(Visibility::Private);

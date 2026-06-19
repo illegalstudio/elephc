@@ -195,6 +195,7 @@ fn callback_sig_for_binding(
             ctx.extern_functions.get(name.as_str()).map(|sig| FunctionSig {
                 params: sig.params.clone(),
                 param_type_exprs: vec![None; sig.params.len()],
+                param_attributes: Vec::new(),
                 defaults: vec![None; sig.params.len()],
                 return_type: sig.return_type.clone(),
                 declared_return: true,
@@ -311,6 +312,7 @@ fn callback_sig_from_closure_params(
             .iter()
             .map(|(_, type_ann, _, _)| type_ann.clone())
             .collect(),
+        param_attributes: Vec::new(),
         defaults: params
             .iter()
             .map(|(_, _, default, _)| default.clone())
@@ -347,6 +349,7 @@ fn start_sig_from_callback_sig(sig: &FunctionSig) -> Option<FunctionSig> {
             .map(|(name, _)| (name.clone(), PhpType::Mixed))
             .collect(),
         param_type_exprs: sig.param_type_exprs.clone(),
+        param_attributes: Vec::new(),
         defaults: sig.defaults.clone(),
         return_type: PhpType::Mixed,
         declared_return: false,

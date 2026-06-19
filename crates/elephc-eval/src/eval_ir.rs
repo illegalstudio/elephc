@@ -593,6 +593,7 @@ pub struct EvalInterfaceMethod {
     attributes: Vec<EvalAttribute>,
     is_static: bool,
     params: Vec<String>,
+    parameter_attributes: Vec<Vec<EvalAttribute>>,
     parameter_has_types: Vec<bool>,
     parameter_types: Vec<Option<EvalParameterType>>,
     parameter_defaults: Vec<Option<EvalExpr>>,
@@ -604,6 +605,7 @@ impl EvalInterfaceMethod {
     /// Creates one dynamic eval interface method signature.
     pub fn new(name: impl Into<String>, params: Vec<String>) -> Self {
         let parameter_has_types = vec![false; params.len()];
+        let parameter_attributes = vec![Vec::new(); params.len()];
         let parameter_types = vec![None; params.len()];
         let parameter_defaults = vec![None; params.len()];
         let parameter_is_by_ref = vec![false; params.len()];
@@ -613,6 +615,7 @@ impl EvalInterfaceMethod {
             attributes: Vec::new(),
             is_static: false,
             params,
+            parameter_attributes,
             parameter_has_types,
             parameter_types,
             parameter_defaults,
@@ -636,6 +639,15 @@ impl EvalInterfaceMethod {
     /// Returns a copy of this interface method with parameter type-presence flags.
     pub fn with_parameter_type_flags(mut self, parameter_has_types: Vec<bool>) -> Self {
         self.parameter_has_types = parameter_has_types;
+        self
+    }
+
+    /// Returns a copy of this interface method with source-order parameter attributes.
+    pub fn with_parameter_attributes(
+        mut self,
+        parameter_attributes: Vec<Vec<EvalAttribute>>,
+    ) -> Self {
+        self.parameter_attributes = parameter_attributes;
         self
     }
 
@@ -682,6 +694,11 @@ impl EvalInterfaceMethod {
     /// Returns source-order parameter names without leading `$`.
     pub fn params(&self) -> &[String] {
         &self.params
+    }
+
+    /// Returns source-order parameter attributes.
+    pub fn parameter_attributes(&self) -> &[Vec<EvalAttribute>] {
+        &self.parameter_attributes
     }
 
     /// Returns source-order flags for whether each parameter declared a type.
@@ -1359,6 +1376,7 @@ pub struct EvalClassMethod {
     is_abstract: bool,
     is_final: bool,
     params: Vec<String>,
+    parameter_attributes: Vec<Vec<EvalAttribute>>,
     parameter_has_types: Vec<bool>,
     parameter_types: Vec<Option<EvalParameterType>>,
     parameter_defaults: Vec<Option<EvalExpr>>,
@@ -1403,6 +1421,7 @@ impl EvalClassMethod {
         body: Vec<EvalStmt>,
     ) -> Self {
         let parameter_has_types = vec![false; params.len()];
+        let parameter_attributes = vec![Vec::new(); params.len()];
         let parameter_types = vec![None; params.len()];
         let parameter_defaults = vec![None; params.len()];
         let parameter_is_by_ref = vec![false; params.len()];
@@ -1415,6 +1434,7 @@ impl EvalClassMethod {
             is_abstract,
             is_final,
             params,
+            parameter_attributes,
             parameter_has_types,
             parameter_types,
             parameter_defaults,
@@ -1438,6 +1458,15 @@ impl EvalClassMethod {
     /// Returns a copy of this method with source-order parameter type-presence flags.
     pub fn with_parameter_type_flags(mut self, parameter_has_types: Vec<bool>) -> Self {
         self.parameter_has_types = parameter_has_types;
+        self
+    }
+
+    /// Returns a copy of this method with source-order parameter attributes.
+    pub fn with_parameter_attributes(
+        mut self,
+        parameter_attributes: Vec<Vec<EvalAttribute>>,
+    ) -> Self {
+        self.parameter_attributes = parameter_attributes;
         self
     }
 
@@ -1508,6 +1537,11 @@ impl EvalClassMethod {
     /// Returns source-order parameter names without leading `$`.
     pub fn params(&self) -> &[String] {
         &self.params
+    }
+
+    /// Returns source-order parameter attributes.
+    pub fn parameter_attributes(&self) -> &[Vec<EvalAttribute>] {
+        &self.parameter_attributes
     }
 
     /// Returns source-order flags for whether each parameter declared a type.

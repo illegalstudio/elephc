@@ -565,7 +565,7 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
 fn parse_fragment_accepts_typed_method_parameter_metadata() {
     let program = parse_fragment(
         br#"class DynEvalTypedParams {
-    public function run(Left&Right $both, int &$id = 7, ?\App\Name &$name = null, string|null $label = "x", mixed &...$tail) {}
+    public function run(#[Both("pair")] Left&Right $both, int &$id = 7, ?\App\Name &$name = null, string|null $label = "x", mixed &...$tail) {}
 }"#,
     )
     .expect("fragment should parse");
@@ -585,8 +585,13 @@ fn parse_fragment_accepts_typed_method_parameter_metadata() {
             "tail".to_string()
         ]
     );
-    assert_eq!(method.parameter_has_types(), &[true, true, true, true, true]);
+    assert_eq!(
+        method.parameter_has_types(),
+        &[true, true, true, true, true]
+    );
     assert!(method.parameter_types().iter().all(Option::is_some));
+    assert_eq!(method.parameter_attributes()[0][0].name(), "Both");
+    assert!(method.parameter_attributes()[1].is_empty());
     let both_type = method.parameter_types()[0].as_ref().expect("both type");
     assert_eq!(
         both_type.variants(),
@@ -609,10 +614,7 @@ fn parse_fragment_accepts_typed_method_parameter_metadata() {
     assert!(name_type.allows_null());
     assert!(!name_type.is_intersection());
     let label_type = method.parameter_types()[3].as_ref().expect("label type");
-    assert_eq!(
-        label_type.variants(),
-        &[EvalParameterTypeVariant::String]
-    );
+    assert_eq!(label_type.variants(), &[EvalParameterTypeVariant::String]);
     assert!(label_type.allows_null());
     assert!(!label_type.is_intersection());
     assert!(matches!(

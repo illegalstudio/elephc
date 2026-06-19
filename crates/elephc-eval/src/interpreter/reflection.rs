@@ -60,6 +60,7 @@ struct EvalReflectionMemberMetadata {
 /// Eval metadata needed to materialize one `ReflectionParameter` object.
 struct EvalReflectionParameterMetadata {
     name: String,
+    attributes: Vec<EvalAttribute>,
     position: usize,
     is_optional: bool,
     is_variadic: bool,
@@ -808,7 +809,7 @@ fn eval_reflection_parameter_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let attrs = values.array_new(0)?;
+    let attrs = eval_reflection_attribute_array_result(&parameter.attributes, context, values)?;
     let interface_names = values.array_new(0)?;
     let trait_names = values.array_new(0)?;
     let method_names = values.array_new(0)?;
@@ -1301,6 +1302,7 @@ fn eval_reflection_method_metadata(
                     method.params(),
                     method.parameter_has_types(),
                     method.parameter_types(),
+                    method.parameter_attributes(),
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
@@ -1326,6 +1328,7 @@ fn eval_reflection_method_metadata(
                     method.params(),
                     method.parameter_has_types(),
                     method.parameter_types(),
+                    method.parameter_attributes(),
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
@@ -1351,6 +1354,7 @@ fn eval_reflection_method_metadata(
                     method.params(),
                     method.parameter_has_types(),
                     method.parameter_types(),
+                    method.parameter_attributes(),
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
@@ -1429,6 +1433,7 @@ fn eval_reflection_parameters_from_names_and_type_flags(
     names: &[String],
     has_type_flags: &[bool],
     parameter_types: &[Option<EvalParameterType>],
+    parameter_attributes: &[Vec<EvalAttribute>],
     defaults: &[Option<EvalExpr>],
     by_ref_flags: &[bool],
     variadic_flags: &[bool],
@@ -1438,6 +1443,10 @@ fn eval_reflection_parameters_from_names_and_type_flags(
         .enumerate()
         .map(|(position, name)| EvalReflectionParameterMetadata {
             name: name.clone(),
+            attributes: parameter_attributes
+                .get(position)
+                .cloned()
+                .unwrap_or_default(),
             position,
             is_optional: defaults.get(position).is_some_and(Option::is_some)
                 || variadic_flags.get(position).copied().unwrap_or(false),

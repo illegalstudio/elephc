@@ -756,12 +756,12 @@ impl Parser {
         self.expect(TokenKind::LParen)?;
         let (
             params,
+            parameter_attributes,
             parameter_types,
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
-        ) =
-            self.parse_method_params()?;
+        ) = self.parse_method_params()?;
         let body = if is_abstract {
             self.expect_semicolon()?;
             Vec::new()
@@ -778,6 +778,7 @@ impl Parser {
             body,
         )
         .with_parameter_types(parameter_types)
+        .with_parameter_attributes(parameter_attributes)
         .with_parameter_defaults(parameter_defaults)
         .with_parameter_by_ref_flags(parameter_is_by_ref)
         .with_parameter_variadic_flags(parameter_is_variadic))
@@ -1275,16 +1276,17 @@ impl Parser {
         self.expect(TokenKind::LParen)?;
         let (
             params,
+            parameter_attributes,
             parameter_types,
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
-        ) =
-            self.parse_method_params()?;
+        ) = self.parse_method_params()?;
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)
             .with_static(is_static)
             .with_parameter_types(parameter_types)
+            .with_parameter_attributes(parameter_attributes)
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic))
@@ -1704,6 +1706,7 @@ impl Parser {
     ) -> Result<
         (
             Vec<String>,
+            Vec<Vec<EvalAttribute>>,
             Vec<Option<EvalParameterType>>,
             Vec<Option<EvalExpr>>,
             Vec<bool>,
@@ -1712,6 +1715,7 @@ impl Parser {
         EvalParseError,
     > {
         let mut params = Vec::new();
+        let mut parameter_attributes = Vec::new();
         let mut parameter_types = Vec::new();
         let mut parameter_defaults = Vec::new();
         let mut parameter_is_by_ref = Vec::new();
@@ -1719,6 +1723,7 @@ impl Parser {
         if self.consume(TokenKind::RParen) {
             return Ok((
                 params,
+                parameter_attributes,
                 parameter_types,
                 parameter_defaults,
                 parameter_is_by_ref,
@@ -1726,6 +1731,7 @@ impl Parser {
             ));
         }
         loop {
+            let attributes = self.parse_attribute_groups()?;
             let param_type = self.parse_optional_parameter_type()?;
             let is_by_ref = self.consume(TokenKind::Ampersand);
             let is_variadic = self.consume(TokenKind::Ellipsis);
@@ -1733,6 +1739,7 @@ impl Parser {
                 return Err(EvalParseError::ExpectedVariable);
             };
             params.push(name.clone());
+            parameter_attributes.push(attributes);
             parameter_types.push(param_type);
             parameter_is_by_ref.push(is_by_ref);
             parameter_is_variadic.push(is_variadic);
@@ -1763,6 +1770,7 @@ impl Parser {
         self.expect(TokenKind::RParen)?;
         Ok((
             params,
+            parameter_attributes,
             parameter_types,
             parameter_defaults,
             parameter_is_by_ref,
@@ -1821,10 +1829,7 @@ impl Parser {
 
     /// Returns whether `&` belongs to by-reference parameter storage.
     fn next_token_starts_parameter_storage(&self) -> bool {
-        matches!(
-            self.peek(),
-            TokenKind::DollarIdent(_) | TokenKind::Ellipsis
-        )
+        matches!(self.peek(), TokenKind::DollarIdent(_) | TokenKind::Ellipsis)
     }
 
     /// Consumes one simple qualified method parameter type name.
@@ -2237,9 +2242,7 @@ fn method_parameter_default_is_supported(default: &EvalExpr) -> bool {
 /// Returns whether an EvalIR expression is safe to retain as a method default.
 fn eval_constant_expression_default_is_supported(expr: &EvalExpr) -> bool {
     match expr {
-        EvalExpr::Array(elements) => elements
-            .iter()
-            .all(eval_array_element_default_is_supported),
+        EvalExpr::Array(elements) => elements.iter().all(eval_array_element_default_is_supported),
         EvalExpr::Const(_) => true,
         EvalExpr::Magic(_) => true,
         EvalExpr::ConstFetch(_) | EvalExpr::NamespacedConstFetch { .. } => true,

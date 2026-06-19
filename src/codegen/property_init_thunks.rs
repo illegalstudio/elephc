@@ -106,6 +106,7 @@ pub(super) fn emit_property_init_thunk(
     let sig = FunctionSig {
         params: vec![("this".to_string(), PhpType::Object(class_name.to_string()))],
         param_type_exprs: vec![None],
+        param_attributes: Vec::new(),
         defaults: vec![None],
         return_type: PhpType::Int,
         declared_return: false,

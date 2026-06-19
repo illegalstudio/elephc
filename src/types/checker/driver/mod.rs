@@ -372,6 +372,7 @@ fn trait_method_reflection_sig(method: &ClassMethod) -> FunctionSig {
             .map(|(_, type_ann, _, _)| type_ann.clone())
             .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
             .collect(),
+        param_attributes: method.param_attributes.clone(),
         defaults,
         return_type: PhpType::Mixed,
         declared_return: method.return_type.is_some(),

@@ -151,11 +151,12 @@ syntax, but requesting those arguments is a runtime fatal.
 Private parent properties shadowed by same-named child properties use separate
 runtime storage, so parent methods keep seeing the private parent value while
 child methods and public access see the child property.
-`ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`, and
-`ReflectionProperty::getAttributes()` expose eval-retained class, method, and
-property attributes for eval-declared class-like symbols when their arguments
-fit the same literal subset, and `getName()` returns the reflected class or
-member name for those owners. `ReflectionClass::getShortName()`,
+`ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`,
+`ReflectionProperty::getAttributes()`, and `ReflectionParameter::getAttributes()`
+expose eval-retained class, method, property, and method-parameter attributes
+for eval-declared class-like symbols when their arguments fit the same literal
+subset, and `getName()` returns the reflected class, member, or parameter name
+for those owners. `ReflectionClass::getShortName()`,
 `ReflectionClass::getNamespaceName()`, and `ReflectionClass::inNamespace()`
 derive namespace-aware parts from the resolved eval class-like name.
 `ReflectionClass::isFinal()`, `ReflectionClass::isAbstract()`,
@@ -204,8 +205,9 @@ declared-type presence, simple named type metadata through
 `allowsNull()`, and `isBuiltin()`, and multi-member union metadata through
 `ReflectionUnionType::getTypes()` and `allowsNull()`. Intersection parameter
 metadata is exposed through `ReflectionIntersectionType::getTypes()` and
-`allowsNull()`. Defaulted eval method parameters are
-bound when omitted and reported through
+`allowsNull()`. Eval method parameter attributes are exposed through
+`ReflectionParameter::getAttributes()` using materialized `ReflectionAttribute`
+objects. Defaulted eval method parameters are bound when omitted and reported through
 `ReflectionParameter::isOptional()`, `isDefaultValueAvailable()`, and
 `getDefaultValue()`. Supported default expressions include
 scalar literals, arrays whose keys and values are supported default

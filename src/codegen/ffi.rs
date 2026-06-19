@@ -46,6 +46,7 @@ pub fn emit_extern_call(
         .unwrap_or_else(|| FunctionSig {
             params: sig.params.clone(),
             param_type_exprs: vec![None; sig.params.len()],
+            param_attributes: Vec::new(),
             defaults: vec![None; sig.params.len()],
             return_type: sig.return_type.clone(),
             declared_return: true,

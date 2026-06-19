@@ -1816,6 +1816,44 @@ if ($directType instanceof ReflectionNamedType) {
     );
 }
 
+/// Verifies `ReflectionParameter::getAttributes()` exposes parameter attributes.
+#[test]
+fn test_reflection_parameter_get_attributes_returns_parameter_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+#[Attribute]
+class ReflectParamTag {
+    public function __construct(public string $name = "") {}
+}
+class ReflectParamAttrTarget {
+    public function run(#[ReflectParamTag("id")] int $id, #[ReflectParamTag("name")] string $name, $plain) {}
+}
+$params = (new ReflectionMethod(ReflectParamAttrTarget::class, "run"))->getParameters();
+foreach ($params as $param) {
+    $attrs = $param->getAttributes();
+    echo $param->getName() . ":" . count($attrs);
+    if (count($attrs) > 0) {
+        echo ":" . $attrs[0]->getName();
+        echo ":" . $attrs[0]->getArguments()[0];
+    }
+    echo "|";
+}
+$direct = new ReflectionParameter([ReflectParamAttrTarget::class, "run"], "name");
+$directAttrs = $direct->getAttributes();
+echo "direct:" . count($directAttrs) . ":" . $directAttrs[0]->getName() . ":" . $directAttrs[0]->getArguments()[0];
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "id:1:ReflectParamTag:id|name:1:ReflectParamTag:name|plain:0|direct:1:ReflectParamTag:name"
+    );
+}
+
 /// Verifies that `ReflectionParameter` exposes supported scalar/null defaults.
 #[test]
 fn test_reflection_parameter_exposes_default_values() {

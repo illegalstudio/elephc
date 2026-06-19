@@ -159,6 +159,12 @@ fn build_static_method_codegen_sig(
             declared_params.push(false);
         }
     }
+    let mut param_attributes = vec![Vec::new()];
+    if let Some(sig) = class_static_sig {
+        param_attributes.extend(sig.param_attributes.clone());
+    } else {
+        param_attributes.extend(method.param_attributes.clone());
+    }
     let return_type = class_static_sig
         .map(|s| s.return_type.clone())
         .unwrap_or(PhpType::Int);
@@ -175,6 +181,7 @@ fn build_static_method_codegen_sig(
                 .map(|(_, type_ann, _, _)| type_ann.clone())
                 .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
                 .collect(),
+            param_attributes,
             defaults,
             return_type,
             declared_return,
@@ -245,6 +252,12 @@ fn build_instance_method_codegen_sig(
             declared_params.push(false);
         }
     }
+    let mut param_attributes = vec![Vec::new()];
+    if let Some(sig) = class_method_sig {
+        param_attributes.extend(sig.param_attributes.clone());
+    } else {
+        param_attributes.extend(method.param_attributes.clone());
+    }
     let return_type = class_method_sig
         .map(|s| s.return_type.clone())
         .unwrap_or(PhpType::Int);
@@ -261,6 +274,7 @@ fn build_instance_method_codegen_sig(
                 .map(|(_, type_ann, _, _)| type_ann.clone())
                 .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
                 .collect(),
+            param_attributes,
             defaults,
             return_type,
             declared_return,

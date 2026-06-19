@@ -258,6 +258,7 @@ fn generator_signature(function: &Function, visible_param_count: usize) -> Funct
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
         param_type_exprs: vec![None; visible_param_count],
+        param_attributes: Vec::new(),
         defaults: function
             .params
             .iter()

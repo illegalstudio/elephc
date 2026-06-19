@@ -139,6 +139,7 @@ fn contextual_closure_sig(
     Ok(Some(FunctionSig {
         params: param_types,
         param_type_exprs,
+        param_attributes: Vec::new(),
         defaults,
         return_type,
         declared_return,

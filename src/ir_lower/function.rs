@@ -370,6 +370,7 @@ pub(crate) fn lower_property_init_thunk(
     let sig = FunctionSig {
         params: vec![("this".to_string(), this_type.clone())],
         param_type_exprs: vec![None],
+        param_attributes: Vec::new(),
         defaults: vec![None],
         return_type: PhpType::Void,
         declared_return: false,
@@ -1064,6 +1065,7 @@ fn signature_from_ast_with_variadic(
             .iter()
             .map(|(_, type_ann, _, _)| type_ann.clone())
             .collect(),
+        param_attributes: Vec::new(),
         defaults: params.iter().map(|(_, _, default, _)| default.clone()).collect(),
         return_type: return_type
             .map(type_expr_to_php_type)

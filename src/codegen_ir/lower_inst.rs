@@ -559,6 +559,7 @@ fn function_signature_from_eir_with_param_count(
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
         param_type_exprs: vec![None; param_count],
+        param_attributes: Vec::new(),
         defaults: function.params.iter().take(param_count).map(|_| None).collect(),
         return_type: function.return_php_type.clone(),
         declared_return: !matches!(function.return_php_type, PhpType::Mixed),

@@ -218,6 +218,7 @@ impl Checker {
                 Ok(Some(FunctionSig {
                     params: closure_sig.params,
                     param_type_exprs: closure_sig.param_type_exprs,
+                    param_attributes: Vec::new(),
                     defaults: closure_sig.defaults,
                     return_type,
                     declared_return,

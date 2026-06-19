@@ -62,8 +62,7 @@ pub struct EnumCaseDecl {
 impl PartialEq for EnumCaseDecl {
     /// Compares two enum cases by name, value, and attributes; span is not compared.
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.value == other.value
-            && self.attributes == other.attributes
+        self.name == other.name && self.value == other.value && self.attributes == other.attributes
     }
 }
 
@@ -159,7 +158,8 @@ impl PartialEq for ClassProperty {
     /// Compares class properties by name, visibility, type, hooks, modifiers,
     /// by-ref flag, default value, and attributes; span is not compared.
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.visibility == other.visibility
+        self.name == other.name
+            && self.visibility == other.visibility
             && self.set_visibility == other.set_visibility
             && self.type_expr == other.type_expr
             && self.hooks == other.hooks
@@ -211,6 +211,9 @@ pub struct ClassMethod {
     pub is_final: bool,
     pub has_body: bool,
     pub params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+    /// Attribute groups declared on each source-order parameter.
+    /// This vector is parallel to `params`, plus one trailing entry when `variadic` is present.
+    pub param_attributes: Vec<Vec<AttributeGroup>>,
     pub variadic: Option<String>,
     /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each argument
     /// collected into the variadic is checked against this type.
@@ -227,7 +230,8 @@ impl PartialEq for ClassMethod {
     /// Compares class methods by name, visibility, static/abstract/final flags,
     /// has_body, and attributes; span, params, return_type, and body are not compared.
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.visibility == other.visibility
+        self.name == other.name
+            && self.visibility == other.visibility
             && self.is_static == other.is_static
             && self.is_abstract == other.is_abstract
             && self.is_final == other.is_final

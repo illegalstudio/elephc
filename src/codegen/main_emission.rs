@@ -131,6 +131,7 @@ pub(super) fn emit_main_and_finalize(
     let main_sig = FunctionSig {
         params: Vec::new(),
         param_type_exprs: Vec::new(),
+        param_attributes: Vec::new(),
         defaults: Vec::new(),
         return_type: PhpType::Void,
         declared_return: false,

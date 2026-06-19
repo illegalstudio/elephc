@@ -8,24 +8,32 @@
 //! Key details:
 //! - Folding must respect PHP coercions, truthiness, numeric edge cases, and runtime error boundaries.
 
-use super::super::{fold_block, try_prune_match_expr};
 use super::super::*;
+use super::super::{fold_block, try_prune_match_expr};
 use super::casts::try_fold_cast;
 use super::ops::{
-    try_fold_array_access, try_fold_binary_op, try_fold_bit_not, try_fold_negate,
-    try_fold_not, try_fold_null_coalesce, try_fold_short_ternary, try_fold_ternary,
+    try_fold_array_access, try_fold_binary_op, try_fold_bit_not, try_fold_negate, try_fold_not,
+    try_fold_null_coalesce, try_fold_short_ternary, try_fold_ternary,
 };
 
 /// Folds default expressions in function parameters.
 /// Returns a new parameter list with each parameter's default expression folded.
 pub(in crate::optimize) fn fold_params(
-    params: Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
-) -> Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)> {
+    params: Vec<(
+        String,
+        Option<crate::parser::ast::TypeExpr>,
+        Option<Expr>,
+        bool,
+    )>,
+) -> Vec<(
+    String,
+    Option<crate::parser::ast::TypeExpr>,
+    Option<Expr>,
+    bool,
+)> {
     params
         .into_iter()
-        .map(|(name, type_expr, default, is_ref)| {
-            (name, type_expr, default.map(fold_expr), is_ref)
-        })
+        .map(|(name, type_expr, default, is_ref)| (name, type_expr, default.map(fold_expr), is_ref))
         .collect()
 }
 
@@ -58,6 +66,7 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
         is_final: method.is_final,
         has_body: method.has_body,
         params: fold_params(method.params),
+        param_attributes: method.param_attributes,
         variadic: method.variadic,
         variadic_type: method.variadic_type,
         return_type: method.return_type,
@@ -90,9 +99,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
     let kind = match expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
-        ExprKind::IncludeValue { .. } => unreachable!(
-            "ExprKind::IncludeValue must be expanded by the resolver"
-        ),
+        ExprKind::IncludeValue { .. } => {
+            unreachable!("ExprKind::IncludeValue must be expanded by the resolver")
+        }
         ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
         ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
         ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
@@ -298,18 +307,14 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             object: Box::new(fold_expr(*object)),
             property,
         },
-        ExprKind::DynamicPropertyAccess { object, property } => {
-            ExprKind::DynamicPropertyAccess {
-                object: Box::new(fold_expr(*object)),
-                property: Box::new(fold_expr(*property)),
-            }
-        }
-        ExprKind::NullsafePropertyAccess { object, property } => {
-            ExprKind::NullsafePropertyAccess {
-                object: Box::new(fold_expr(*object)),
-                property,
-            }
-        }
+        ExprKind::DynamicPropertyAccess { object, property } => ExprKind::DynamicPropertyAccess {
+            object: Box::new(fold_expr(*object)),
+            property: Box::new(fold_expr(*property)),
+        },
+        ExprKind::NullsafePropertyAccess { object, property } => ExprKind::NullsafePropertyAccess {
+            object: Box::new(fold_expr(*object)),
+            property,
+        },
         ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             ExprKind::NullsafeDynamicPropertyAccess {
                 object: Box::new(fold_expr(*object)),

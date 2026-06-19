@@ -619,6 +619,7 @@ mod tests {
                 ("rest".to_string(), PhpType::Array(Box::new(PhpType::Mixed))),
             ],
             param_type_exprs: vec![None, None, None],
+            param_attributes: Vec::new(),
             defaults: vec![
                 None,
                 Some(Expr::new(ExprKind::StringLiteral("fallback".to_string()), Span::dummy())),
@@ -667,6 +668,7 @@ mod tests {
         let sig = FunctionSig {
             params: vec![("value".to_string(), PhpType::Int)],
             param_type_exprs: vec![None],
+            param_attributes: Vec::new(),
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: false,

@@ -888,6 +888,7 @@ fn callback_filter_callable_sig() -> FunctionSig {
             ("iterator".to_string(), PhpType::Object("Iterator".to_string())),
         ],
         param_type_exprs: vec![None, None, None],
+        param_attributes: Vec::new(),
         defaults: vec![None, None, None],
         return_type: PhpType::Bool,
         declared_return: false,

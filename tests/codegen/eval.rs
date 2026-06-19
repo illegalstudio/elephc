@@ -6406,7 +6406,7 @@ fn test_eval_reflection_method_lists_parameters() {
 eval('interface EvalReflectLeft {}
 interface EvalReflectRight {}
 class EvalReflectParamTarget {
-    public function run(int $first, int|string $union, EvalReflectLeft&EvalReflectRight $both, \App\Name|null $second = null, ...$rest) {}
+    public function run(#[EvalParamTag("first")] int $first, int|string $union, #[EvalParamTag("both")] EvalReflectLeft&EvalReflectRight $both, \App\Name|null $second = null, ...$rest) {}
 }
 $method = new ReflectionMethod("EvalReflectParamTarget", "run");
 echo $method->getNumberOfParameters() . "/";
@@ -6440,6 +6440,12 @@ foreach ($params as $param) {
     } else {
         echo ":null";
     }
+    $attrs = $param->getAttributes();
+    echo ":A" . count($attrs);
+    if (count($attrs) > 0) {
+        echo ":" . $attrs[0]->getName();
+        echo ":" . $attrs[0]->getArguments()[0];
+    }
     echo $param->isDefaultValueAvailable() ? ":D" : ":d";
     if ($param->isDefaultValueAvailable()) {
         echo "=";
@@ -6456,7 +6462,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "5/3:first@0rvbT:int!B:d|union@1rvbT:union!:intB:stringB:d|both@2rvbT:intersection!:EvalReflectLeftC:EvalReflectRightC:d|second@3OvbT:App\\Name?C:D=null|rest@4OVbt:null:d|"
+        "5/3:first@0rvbT:int!B:A1:EvalParamTag:first:d|union@1rvbT:union!:intB:stringB:A0:d|both@2rvbT:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|second@3OvbT:App\\Name?C:A0:D=null|rest@4OVbt:null:A0:d|"
     );
 }
 

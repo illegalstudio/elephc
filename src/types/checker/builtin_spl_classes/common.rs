@@ -78,6 +78,7 @@ pub(super) fn class_method_with_body(
         is_final: false,
         has_body: true,
         params,
+        param_attributes: Vec::new(),
         variadic: None,
         variadic_type: None,
         return_type,

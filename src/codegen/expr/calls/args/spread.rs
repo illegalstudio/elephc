@@ -471,6 +471,7 @@ fn fallback_variadic_sig() -> FunctionSig {
             PhpType::Array(Box::new(PhpType::Mixed)),
         )],
         param_type_exprs: vec![None],
+        param_attributes: Vec::new(),
         defaults: vec![None],
         return_type: PhpType::Mixed,
         declared_return: false,

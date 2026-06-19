@@ -163,6 +163,7 @@ fn descriptor_invoker_placeholder_sig() -> FunctionSig {
     FunctionSig {
         params: Vec::new(),
         param_type_exprs: Vec::new(),
+        param_attributes: Vec::new(),
         defaults: Vec::new(),
         return_type: PhpType::Mixed,
         declared_return: false,

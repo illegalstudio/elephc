@@ -70,6 +70,8 @@ struct ReflectionListedMember {
 #[derive(Clone)]
 struct ReflectionParameterMember {
     name: String,
+    attr_names: Vec<String>,
+    attr_args: Vec<Option<Vec<AttrArgValue>>>,
     position: i64,
     is_optional: bool,
     is_variadic: bool,
@@ -1618,6 +1620,16 @@ fn reflection_parameter_members(sig: &FunctionSig) -> Vec<ReflectionParameterMem
             let has_type = sig.declared_params.get(index).copied().unwrap_or(false);
             ReflectionParameterMember {
                 name: name.clone(),
+                attr_names: sig
+                    .param_attributes
+                    .get(index)
+                    .map(|groups| crate::types::collect_attribute_names(groups))
+                    .unwrap_or_default(),
+                attr_args: sig
+                    .param_attributes
+                    .get(index)
+                    .map(|groups| crate::types::collect_attribute_args(groups))
+                    .unwrap_or_default(),
                 position: index as i64,
                 is_optional: is_variadic
                     || sig
@@ -2818,6 +2830,12 @@ fn emit_reflection_parameter_properties(
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let name_offset = reflection_property_offset(class_info, "__name")?;
     emit_reflection_string_property(ctx, &parameter.name, name_offset, name_offset + 8);
+    emit_reflection_attrs_property(
+        ctx,
+        "ReflectionParameter",
+        &parameter.attr_names,
+        &parameter.attr_args,
+    )?;
     emit_reflection_owner_int_property(
         ctx,
         "ReflectionParameter",
@@ -2935,7 +2953,9 @@ fn emit_reflection_parameter_default_property(
         Some(ReflectionParameterDefaultValue::Str(value)) => {
             emit_boxed_string_literal_default_to_result(ctx, value)
         }
-        Some(ReflectionParameterDefaultValue::Null) | None => emit_boxed_null_literal_to_result(ctx),
+        Some(ReflectionParameterDefaultValue::Null) | None => {
+            emit_boxed_null_literal_to_result(ctx)
+        }
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, default_offset);
@@ -3018,7 +3038,9 @@ fn emit_reflection_intersection_type_object(
             .module
             .class_infos
             .get("ReflectionIntersectionType")
-            .ok_or_else(|| CodegenIrError::unsupported("unknown class ReflectionIntersectionType"))?;
+            .ok_or_else(|| {
+                CodegenIrError::unsupported("unknown class ReflectionIntersectionType")
+            })?;
         (
             class_info.class_id,
             class_info.properties.len(),
@@ -3033,12 +3055,7 @@ fn emit_reflection_intersection_type_object(
         &uninitialized_marker_offsets,
     )?;
     emit_reflection_intersection_type_types_property(ctx, &type_metadata.types)?;
-    emit_reflection_owner_bool_property(
-        ctx,
-        "ReflectionIntersectionType",
-        "__allows_null",
-        false,
-    )?;
+    emit_reflection_owner_bool_property(ctx, "ReflectionIntersectionType", "__allows_null", false)?;
     Ok(())
 }
 

@@ -537,6 +537,7 @@ fn install_preg_callback_expected_sig(
     let previous = ctx.expected_first_class_callable_sig.replace(FunctionSig {
         params: vec![("matches".to_string(), preg_matches_type())],
         param_type_exprs: vec![None],
+        param_attributes: Vec::new(),
         defaults: vec![None],
         return_type: PhpType::Str,
         declared_return: false,

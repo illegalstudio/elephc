@@ -364,6 +364,7 @@ fn fiber_start_call_sig(arg_count: usize) -> FunctionSig {
             .map(|idx| (format!("arg{}", idx), PhpType::Mixed))
             .collect(),
         param_type_exprs: vec![None; arg_count],
+        param_attributes: Vec::new(),
         defaults: vec![None; arg_count],
         return_type: PhpType::Mixed,
         declared_return: false,

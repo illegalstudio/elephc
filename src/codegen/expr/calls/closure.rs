@@ -217,6 +217,7 @@ pub(super) fn emit_closure(
     let preliminary_sig = FunctionSig {
         params: param_types.clone(),
         param_type_exprs: param_type_exprs.clone(),
+        param_attributes: Vec::new(),
         defaults: defaults.clone(),
         return_type: PhpType::Int,
         declared_return: false,
@@ -232,6 +233,7 @@ pub(super) fn emit_closure(
     let sig = FunctionSig {
         params: param_types,
         param_type_exprs,
+        param_attributes: Vec::new(),
         defaults,
         return_type: resolved_return_type,
         declared_return: return_type.is_some(),
