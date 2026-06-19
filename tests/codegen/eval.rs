@@ -6710,6 +6710,44 @@ echo $directType->getName();');
     );
 }
 
+/// Verifies eval ReflectionProperty materializes property default metadata through the bridge.
+#[test]
+fn test_eval_reflection_property_get_default_value_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectPropertyDefaultTarget {
+    public $implicit;
+    public int $typed;
+    public ?string $nullableTyped;
+    public $explicitNull = null;
+    public int $count = 7;
+    public static string $label = "ok";
+}
+foreach (["implicit", "typed", "nullableTyped", "explicitNull", "count", "label"] as $name) {
+    $property = new ReflectionProperty("EvalReflectPropertyDefaultTarget", $name);
+    echo $property->getName() . ":";
+    echo $property->hasDefaultValue() ? "D:" : "d:";
+    $value = $property->getDefaultValue();
+    echo $value === null ? "null" : $value;
+    echo "|";
+}
+$listed = (new ReflectionClass("EvalReflectPropertyDefaultTarget"))->getProperty("implicit");
+echo "listed:";
+echo $listed->hasDefaultValue() ? "D:" : "d:";
+echo $listed->getDefaultValue() === null ? "null" : "bad";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "implicit:D:null|typed:d:null|nullableTyped:d:null|explicitNull:D:null|count:D:7|label:D:ok|listed:D:null"
+    );
+}
+
 /// Verifies eval ReflectionParameter exposes the declaring class for method parameters.
 #[test]
 fn test_eval_reflection_parameter_reports_declaring_class() {

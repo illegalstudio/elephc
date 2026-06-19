@@ -2031,6 +2031,18 @@ fn add_reflection_member_flag_methods(
             null_expr(),
         ));
         properties.push(builtin_property(
+            "__has_default_value",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__default_value",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        properties.push(builtin_property(
             "__modifiers",
             Visibility::Private,
             Some(TypeExpr::Int),
@@ -2042,6 +2054,14 @@ fn add_reflection_member_flag_methods(
         ));
         methods.push(builtin_reflection_property_has_type_method());
         methods.push(builtin_reflection_class_mixed_method("getType", "__type"));
+        methods.push(builtin_reflection_class_bool_method(
+            "hasDefaultValue",
+            "__has_default_value",
+        ));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getDefaultValue",
+            "__default_value",
+        ));
         for (property, method) in [("__is_final", "isFinal"), ("__is_abstract", "isAbstract")] {
             properties.push(builtin_property(
                 property,
@@ -2069,10 +2089,7 @@ fn add_reflection_member_flag_methods(
             Some(mixed_type()),
             Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
         ));
-        methods.push(builtin_reflection_class_mixed_method(
-            "getValue",
-            "__value",
-        ));
+        methods.push(builtin_reflection_class_mixed_method("getValue", "__value"));
         properties.push(builtin_property(
             "__is_enum_case",
             Visibility::Private,
@@ -2114,10 +2131,7 @@ fn add_reflection_member_flag_methods(
             Some(mixed_type()),
             Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
         ));
-        methods.push(builtin_reflection_class_mixed_method(
-            "getValue",
-            "__value",
-        ));
+        methods.push(builtin_reflection_class_mixed_method("getValue", "__value"));
     }
     if class_name == "ReflectionEnumBackedCase" {
         properties.push(builtin_property(
@@ -2358,6 +2372,18 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("hasDefaultValue"))
+                {
+                    sig.return_type = PhpType::Bool;
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getDefaultValue"))
+                {
+                    sig.return_type = PhpType::Mixed;
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;

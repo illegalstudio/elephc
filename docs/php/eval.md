@@ -243,6 +243,9 @@ property metadata with PHP-compatible `ReflectionProperty::IS_*` constants for
 the bitmask. `ReflectionProperty::hasType()` and `getType()` expose retained
 property type metadata through `ReflectionNamedType`, `ReflectionUnionType`, and
 `ReflectionIntersectionType` where eval has retained a supported declared type.
+`ReflectionProperty::hasDefaultValue()` and `getDefaultValue()` expose
+materialized property default metadata, including PHP's implicit `null` default
+for untyped concrete properties without an explicit initializer.
 `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant

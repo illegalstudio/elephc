@@ -2195,6 +2195,66 @@ if ($directType instanceof ReflectionNamedType) {
     );
 }
 
+/// Verifies that `ReflectionProperty` exposes supported property defaults.
+#[test]
+fn test_reflection_property_get_default_value_returns_property_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectPropertyDefaultTarget {
+    public $implicit;
+    public int $typed;
+    public ?string $nullableTyped;
+    public $explicitNull = null;
+    public int $count = 7;
+    public static string $label = "ok";
+}
+$implicit = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "implicit");
+echo $implicit->getName() . ":";
+echo $implicit->hasDefaultValue() ? "D:" : "d:";
+echo $implicit->getDefaultValue() === null ? "null" : $implicit->getDefaultValue();
+echo "|";
+$typed = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "typed");
+echo $typed->getName() . ":";
+echo $typed->hasDefaultValue() ? "D:" : "d:";
+echo $typed->getDefaultValue() === null ? "null" : $typed->getDefaultValue();
+echo "|";
+$nullableTyped = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "nullableTyped");
+echo $nullableTyped->getName() . ":";
+echo $nullableTyped->hasDefaultValue() ? "D:" : "d:";
+echo $nullableTyped->getDefaultValue() === null ? "null" : $nullableTyped->getDefaultValue();
+echo "|";
+$explicitNull = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "explicitNull");
+echo $explicitNull->getName() . ":";
+echo $explicitNull->hasDefaultValue() ? "D:" : "d:";
+echo $explicitNull->getDefaultValue() === null ? "null" : $explicitNull->getDefaultValue();
+echo "|";
+$count = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "count");
+echo $count->getName() . ":";
+echo $count->hasDefaultValue() ? "D:" : "d:";
+echo $count->getDefaultValue() === null ? "null" : $count->getDefaultValue();
+echo "|";
+$label = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "label");
+echo $label->getName() . ":";
+echo $label->hasDefaultValue() ? "D:" : "d:";
+echo $label->getDefaultValue() === null ? "null" : $label->getDefaultValue();
+echo "|";
+$listed = (new ReflectionClass(ReflectPropertyDefaultTarget::class))->getProperty("implicit");
+echo "listed:";
+echo $listed->hasDefaultValue() ? "D:" : "d:";
+echo $listed->getDefaultValue() === null ? "null" : "bad";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "implicit:D:null|typed:d:null|nullableTyped:d:null|explicitNull:D:null|count:D:7|label:D:ok|listed:D:null"
+    );
+}
+
 /// Verifies `ReflectionParameter::getAttributes()` exposes parameter attributes.
 #[test]
 fn test_reflection_parameter_get_attributes_returns_parameter_metadata() {

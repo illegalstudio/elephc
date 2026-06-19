@@ -968,7 +968,7 @@ return true;"##,
 #[test]
 fn execute_program_reflection_property_get_type_metadata() {
     let program = parse_fragment(
-br##"class EvalReflectPropertyTypeDep {}
+        br##"class EvalReflectPropertyTypeDep {}
 class EvalReflectPropertyTypeTarget {
     public int $id;
     public ?string $name;
@@ -1012,6 +1012,45 @@ return true;"##,
     assert_eq!(
         values.output,
         "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies ReflectionProperty exposes eval property default metadata.
+#[test]
+fn execute_program_reflection_property_get_default_value_metadata() {
+    let program = parse_fragment(
+        br#"class EvalReflectPropertyDefaultTarget {
+    public $implicit;
+    public int $typed;
+    public ?string $nullableTyped;
+    public $explicitNull = null;
+    public int $count = 7;
+    public static string $label = "ok";
+}
+foreach (["implicit", "typed", "nullableTyped", "explicitNull", "count", "label"] as $name) {
+    $property = new ReflectionProperty("EvalReflectPropertyDefaultTarget", $name);
+    echo $property->getName(); echo ":";
+    echo $property->hasDefaultValue() ? "D:" : "d:";
+    $value = $property->getDefaultValue();
+    echo $value === null ? "null" : $value;
+    echo "|";
+}
+$listed = (new ReflectionClass("EvalReflectPropertyDefaultTarget"))->getProperty("implicit");
+echo "listed:";
+echo $listed->hasDefaultValue() ? "D:" : "d:";
+echo $listed->getDefaultValue() === null ? "null" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "implicit:D:null|typed:d:null|nullableTyped:d:null|explicitNull:D:null|count:D:7|label:D:ok|listed:D:null"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
