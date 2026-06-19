@@ -1108,6 +1108,15 @@ fn lower_null_coalesce(
     default: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    // PHP `$a[$k] ?? $d` uses isset semantics: when the key is absent (or its value is null),
+    // yield `$d` WITHOUT reading the element. Eagerly reading a missing element is unsafe — for a
+    // statically array-typed element there is no null representation, so the read returns a garbage
+    // descriptor (which then crashes downstream). Route array-element `??` through an
+    // existence-guarded read instead of the eager read + IsNull path used for other operands.
+    if let ExprKind::ArrayAccess { array, index } = &value.kind {
+        return lower_array_access_null_coalesce(ctx, array, index, default, expr);
+    }
+
     let value = lower_expr(ctx, value);
     let is_null = ctx.emit_value(
         Op::IsNull,
@@ -1136,6 +1145,77 @@ fn lower_null_coalesce(
 
     ctx.builder.position_at_end(value_block);
     store_value_into_temp(ctx, &temp_name, result_type, value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Lowers `$a[$k] ?? $default` with PHP isset semantics: evaluate the array and index once,
+/// take `$default` when the key is absent (or its value is null), and only read the element when
+/// it is present. This avoids eagerly reading a missing element — for a statically array-typed
+/// element there is no null representation, so the eager read returns a garbage descriptor that
+/// crashes downstream. The result is `Mixed` whenever the element and default types differ (so a
+/// `null`/scalar default is representable alongside an array/object element).
+fn lower_array_access_null_coalesce(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    default: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    // Existence check via `isset($a[$k])`, which is false for a missing key OR a null value —
+    // exactly the `??` condition — and which already handles plain arrays, hashes, string offsets,
+    // and `ArrayAccess` objects without reading the element.
+    let access_expr = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(array.clone()),
+            index: Box::new(index.clone()),
+        },
+        expr.span,
+    );
+    let isset_expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("isset"),
+            args: vec![access_expr.clone()],
+        },
+        expr.span,
+    );
+    let exists = lower_expr(ctx, &isset_expr);
+    let exists = ctx.truthy(exists, Some(expr.span));
+
+    let read_expr = access_expr;
+    let array_ty = materialized_expr_type_for_merge(ctx, array);
+    let elem_ty = match array_ty.codegen_repr() {
+        PhpType::Array(elem) => *elem,
+        PhpType::AssocArray { value, .. } => *value,
+        _ => PhpType::Mixed,
+    };
+    let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+    let result_type = if elem_ty.codegen_repr() == default_ty {
+        elem_ty.codegen_repr()
+    } else {
+        PhpType::Mixed
+    };
+    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+
+    let present_block = ctx.builder.create_named_block("coalesce.present", Vec::new());
+    let absent_block = ctx.builder.create_named_block("coalesce.absent", Vec::new());
+    let merge = ctx.builder.create_named_block("coalesce.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: exists.value,
+        then_target: present_block,
+        then_args: Vec::new(),
+        else_target: absent_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(present_block);
+    store_expr_into_temp(ctx, &temp_name, result_type.clone(), &read_expr, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(absent_block);
+    store_expr_into_temp(ctx, &temp_name, result_type, default, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
