@@ -75,8 +75,15 @@ struct ReflectionParameterMember {
     is_variadic: bool,
     is_passed_by_reference: bool,
     has_type: bool,
-    type_metadata: Option<ReflectionNamedTypeMetadata>,
+    type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
+}
+
+/// Metadata for one `ReflectionType` object returned by `ReflectionParameter::getType()`.
+#[derive(Clone)]
+enum ReflectionParameterTypeMetadata {
+    Named(ReflectionNamedTypeMetadata),
+    Union(ReflectionUnionTypeMetadata),
 }
 
 /// Metadata for one `ReflectionNamedType` returned by `ReflectionParameter::getType()`.
@@ -85,6 +92,13 @@ struct ReflectionNamedTypeMetadata {
     name: String,
     allows_null: bool,
     is_builtin: bool,
+}
+
+/// Metadata for one `ReflectionUnionType` returned by `ReflectionParameter::getType()`.
+#[derive(Clone)]
+struct ReflectionUnionTypeMetadata {
+    types: Vec<ReflectionNamedTypeMetadata>,
+    allows_null: bool,
 }
 
 /// Compile-time default forms returned by `ReflectionParameter::getDefaultValue()`.
@@ -1607,7 +1621,7 @@ fn reflection_parameter_members(sig: &FunctionSig) -> Vec<ReflectionParameterMem
                 is_variadic,
                 is_passed_by_reference: sig.ref_params.get(index).copied().unwrap_or(false),
                 has_type,
-                type_metadata: reflection_named_type_metadata(ty).filter(|_| has_type),
+                type_metadata: reflection_parameter_type_metadata(ty).filter(|_| has_type),
                 default_value: sig
                     .defaults
                     .get(index)
@@ -1637,7 +1651,15 @@ fn reflection_parameter_default_value(default: &Expr) -> Option<ReflectionParame
     }
 }
 
-/// Converts a normalized parameter type into the simple `ReflectionNamedType` subset.
+/// Converts a normalized parameter type into a supported `ReflectionType` subset.
+fn reflection_parameter_type_metadata(ty: &PhpType) -> Option<ReflectionParameterTypeMetadata> {
+    match ty {
+        PhpType::Union(members) => reflection_union_or_nullable_type_metadata(members),
+        _ => reflection_named_type_metadata(ty).map(ReflectionParameterTypeMetadata::Named),
+    }
+}
+
+/// Converts a normalized non-union parameter type into a simple `ReflectionNamedType`.
 fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionNamedTypeMetadata> {
     match ty {
         PhpType::Int => Some(reflection_builtin_named_type("int", false)),
@@ -1655,7 +1677,6 @@ fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionNamedTypeMet
             allows_null: false,
             is_builtin: false,
         }),
-        PhpType::Union(members) => reflection_nullable_named_type_metadata(members),
         _ => None,
     }
 }
@@ -1669,18 +1690,27 @@ fn reflection_builtin_named_type(name: &str, allows_null: bool) -> ReflectionNam
     }
 }
 
-/// Handles `T|null` unions while leaving broader union types for future `ReflectionUnionType`.
-fn reflection_nullable_named_type_metadata(
+/// Handles `T|null` as a nullable named type and wider unions as `ReflectionUnionType`.
+fn reflection_union_or_nullable_type_metadata(
     members: &[PhpType],
-) -> Option<ReflectionNamedTypeMetadata> {
-    let mut non_null_members = members.iter().filter(|member| !matches!(member, PhpType::Void));
-    let first = non_null_members.next()?;
-    if non_null_members.next().is_some() {
-        return None;
+) -> Option<ReflectionParameterTypeMetadata> {
+    let allows_null = members.iter().any(|member| matches!(member, PhpType::Void));
+    let non_null_members = members
+        .iter()
+        .filter(|member| !matches!(member, PhpType::Void))
+        .collect::<Vec<_>>();
+    if non_null_members.len() == 1 {
+        let mut metadata = reflection_named_type_metadata(non_null_members[0])?;
+        metadata.allows_null = allows_null;
+        return Some(ReflectionParameterTypeMetadata::Named(metadata));
     }
-    let mut metadata = reflection_named_type_metadata(first)?;
-    metadata.allows_null = true;
-    Some(metadata)
+    let types = non_null_members
+        .into_iter()
+        .map(reflection_named_type_metadata)
+        .collect::<Option<Vec<_>>>()?;
+    (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Union(
+        ReflectionUnionTypeMetadata { types, allows_null },
+    ))
 }
 
 /// Returns the `__construct` member object metadata when the reflected class-like symbol has one.
@@ -2785,16 +2815,24 @@ fn emit_reflection_parameter_type_property(
         reflection_property_offset(class_info, "__type")?
     };
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let object_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    if let Some(type_metadata) = parameter.type_metadata.as_ref() {
-        emit_reflection_named_type_object(ctx, type_metadata)?;
-        emit_box_current_value_as_mixed(
-            ctx.emitter,
-            &PhpType::Object("ReflectionNamedType".to_string()),
-        );
-    } else {
-        emit_boxed_null_literal_to_result(ctx);
+    match parameter.type_metadata.as_ref() {
+        Some(ReflectionParameterTypeMetadata::Named(type_metadata)) => {
+            emit_reflection_named_type_object(ctx, type_metadata)?;
+            emit_box_current_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Object("ReflectionNamedType".to_string()),
+            );
+        }
+        Some(ReflectionParameterTypeMetadata::Union(type_metadata)) => {
+            emit_reflection_union_type_object(ctx, type_metadata)?;
+            emit_box_current_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Object("ReflectionUnionType".to_string()),
+            );
+        }
+        None => emit_boxed_null_literal_to_result(ctx),
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, type_offset);
@@ -2817,7 +2855,7 @@ fn emit_reflection_parameter_default_property(
         reflection_property_offset(class_info, "__default_value")?
     };
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let object_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     match parameter.default_value.as_ref() {
         Some(ReflectionParameterDefaultValue::Int(value)) => {
@@ -2838,6 +2876,90 @@ fn emit_reflection_parameter_default_property(
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, default_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, default_offset + 8);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
+}
+
+/// Allocates and populates one `ReflectionUnionType` object.
+fn emit_reflection_union_type_object(
+    ctx: &mut FunctionContext<'_>,
+    type_metadata: &ReflectionUnionTypeMetadata,
+) -> Result<()> {
+    let (class_id, property_count, uninitialized_marker_offsets) = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionUnionType")
+            .ok_or_else(|| CodegenIrError::unsupported("unknown class ReflectionUnionType"))?;
+        (
+            class_info.class_id,
+            class_info.properties.len(),
+            super::uninitialized_property_marker_offsets(class_info),
+        )
+    };
+    super::emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        false,
+        &uninitialized_marker_offsets,
+    )?;
+    emit_reflection_union_type_types_property(ctx, &type_metadata.types)?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionUnionType",
+        "__allows_null",
+        type_metadata.allows_null,
+    )?;
+    Ok(())
+}
+
+/// Writes the `ReflectionUnionType::__types` array of `ReflectionNamedType` objects.
+fn emit_reflection_union_type_types_property(
+    ctx: &mut FunctionContext<'_>,
+    types: &[ReflectionNamedTypeMetadata],
+) -> Result<()> {
+    let types_offset = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionUnionType")
+            .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+        reflection_property_offset(class_info, "__types")?
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    emit_reflection_named_type_array(ctx, types)?;
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, types_offset);
+    abi::emit_load_int_immediate(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter), 4);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        object_reg,
+        types_offset + 8,
+    );
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
+}
+
+/// Allocates an indexed array of populated `ReflectionNamedType` objects.
+fn emit_reflection_named_type_array(
+    ctx: &mut FunctionContext<'_>,
+    types: &[ReflectionNamedTypeMetadata],
+) -> Result<()> {
+    emit_reflection_indexed_array(ctx, types.len().max(1), 8);
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Object("ReflectionNamedType".to_string()),
+    );
+    for type_metadata in types {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_reflection_named_type_object(ctx, type_metadata)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_append_reflection_member_object(ctx);
+    }
     Ok(())
 }
 

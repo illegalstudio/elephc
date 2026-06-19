@@ -65,8 +65,19 @@ struct EvalReflectionParameterMetadata {
     is_variadic: bool,
     is_passed_by_reference: bool,
     has_type: bool,
-    type_metadata: Option<EvalReflectionNamedTypeMetadata>,
+    type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
+}
+
+/// Eval metadata needed to materialize one parameter `ReflectionType` object.
+struct EvalReflectionParameterTypeMetadata {
+    kind: EvalReflectionParameterTypeKind,
+}
+
+/// Eval reflection parameter type object variants.
+enum EvalReflectionParameterTypeKind {
+    Named(EvalReflectionNamedTypeMetadata),
+    Union(EvalReflectionUnionTypeMetadata),
 }
 
 /// Eval metadata needed to materialize one `ReflectionNamedType` object.
@@ -74,6 +85,12 @@ struct EvalReflectionNamedTypeMetadata {
     name: String,
     allows_null: bool,
     is_builtin: bool,
+}
+
+/// Eval metadata needed to materialize one `ReflectionUnionType` object.
+struct EvalReflectionUnionTypeMetadata {
+    types: Vec<EvalReflectionNamedTypeMetadata>,
+    allows_null: bool,
 }
 
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.
@@ -793,7 +810,7 @@ fn eval_reflection_parameter_object_result(
     let method_objects = values.array_new(0)?;
     let parent_class = values.bool_value(false)?;
     let type_value = match parameter.type_metadata.as_ref() {
-        Some(type_metadata) => eval_reflection_named_type_object_result(type_metadata, values)?,
+        Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
         None => values.null()?,
     };
     let default_value = match parameter.default_value.as_ref() {
@@ -825,6 +842,21 @@ fn eval_reflection_parameter_object_result(
     values.release(default_value)?;
     values.release(parent_class)?;
     Ok(object)
+}
+
+/// Materializes one parameter ReflectionType object through the shared reflection helper.
+fn eval_reflection_type_object_result(
+    type_metadata: &EvalReflectionParameterTypeMetadata,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match &type_metadata.kind {
+        EvalReflectionParameterTypeKind::Named(named_type) => {
+            eval_reflection_named_type_object_result(named_type, values)
+        }
+        EvalReflectionParameterTypeKind::Union(union_type) => {
+            eval_reflection_union_type_object_result(union_type, values)
+        }
+    }
 }
 
 /// Materializes one ReflectionNamedType object through the shared reflection helper.
@@ -864,6 +896,59 @@ fn eval_reflection_named_type_object_result(
     values.release(property_objects)?;
     values.release(parent_class)?;
     Ok(object)
+}
+
+/// Materializes one ReflectionUnionType object through the shared reflection helper.
+fn eval_reflection_union_type_object_result(
+    type_metadata: &EvalReflectionUnionTypeMetadata,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let attrs = values.array_new(0)?;
+    let interface_names = values.array_new(0)?;
+    let trait_names = values.array_new(0)?;
+    let method_names = values.array_new(0)?;
+    let property_names = values.array_new(0)?;
+    let types = eval_reflection_named_type_object_array_result(&type_metadata.types, values)?;
+    let property_objects = values.array_new(0)?;
+    let parent_class = values.bool_value(false)?;
+    let flags = eval_reflection_union_type_flags(type_metadata);
+    let object = values.reflection_owner_new(
+        EVAL_REFLECTION_OWNER_UNION_TYPE,
+        "",
+        attrs,
+        interface_names,
+        trait_names,
+        method_names,
+        property_names,
+        types,
+        property_objects,
+        parent_class,
+        flags,
+        0,
+    )?;
+    values.release(attrs)?;
+    values.release(interface_names)?;
+    values.release(trait_names)?;
+    values.release(method_names)?;
+    values.release(property_names)?;
+    values.release(types)?;
+    values.release(property_objects)?;
+    values.release(parent_class)?;
+    Ok(object)
+}
+
+/// Builds an indexed array of populated ReflectionNamedType objects.
+fn eval_reflection_named_type_object_array_result(
+    types: &[EvalReflectionNamedTypeMetadata],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(types.len())?;
+    for (position, type_metadata) in types.iter().enumerate() {
+        let type_object = eval_reflection_named_type_object_result(type_metadata, values)?;
+        let key = values.int(position as i64)?;
+        result = values.array_set(result, key, type_object)?;
+    }
+    Ok(result)
 }
 
 /// Builds an indexed array of ReflectionMethod or ReflectionProperty objects for a ReflectionClass.
@@ -1315,21 +1400,46 @@ fn eval_reflection_parameters_from_names_and_type_flags(
             type_metadata: parameter_types
                 .get(position)
                 .and_then(Option::as_ref)
-                .and_then(eval_reflection_named_type_metadata)
+                .and_then(eval_reflection_parameter_type_metadata)
                 .filter(|_| has_type_flags.get(position).copied().unwrap_or(false)),
             default_value: defaults.get(position).and_then(Clone::clone),
         })
         .collect()
 }
 
-/// Converts eval parameter type metadata into the simple ReflectionNamedType subset.
-fn eval_reflection_named_type_metadata(
+/// Converts eval parameter type metadata into the supported ReflectionType subset.
+fn eval_reflection_parameter_type_metadata(
     parameter_type: &EvalParameterType,
-) -> Option<EvalReflectionNamedTypeMetadata> {
-    let [variant] = parameter_type.variants() else {
+) -> Option<EvalReflectionParameterTypeMetadata> {
+    let variants = parameter_type.variants();
+    if variants.is_empty() {
         return None;
-    };
+    }
     let allows_null = parameter_type.allows_null();
+    let mut types = variants
+        .iter()
+        .map(|variant| eval_reflection_named_type_variant_metadata(variant, false))
+        .collect::<Option<Vec<_>>>()?;
+    if types.len() == 1 {
+        let mut named = types.pop()?;
+        named.allows_null = allows_null;
+        return Some(EvalReflectionParameterTypeMetadata {
+            kind: EvalReflectionParameterTypeKind::Named(named),
+        });
+    }
+    Some(EvalReflectionParameterTypeMetadata {
+        kind: EvalReflectionParameterTypeKind::Union(EvalReflectionUnionTypeMetadata {
+            types,
+            allows_null,
+        }),
+    })
+}
+
+/// Converts one eval parameter type variant into `ReflectionNamedType` metadata.
+fn eval_reflection_named_type_variant_metadata(
+    variant: &EvalParameterTypeVariant,
+    allows_null: bool,
+) -> Option<EvalReflectionNamedTypeMetadata> {
     match variant {
         EvalParameterTypeVariant::Array => {
             Some(eval_reflection_builtin_named_type("array", allows_null))
@@ -1432,6 +1542,15 @@ fn eval_reflection_named_type_flags(type_metadata: &EvalReflectionNamedTypeMetad
         flags |= EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN;
     }
     flags
+}
+
+/// Packs ReflectionUnionType predicate flags for the runtime type factory.
+fn eval_reflection_union_type_flags(type_metadata: &EvalReflectionUnionTypeMetadata) -> u64 {
+    if type_metadata.allows_null {
+        EVAL_REFLECTION_NAMED_TYPE_FLAG_ALLOWS_NULL
+    } else {
+        0
+    }
 }
 
 /// Converts one reflection constructor argument to a Rust UTF-8 string.
