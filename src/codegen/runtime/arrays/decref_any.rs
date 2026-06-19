@@ -75,6 +75,8 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_decref_any_object");                         // release objects through __rt_decref_object
     emitter.instruction("cmp x11, #5");                                         // is this a boxed mixed value?
     emitter.instruction("b.eq __rt_decref_any_mixed");                          // release mixed cells through __rt_decref_mixed
+    emitter.instruction("cmp x11, #6");                                         // is this a reference cell?
+    emitter.instruction("b.eq __rt_decref_any_refcell");                        // release reference cells through __rt_decref_refcell
     emitter.instruction("ret");                                                 // unknown/raw kinds need no release
 
     emitter.label("__rt_decref_any_string");
@@ -91,6 +93,9 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_mixed");
     emitter.instruction("b __rt_decref_mixed");                                 // tail-call to mixed-cell decref
+
+    emitter.label("__rt_decref_any_refcell");
+    emitter.instruction("b __rt_decref_refcell");                               // tail-call to reference-cell decref
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release
@@ -133,6 +138,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_decref_any_object");                           // objects release through the x86_64 object decref helper
     emitter.instruction("cmp r10, 5");                                          // does this heap-backed payload point at a boxed mixed cell?
     emitter.instruction("je __rt_decref_any_mixed");                            // mixed cells release through the x86_64 mixed decref helper
+    emitter.instruction("cmp r10, 6");                                          // does this heap-backed payload point at a reference cell?
+    emitter.instruction("je __rt_decref_any_refcell");                          // reference cells release through the x86_64 reference decref helper
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
 
     emitter.label("__rt_decref_any_string");
@@ -149,6 +156,9 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_mixed");
     emitter.instruction("jmp __rt_decref_mixed");                               // tail-call to the mixed-box decref helper on x86_64
+
+    emitter.label("__rt_decref_any_refcell");
+    emitter.instruction("jmp __rt_decref_refcell");                             // tail-call to the reference-cell decref helper on x86_64
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release for null, foreign, or unsupported heap kinds
