@@ -1220,6 +1220,7 @@ pub struct EvalClassProperty {
     attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
     is_static: bool,
+    is_final: bool,
     is_readonly: bool,
     is_abstract: bool,
     has_get_hook: bool,
@@ -1262,11 +1263,31 @@ impl EvalClassProperty {
         is_readonly: bool,
         default: Option<EvalExpr>,
     ) -> Self {
+        Self::with_visibility_static_final_and_readonly(
+            name,
+            visibility,
+            is_static,
+            false,
+            is_readonly,
+            default,
+        )
+    }
+
+    /// Creates an eval class property with explicit storage and modifier metadata.
+    pub fn with_visibility_static_final_and_readonly(
+        name: impl Into<String>,
+        visibility: EvalVisibility,
+        is_static: bool,
+        is_final: bool,
+        is_readonly: bool,
+        default: Option<EvalExpr>,
+    ) -> Self {
         Self {
             name: name.into(),
             attributes: Vec::new(),
             visibility,
             is_static,
+            is_final,
             is_readonly,
             is_abstract: false,
             has_get_hook: false,
@@ -1320,6 +1341,11 @@ impl EvalClassProperty {
     /// Returns whether this property was declared `static`.
     pub const fn is_static(&self) -> bool {
         self.is_static
+    }
+
+    /// Returns whether this property was declared `final`.
+    pub const fn is_final(&self) -> bool {
+        self.is_final
     }
 
     /// Returns whether this property was declared `readonly`.

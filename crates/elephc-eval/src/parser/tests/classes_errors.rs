@@ -525,6 +525,7 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
     let program = parse_fragment(
         br#"abstract class DynEvalAbstract {
     abstract public function read($value);
+    final public $value = 42;
     final public function label() { return "base"; }
 }"#,
     )
@@ -537,7 +538,14 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
             false,
             None,
             Vec::new(),
-            Vec::new(),
+            vec![EvalClassProperty::with_visibility_static_final_and_readonly(
+                "value",
+                EvalVisibility::Public,
+                false,
+                true,
+                false,
+                Some(EvalExpr::Const(EvalConst::Int(42))),
+            )],
             vec![
                 EvalClassMethod::with_modifiers(
                     "read",

@@ -441,6 +441,19 @@ class EvalMissingAbstractHookBox extends EvalMissingAbstractHookBase {}"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies abstract final eval properties are rejected while parsing.
+#[test]
+fn parse_fragment_rejects_final_abstract_property_hook_contract() {
+    let err = parse_fragment(
+        br#"abstract class EvalFinalAbstractHookBase {
+    abstract final public string $value { get; }
+}"#,
+    )
+    .expect_err("final abstract property should fail");
+
+    assert_eq!(err, EvalParseError::UnsupportedConstruct);
+}
+
 /// Verifies readonly properties cannot satisfy abstract writable hook contracts.
 #[test]
 fn execute_program_rejects_readonly_property_for_abstract_set_contract() {

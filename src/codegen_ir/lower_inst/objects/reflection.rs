@@ -1506,8 +1506,8 @@ fn reflection_property_member_flags(
         return Some(reflection_member_flags(
             false,
             visibility,
-            false,
-            false,
+            info.final_properties.contains(property_name),
+            info.abstract_properties.contains(property_name),
             info.readonly_properties.contains(property_name),
         ));
     }
@@ -1520,7 +1520,13 @@ fn reflection_property_member_flags(
             .static_property_visibilities
             .get(property_name)
             .unwrap_or(&Visibility::Public);
-        return Some(reflection_member_flags(true, visibility, false, false, false));
+        return Some(reflection_member_flags(
+            true,
+            visibility,
+            info.final_static_properties.contains(property_name),
+            false,
+            false,
+        ));
     }
     None
 }
@@ -3622,6 +3628,13 @@ fn emit_reflection_member_flag_properties(
                 flags.is_protected,
             )?;
             emit_reflection_owner_bool_property(ctx, class_name, "__is_private", flags.is_private)?;
+            emit_reflection_owner_bool_property(ctx, class_name, "__is_final", flags.is_final)?;
+            emit_reflection_owner_bool_property(
+                ctx,
+                class_name,
+                "__is_abstract",
+                flags.is_abstract,
+            )?;
             emit_reflection_owner_bool_property(
                 ctx,
                 class_name,

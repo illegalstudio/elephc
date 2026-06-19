@@ -134,8 +134,8 @@ containers to eval-declared functions.
 Eval-declared classes support inheritance, public/protected/private properties
 and methods, concrete property `get` / `set` hooks, interface property hook
 contract checks, abstract property hook contracts, property-level `readonly`,
-`readonly class`, `__construct()`, abstract classes and methods, final classes
-and methods, trait composition with `insteadof` conflict resolution and `as`
+`readonly class`, `__construct()`, abstract classes and methods, final classes,
+methods, and properties, trait composition with `insteadof` conflict resolution and `as`
 aliases/visibility adaptations, interface implementation checks, static
 properties, static methods, static interface method contracts, class constants, interface constants, trait
 constants, class-level attributes, and `ClassName::class` literals. Member
@@ -234,7 +234,7 @@ parameters after method execution, write back mutated `&...$items` elements
 when the variadic container itself is not rebound, and are reported through
 `ReflectionParameter::isPassedByReference()`.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
-and `isReadOnly()` report eval property metadata.
+`isFinal()`, `isAbstract()`, and `isReadOnly()` report eval property metadata.
 `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant

@@ -507,12 +507,10 @@ impl Parser {
         }
 
         let visibility = visibility.unwrap_or(EvalVisibility::Public);
-        if is_final {
-            return Err(EvalParseError::UnsupportedConstruct);
-        }
         let (property, mut hook_methods) = self.parse_class_property_decl(
             visibility,
             is_static,
+            is_final,
             is_readonly,
             is_readonly_class,
             is_abstract,
@@ -789,6 +787,7 @@ impl Parser {
         &mut self,
         visibility: EvalVisibility,
         is_static: bool,
+        is_final: bool,
         is_readonly: bool,
         is_readonly_class: bool,
         is_abstract: bool,
@@ -816,10 +815,11 @@ impl Parser {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             let (requires_get_hook, requires_set_hook) = self.parse_property_hook_contracts()?;
-            let property = EvalClassProperty::with_visibility_static_and_readonly(
+            let property = EvalClassProperty::with_visibility_static_final_and_readonly(
                 name,
                 visibility,
                 is_static,
+                is_final,
                 effective_readonly,
                 None,
             )
@@ -829,10 +829,11 @@ impl Parser {
         let default_is_some = default.is_some();
         let (has_get_hook, has_set_hook, hook_methods) =
             self.parse_property_hook_tail(&name, is_static, effective_readonly, default_is_some)?;
-        let property = EvalClassProperty::with_visibility_static_and_readonly(
+        let property = EvalClassProperty::with_visibility_static_final_and_readonly(
             name,
             visibility,
             is_static,
+            is_final,
             effective_readonly,
             default,
         )
@@ -1025,11 +1026,14 @@ impl Parser {
             return Ok(());
         }
         let visibility = visibility.unwrap_or(EvalVisibility::Public);
-        if is_final {
-            return Err(EvalParseError::UnsupportedConstruct);
-        }
-        let (property, mut hook_methods) =
-            self.parse_class_property_decl(visibility, is_static, is_readonly, false, is_abstract)?;
+        let (property, mut hook_methods) = self.parse_class_property_decl(
+            visibility,
+            is_static,
+            is_final,
+            is_readonly,
+            false,
+            is_abstract,
+        )?;
         properties.push(property.with_attributes(attributes));
         methods.append(&mut hook_methods);
         Ok(())

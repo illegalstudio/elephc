@@ -977,6 +977,9 @@ fn validate_eval_class_modifiers(
     }
     validate_eval_declared_constants(class.constants())?;
     validate_eval_declared_properties(class)?;
+    for property in class.properties() {
+        validate_property_parent_redeclaration(class, property, context)?;
+    }
     for method in class.methods() {
         if method.is_abstract() && method.is_final() {
             return Err(EvalStatus::RuntimeFatal);
@@ -1005,6 +1008,7 @@ fn validate_eval_declared_properties(class: &EvalClass) -> Result<(), EvalStatus
         if property.is_abstract()
             && (!class.is_abstract()
                 || property.is_static()
+                || property.is_final()
                 || property.is_readonly()
                 || property.default().is_some()
                 || (!property.requires_get_hook() && !property.requires_set_hook()))
@@ -1012,6 +1016,9 @@ fn validate_eval_declared_properties(class: &EvalClass) -> Result<(), EvalStatus
             return Err(EvalStatus::RuntimeFatal);
         }
         if property.is_static() && property.is_readonly() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if property.is_final() && property.visibility() == EvalVisibility::Private {
             return Err(EvalStatus::RuntimeFatal);
         }
         if property.is_readonly() && property.default().is_some() {
@@ -1022,6 +1029,27 @@ fn validate_eval_declared_properties(class: &EvalClass) -> Result<(), EvalStatus
         {
             return Err(EvalStatus::RuntimeFatal);
         }
+    }
+    Ok(())
+}
+
+/// Validates one property declaration against inherited eval property metadata.
+fn validate_property_parent_redeclaration(
+    class: &EvalClass,
+    property: &EvalClassProperty,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    let Some(parent) = class.parent() else {
+        return Ok(());
+    };
+    let Some((_, parent_property)) = context.class_property(parent, property.name()) else {
+        return Ok(());
+    };
+    if parent_property.visibility() == EvalVisibility::Private {
+        return Ok(());
+    }
+    if parent_property.is_final() {
+        return Err(EvalStatus::RuntimeFatal);
     }
     Ok(())
 }

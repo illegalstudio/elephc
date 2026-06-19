@@ -1535,6 +1535,15 @@ fn add_reflection_member_flag_methods(
         }
     }
     if class_name == "ReflectionProperty" {
+        for (property, method) in [("__is_final", "isFinal"), ("__is_abstract", "isAbstract")] {
+            properties.push(builtin_property(
+                property,
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ));
+            methods.push(builtin_reflection_class_bool_method(method, property));
+        }
         properties.push(builtin_property(
             "__is_readonly",
             Visibility::Private,

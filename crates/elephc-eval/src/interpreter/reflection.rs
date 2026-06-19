@@ -587,8 +587,8 @@ fn eval_reflection_property_new(
     let flags = eval_reflection_member_flags(
         property.visibility,
         property.is_static,
-        false,
-        false,
+        property.is_final,
+        property.is_abstract,
         property.is_readonly,
     );
     eval_reflection_owner_object(
@@ -1587,7 +1587,7 @@ fn eval_reflection_property_metadata(
                 attributes: property.attributes().to_vec(),
                 visibility: property.visibility(),
                 is_static: property.is_static(),
-                is_final: false,
+                is_final: property.is_final(),
                 is_abstract: property.is_abstract(),
                 is_readonly: property.is_readonly(),
                 required_parameter_count: 0,
@@ -1622,7 +1622,7 @@ fn eval_reflection_property_metadata(
                 attributes: property.attributes().to_vec(),
                 visibility: property.visibility(),
                 is_static: property.is_static(),
-                is_final: false,
+                is_final: property.is_final(),
                 is_abstract: property.is_abstract(),
                 is_readonly: property.is_readonly(),
                 required_parameter_count: 0,

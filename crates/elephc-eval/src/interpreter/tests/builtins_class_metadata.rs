@@ -682,11 +682,16 @@ fn execute_program_reflects_eval_member_predicates() {
 readonly class EvalReflectReadonlyClass {
     public int $classReadonly;
 }
+abstract class EvalReflectAbstractProperty {
+    abstract public int $mustRead { get; }
+}
 class EvalReflectMemberChild extends EvalReflectMemberBase {
     public function mustImplement() {}
     private static $token;
+    final public static $staticSeal;
     protected $visible;
     public readonly int $locked;
+    final public int $sealed;
 }
 $baseStatic = new ReflectionMethod("EvalReflectMemberChild", "baseStatic");
 echo $baseStatic->isStatic() ? "S" : "s";
@@ -710,17 +715,33 @@ $staticProp = new ReflectionProperty("EvalReflectMemberChild", "token");
 echo $staticProp->isStatic() ? "S" : "s";
 echo $staticProp->isPrivate() ? "R" : "r";
 echo $staticProp->isProtected() ? "P" : "p";
+echo $staticProp->isFinal() ? "F" : "f";
+echo $staticProp->isAbstract() ? "A" : "a";
 echo $staticProp->isReadOnly() ? "R" : "r";
 echo ":";
 $visibleProp = new ReflectionProperty("EvalReflectMemberChild", "visible");
 echo $visibleProp->isStatic() ? "S" : "s";
 echo $visibleProp->isProtected() ? "P" : "p";
 echo $visibleProp->isPublic() ? "U" : "u";
+echo $visibleProp->isFinal() ? "F" : "f";
+echo $visibleProp->isAbstract() ? "A" : "a";
 echo $visibleProp->isReadOnly() ? "R" : "r";
 echo ":";
 $readonlyProp = new ReflectionProperty("EvalReflectMemberChild", "locked");
 echo $readonlyProp->isReadOnly() ? "R" : "r";
 echo $readonlyProp->isPublic() ? "U" : "u";
+echo ":";
+$sealedProp = new ReflectionProperty("EvalReflectMemberChild", "sealed");
+echo $sealedProp->isFinal() ? "F" : "f";
+echo $sealedProp->isPublic() ? "U" : "u";
+echo ":";
+$staticFinalProp = new ReflectionProperty("EvalReflectMemberChild", "staticSeal");
+echo $staticFinalProp->isFinal() ? "F" : "f";
+echo $staticFinalProp->isStatic() ? "S" : "s";
+echo ":";
+$abstractProp = new ReflectionProperty("EvalReflectAbstractProperty", "mustRead");
+echo $abstractProp->isAbstract() ? "A" : "a";
+echo $abstractProp->isFinal() ? "F" : "f";
 echo ":";
 $classReadonlyProp = new ReflectionProperty("EvalReflectReadonlyClass", "classReadonly");
 echo $classReadonlyProp->isReadOnly() ? "C" : "c";
@@ -732,7 +753,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "SPurfa:APs:FUs:SRpr:sPur:RU:C");
+    assert_eq!(values.output, "SPurfa:APs:FUs:SRpfar:sPufar:RU:FU:FS:Af:C");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

@@ -522,8 +522,13 @@ impl FakeOps {
             properties.push(("__is_protected".to_string(), is_protected));
             properties.push(("__is_private".to_string(), is_private));
             if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+                let is_final = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL) != 0)?;
+                let is_abstract =
+                    self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT) != 0)?;
                 let is_readonly =
                     self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY) != 0)?;
+                properties.push(("__is_final".to_string(), is_final));
+                properties.push(("__is_abstract".to_string(), is_abstract));
                 properties.push(("__is_readonly".to_string(), is_readonly));
             }
         }

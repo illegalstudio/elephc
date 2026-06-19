@@ -1565,14 +1565,19 @@ abstract class ReflectMemberBase {
     abstract protected function mustImplement();
     final public function locked() {}
 }
+abstract class ReflectAbstractProperty {
+    abstract public int $mustRead { get; }
+}
 readonly class ReflectReadonlyClass {
     public int $classReadonly;
 }
 class ReflectMemberChild extends ReflectMemberBase {
     public function mustImplement() {}
     private static string $token = "x";
+    final public static string $staticSeal = "x";
     protected int $visible = 2;
     public readonly int $locked;
+    final public int $sealed;
 }
 $baseStatic = new ReflectionMethod(ReflectMemberChild::class, "baseStatic");
 echo $baseStatic->isStatic() ? "S" : "s";
@@ -1596,23 +1601,39 @@ $staticProp = new ReflectionProperty(ReflectMemberChild::class, "token");
 echo $staticProp->isStatic() ? "S" : "s";
 echo $staticProp->isPrivate() ? "R" : "r";
 echo $staticProp->isProtected() ? "P" : "p";
+echo $staticProp->isFinal() ? "F" : "f";
+echo $staticProp->isAbstract() ? "A" : "a";
 echo $staticProp->isReadOnly() ? "R" : "r";
 echo ":";
 $visibleProp = new ReflectionProperty(ReflectMemberChild::class, "visible");
 echo $visibleProp->isStatic() ? "S" : "s";
 echo $visibleProp->isProtected() ? "P" : "p";
 echo $visibleProp->isPublic() ? "U" : "u";
+echo $visibleProp->isFinal() ? "F" : "f";
+echo $visibleProp->isAbstract() ? "A" : "a";
 echo $visibleProp->isReadOnly() ? "R" : "r";
 echo ":";
 $readonlyProp = new ReflectionProperty(ReflectMemberChild::class, "locked");
 echo $readonlyProp->isReadOnly() ? "R" : "r";
 echo $readonlyProp->isPublic() ? "U" : "u";
 echo ":";
+$sealedProp = new ReflectionProperty(ReflectMemberChild::class, "sealed");
+echo $sealedProp->isFinal() ? "F" : "f";
+echo $sealedProp->isPublic() ? "U" : "u";
+echo ":";
+$staticFinalProp = new ReflectionProperty(ReflectMemberChild::class, "staticSeal");
+echo $staticFinalProp->isFinal() ? "F" : "f";
+echo $staticFinalProp->isStatic() ? "S" : "s";
+echo ":";
+$abstractProp = new ReflectionProperty(ReflectAbstractProperty::class, "mustRead");
+echo $abstractProp->isAbstract() ? "A" : "a";
+echo $abstractProp->isFinal() ? "F" : "f";
+echo ":";
 $classReadonlyProp = new ReflectionProperty(ReflectReadonlyClass::class, "classReadonly");
 echo $classReadonlyProp->isReadOnly() ? "C" : "c";
 "#,
     );
-    assert_eq!(out, "SPurfa:APs:FUs:SRpr:sPur:RU:C");
+    assert_eq!(out, "SPurfa:APs:FUs:SRpfar:sPufar:RU:FU:FS:Af:C");
 }
 
 /// Verifies member and enum-case reflectors expose their declaring class object.

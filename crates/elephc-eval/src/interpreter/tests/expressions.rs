@@ -533,6 +533,28 @@ class EvalFinalMethodChild extends EvalFinalMethodBase {
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
+
+/// Verifies eval rejects overriding a final eval-declared property.
+#[test]
+fn execute_program_rejects_overriding_final_eval_property() {
+    let program = parse_fragment(
+        br#"class EvalFinalPropertyBase {
+    final public $value = 1;
+}
+class EvalFinalPropertyChild extends EvalFinalPropertyBase {
+    public $value = 2;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("overriding final property should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval-declared traits contribute methods, properties, and metadata.
 #[test]
 fn execute_program_constructs_class_using_eval_declared_trait() {
