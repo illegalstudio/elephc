@@ -68,6 +68,8 @@ struct ReflectionOwnerLayout {
     is_instantiable_hi: Option<usize>,
     is_cloneable_lo: Option<usize>,
     is_cloneable_hi: Option<usize>,
+    is_iterable_lo: Option<usize>,
+    is_iterable_hi: Option<usize>,
     is_internal_lo: Option<usize>,
     is_internal_hi: Option<usize>,
     is_user_defined_lo: Option<usize>,
@@ -229,6 +231,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_readonly_lo = reflection_property_offset(info, "__is_readonly");
     let is_instantiable_lo = reflection_property_offset(info, "__is_instantiable");
     let is_cloneable_lo = reflection_property_offset(info, "__is_cloneable");
+    let is_iterable_lo = reflection_property_offset(info, "__is_iterable");
     let is_internal_lo = reflection_property_offset(info, "__is_internal");
     let is_user_defined_lo = reflection_property_offset(info, "__is_user_defined");
     let modifiers_lo = reflection_property_offset(info, "__modifiers");
@@ -301,6 +304,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         is_instantiable_hi: is_instantiable_lo.map(|offset| offset + 8),
         is_cloneable_lo,
         is_cloneable_hi: is_cloneable_lo.map(|offset| offset + 8),
+        is_iterable_lo,
+        is_iterable_hi: is_iterable_lo.map(|offset| offset + 8),
         is_internal_lo,
         is_internal_hi: is_internal_lo.map(|offset| offset + 8),
         is_user_defined_lo,
@@ -967,6 +972,8 @@ fn emit_set_owner_class_flags_property_aarch64(
         Some(is_instantiable_hi),
         Some(is_cloneable_lo),
         Some(is_cloneable_hi),
+        Some(is_iterable_lo),
+        Some(is_iterable_hi),
         Some(is_internal_lo),
         Some(is_internal_hi),
         Some(is_user_defined_lo),
@@ -990,6 +997,8 @@ fn emit_set_owner_class_flags_property_aarch64(
         layout.is_instantiable_hi,
         layout.is_cloneable_lo,
         layout.is_cloneable_hi,
+        layout.is_iterable_lo,
+        layout.is_iterable_hi,
         layout.is_internal_lo,
         layout.is_internal_hi,
         layout.is_user_defined_lo,
@@ -1041,6 +1050,10 @@ fn emit_set_owner_class_flags_property_aarch64(
     emitter.instruction("and x10, x10, #1");                                    // extract the user-defined-class flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_user_defined_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_user_defined_hi);
+    emitter.instruction("lsr x10, x11, #10");                                   // move the iterable-class bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the iterable-class flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_iterable_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_iterable_hi);
     emitter.instruction("ldr x10, [sp, #96]");                                  // reload PHP ReflectionClass::getModifiers() bitmask
     abi::emit_store_to_address(emitter, "x10", "x9", modifiers_lo);
     abi::emit_store_zero_to_address(emitter, "x9", modifiers_hi);
@@ -1068,6 +1081,8 @@ fn emit_set_owner_class_flags_property_x86_64(
         Some(is_instantiable_hi),
         Some(is_cloneable_lo),
         Some(is_cloneable_hi),
+        Some(is_iterable_lo),
+        Some(is_iterable_hi),
         Some(is_internal_lo),
         Some(is_internal_hi),
         Some(is_user_defined_lo),
@@ -1091,6 +1106,8 @@ fn emit_set_owner_class_flags_property_x86_64(
         layout.is_instantiable_hi,
         layout.is_cloneable_lo,
         layout.is_cloneable_hi,
+        layout.is_iterable_lo,
+        layout.is_iterable_hi,
         layout.is_internal_lo,
         layout.is_internal_hi,
         layout.is_user_defined_lo,
@@ -1152,6 +1169,11 @@ fn emit_set_owner_class_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the user-defined-class flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_user_defined_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_user_defined_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the iterable bit
+    emitter.instruction("shr rax, 10");                                         // move the iterable-class bit into position
+    emitter.instruction("and rax, 1");                                          // extract the iterable-class flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_iterable_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_iterable_hi);
     emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload PHP ReflectionClass::getModifiers() bitmask
     abi::emit_store_to_address(emitter, "rax", "r10", modifiers_lo);
     abi::emit_store_zero_to_address(emitter, "r10", modifiers_hi);

@@ -22,6 +22,7 @@ const EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE: u64 = 64;
 const EVAL_REFLECTION_CLASS_FLAG_CLONEABLE: u64 = 128;
 const EVAL_REFLECTION_CLASS_FLAG_INTERNAL: u64 = 256;
 const EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED: u64 = 512;
+const EVAL_REFLECTION_CLASS_FLAG_ITERABLE: u64 = 1024;
 const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
@@ -631,6 +632,9 @@ fn eval_reflection_class_new(
         }
         if is_enum {
             flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM;
+        }
+        if eval_reflection_builtin_class_is_iterable(&class_name) {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_ITERABLE;
         }
         return eval_reflection_owner_object(
             EVAL_REFLECTION_OWNER_CLASS,
@@ -1531,6 +1535,9 @@ fn eval_reflection_class_like_attributes(
         if eval_reflection_class_is_cloneable(class, is_enum, context) {
             flags |= EVAL_REFLECTION_CLASS_FLAG_CLONEABLE;
         }
+        if eval_reflection_class_is_iterable(class, is_enum, context) {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_ITERABLE;
+        }
         let modifiers = eval_reflection_class_modifiers(
             class.is_final(),
             class.is_abstract(),
@@ -1632,6 +1639,68 @@ fn eval_reflection_class_is_cloneable(
         .class_method(class.name(), "__clone")
         .map(|(_, method)| method.visibility() == EvalVisibility::Public)
         .unwrap_or(true)
+}
+
+/// Returns PHP's `ReflectionClass::isIterable()` value for eval class metadata.
+fn eval_reflection_class_is_iterable(
+    class: &EvalClass,
+    is_enum: bool,
+    context: &ElephcEvalContext,
+) -> bool {
+    if class.is_abstract() || is_enum {
+        return false;
+    }
+    context
+        .class_interface_names(class.name())
+        .iter()
+        .any(|name| {
+            name.eq_ignore_ascii_case("Iterator") || name.eq_ignore_ascii_case("IteratorAggregate")
+        })
+}
+
+/// Returns PHP's `ReflectionClass::isIterable()` value for compiler-injected class names.
+fn eval_reflection_builtin_class_is_iterable(class_name: &str) -> bool {
+    matches!(
+        class_name
+            .trim_start_matches('\\')
+            .to_ascii_lowercase()
+            .as_str(),
+        "__elephcappenditeratorarrayiterator"
+            | "appenditerator"
+            | "arrayiterator"
+            | "arrayobject"
+            | "cachingiterator"
+            | "callbackfilteriterator"
+            | "directoryiterator"
+            | "emptyiterator"
+            | "filesystemiterator"
+            | "generator"
+            | "globiterator"
+            | "infiniteiterator"
+            | "internaliterator"
+            | "iteratoriterator"
+            | "limititerator"
+            | "multipleiterator"
+            | "norewinditerator"
+            | "parentiterator"
+            | "recursivearrayiterator"
+            | "recursivecachingiterator"
+            | "recursivecallbackfilteriterator"
+            | "recursivedirectoryiterator"
+            | "recursiveiteratoriterator"
+            | "recursiveregexiterator"
+            | "regexiterator"
+            | "spldoublylinkedlist"
+            | "splfixedarray"
+            | "splfileobject"
+            | "splmaxheap"
+            | "splminheap"
+            | "splobjectstorage"
+            | "splpriorityqueue"
+            | "splqueue"
+            | "splstack"
+            | "spltempfileobject"
+    )
 }
 
 /// Returns whether one reflected class-like name belongs to compiler-injected metadata.

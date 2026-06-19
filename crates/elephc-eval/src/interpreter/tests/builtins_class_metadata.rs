@@ -641,6 +641,46 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::isIterable reports eval Traversable-compatible class metadata.
+#[test]
+fn execute_program_reflects_eval_class_iterable_predicate() {
+    let program = parse_fragment(
+        br#"class EvalIterablePlain {}
+abstract class EvalIterableAbstract implements Iterator {}
+interface EvalIterableIface extends Iterator {}
+trait EvalIterableTrait {}
+enum EvalIterableEnum { case Ready; }
+class EvalIterableIterator implements Iterator {
+    public function current() { return null; }
+    public function key() { return null; }
+    public function next() {}
+    public function valid() { return false; }
+    public function rewind() {}
+}
+class EvalIterableAggregate implements IteratorAggregate {
+    public function getIterator() { return $this; }
+}
+echo (new ReflectionClass("EvalIterablePlain"))->isIterable() ? "P" : "p";
+$iter = new ReflectionClass("EvalIterableIterator");
+echo $iter->isIterable() ? "I" : "i";
+echo $iter->isIterateable() ? "A" : "a";
+echo (new ReflectionClass("EvalIterableAggregate"))->isIterable() ? "G" : "g";
+echo (new ReflectionClass("EvalIterableAbstract"))->isIterable() ? "B" : "b";
+echo (new ReflectionClass("EvalIterableIface"))->isIterable() ? "F" : "f";
+echo (new ReflectionClass("EvalIterableEnum"))->isIterable() ? "E" : "e";
+echo (new ReflectionClass("EvalIterableTrait"))->isIterable() ? "H" : "h";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "pIAGbfeh");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass origin predicates report eval class-like symbols as user-defined.
 #[test]
 fn execute_program_reflects_eval_class_origin_predicates() {
