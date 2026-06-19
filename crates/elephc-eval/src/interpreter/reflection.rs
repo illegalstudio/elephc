@@ -48,6 +48,7 @@ struct EvalReflectionMemberMetadata {
     is_static: bool,
     is_final: bool,
     is_abstract: bool,
+    required_parameter_count: usize,
     parameters: Vec<EvalReflectionParameterMetadata>,
 }
 
@@ -159,7 +160,7 @@ fn eval_reflection_method_new(
         &[],
         &method.parameters,
         flags,
-        0,
+        method.required_parameter_count as u64,
         context,
         values,
     )
@@ -444,7 +445,7 @@ fn eval_reflection_member_object_array_result(
             &[],
             &member.parameters,
             flags,
-            0,
+            member.required_parameter_count as u64,
             context,
             values,
         )?;
@@ -605,6 +606,10 @@ fn eval_reflection_method_metadata(
                 is_static: method.is_static(),
                 is_final: method.is_final(),
                 is_abstract: method.is_abstract(),
+                required_parameter_count: eval_reflection_required_parameter_count(
+                    method.parameter_defaults(),
+                    method.parameter_is_variadic(),
+                ),
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
                     method.params(),
                     method.parameter_has_types(),
@@ -625,6 +630,10 @@ fn eval_reflection_method_metadata(
                 is_static: false,
                 is_final: false,
                 is_abstract: true,
+                required_parameter_count: eval_reflection_required_parameter_count(
+                    method.parameter_defaults(),
+                    method.parameter_is_variadic(),
+                ),
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
                     method.params(),
                     method.parameter_has_types(),
@@ -645,6 +654,10 @@ fn eval_reflection_method_metadata(
                 is_static: method.is_static(),
                 is_final: method.is_final(),
                 is_abstract: method.is_abstract(),
+                required_parameter_count: eval_reflection_required_parameter_count(
+                    method.parameter_defaults(),
+                    method.parameter_is_variadic(),
+                ),
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
                     method.params(),
                     method.parameter_has_types(),
@@ -671,6 +684,7 @@ fn eval_reflection_property_metadata(
                 is_static: property.is_static(),
                 is_final: false,
                 is_abstract: property.is_abstract(),
+                required_parameter_count: 0,
                 parameters: Vec::new(),
             });
     }
@@ -685,6 +699,7 @@ fn eval_reflection_property_metadata(
                 is_static: false,
                 is_final: false,
                 is_abstract: true,
+                required_parameter_count: 0,
                 parameters: Vec::new(),
             });
     }
@@ -699,9 +714,24 @@ fn eval_reflection_property_metadata(
                 is_static: property.is_static(),
                 is_final: false,
                 is_abstract: property.is_abstract(),
+                required_parameter_count: 0,
                 parameters: Vec::new(),
             })
     })
+}
+
+/// Returns PHP's required parameter count for a reflected method signature.
+fn eval_reflection_required_parameter_count(
+    defaults: &[Option<EvalExpr>],
+    variadic_flags: &[bool],
+) -> usize {
+    let fixed_count = variadic_flags
+        .iter()
+        .position(|is_variadic| *is_variadic)
+        .unwrap_or(defaults.len());
+    (0..fixed_count)
+        .rfind(|position| !defaults.get(*position).is_some_and(Option::is_some))
+        .map_or(0, |position| position + 1)
 }
 
 /// Builds parameter reflection metadata from eval parameter names and type flags.

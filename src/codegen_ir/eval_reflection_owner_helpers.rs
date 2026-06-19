@@ -68,6 +68,8 @@ struct ReflectionOwnerLayout {
     is_protected_hi: Option<usize>,
     is_private_lo: Option<usize>,
     is_private_hi: Option<usize>,
+    required_parameter_count_lo: Option<usize>,
+    required_parameter_count_hi: Option<usize>,
     position_lo: Option<usize>,
     position_hi: Option<usize>,
     is_optional_lo: Option<usize>,
@@ -186,6 +188,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_public_lo = reflection_property_offset(info, "__is_public");
     let is_protected_lo = reflection_property_offset(info, "__is_protected");
     let is_private_lo = reflection_property_offset(info, "__is_private");
+    let required_parameter_count_lo = reflection_property_offset(info, "__required_parameter_count");
     let position_lo = reflection_property_offset(info, "__position");
     let is_optional_lo = reflection_property_offset(info, "__is_optional");
     let is_variadic_lo = reflection_property_offset(info, "__is_variadic");
@@ -238,6 +241,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         is_protected_hi: is_protected_lo.map(|offset| offset + 8),
         is_private_lo,
         is_private_hi: is_private_lo.map(|offset| offset + 8),
+        required_parameter_count_lo,
+        required_parameter_count_hi: required_parameter_count_lo.map(|offset| offset + 8),
         position_lo,
         position_hi: position_lo.map(|offset| offset + 8),
         is_optional_lo,
@@ -521,6 +526,7 @@ fn emit_aarch64_owner_kind_body(
     }
     emit_set_owner_class_flags_property_aarch64(emitter, layout);
     emit_set_owner_member_flags_property_aarch64(emitter, layout);
+    emit_set_owner_required_parameter_count_property_aarch64(emitter, layout);
     emit_set_owner_parameter_property_aarch64(emitter, layout);
     emit_set_owner_metadata_arrays_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_aarch64(emitter, layout, fail_label);
@@ -544,6 +550,7 @@ fn emit_x86_64_owner_kind_body(
     }
     emit_set_owner_class_flags_property_x86_64(emitter, layout);
     emit_set_owner_member_flags_property_x86_64(emitter, layout);
+    emit_set_owner_required_parameter_count_property_x86_64(emitter, layout);
     emit_set_owner_parameter_property_x86_64(emitter, layout);
     emit_set_owner_metadata_arrays_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_x86_64(emitter, layout, fail_label);
@@ -1021,6 +1028,40 @@ fn emit_set_owner_member_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the abstract-method flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_abstract_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_abstract_hi);
+}
+
+/// Stores incoming ARM64 ReflectionMethod required-parameter count.
+fn emit_set_owner_required_parameter_count_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let (Some(required_parameter_count_lo), Some(required_parameter_count_hi)) = (
+        layout.required_parameter_count_lo,
+        layout.required_parameter_count_hi,
+    ) else {
+        return;
+    };
+    emitter.instruction("ldr x10, [sp, #96]");                                  // reload ReflectionMethod required-parameter count
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "x10", "x9", required_parameter_count_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", required_parameter_count_hi);
+}
+
+/// Stores incoming x86_64 ReflectionMethod required-parameter count.
+fn emit_set_owner_required_parameter_count_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let (Some(required_parameter_count_lo), Some(required_parameter_count_hi)) = (
+        layout.required_parameter_count_lo,
+        layout.required_parameter_count_hi,
+    ) else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // reload ReflectionMethod required-parameter count
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "rax", "r10", required_parameter_count_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", required_parameter_count_hi);
 }
 
 /// Stores incoming ARM64 ReflectionParameter position and predicate flags.

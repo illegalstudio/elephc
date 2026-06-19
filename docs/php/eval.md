@@ -180,12 +180,13 @@ coercion, `array`, `object`, `iterable`, `mixed`, nullable/union forms, and
 eval/runtime class or interface names.
 `ReflectionMethod::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
 `isFinal()`, and `isAbstract()` report eval method metadata.
-`ReflectionMethod::getParameters()` returns `ReflectionParameter` objects for
-eval-declared method parameters. Eval currently exposes parameter names and
-zero-based positions there, plus declared-type presence for method parameter
-type hints. Defaulted eval method parameters are bound when omitted and reported
-through `ReflectionParameter::isOptional()`. Supported default expressions
-include scalar literals, arrays whose keys and values are supported default
+`ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
+`getNumberOfRequiredParameters()` report eval-declared method parameter
+metadata. Eval currently exposes parameter names and zero-based positions there,
+plus declared-type presence for method parameter type hints. Defaulted eval
+method parameters are bound when omitted and reported through
+`ReflectionParameter::isOptional()`. Supported default expressions include
+scalar literals, arrays whose keys and values are supported default
 expressions, magic constants, unary and binary operators supported by eval,
 ternary and null-coalescing expressions, predefined or eval-defined constant
 fetches, namespaced constant fallback, class/interface/trait/enum constant

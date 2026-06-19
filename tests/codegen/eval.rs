@@ -6021,8 +6021,10 @@ fn test_eval_reflection_method_lists_parameters() {
 eval('class EvalReflectParamTarget {
     public function run(int $first, \App\Name|null $second = null, ...$rest) {}
 }
-$params = (new ReflectionMethod("EvalReflectParamTarget", "run"))->getParameters();
-echo count($params) . ":";
+$method = new ReflectionMethod("EvalReflectParamTarget", "run");
+echo $method->getNumberOfParameters() . "/";
+echo $method->getNumberOfRequiredParameters() . ":";
+$params = $method->getParameters();
 foreach ($params as $param) {
     echo $param->getName() . "@" . $param->getPosition();
     echo $param->isOptional() ? "O" : "r";
@@ -6038,7 +6040,7 @@ foreach ($params as $param) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "3:first@0rvbT|second@1OvbT|rest@2OVbt|");
+    assert_eq!(out.stdout, "3/1:first@0rvbT|second@1OvbT|rest@2OVbt|");
 }
 
 /// Verifies eval ReflectionClass::newInstance constructs eval-declared classes.
