@@ -751,6 +751,7 @@ pub struct EvalClass {
     is_abstract: bool,
     is_final: bool,
     is_readonly_class: bool,
+    is_anonymous: bool,
     parent: Option<String>,
     interfaces: Vec<String>,
     attributes: Vec<EvalAttribute>,
@@ -979,6 +980,7 @@ impl EvalClass {
             is_abstract,
             is_final,
             is_readonly_class,
+            is_anonymous: false,
             parent,
             interfaces,
             attributes: Vec::new(),
@@ -993,6 +995,12 @@ impl EvalClass {
     /// Returns a copy of this class with class-like attributes attached.
     pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
         self.attributes = attributes;
+        self
+    }
+
+    /// Marks this eval class metadata as an anonymous class expression result.
+    pub fn with_anonymous(mut self) -> Self {
+        self.is_anonymous = true;
         self
     }
 
@@ -1026,6 +1034,11 @@ impl EvalClass {
     /// Returns whether this eval-declared class was declared `readonly`.
     pub const fn is_readonly_class(&self) -> bool {
         self.is_readonly_class
+    }
+
+    /// Returns whether this eval class came from a `new class {}` expression.
+    pub const fn is_anonymous(&self) -> bool {
+        self.is_anonymous
     }
 
     /// Returns the parent class name declared by this eval class, when present.
@@ -1707,6 +1720,10 @@ pub enum EvalExpr {
     Magic(EvalMagicConst),
     NewObject {
         class_name: String,
+        args: Vec<EvalCallArg>,
+    },
+    NewAnonymousClass {
+        class: EvalClass,
         args: Vec<EvalCallArg>,
     },
     StaticMethodCall {

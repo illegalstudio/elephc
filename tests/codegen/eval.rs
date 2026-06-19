@@ -6279,6 +6279,41 @@ echo (new ReflectionClass("EvalAnonEnum"))->isAnonymous() ? "E" : "e";');
     assert_eq!(out.stdout, "cite");
 }
 
+/// Verifies eval anonymous class expressions instantiate and reflect as anonymous through the bridge.
+#[test]
+fn test_eval_anonymous_class_expression_runtime_and_reflection() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalRuntimeAnonLabel {
+    function label();
+}
+class EvalRuntimeAnonBase {
+    protected string $prefix;
+    public function __construct($prefix) { $this->prefix = $prefix; }
+}
+function eval_runtime_anon_make($prefix) {
+    return new class($prefix) extends EvalRuntimeAnonBase implements EvalRuntimeAnonLabel {
+        public function label() { return $this->prefix . ":anon"; }
+    };
+}
+$first = eval_runtime_anon_make("A");
+$second = eval_runtime_anon_make("B");
+echo $first->label(); echo ":";
+echo $second->label(); echo ":";
+echo get_class($first) === get_class($second) ? "same" : "different"; echo ":";
+$ref = new ReflectionClass(get_class($first));
+echo $ref->isAnonymous() ? "anonymous" : "named"; echo ":";
+echo $ref->implementsInterface("EvalRuntimeAnonLabel") ? "iface" : "bad";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "A:anon:B:anon:same:anonymous:iface");
+}
+
 /// Verifies eval ReflectionClass reports method, property, and constant membership through the bridge.
 #[test]
 fn test_eval_reflection_class_member_existence() {

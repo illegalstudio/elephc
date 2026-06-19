@@ -209,6 +209,42 @@ readonly class EvalReadonlyParentMismatchChild extends EvalReadonlyParentMismatc
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies anonymous eval classes instantiate, reuse their synthetic class, and reflect as anonymous.
+#[test]
+fn execute_program_instantiates_anonymous_class_expressions() {
+    let program = parse_fragment(
+        br#"interface EvalAnonRuntimeLabel {
+    function label();
+}
+class EvalAnonRuntimeBase {
+    protected string $prefix;
+    public function __construct($prefix) { $this->prefix = $prefix; }
+}
+function eval_anon_make($prefix) {
+    return new class($prefix) extends EvalAnonRuntimeBase implements EvalAnonRuntimeLabel {
+        public function label() { return $this->prefix . ":anon"; }
+    };
+}
+$first = eval_anon_make("A");
+$second = eval_anon_make("B");
+echo $first->label(); echo ":";
+echo $second->label(); echo ":";
+echo get_class($first) === get_class($second) ? "same" : "different"; echo ":";
+$ref = new ReflectionClass(get_class($first));
+echo $ref->isAnonymous() ? "anonymous" : "named"; echo ":";
+echo $ref->implementsInterface("EvalAnonRuntimeLabel") ? "iface" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "A:anon:B:anon:same:anonymous:iface");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies a get-only property hook computes a virtual eval property.
 #[test]
 fn execute_program_reads_eval_property_get_hook() {

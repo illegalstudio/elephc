@@ -73,7 +73,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, eval object property access, static property access, and class constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, and string-key reads/writes. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
-| Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking for supported public scalar/Mixed constructor signatures. |
+| Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking for supported public scalar/Mixed constructor signatures. |
 | Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and by-reference parameters for direct variable, array-element, and object-property arguments. Runtime/AOT object-method and static-method fallback supports the same argument binding for supported public scalar/Mixed method signatures. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, and eval-declared-function `__FUNCTION__` / `__METHOD__`. |
@@ -166,9 +166,10 @@ derive namespace-aware parts from the resolved eval class-like name.
 `ReflectionClass::isEnum()` report eval class-like metadata, including
 PHP-compatible enum finality and class-like kind checks for eval interfaces,
 traits, and enums. `ReflectionClass::isReadOnly()` reports eval `readonly class`
-metadata. `ReflectionClass::isAnonymous()` reports `false` for eval-declared
-named class-like symbols. `ReflectionClass::isInstantiable()` reports whether
-eval class-like metadata describes a concrete class with no constructor or a public constructor.
+metadata. `ReflectionClass::isAnonymous()` reports true for eval anonymous
+classes and false for eval-declared named class-like symbols.
+`ReflectionClass::isInstantiable()` reports whether eval class-like metadata
+describes a concrete class with no constructor or a public constructor.
 `ReflectionClass::isCloneable()` reports whether eval class metadata describes
 a concrete class with no `__clone()` or a public `__clone()`.
 `ReflectionClass::isIterable()` and `isIterateable()` report whether eval or

@@ -16,6 +16,9 @@ use crate::errors::EvalParseError;
 use crate::eval_ir::EvalProgram;
 use crate::lexer::TokenKind;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static ANONYMOUS_CLASS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Parses tokenized eval fragments into EvalIR.
 pub(super) struct Parser {
@@ -47,6 +50,12 @@ pub(super) enum UseImportKind {
     Class,
     Function,
     Const,
+}
+
+/// Returns a parser-global synthetic class name for one eval anonymous class expression.
+pub(super) fn next_anonymous_class_name() -> String {
+    let id = ANONYMOUS_CLASS_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("class@anonymous#eval{id}")
 }
 
 impl NamespaceImports {

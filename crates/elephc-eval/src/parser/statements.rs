@@ -32,6 +32,15 @@ pub(super) struct ParsedMethodParams {
     promoted_assignments: Vec<EvalStmt>,
 }
 
+/// Class-body members collected while parsing a named or anonymous eval class.
+struct ParsedClassBody {
+    constants: Vec<EvalClassConstant>,
+    properties: Vec<EvalClassProperty>,
+    methods: Vec<EvalClassMethod>,
+    traits: Vec<String>,
+    trait_adaptations: Vec<EvalTraitAdaptation>,
+}
+
 impl Parser {
     /// Parses one source statement, expanding `unset($a, $b)` to one statement per variable.
     pub(super) fn parse_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
@@ -359,6 +368,66 @@ impl Parser {
         self.advance();
         let parent = self.parse_class_parent_clause()?;
         let interfaces = self.parse_class_interface_clause()?;
+        let body = self.parse_class_body_members(is_readonly_class)?;
+        self.consume_semicolon();
+        Ok(vec![EvalStmt::ClassDecl(
+            EvalClass::with_class_modifiers_traits_adaptations_and_constants(
+                name,
+                is_abstract,
+                is_final,
+                is_readonly_class,
+                parent,
+                interfaces,
+                body.traits,
+                body.trait_adaptations,
+                body.constants,
+                body.properties,
+                body.methods,
+            )
+            .with_attributes(attributes),
+        )])
+    }
+
+    /// Parses `class [(args)] [extends Parent] [implements Iface, ...] { ... }` after `new`.
+    pub(super) fn parse_anonymous_class_expr(
+        &mut self,
+        is_readonly_class: bool,
+    ) -> Result<EvalExpr, EvalParseError> {
+        if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "class")) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        self.advance();
+        let args = if matches!(self.current(), TokenKind::LParen) {
+            self.parse_call_args()?
+        } else {
+            Vec::new()
+        };
+        let parent = self.parse_class_parent_clause()?;
+        let interfaces = self.parse_class_interface_clause()?;
+        let body = self.parse_class_body_members(is_readonly_class)?;
+        let name = next_anonymous_class_name();
+        let class = EvalClass::with_class_modifiers_traits_adaptations_and_constants(
+            name,
+            false,
+            false,
+            is_readonly_class,
+            parent,
+            interfaces,
+            body.traits,
+            body.trait_adaptations,
+            body.constants,
+            body.properties,
+            body.methods,
+        )
+        .with_anonymous();
+        Ok(EvalExpr::NewAnonymousClass { class, args })
+    }
+
+    /// Parses members inside a class body after relation clauses.
+    fn parse_class_body_members(
+        &mut self,
+        is_readonly_class: bool,
+    ) -> Result<ParsedClassBody, EvalParseError> {
         self.expect(TokenKind::LBrace)?;
         let mut constants = Vec::new();
         let mut properties = Vec::new();
@@ -378,23 +447,13 @@ impl Parser {
                 &mut trait_adaptations,
             )?;
         }
-        self.consume_semicolon();
-        Ok(vec![EvalStmt::ClassDecl(
-            EvalClass::with_class_modifiers_traits_adaptations_and_constants(
-                name,
-                is_abstract,
-                is_final,
-                is_readonly_class,
-                parent,
-                interfaces,
-                traits,
-                trait_adaptations,
-                constants,
-                properties,
-                methods,
-            )
-            .with_attributes(attributes),
-        )])
+        Ok(ParsedClassBody {
+            constants,
+            properties,
+            methods,
+            traits,
+            trait_adaptations,
+        })
     }
 
     /// Parses class-level `abstract`, `final`, and `readonly` modifiers before `class`.
@@ -2375,6 +2434,7 @@ fn eval_constant_expression_default_is_supported(expr: &EvalExpr) -> bool {
             eval_default_class_receiver_is_supported(class_name)
                 && args.iter().all(eval_call_arg_default_is_supported)
         }
+        EvalExpr::NewAnonymousClass { .. } => false,
         EvalExpr::NullCoalesce { value, default } => {
             eval_constant_expression_default_is_supported(value)
                 && eval_constant_expression_default_is_supported(default)

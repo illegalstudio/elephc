@@ -159,6 +159,38 @@ fn parse_fragment_accepts_qualified_new_object_source() {
         }))]
     );
 }
+
+/// Verifies anonymous class expressions parse as executable eval class metadata.
+#[test]
+fn parse_fragment_accepts_anonymous_class_source() {
+    let program = parse_fragment(
+        br#"return new readonly class("Ada") extends BaseBox implements Labelled {
+    public string $name;
+    public function label() { return $this->name; }
+};"#,
+    )
+    .expect("fragment should parse");
+    let [EvalStmt::Return(Some(EvalExpr::NewAnonymousClass { class, args }))] =
+        program.statements()
+    else {
+        panic!("expected anonymous class return");
+    };
+
+    assert!(class.name().starts_with("class@anonymous#eval"));
+    assert!(class.is_anonymous());
+    assert!(class.is_readonly_class());
+    assert_eq!(class.parent(), Some("BaseBox"));
+    assert_eq!(class.interfaces(), &["Labelled".to_string()]);
+    assert_eq!(class.properties().len(), 1);
+    assert_eq!(class.methods().len(), 1);
+    assert_eq!(
+        args,
+        &[EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+            "Ada".to_string(),
+        )))]
+    );
+}
+
 /// Verifies object method calls preserve source-order argument expressions.
 #[test]
 fn parse_fragment_accepts_method_call_args_source() {

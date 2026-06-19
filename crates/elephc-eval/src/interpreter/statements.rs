@@ -413,6 +413,26 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     }
 }
 
+/// Registers one eval anonymous class expression if this execution has not seen it yet.
+pub(in crate::interpreter) fn ensure_eval_anonymous_class_decl(
+    class: &EvalClass,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !class.is_anonymous() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Some(existing) = context.class(class.name()) {
+        return if existing.is_anonymous() {
+            Ok(())
+        } else {
+            Err(EvalStatus::RuntimeFatal)
+        };
+    }
+    execute_class_decl_stmt(class, context, scope, values)
+}
+
 /// Registers an eval-declared enum and materializes its singleton cases.
 pub(in crate::interpreter) fn execute_enum_decl_stmt(
     enum_decl: &EvalEnum,
@@ -736,22 +756,24 @@ fn expand_eval_class_traits(
     constants.extend(class.constants().iter().cloned());
     properties.extend(class.properties().iter().cloned());
     methods.extend(class.methods().iter().cloned());
-    Ok(
-        EvalClass::with_class_modifiers_traits_adaptations_and_constants(
-            class.name().to_string(),
-            class.is_abstract(),
-            class.is_final(),
-            class.is_readonly_class(),
-            class.parent().map(str::to_string),
-            class.interfaces().to_vec(),
-            class.traits().to_vec(),
-            class.trait_adaptations().to_vec(),
-            constants,
-            properties,
-            methods,
-        )
-        .with_attributes(class.attributes().to_vec()),
+    let mut expanded = EvalClass::with_class_modifiers_traits_adaptations_and_constants(
+        class.name().to_string(),
+        class.is_abstract(),
+        class.is_final(),
+        class.is_readonly_class(),
+        class.parent().map(str::to_string),
+        class.interfaces().to_vec(),
+        class.traits().to_vec(),
+        class.trait_adaptations().to_vec(),
+        constants,
+        properties,
+        methods,
     )
+    .with_attributes(class.attributes().to_vec());
+    if class.is_anonymous() {
+        expanded = expanded.with_anonymous();
+    }
+    Ok(expanded)
 }
 
 /// Returns case-insensitive method names declared directly by a pending class.

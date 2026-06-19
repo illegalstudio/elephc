@@ -554,7 +554,7 @@ impl FakeOps {
         let is_internal = self.bool_value((flags & 256) != 0)?;
         let is_user_defined = self.bool_value((flags & 512) != 0)?;
         let is_iterable = self.bool_value((flags & 1024) != 0)?;
-        let is_anonymous = self.bool_value(false)?;
+        let is_anonymous = self.bool_value((flags & 2048) != 0)?;
         let modifiers_cell = self.int(modifiers as i64)?;
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
         if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
