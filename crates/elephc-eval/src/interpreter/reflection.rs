@@ -20,6 +20,8 @@ const EVAL_REFLECTION_CLASS_FLAG_ENUM: u64 = 16;
 const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
 const EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE: u64 = 64;
 const EVAL_REFLECTION_CLASS_FLAG_CLONEABLE: u64 = 128;
+const EVAL_REFLECTION_CLASS_FLAG_INTERNAL: u64 = 256;
+const EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED: u64 = 512;
 const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
@@ -616,6 +618,11 @@ fn eval_reflection_class_new(
             return Ok(None);
         }
         let mut flags = 0;
+        if eval_reflection_class_like_is_internal(&class_name) {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_INTERNAL;
+        } else {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED;
+        }
         if is_interface {
             flags |= EVAL_REFLECTION_CLASS_FLAG_INTERFACE;
         }
@@ -1505,7 +1512,7 @@ fn eval_reflection_class_like_attributes(
 ) -> Option<EvalReflectionClassMetadata> {
     if let Some(class) = context.class(name) {
         let is_enum = context.has_enum(class.name());
-        let mut flags = 0;
+        let mut flags = EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED;
         if class.is_final() {
             flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL;
         }
@@ -1551,7 +1558,7 @@ fn eval_reflection_class_like_attributes(
             method_names: context.interface_method_names(interface.name()),
             property_names: context.interface_property_names(interface.name()),
             parent_class_name: None,
-            flags: EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
+            flags: EVAL_REFLECTION_CLASS_FLAG_INTERFACE | EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED,
             modifiers: 0,
         });
     }
@@ -1564,7 +1571,7 @@ fn eval_reflection_class_like_attributes(
             method_names: context.trait_method_names(trait_decl.name()),
             property_names: context.trait_property_names(trait_decl.name()),
             parent_class_name: None,
-            flags: EVAL_REFLECTION_CLASS_FLAG_TRAIT,
+            flags: EVAL_REFLECTION_CLASS_FLAG_TRAIT | EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED,
             modifiers: 0,
         });
     }
@@ -1578,7 +1585,9 @@ fn eval_reflection_class_like_attributes(
             method_names: context.class_method_names(enum_decl.name()),
             property_names: context.class_property_names(enum_decl.name()),
             parent_class_name: None,
-            flags: EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM,
+            flags: EVAL_REFLECTION_CLASS_FLAG_FINAL
+                | EVAL_REFLECTION_CLASS_FLAG_ENUM
+                | EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED,
             modifiers: 32,
         })
 }
@@ -1623,6 +1632,50 @@ fn eval_reflection_class_is_cloneable(
         .class_method(class.name(), "__clone")
         .map(|(_, method)| method.visibility() == EvalVisibility::Public)
         .unwrap_or(true)
+}
+
+/// Returns whether one reflected class-like name belongs to compiler-injected metadata.
+fn eval_reflection_class_like_is_internal(class_name: &str) -> bool {
+    let trimmed = class_name.trim_start_matches('\\');
+    if EVAL_SPL_CLASS_NAMES
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(trimmed))
+    {
+        return true;
+    }
+    matches!(
+        trimmed.to_ascii_lowercase().as_str(),
+        "__elephcappenditeratorarrayiterator"
+            | "fiber"
+            | "fibererror"
+            | "generator"
+            | "internaliterator"
+            | "jsonexception"
+            | "phar"
+            | "phardata"
+            | "pharfileinfo"
+            | "php_user_filter"
+            | "reflectionattribute"
+            | "reflectionclass"
+            | "reflectionclassconstant"
+            | "reflectionenumbackedcase"
+            | "reflectionenumunitcase"
+            | "reflectionexception"
+            | "reflectionfunction"
+            | "reflectionintersectiontype"
+            | "reflectionmethod"
+            | "reflectionnamedtype"
+            | "reflectionparameter"
+            | "reflectionproperty"
+            | "reflectionuniontype"
+            | "sortdirection"
+            | "splheap"
+            | "splmaxheap"
+            | "splminheap"
+            | "splobjectstorage"
+            | "splpriorityqueue"
+            | "stdclass"
+    )
 }
 
 /// Computes PHP's `ReflectionClass::getModifiers()` bitmask for eval metadata.

@@ -350,6 +350,16 @@ fn emit_reflection_owner_object(
         emit_reflection_bool_property(ctx, "__is_anonymous", metadata.is_anonymous)?;
         emit_reflection_bool_property(ctx, "__is_instantiable", metadata.is_instantiable)?;
         emit_reflection_bool_property(ctx, "__is_cloneable", metadata.is_cloneable)?;
+        let is_internal = metadata
+            .reflected_name
+            .as_deref()
+            .is_some_and(reflection_class_like_is_internal);
+        emit_reflection_bool_property(ctx, "__is_internal", is_internal)?;
+        emit_reflection_bool_property(
+            ctx,
+            "__is_user_defined",
+            metadata.reflected_name.is_some() && !is_internal,
+        )?;
         emit_reflection_int_property_by_name(ctx, "__modifiers", metadata.modifiers)?;
     }
     if matches!(
@@ -1441,6 +1451,105 @@ fn reflection_class_has_runtime_managed_storage(class_name: &str) -> bool {
             | "recursivefilteriterator"
             | "recursivecallbackfilteriterator"
             | "recursiveiteratoriterator"
+    )
+}
+
+/// Returns whether the reflected class-like name belongs to compiler-injected PHP metadata.
+fn reflection_class_like_is_internal(class_name: &str) -> bool {
+    let key = php_symbol_key(class_name.trim_start_matches('\\'));
+    matches!(
+        key.as_str(),
+        "__elephcappenditeratorarrayiterator"
+            | "appenditerator"
+            | "arrayaccess"
+            | "arrayiterator"
+            | "arrayobject"
+            | "badfunctioncallexception"
+            | "badmethodcallexception"
+            | "cachingiterator"
+            | "callbackfilteriterator"
+            | "countable"
+            | "directoryiterator"
+            | "domainexception"
+            | "emptyiterator"
+            | "error"
+            | "exception"
+            | "fiber"
+            | "fibererror"
+            | "filteriterator"
+            | "filesystemiterator"
+            | "generator"
+            | "globiterator"
+            | "infiniteiterator"
+            | "internaliterator"
+            | "invalidargumentexception"
+            | "iterator"
+            | "iteratoraggregate"
+            | "iteratoriterator"
+            | "jsonexception"
+            | "jsonserializable"
+            | "lengthexception"
+            | "limititerator"
+            | "logicexception"
+            | "multipleiterator"
+            | "norewinditerator"
+            | "outeriterator"
+            | "outofboundsexception"
+            | "outofrangeexception"
+            | "overflowexception"
+            | "parentiterator"
+            | "phar"
+            | "phardata"
+            | "pharfileinfo"
+            | "php_user_filter"
+            | "rangeexception"
+            | "recursivearrayiterator"
+            | "recursivecachingiterator"
+            | "recursivecallbackfilteriterator"
+            | "recursivedirectoryiterator"
+            | "recursivefilteriterator"
+            | "recursiveiterator"
+            | "recursiveiteratoriterator"
+            | "recursiveregexiterator"
+            | "reflectionattribute"
+            | "reflectionclass"
+            | "reflectionclassconstant"
+            | "reflectionenumbackedcase"
+            | "reflectionenumunitcase"
+            | "reflectionexception"
+            | "reflectionfunction"
+            | "reflectionintersectiontype"
+            | "reflectionmethod"
+            | "reflectionnamedtype"
+            | "reflectionparameter"
+            | "reflectionproperty"
+            | "reflectionuniontype"
+            | "regexiterator"
+            | "runtimeexception"
+            | "seekableiterator"
+            | "sortdirection"
+            | "spldoublylinkedlist"
+            | "splfixedarray"
+            | "splfileinfo"
+            | "splfileobject"
+            | "splheap"
+            | "splmaxheap"
+            | "splminheap"
+            | "splobjectstorage"
+            | "splobserver"
+            | "splpriorityqueue"
+            | "splqueue"
+            | "splstack"
+            | "splsubject"
+            | "spltempfileobject"
+            | "stdclass"
+            | "stringable"
+            | "throwable"
+            | "traversable"
+            | "typeerror"
+            | "underflowexception"
+            | "unexpectedvalueexception"
+            | "valueerror"
     )
 }
 

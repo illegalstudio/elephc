@@ -1300,6 +1300,35 @@ echo (new ReflectionClass(ReflectionClass::class))->isCloneable() ? "C" : "c";
     assert_eq!(out, "aPFvrUiteSc");
 }
 
+/// Verifies that `ReflectionClass::isInternal()` and `isUserDefined()` report
+/// whether class-like metadata came from compiler built-ins or user code.
+#[test]
+fn test_reflection_class_internal_user_defined_predicates() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectOriginClass {}
+interface ReflectOriginIface {}
+trait ReflectOriginTrait {}
+enum ReflectOriginEnum { case Ready; }
+$class = new ReflectionClass(ReflectOriginClass::class);
+echo $class->isInternal() ? "I" : "i"; echo $class->isUserDefined() ? "U" : "u"; echo ":";
+$iface = new ReflectionClass(ReflectOriginIface::class);
+echo $iface->isInternal() ? "I" : "i"; echo $iface->isUserDefined() ? "U" : "u"; echo ":";
+$trait = new ReflectionClass(ReflectOriginTrait::class);
+echo $trait->isInternal() ? "I" : "i"; echo $trait->isUserDefined() ? "U" : "u"; echo ":";
+$enum = new ReflectionClass(ReflectOriginEnum::class);
+echo $enum->isInternal() ? "I" : "i"; echo $enum->isUserDefined() ? "U" : "u"; echo ":";
+$std = new ReflectionClass(stdClass::class);
+echo $std->isInternal() ? "I" : "i"; echo $std->isUserDefined() ? "U" : "u"; echo ":";
+$reflection = new ReflectionClass(ReflectionClass::class);
+echo $reflection->isInternal() ? "I" : "i"; echo $reflection->isUserDefined() ? "U" : "u"; echo ":";
+$iterator = new ReflectionClass(Iterator::class);
+echo $iterator->isInternal() ? "I" : "i"; echo $iterator->isUserDefined() ? "U" : "u"; echo ":";
+"#,
+    );
+    assert_eq!(out, "iU:iU:iU:iU:Iu:Iu:Iu:");
+}
+
 /// Verifies that `ReflectionClass::hasMethod()`, `hasProperty()`, and
 /// `hasConstant()` report PHP-visible members for static class-like metadata.
 #[test]
