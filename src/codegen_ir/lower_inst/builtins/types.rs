@@ -442,7 +442,7 @@ fn emit_no_arg_class_name_lookup(ctx: &mut FunctionContext<'_>, name: &str) {
 }
 
 /// Emits dynamic class-name lookup for an object pointer already loaded in the result register.
-fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+pub(super) fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     let empty_label = ctx.next_label("get_class_empty");
     let done_label = ctx.next_label("get_class_done");
     match ctx.emitter.target.arch {
@@ -527,7 +527,7 @@ fn emit_dynamic_object_class_name_x86_64(
 /// holds an object (runtime tag 6) read the class name from the object's class id; otherwise yield
 /// an empty class name (matching the result on a non-object). `__rt_mixed_unbox` returns the tag in
 /// `x0`/`rax` and the payload (the object pointer for tag 6) in `x1` (AArch64) / `rdi` (x86_64).
-fn emit_mixed_object_class_name(
+pub(super) fn emit_mixed_object_class_name(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
     name: &str,

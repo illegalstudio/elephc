@@ -190,4 +190,59 @@ echo $x;
     assert_eq!(out, "3");
 }
 
+/// Verifies `get_debug_type()` returns PHP 8's short scalar type names for statically typed values.
+#[test]
+fn test_get_debug_type_scalars() {
+    let out = compile_and_run(
+        r#"<?php
+echo get_debug_type(5) . "|" . get_debug_type(1.5) . "|" . get_debug_type("s")
+    . "|" . get_debug_type(true) . "|" . get_debug_type(null) . "|" . get_debug_type([1, 2]);
+"#,
+    );
+    assert_eq!(out, "int|float|string|bool|null|array");
+}
+
+/// Verifies `get_debug_type()` returns the class name for an object (here a statically typed one).
+#[test]
+fn test_get_debug_type_object_returns_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+class Mailer {}
+echo get_debug_type(new Mailer());
+"#,
+    );
+    assert_eq!(out, "Mailer");
+}
+
+/// Verifies `get_debug_type()` dispatches on the runtime tag of a boxed Mixed value, including the
+/// class name when the Mixed holds an object.
+#[test]
+fn test_get_debug_type_mixed_values() {
+    let out = compile_and_run(
+        r#"<?php
+class Widget {}
+$bag = ["i" => 5, "s" => "x", "f" => 2.5, "b" => false, "n" => null, "arr" => [1], "o" => new Widget()];
+echo get_debug_type($bag["i"]) . "|" . get_debug_type($bag["s"]) . "|" . get_debug_type($bag["f"])
+    . "|" . get_debug_type($bag["b"]) . "|" . get_debug_type($bag["n"]) . "|" . get_debug_type($bag["arr"])
+    . "|" . get_debug_type($bag["o"]);
+"#,
+    );
+    assert_eq!(out, "int|string|float|bool|null|array|Widget");
+}
+
+/// Verifies `get_debug_type()` returns the runtime class name of a dynamically constructed object
+/// (whose static type is Mixed), and that the name is case-insensitive like other builtins.
+#[test]
+fn test_get_debug_type_dynamic_new_and_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+class Service {}
+$c = "Service";
+$o = new $c();
+echo get_debug_type($o) . "|" . GET_DEBUG_TYPE(7);
+"#,
+    );
+    assert_eq!(out, "Service|int");
+}
+
 // --- Missing type function tests ---

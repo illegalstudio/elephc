@@ -207,6 +207,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `floatval()`    | `floatval($val): float`      | Convert to float               |
 | `intval()`      | `intval($val): int`          | Converts to integer            |
 | `gettype()`     | `gettype($val): string`      | Returns type name              |
+| `get_debug_type()` | `get_debug_type($val): string` | Short type name (`int`/`float`/`string`/`bool`/`null`/`array`) or the object's class name |
 | `empty()`       | `empty($val): bool`          | Returns true if value is falsy |
 | `unset()`       | `unset($var, ...$vars): void` | Sets one or more variables to null |
 | `settype()`     | `settype($var, $type): bool` | Changes variable type in place |

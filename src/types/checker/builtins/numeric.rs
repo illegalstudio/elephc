@@ -268,6 +268,16 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Str))
         }
+        "get_debug_type" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "get_debug_type() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
         "empty" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "empty() takes exactly 1 argument"));

@@ -155,6 +155,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "function_exists",
     "get_class",
     "get_parent_class",
+    "get_debug_type",
     "get_resource_id",
     "get_resource_type",
     "get_declared_classes",

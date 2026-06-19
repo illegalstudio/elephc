@@ -148,6 +148,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
         "gettype" => lower_gettype(ctx, inst),
+        "get_debug_type" => lower_get_debug_type(ctx, inst),
         "define" => lower_define(ctx, inst),
         "defined" => lower_defined(ctx, inst),
         "file_get_contents" => io::lower_file_get_contents(ctx, inst),
@@ -716,6 +717,111 @@ fn emit_type_name_result(ctx: &mut FunctionContext<'_>, type_name: &[u8]) {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+}
+
+/// Lowers `get_debug_type(value)` — PHP 8's type-name helper. Like `gettype()` but with the short
+/// scalar spellings (`int`/`float`/`string`/`bool`/`null`) and an object's class name in place of
+/// the literal "object".
+fn lower_get_debug_type(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "get_debug_type", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.raw_value_php_type(value)?;
+    if matches!(ty, PhpType::TaggedScalar) {
+        emit_tagged_scalar_get_debug_type(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_mixed_get_debug_type(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(ty, PhpType::Object(_)) {
+        // Objects report their runtime class name, exactly like get_class().
+        ctx.load_value_to_result(value)?;
+        types::emit_dynamic_object_class_name(ctx, "get_class");
+        return store_if_result(ctx, inst);
+    }
+    let Some(type_name) = static_get_debug_type_name(&ty) else {
+        return Err(CodegenIrError::unsupported(format!(
+            "get_debug_type for PHP type {:?}",
+            ty
+        )));
+    };
+    emit_type_name_result(ctx, type_name);
+    store_if_result(ctx, inst)
+}
+
+/// Emits `get_debug_type()` for an inline tagged scalar (`int` or `null`).
+fn emit_tagged_scalar_get_debug_type(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let null_case = ctx.next_label("debugtype_tagged_null");
+    let done = ctx.next_label("debugtype_tagged_done");
+    ctx.load_value_to_result(value)?;
+    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_case);
+    emit_type_name_result(ctx, b"int");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null_case);
+    emit_type_name_result(ctx, b"null");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits `get_debug_type()` for a boxed Mixed/Union payload by dispatching on the runtime tag,
+/// reading the runtime class name for objects.
+fn emit_mixed_get_debug_type(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let integer_case = ctx.next_label("debugtype_mixed_int");
+    let double_case = ctx.next_label("debugtype_mixed_float");
+    let string_case = ctx.next_label("debugtype_mixed_string");
+    let boolean_case = ctx.next_label("debugtype_mixed_bool");
+    let null_case = ctx.next_label("debugtype_mixed_null");
+    let array_case = ctx.next_label("debugtype_mixed_array");
+    let object_case = ctx.next_label("debugtype_mixed_object");
+    let resource_case = ctx.next_label("debugtype_mixed_resource");
+    let done = ctx.next_label("debugtype_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_on_gettype_mixed_tag(ctx, 0, &integer_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 2, &double_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 3, &boolean_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 4, &array_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 5, &array_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
+    abi::emit_jump(ctx.emitter, &null_case);
+
+    emit_mixed_gettype_case(ctx, &integer_case, b"int", &done);
+    emit_mixed_gettype_case(ctx, &double_case, b"float", &done);
+    emit_mixed_gettype_case(ctx, &string_case, b"string", &done);
+    emit_mixed_gettype_case(ctx, &boolean_case, b"bool", &done);
+    emit_mixed_gettype_case(ctx, &null_case, b"null", &done);
+    emit_mixed_gettype_case(ctx, &array_case, b"array", &done);
+    emit_mixed_gettype_case(ctx, &resource_case, b"resource", &done);
+
+    // Object payload: report the runtime class name.
+    ctx.emitter.label(&object_case);
+    types::emit_mixed_object_class_name(ctx, value, "get_class")?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Returns PHP's `get_debug_type()` spelling for concrete statically known non-object types.
+fn static_get_debug_type_name(ty: &PhpType) -> Option<&'static [u8]> {
+    match ty {
+        PhpType::Int => Some(b"int".as_slice()),
+        PhpType::Float => Some(b"float".as_slice()),
+        PhpType::Str => Some(b"string".as_slice()),
+        PhpType::Bool => Some(b"bool".as_slice()),
+        PhpType::Void | PhpType::Never => Some(b"null".as_slice()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            Some(b"array".as_slice())
+        }
+        PhpType::Resource(_) => Some(b"resource".as_slice()),
+        _ => None,
+    }
 }
 
 /// Lowers `phpversion()` as the compiler package version string.
