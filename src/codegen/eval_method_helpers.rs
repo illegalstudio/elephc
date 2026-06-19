@@ -635,8 +635,8 @@ fn emit_aarch64_builtin_throwable_method_name_branch(
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested method-name length
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
-    emitter.instruction("bl __rt_str_eq");                                      // compare requested method name with this Throwable method
-    emitter.instruction(&format!("cbnz x0, {}", target_label));                 // dispatch to the compact Throwable method when names match
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare Throwable method names with PHP case-insensitive rules
+    emitter.instruction(&format!("cbz x0, {}", target_label));                  // dispatch to the compact Throwable method when names match
 }
 
 /// Emits one x86_64 method-name comparison for a compact Throwable method.
@@ -652,9 +652,9 @@ fn emit_x86_64_builtin_throwable_method_name_branch(
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload requested method-name length
     abi::emit_symbol_address(emitter, "rdx", &label);
     abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-    emitter.instruction("call __rt_str_eq");                                    // compare requested method name with this Throwable method
+    emitter.instruction("call __rt_strcasecmp");                                // compare Throwable method names with PHP case-insensitive rules
     emitter.instruction("test rax, rax");                                       // check whether the method names matched
-    emitter.instruction(&format!("jne {}", target_label));                      // dispatch to the compact Throwable method when names match
+    emitter.instruction(&format!("je {}", target_label));                       // dispatch to the compact Throwable method when names match
 }
 
 /// Emits one ARM64 method-name comparison and branch to the matching body.
@@ -669,9 +669,9 @@ fn emit_aarch64_method_name_compare(
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested method-name length
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
-    emitter.instruction("bl __rt_str_eq");                                      // compare requested method name with this public method
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare public method names with PHP case-insensitive rules
     let target_label = method_body_label(module, slot);
-    emitter.instruction(&format!("cbnz x0, {}", target_label));                 // dispatch to the method body when the names match
+    emitter.instruction(&format!("cbz x0, {}", target_label));                  // dispatch to the method body when the names match
 }
 
 /// Emits one x86_64 method-name comparison and branch to the matching body.
@@ -686,9 +686,9 @@ fn emit_x86_64_method_name_compare(
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload requested method-name length
     abi::emit_symbol_address(emitter, "rdx", &label);
     abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-    emitter.instruction("call __rt_str_eq");                                    // compare requested method name with this public method
+    emitter.instruction("call __rt_strcasecmp");                                // compare public method names with PHP case-insensitive rules
     emitter.instruction("test rax, rax");                                       // check whether the method names matched
-    emitter.instruction(&format!("jne {}", method_body_label(module, slot)));   // dispatch to the method body when the names match
+    emitter.instruction(&format!("je {}", method_body_label(module, slot)));    // dispatch to the method body when the names match
 }
 
 /// Emits one ARM64 static method-name comparison and branch to the matching body.
