@@ -28,7 +28,7 @@ pub(super) fn is_reference_property(object: &Expr, property: &str, ctx: &Context
     };
     ctx.classes
         .get(&class_name)
-        .is_some_and(|class_info| class_info.reference_properties.contains(property))
+        .is_some_and(|class_info| class_info.visible_property_is_reference(property))
 }
 /// Returns `Some(var_name)` when `object` is `$this`, `value` is a variable
 /// with the same name as `property`, and that name is a registered reference
@@ -130,12 +130,10 @@ fn reference_property_type(object: &Expr, property: &str, ctx: &Context) -> Opti
         return None;
     };
     let class_info = ctx.classes.get(&class_name)?;
-    if !class_info.reference_properties.contains(property) {
+    if !class_info.visible_property_is_reference(property) {
         return None;
     }
     class_info
-        .properties
-        .iter()
-        .find(|(name, _)| name == property)
-        .map(|(_, ty)| ty.clone())
+        .visible_property(property)
+        .map(|(_, (_, ty))| ty.clone())
 }

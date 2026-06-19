@@ -705,22 +705,23 @@ pub(super) fn emit_loaded_object_property_access(
             return PhpType::Int;
         }
     };
-    let offset = match class_info.property_offsets.get(property) {
-        Some(offset) => *offset,
+    let (index, _) = match class_info.visible_property(property) {
+        Some((index, entry)) => (index, entry),
         None => {
             emitter.comment(&format!("WARNING: missing property offset {}", property));
             return PhpType::Int;
         }
     };
+    let offset = 8 + index * 16;
 
     emit_loaded_object_property_value(
         class_name,
         property,
         prop_ty,
         offset,
-        class_info.declared_properties.contains(property),
+        class_info.property_slot_is_declared(index, property),
         false,
-        class_info.reference_properties.contains(property),
+        class_info.property_slot_is_reference(index, property),
         ctx,
         data,
         emitter,

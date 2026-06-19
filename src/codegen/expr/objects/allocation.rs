@@ -132,7 +132,7 @@ pub(super) fn emit_new_object_core(
     for i in 0..num_props {
         let offset = 8 + i * 16;
         let property_name = &class_info.properties[i].0;
-        let starts_uninitialized = class_info.declared_properties.contains(property_name)
+        let starts_uninitialized = class_info.property_slot_is_declared(i, property_name)
             && class_info.defaults.get(i).is_some_and(|default| default.is_none());
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -212,7 +212,7 @@ pub(super) fn emit_new_object_core(
                 assoc_ty
             } else {
                 let actual_ty = emit_expr(&default_expr, emitter, ctx, data);
-                if class_info.declared_properties.contains(prop_name) {
+                if class_info.property_slot_is_declared(i, prop_name) {
                     coerce_result_to_type(emitter, ctx, data, &actual_ty, &expected_ty);
                     expected_ty
                 } else {

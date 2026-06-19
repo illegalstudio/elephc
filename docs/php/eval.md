@@ -148,6 +148,9 @@ integer literals). `ReflectionAttribute::newInstance()` instantiates
 eval-declared attribute classes from those materialized attributes.
 Attribute names remain visible when an attribute uses unsupported argument
 syntax, but requesting those arguments is a runtime fatal.
+Private parent properties shadowed by same-named child properties use separate
+runtime storage, so parent methods keep seeing the private parent value while
+child methods and public access see the child property.
 `ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`, and
 `ReflectionProperty::getAttributes()` expose eval-retained class, method, and
 property attributes for eval-declared class-like symbols when their arguments

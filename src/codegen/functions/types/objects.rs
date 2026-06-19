@@ -68,7 +68,7 @@ pub(super) fn infer_property_access_type(
                 };
             }
             if let Some(ci) = c.classes.get(&cn) {
-                if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == property) {
+                if let Some((_, (_, ty))) = ci.visible_property(property) {
                     return if nullable {
                         merge_union_members(vec![ty.clone(), PhpType::Void])
                     } else {
@@ -124,7 +124,7 @@ pub(super) fn infer_nullsafe_property_access_type(
         }
         if let Some((cn, nullable)) = nullsafe_context_class(object, sig, c) {
             if let Some(ci) = c.classes.get(&cn) {
-                if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == property) {
+                if let Some((_, (_, ty))) = ci.visible_property(property) {
                     return if nullable {
                         merge_union_members(vec![ty.clone(), PhpType::Void])
                     } else {

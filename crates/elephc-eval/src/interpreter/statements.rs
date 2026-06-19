@@ -1506,10 +1506,12 @@ pub(in crate::interpreter) fn eval_property_get_result(
         return values.property_get(object, property_name);
     };
     let object_class_name = class.name().to_string();
+    let mut storage_property_name = property_name.to_string();
     if let Some((declaring_class, property)) =
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
         validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+        storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if property.has_get_hook()
             && !current_eval_property_hook_is(
                 &declaring_class,
@@ -1535,7 +1537,7 @@ pub(in crate::interpreter) fn eval_property_get_result(
             );
         }
     }
-    values.property_get(object, property_name)
+    values.property_get(object, &storage_property_name)
 }
 
 /// Writes one object property while enforcing eval-declared member visibility.
@@ -1556,11 +1558,13 @@ pub(in crate::interpreter) fn eval_property_set_result(
     if context.has_enum(&object_class_name) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let mut storage_property_name = property_name.to_string();
     if let Some((declaring_class, property)) =
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
         validate_eval_member_access(&declaring_class, property.visibility(), context)?;
         validate_eval_readonly_property_write(&declaring_class, &property, context)?;
+        storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if property.has_set_hook() {
             if !current_eval_property_hook_is(
                 &declaring_class,
@@ -1594,7 +1598,7 @@ pub(in crate::interpreter) fn eval_property_set_result(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
-    values.property_set(object, property_name, value)
+    values.property_set(object, &storage_property_name, value)
 }
 
 /// Validates that an object property may be used as a by-reference method argument.
@@ -1708,6 +1712,18 @@ fn eval_dynamic_property_for_access(
         }
     }
     context.class_property(object_class_name, property_name)
+}
+
+/// Returns the physical storage name for an eval object property slot.
+fn eval_instance_property_storage_name(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+) -> String {
+    if property.visibility() == EvalVisibility::Private {
+        format!("\0{}\0{}", declaring_class.trim_start_matches('\\'), property.name())
+    } else {
+        property.name().to_string()
+    }
 }
 
 /// Reads one eval-declared static property after resolving the class-like receiver.
@@ -2092,7 +2108,8 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
             } else {
                 values.null()?
             };
-            values.property_set(object, property.name(), value)?;
+            let storage_name = eval_instance_property_storage_name(class.name(), property);
+            values.property_set(object, &storage_name, value)?;
         }
     }
     if let Some((constructor_class, constructor)) =

@@ -107,8 +107,8 @@ fn resolve_object_property_target(
             return PropertyAssignResolution::Abort;
         }
     };
-    let prop_ty = match class_info.properties.iter().find(|(n, _)| n == property) {
-        Some((_, ty)) => ty.clone(),
+    let (slot_index, prop_ty) = match class_info.visible_property(property) {
+        Some((index, (_, ty))) => (index, ty.clone()),
         None => {
             if let Some(magic_class_name) = magic_set_class {
                 return PropertyAssignResolution::UseMagicSet(magic_class_name.to_string());
@@ -124,19 +124,13 @@ fn resolve_object_property_target(
             return PropertyAssignResolution::Abort;
         }
     };
-    let offset = match class_info.property_offsets.get(property) {
-        Some(offset) => *offset,
-        None => {
-            emitter.comment(&format!("WARNING: missing property offset {}", property));
-            return PropertyAssignResolution::Abort;
-        }
-    };
+    let offset = 8 + slot_index * 16;
     PropertyAssignResolution::Resolved(PropertyAssignTarget {
         class_name: class_name.to_string(),
         offset,
         prop_ty,
         needs_deref: false,
-        is_reference: class_info.reference_properties.contains(property),
+        is_reference: class_info.property_slot_is_reference(slot_index, property),
     })
 }
 

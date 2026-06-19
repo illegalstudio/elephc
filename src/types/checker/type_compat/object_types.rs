@@ -365,14 +365,12 @@ impl Checker {
                 continue;
             }
 
-            let property_has_declared_type = class_info.declared_properties.contains(&prop_name);
+            let property_has_declared_type = class_info.visible_property_is_declared(&prop_name);
             if !property_has_declared_type {
-                if let Some(prop) = class_info
-                    .properties
-                    .iter_mut()
-                    .find(|(name, _)| name == &prop_name)
-                {
-                    prop.1 = arg_ty.clone();
+                if let Some(slot) = class_info.visible_property_index(&prop_name) {
+                    if let Some(prop) = class_info.properties.get_mut(slot) {
+                        prop.1 = arg_ty.clone();
+                    }
                 }
             }
 

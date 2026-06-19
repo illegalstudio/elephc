@@ -2738,10 +2738,8 @@ fn object_property_type(
     };
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
-        .properties
-        .iter()
-        .find(|(name, _)| name == property)
-        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+        .visible_property(property)
+        .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.codegen_repr()))
 }
 
 /// Returns true when a property type uses concrete indexed-array storage.

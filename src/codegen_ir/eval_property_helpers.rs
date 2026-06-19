@@ -94,18 +94,18 @@ fn collect_class_property_slots(
     class_info: &ClassInfo,
     slots: &mut Vec<EvalPropertySlot>,
 ) {
-    for (property, ty) in &class_info.properties {
+    for (index, (property, ty)) in class_info.properties.iter().enumerate() {
+        if class_info.visible_property_index(property) != Some(index) {
+            continue;
+        }
         if !property_is_public(class_info, property) || !property_type_supported(ty) {
             continue;
         }
-        let Some(offset) = class_info.property_offsets.get(property).copied() else {
-            continue;
-        };
         slots.push(EvalPropertySlot {
             class_id: class_info.class_id,
             class_name: class_name.to_string(),
             property: property.clone(),
-            offset,
+            offset: 8 + index * 16,
             ty: ty.codegen_repr(),
         });
     }

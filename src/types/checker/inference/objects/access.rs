@@ -201,7 +201,7 @@ impl Checker {
             {
                 return Ok(ty);
             }
-            if let Some((_, ty)) = class_info.properties.iter().find(|(n, _)| n == property) {
+            if let Some((_, (_, ty))) = class_info.visible_property(property) {
                 return Ok(ty.clone());
             }
             if let Some(sig) = class_info.methods.get("__get") {

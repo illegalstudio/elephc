@@ -34,9 +34,11 @@ pub(super) struct ClassBuildState {
     pub(super) property_visibilities: HashMap<String, Visibility>,
     pub(super) property_set_visibilities: HashMap<String, Visibility>,
     pub(super) declared_properties: HashSet<String>,
+    pub(super) property_declared_slots: Vec<bool>,
     pub(super) final_properties: HashSet<String>,
     pub(super) readonly_properties: HashSet<String>,
     pub(super) reference_properties: HashSet<String>,
+    pub(super) property_reference_slots: Vec<bool>,
     pub(super) abstract_properties: HashSet<String>,
     pub(super) abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub(super) static_prop_types: Vec<(String, PhpType)>,
@@ -153,9 +155,11 @@ impl ClassBuildState {
             property_visibilities: self.property_visibilities,
             property_set_visibilities: self.property_set_visibilities,
             declared_properties: self.declared_properties,
+            property_declared_slots: self.property_declared_slots,
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
             reference_properties: self.reference_properties,
+            property_reference_slots: self.property_reference_slots,
             abstract_properties: self.abstract_properties,
             abstract_property_hooks: self.abstract_property_hooks,
             static_properties: self.static_prop_types,
@@ -278,6 +282,20 @@ impl ClassBuildState {
             self.prop_types.push((name.clone(), ty.clone()));
             self.property_offsets.insert(name.clone(), 8 + index * 16);
             self.defaults.push(parent.defaults[index].clone());
+            self.property_declared_slots.push(
+                parent
+                    .property_declared_slots
+                    .get(index)
+                    .copied()
+                    .unwrap_or_else(|| parent.declared_properties.contains(name)),
+            );
+            self.property_reference_slots.push(
+                parent
+                    .property_reference_slots
+                    .get(index)
+                    .copied()
+                    .unwrap_or_else(|| parent.reference_properties.contains(name)),
+            );
             if let Some(visibility) = parent.property_visibilities.get(name) {
                 self.property_visibilities
                     .insert(name.clone(), visibility.clone());

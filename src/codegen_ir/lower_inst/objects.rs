@@ -1906,11 +1906,7 @@ fn collect_property_defaults(
         let Some(default_expr) = class_info.defaults.get(index).and_then(Option::as_ref) else {
             continue;
         };
-        let offset = class_info
-            .property_offsets
-            .get(property)
-            .copied()
-            .unwrap_or(8 + index * 16);
+        let offset = 8 + index * 16;
         defaults.push(PropertyDefault {
             offset,
             value: literal_default_value(
@@ -3738,17 +3734,10 @@ fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter_map(|(index, (property, _))| {
-            let starts_uninitialized = class_info.declared_properties.contains(property)
+            let starts_uninitialized = class_info.property_slot_is_declared(index, property)
                 && class_info.defaults.get(index).is_some_and(|default| default.is_none());
             if starts_uninitialized {
-                Some(
-                    class_info
-                        .property_offsets
-                        .get(property)
-                        .copied()
-                        .unwrap_or(8 + index * 16)
-                        + 8,
-                )
+                Some(8 + index * 16 + 8)
             } else {
                 None
             }
@@ -3840,12 +3829,7 @@ fn resolve_property_slot_for_class(
         .class_infos
         .get(normalized)
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", normalized)))?;
-    let is_reference = class_info.reference_properties.contains(property);
-    let Some((index, (_, php_type))) = class_info
-        .properties
-        .iter()
-        .enumerate()
-        .find(|(_, (name, _))| name == property)
+    let Some((index, (_, php_type))) = class_info.visible_property(property)
     else {
         return Err(CodegenIrError::unsupported(format!(
             "{} for dynamic or missing property {}::${}",
@@ -3854,20 +3838,17 @@ fn resolve_property_slot_for_class(
             property
         )));
     };
+    let is_reference = class_info.property_slot_is_reference(index, property);
     let php_type = runtime_property_type_override(ctx, normalized, property)
         .unwrap_or_else(|| php_type.clone());
     ensure_property_type_supported(&php_type, inst)?;
-    let offset = class_info
-        .property_offsets
-        .get(property)
-        .copied()
-        .unwrap_or(8 + index * 16);
+    let offset = 8 + index * 16;
     Ok(PropertySlot {
         class_name: normalized.to_string(),
         property: property.to_string(),
         php_type,
         offset,
-        is_declared: class_info.declared_properties.contains(property),
+        is_declared: class_info.property_slot_is_declared(index, property),
         is_packed: false,
         is_reference,
     })

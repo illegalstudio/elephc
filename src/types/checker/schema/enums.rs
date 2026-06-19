@@ -280,9 +280,11 @@ pub(crate) fn insert_enum_metadata(
     let mut defaults = Vec::new();
     let mut property_visibilities = HashMap::new();
     let mut declared_properties = HashSet::new();
+    let mut property_declared_slots = Vec::new();
     let final_properties = HashSet::new();
     let mut readonly_properties = HashSet::new();
     let reference_properties = HashSet::new();
+    let mut property_reference_slots = Vec::new();
     push_enum_readonly_property(
         "name",
         PhpType::Str,
@@ -293,7 +295,9 @@ pub(crate) fn insert_enum_metadata(
         &mut defaults,
         &mut property_visibilities,
         &mut declared_properties,
+        &mut property_declared_slots,
         &mut readonly_properties,
+        &mut property_reference_slots,
     );
     if let Some(backing_ty) = &backing_type {
         push_enum_readonly_property(
@@ -306,7 +310,9 @@ pub(crate) fn insert_enum_metadata(
             &mut defaults,
             &mut property_visibilities,
             &mut declared_properties,
+            &mut property_declared_slots,
             &mut readonly_properties,
+            &mut property_reference_slots,
         );
     }
 
@@ -440,9 +446,11 @@ pub(crate) fn insert_enum_metadata(
             property_visibilities,
             property_set_visibilities: HashMap::new(),
             declared_properties,
+            property_declared_slots,
             final_properties,
             readonly_properties,
             reference_properties,
+            property_reference_slots,
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),
@@ -494,7 +502,9 @@ fn push_enum_readonly_property(
     defaults: &mut Vec<Option<crate::parser::ast::Expr>>,
     property_visibilities: &mut HashMap<String, Visibility>,
     declared_properties: &mut HashSet<String>,
+    property_declared_slots: &mut Vec<bool>,
     readonly_properties: &mut HashSet<String>,
+    property_reference_slots: &mut Vec<bool>,
 ) {
     let offset = 8 + properties.len() * 16;
     let property = property.to_string();
@@ -504,5 +514,7 @@ fn push_enum_readonly_property(
     defaults.push(None);
     property_visibilities.insert(property.clone(), Visibility::Public);
     declared_properties.insert(property.clone());
+    property_declared_slots.push(true);
     readonly_properties.insert(property);
+    property_reference_slots.push(false);
 }
