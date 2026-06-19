@@ -784,6 +784,38 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass getMethod/getProperty return eval member objects.
+#[test]
+fn execute_program_reflection_class_gets_eval_member_objects() {
+    let program = parse_fragment(
+        br#"class EvalReflectLookupTarget {
+    public function first() {}
+    private static function helper() {}
+    protected $visible;
+    private static $token;
+}
+$ref = new ReflectionClass("EvalReflectLookupTarget");
+$method = $ref->getMethod("FIRST");
+echo $method->getName(); echo ":";
+echo $method->isPublic() ? "U" : "u"; echo ":";
+$helper = $ref->getMethod("helper");
+echo $helper->isPrivate() ? "P" : "p";
+echo $helper->isStatic() ? "S" : "s"; echo ":";
+$property = $ref->getProperty("visible");
+echo $property->getName(); echo ":";
+echo $property->isProtected() ? "R" : "r";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "first:U:PS:visible:R");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::getParentClass returns eval parent metadata or false.
 #[test]
 fn execute_program_reflection_class_get_parent_class() {

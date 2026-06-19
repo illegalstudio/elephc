@@ -231,6 +231,68 @@ pub(in crate::interpreter) fn eval_reflection_class_get_constants_result(
     Ok(Some(result))
 }
 
+/// Handles eval-backed `ReflectionClass::getMethod()` and `getProperty()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let owner_kind = if method_name.eq_ignore_ascii_case("getMethod") {
+        EVAL_REFLECTION_OWNER_METHOD
+    } else if method_name.eq_ignore_ascii_case("getProperty") {
+        EVAL_REFLECTION_OWNER_PROPERTY
+    } else {
+        return Ok(None);
+    };
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
+    let requested_name = eval_reflection_string_arg(args[0], values)?;
+    let Some(member_name) =
+        eval_reflection_member_name(owner_kind, &reflected_name, &requested_name, context)
+    else {
+        let message_name = eval_reflection_class_like_attributes(&reflected_name, context)
+            .map(|metadata| metadata.resolved_name)
+            .unwrap_or_else(|| reflected_name.clone());
+        let message = eval_reflection_missing_member_message(
+            owner_kind,
+            &message_name,
+            &requested_name,
+        );
+        return eval_throw_reflection_exception(&message, context, values);
+    };
+    let member = eval_reflection_member_metadata(owner_kind, &reflected_name, &member_name, context)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let flags = eval_reflection_member_flags(
+        member.visibility,
+        member.is_static,
+        member.is_final,
+        member.is_abstract,
+    );
+    eval_reflection_owner_object(
+        owner_kind,
+        &member_name,
+        &member.attributes,
+        &[],
+        &[],
+        &[],
+        &[],
+        None,
+        &member.parameters,
+        flags,
+        member.required_parameter_count as u64,
+        context,
+        values,
+    )
+    .map(Some)
+}
+
 /// Returns the constant names visible through eval-backed `ReflectionClass`.
 fn eval_reflection_constant_names(
     reflected_name: &str,
@@ -256,6 +318,41 @@ fn eval_reflection_constant_value(
     }
     let (declaring_class, constant) = context.class_constant(reflected_name, constant_name)?;
     context.class_constant_cell(&declaring_class, constant.name())
+}
+
+/// Resolves the declared member spelling for eval `ReflectionClass` single-member lookups.
+fn eval_reflection_member_name(
+    owner_kind: u64,
+    reflected_name: &str,
+    requested_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<String> {
+    let metadata = eval_reflection_class_like_attributes(reflected_name, context)?;
+    let names = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        metadata.method_names
+    } else {
+        metadata.property_names
+    };
+    names
+        .into_iter()
+        .find(|name| match owner_kind {
+            EVAL_REFLECTION_OWNER_METHOD => name.eq_ignore_ascii_case(requested_name),
+            EVAL_REFLECTION_OWNER_PROPERTY => name == requested_name,
+            _ => false,
+        })
+}
+
+/// Builds PHP-compatible missing-member messages for eval ReflectionClass lookups.
+fn eval_reflection_missing_member_message(
+    owner_kind: u64,
+    reflected_name: &str,
+    requested_name: &str,
+) -> String {
+    if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        format!("Method {}::{}() does not exist", reflected_name, requested_name)
+    } else {
+        format!("Property {}::${} does not exist", reflected_name, requested_name)
+    }
 }
 
 /// Builds an eval-backed `ReflectionClass` object when the reflected class-like exists in eval.

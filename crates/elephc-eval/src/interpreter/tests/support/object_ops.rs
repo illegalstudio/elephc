@@ -236,9 +236,15 @@ impl FakeOps {
                 Self::object_property(&properties, "__methods")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
             }
+            (FakeValue::Object(properties), "getmethod") if args.len() == 1 => {
+                self.object_named_member(&properties, "__methods", args[0], true)
+            }
             (FakeValue::Object(properties), "getproperties") if args.is_empty() => {
                 Self::object_property(&properties, "__properties")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
+            (FakeValue::Object(properties), "getproperty") if args.len() == 1 => {
+                self.object_named_member(&properties, "__properties", args[0], false)
             }
             (FakeValue::Object(properties), "getconstants") if args.is_empty() => {
                 Self::object_property(&properties, "__constants")
@@ -529,6 +535,47 @@ impl FakeOps {
         };
         self.bool_value(contains)
     }
+
+    /// Finds one fake ReflectionMethod/ReflectionProperty object by its private name slot.
+    fn object_named_member(
+        &mut self,
+        properties: &[(String, RuntimeCellHandle)],
+        property: &str,
+        needle: RuntimeCellHandle,
+        case_insensitive: bool,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let FakeValue::String(mut needle) = self.get(needle) else {
+            return Err(EvalStatus::UnsupportedConstruct);
+        };
+        if case_insensitive {
+            needle = needle.to_ascii_lowercase();
+        }
+        let Some(array) = Self::object_property(properties, property) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        let FakeValue::Array(elements) = self.get(array) else {
+            return Err(EvalStatus::UnsupportedConstruct);
+        };
+        for element in elements {
+            let FakeValue::Object(member_properties) = self.get(element) else {
+                continue;
+            };
+            let Some(name) = Self::object_property(&member_properties, "__name") else {
+                continue;
+            };
+            let FakeValue::String(mut name) = self.get(name) else {
+                continue;
+            };
+            if case_insensitive {
+                name = name.to_ascii_lowercase();
+            }
+            if name == needle {
+                return Ok(element);
+            }
+        }
+        Err(EvalStatus::RuntimeFatal)
+    }
+
     /// Creates one fake object for eval `new` unit tests.
     pub(super) fn runtime_new_object(
         &mut self,

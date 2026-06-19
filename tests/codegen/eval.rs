@@ -6298,6 +6298,56 @@ foreach ($properties as $property) {
     assert_eq!(out.stdout, "2:2:F1SR:V1PTR");
 }
 
+/// Verifies eval ReflectionClass getMethod/getProperty return single member objects.
+#[test]
+fn test_eval_reflection_class_get_method_and_property_lookup_members() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectLookupTarget {
+    public function first() {}
+    private static function helper() {}
+    protected $visible;
+    private static $token;
+}
+$ref = new ReflectionClass("EvalReflectLookupTarget");
+$method = $ref->getMethod("FIRST");
+echo $method->getName() . ":";
+echo $method->isPublic() ? "U" : "u";
+echo ":";
+$helper = $ref->getMethod("helper");
+echo $helper->isPrivate() ? "P" : "p";
+echo $helper->isStatic() ? "S" : "s";
+echo ":";
+$property = $ref->getProperty("visible");
+echo $property->getName() . ":";
+echo $property->isProtected() ? "R" : "r";
+echo ":";
+try {
+    $ref->getProperty("Visible");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo ":";
+try {
+    $ref->getMethod("missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "first:U:PS:visible:R:Property EvalReflectLookupTarget::$Visible does not exist:Method EvalReflectLookupTarget::missing() does not exist"
+    );
+}
+
 /// Verifies eval ReflectionMethod materializes ReflectionParameter objects through the bridge.
 #[test]
 fn test_eval_reflection_method_lists_parameters() {

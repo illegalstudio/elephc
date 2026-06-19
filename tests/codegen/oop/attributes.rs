@@ -1611,6 +1611,57 @@ foreach ($properties as $property) {
     assert_eq!(out.stdout, "2:2:F1SR:V1PTR");
 }
 
+/// Verifies that `ReflectionClass::getMethod()` and `getProperty()` return
+/// single member objects and throw ReflectionException for missing members.
+#[test]
+fn test_reflection_class_get_method_and_property_lookup_members() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectLookupTarget {
+    public function first() {}
+    private static function helper() {}
+    protected int $visible = 1;
+    private static string $token = "x";
+}
+$ref = new ReflectionClass(ReflectLookupTarget::class);
+$method = $ref->getMethod("FIRST");
+echo $method->getName() . ":";
+echo $method->isPublic() ? "U" : "u";
+echo ":";
+$helper = $ref->getMethod("helper");
+echo $helper->isPrivate() ? "P" : "p";
+echo $helper->isStatic() ? "S" : "s";
+echo ":";
+$property = $ref->getProperty("visible");
+echo $property->getName() . ":";
+echo $property->isProtected() ? "R" : "r";
+echo ":";
+try {
+    $ref->getProperty("Visible");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo ":";
+try {
+    $ref->getMethod("missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "first:U:PS:visible:R:Property ReflectLookupTarget::$Visible does not exist:Method ReflectLookupTarget::missing() does not exist"
+    );
+}
+
 /// Verifies that `ReflectionMethod::getParameters()` returns populated
 /// ReflectionParameter objects for typed, by-reference, defaulted, and variadic parameters.
 #[test]

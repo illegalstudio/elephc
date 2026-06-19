@@ -596,6 +596,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 "__methods",
                 object_array_type("ReflectionMethod"),
             ),
+            builtin_reflection_class_get_member_method(
+                "getMethod",
+                "__methods",
+                "ReflectionMethod",
+                true,
+            ),
             builtin_reflection_class_nullable_object_method(
                 "getConstructor",
                 "__constructor",
@@ -606,6 +612,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 "getProperties",
                 "__properties",
                 object_array_type("ReflectionProperty"),
+            ),
+            builtin_reflection_class_get_member_method(
+                "getProperty",
+                "__properties",
+                "ReflectionProperty",
+                false,
             ),
             builtin_reflection_class_new_instance_method(),
             builtin_reflection_owner_get_attributes_method(),
@@ -1025,6 +1037,23 @@ fn strtolower_call(expr: Expr, span: crate::span::Span) -> Expr {
     function_call("strtolower", vec![expr], span)
 }
 
+/// Builds a variable expression for synthetic Reflection method bodies.
+fn variable_expr(name: &str, span: crate::span::Span) -> Expr {
+    Expr::new(ExprKind::Variable(name.to_string()), span)
+}
+
+/// Builds a method call expression for synthetic Reflection method bodies.
+fn method_call_expr(object: Expr, method: &str, args: Vec<Expr>, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(object),
+            method: method.to_string(),
+            args,
+        },
+        span,
+    )
+}
+
 /// Returns a public `ReflectionClass` array method backed by one private slot.
 fn builtin_reflection_class_array_method(
     method_name: &str,
@@ -1053,6 +1082,110 @@ fn builtin_reflection_class_array_method(
             ))),
             dummy_span,
         )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass::getMethod()` or `getProperty()` lookup method.
+fn builtin_reflection_class_get_member_method(
+    method_name: &str,
+    property: &str,
+    return_class: &str,
+    case_insensitive: bool,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name = variable_expr("name", dummy_span);
+    let member = variable_expr("member", dummy_span);
+    let member_name = method_call_expr(member.clone(), "getName", Vec::new(), dummy_span);
+    let left = if case_insensitive {
+        strtolower_call(member_name, dummy_span)
+    } else {
+        member_name
+    };
+    let right = if case_insensitive {
+        strtolower_call(name.clone(), dummy_span)
+    } else {
+        name.clone()
+    };
+    let exists = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(left),
+            op: if case_insensitive {
+                BinOp::Eq
+            } else {
+                BinOp::StrictEq
+            },
+            right: Box::new(right),
+        },
+        dummy_span,
+    );
+    let message = if return_class == "ReflectionMethod" {
+        concat_expr(
+            concat_expr(
+                concat_expr(
+                    reflection_this_property("__name", dummy_span),
+                    string_lit("::", dummy_span),
+                    dummy_span,
+                ),
+                name.clone(),
+                dummy_span,
+            ),
+            string_lit("() does not exist", dummy_span),
+            dummy_span,
+        )
+    } else {
+        concat_expr(
+            concat_expr(
+                concat_expr(
+                    reflection_this_property("__name", dummy_span),
+                    string_lit("::$", dummy_span),
+                    dummy_span,
+                ),
+                name.clone(),
+                dummy_span,
+            ),
+            string_lit(" does not exist", dummy_span),
+            dummy_span,
+        )
+    };
+    let message = concat_expr(
+        string_lit(if return_class == "ReflectionMethod" { "Method " } else { "Property " }, dummy_span),
+        message,
+        dummy_span,
+    );
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified(return_class))),
+        body: vec![
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property(property, dummy_span),
+                    key_var: None,
+                    value_var: "member".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: exists,
+                            then_body: vec![Stmt::new(StmtKind::Return(Some(member)), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            throw_new_reflection_exception(message, dummy_span),
+        ],
         span: dummy_span,
         attributes: Vec::new(),
     }
@@ -1494,9 +1627,15 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     sig.return_type =
                         PhpType::Array(Box::new(PhpType::Object("ReflectionMethod".to_string())));
                 }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getMethod")) {
+                    sig.return_type = PhpType::Object("ReflectionMethod".to_string());
+                }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getProperties")) {
                     sig.return_type =
                         PhpType::Array(Box::new(PhpType::Object("ReflectionProperty".to_string())));
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getProperty")) {
+                    sig.return_type = PhpType::Object("ReflectionProperty".to_string());
                 }
                 if let Some(sig) = class_info
                     .methods
