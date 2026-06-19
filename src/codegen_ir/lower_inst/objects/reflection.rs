@@ -71,6 +71,7 @@ struct ReflectionListedMember {
 #[derive(Clone)]
 struct ReflectionParameterMember {
     name: String,
+    declaring_class_name: Option<String>,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
     position: i64,
@@ -1500,6 +1501,10 @@ fn reflection_class_method_member(
         .get(&method_key)
         .or_else(|| info.static_methods.get(&method_key))?;
     let declaring_class_name = reflection_method_declaring_class_name(info, &method_key);
+    let parameters = reflection_parameter_members_with_declaring_class(
+        sig,
+        declaring_class_name.as_deref(),
+    );
     Some(ReflectionListedMember {
         name: method_key.clone(),
         declaring_class_name,
@@ -1515,7 +1520,7 @@ fn reflection_class_method_member(
             .unwrap_or_default(),
         flags: reflection_method_member_flags(info, &method_key)?,
         required_parameter_count: reflection_required_parameter_count(sig),
-        parameters: reflection_parameter_members(sig),
+        parameters,
     })
 }
 
@@ -1551,6 +1556,8 @@ fn reflection_interface_method_member(
         .or_else(|| info.static_method_declaring_interfaces.get(&method_key))
         .cloned()
         .unwrap_or_else(|| interface_name.to_string());
+    let parameters =
+        reflection_parameter_members_with_declaring_class(sig, Some(declaring_class_name.as_str()));
     Some(ReflectionListedMember {
         name: method_key,
         declaring_class_name: Some(declaring_class_name),
@@ -1558,7 +1565,7 @@ fn reflection_interface_method_member(
         attr_args: Vec::new(),
         flags: reflection_member_flags(is_static, &Visibility::Public, false, true),
         required_parameter_count: reflection_required_parameter_count(sig),
-        parameters: reflection_parameter_members(sig),
+        parameters,
     })
 }
 
@@ -1594,7 +1601,10 @@ fn reflection_trait_method_member(
             info.is_abstract,
         ),
         required_parameter_count: reflection_required_parameter_count(&info.signature),
-        parameters: reflection_parameter_members(&info.signature),
+        parameters: reflection_parameter_members_with_declaring_class(
+            &info.signature,
+            Some(trait_name),
+        ),
     })
 }
 
@@ -1706,6 +1716,14 @@ fn reflection_required_parameter_count(sig: &FunctionSig) -> i64 {
 
 /// Builds reflected parameter metadata from a method/function signature.
 fn reflection_parameter_members(sig: &FunctionSig) -> Vec<ReflectionParameterMember> {
+    reflection_parameter_members_with_declaring_class(sig, None)
+}
+
+/// Builds reflected parameter metadata and attaches declaring class metadata when present.
+fn reflection_parameter_members_with_declaring_class(
+    sig: &FunctionSig,
+    declaring_class_name: Option<&str>,
+) -> Vec<ReflectionParameterMember> {
     sig.params
         .iter()
         .enumerate()
@@ -1714,6 +1732,7 @@ fn reflection_parameter_members(sig: &FunctionSig) -> Vec<ReflectionParameterMem
             let has_type = sig.declared_params.get(index).copied().unwrap_or(false);
             ReflectionParameterMember {
                 name: name.clone(),
+                declaring_class_name: declaring_class_name.map(str::to_string),
                 attr_names: sig
                     .param_attributes
                     .get(index)
@@ -3015,6 +3034,41 @@ fn emit_reflection_parameter_properties(
         parameter.default_value.is_some(),
     )?;
     emit_reflection_parameter_default_property(ctx, parameter)?;
+    emit_reflection_parameter_declaring_class_property(ctx, parameter)?;
+    Ok(())
+}
+
+/// Writes one ReflectionParameter object's nullable declaring-class slot.
+fn emit_reflection_parameter_declaring_class_property(
+    ctx: &mut FunctionContext<'_>,
+    parameter: &ReflectionParameterMember,
+) -> Result<()> {
+    let declaring_class_offset = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionParameter")
+            .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+        reflection_property_offset(class_info, "__declaring_class")?
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if let Some(declaring_class_name) = parameter.declaring_class_name.as_deref() {
+        let declaring_metadata =
+            reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
+        emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
+        emit_box_current_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Object("ReflectionClass".to_string()),
+        );
+    } else {
+        emit_boxed_null_literal_to_result(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, declaring_class_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, declaring_class_offset + 8);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
     Ok(())
 }
 

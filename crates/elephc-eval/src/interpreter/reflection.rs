@@ -61,6 +61,7 @@ struct EvalReflectionMemberMetadata {
 /// Eval metadata needed to materialize one `ReflectionParameter` object.
 struct EvalReflectionParameterMetadata {
     name: String,
+    declaring_class_name: Option<String>,
     attributes: Vec<EvalAttribute>,
     position: usize,
     is_optional: bool,
@@ -904,7 +905,12 @@ fn eval_reflection_parameter_object_result(
     let method_names = values.array_new(0)?;
     let property_names = values.array_new(0)?;
     let method_objects = values.array_new(0)?;
-    let parent_class = values.bool_value(false)?;
+    let parent_class = match parameter.declaring_class_name.as_deref() {
+        Some(declaring_class_name) => {
+            eval_reflection_shallow_class_object_result(declaring_class_name, context, values)?
+        }
+        None => values.null()?,
+    };
     let type_value = match parameter.type_metadata.as_ref() {
         Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
         None => values.null()?,
@@ -1377,18 +1383,9 @@ fn eval_reflection_method_metadata(
     if context.has_class(class_name) || context.has_enum(class_name) {
         return context
             .class_method(class_name, method_name)
-            .map(|(declaring_class, method)| EvalReflectionMemberMetadata {
-                declaring_class_name: Some(declaring_class),
-                attributes: method.attributes().to_vec(),
-                visibility: method.visibility(),
-                is_static: method.is_static(),
-                is_final: method.is_final(),
-                is_abstract: method.is_abstract(),
-                required_parameter_count: eval_reflection_required_parameter_count(
-                    method.parameter_defaults(),
-                    method.parameter_is_variadic(),
-                ),
-                parameters: eval_reflection_parameters_from_names_and_type_flags(
+            .map(|(declaring_class, method)| {
+                let parameters = eval_reflection_parameters_from_names_and_type_flags(
+                    Some(declaring_class.as_str()),
                     method.params(),
                     method.parameter_has_types(),
                     method.parameter_types(),
@@ -1396,7 +1393,20 @@ fn eval_reflection_method_metadata(
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
-                ),
+                );
+                EvalReflectionMemberMetadata {
+                    declaring_class_name: Some(declaring_class),
+                    attributes: method.attributes().to_vec(),
+                    visibility: method.visibility(),
+                    is_static: method.is_static(),
+                    is_final: method.is_final(),
+                    is_abstract: method.is_abstract(),
+                    required_parameter_count: eval_reflection_required_parameter_count(
+                        method.parameter_defaults(),
+                        method.parameter_is_variadic(),
+                    ),
+                    parameters,
+                }
             });
     }
     if context.has_interface(class_name) {
@@ -1416,6 +1426,7 @@ fn eval_reflection_method_metadata(
                     method.parameter_is_variadic(),
                 ),
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
+                    Some(class_name),
                     method.params(),
                     method.parameter_has_types(),
                     method.parameter_types(),
@@ -1443,6 +1454,7 @@ fn eval_reflection_method_metadata(
                     method.parameter_is_variadic(),
                 ),
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
+                    Some(trait_decl.name()),
                     method.params(),
                     method.parameter_has_types(),
                     method.parameter_types(),
@@ -1525,6 +1537,7 @@ fn eval_reflection_required_parameter_count(
 
 /// Builds parameter reflection metadata from eval parameter names and type flags.
 fn eval_reflection_parameters_from_names_and_type_flags(
+    declaring_class_name: Option<&str>,
     names: &[String],
     has_type_flags: &[bool],
     parameter_types: &[Option<EvalParameterType>],
@@ -1538,6 +1551,7 @@ fn eval_reflection_parameters_from_names_and_type_flags(
         .enumerate()
         .map(|(position, name)| EvalReflectionParameterMetadata {
             name: name.clone(),
+            declaring_class_name: declaring_class_name.map(str::to_string),
             attributes: parameter_attributes
                 .get(position)
                 .cloned()

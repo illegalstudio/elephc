@@ -833,6 +833,35 @@ return true;"##,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval ReflectionParameter exposes declaring class metadata.
+#[test]
+fn execute_program_reflects_eval_parameter_declaring_class() {
+    let program = parse_fragment(
+        br#"class EvalDeclaringParamBase {
+    public function inherited($base) {}
+}
+class EvalDeclaringParamChild extends EvalDeclaringParamBase {
+    public function own($child) {}
+}
+$inherited = (new ReflectionMethod("EvalDeclaringParamChild", "inherited"))->getParameters()[0];
+echo $inherited->getDeclaringClass()->getName(); echo ":";
+$listed = (new ReflectionMethod("EvalDeclaringParamChild", "own"))->getParameters()[0];
+echo $listed->getDeclaringClass()->getName();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EvalDeclaringParamBase:EvalDeclaringParamChild"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::getMethods preserves eval method parameter metadata.
 #[test]
 fn execute_program_reflection_class_lists_eval_method_parameters() {
