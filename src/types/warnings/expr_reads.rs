@@ -57,6 +57,10 @@ pub(super) fn collect_expr_reads(
             collect_expr_reads(value, scope, warnings);
             collect_expr_reads(callable, scope, warnings);
         }
+        // `[$a, $b] = EXPR`: the target vars are written, not read — only EXPR is a read.
+        ExprKind::ListUnpack { value, .. } => {
+            collect_expr_reads(value, scope, warnings);
+        }
         ExprKind::Assignment {
             target,
             value,

@@ -55,6 +55,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             value: Box::new(prune_expr(*value)),
             callable: Box::new(prune_expr(*callable)),
         },
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars,
+            value: Box::new(prune_expr(*value)),
+        },
         ExprKind::Assignment {
             target,
             value,

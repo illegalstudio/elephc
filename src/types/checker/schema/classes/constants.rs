@@ -84,6 +84,10 @@ fn rewrite_expr(
             value: Box::new(rewrite_expr(value, class_name, parent_name)?),
             callable: Box::new(rewrite_expr(callable, class_name, parent_name)?),
         },
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars: vars.clone(),
+            value: Box::new(rewrite_expr(value, class_name, parent_name)?),
+        },
         ExprKind::Assignment {
             target,
             value,

@@ -80,6 +80,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
             conditional_value_temp.as_deref(),
             expr,
         ),
+        ExprKind::ListUnpack { vars, value } => {
+            lower_list_unpack_expr(ctx, vars, value, expr.span)
+        }
         ExprKind::PreIncrement(name) => lower_inc_dec(ctx, name, true, false, expr),
         ExprKind::PostIncrement(name) => lower_inc_dec(ctx, name, true, true, expr),
         ExprKind::PreDecrement(name) => lower_inc_dec(ctx, name, false, false, expr),
@@ -665,6 +668,7 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::ShortTernary { value, default } => {
             expr_can_reset_concat_storage(value) || expr_can_reset_concat_storage(default)
         }
+        ExprKind::ListUnpack { value, .. } => expr_can_reset_concat_storage(value),
         ExprKind::Assignment {
             target,
             value,
@@ -7351,6 +7355,35 @@ fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> 
         Op::ObjectClone.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Lowers a list-destructuring assignment used in expression position
+/// (`[$a, $b] = EXPR`). Evaluates `value` once, assigns each element positionally to the
+/// simple locals in `vars` (mirroring the statement-form `lower_list_unpack`), and yields the
+/// evaluated `value` as the expression result — matching PHP, where `[$a, $b] = X` evaluates to
+/// `X`. Reuses the statement-form element-read helpers so the two forms stay in lockstep.
+fn lower_list_unpack_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    vars: &[String],
+    value: &Expr,
+    span: Span,
+) -> LoweredValue {
+    let source = lower_expr(ctx, value);
+    let item_type = super::stmt::list_unpack_item_type(ctx, source.value);
+    let get_op = super::stmt::list_unpack_get_op(source.ir_type);
+    for (index, var) in vars.iter().enumerate() {
+        let index_value = super::stmt::lower_list_unpack_index(ctx, index, span);
+        let item = ctx.emit_value(
+            get_op,
+            vec![source.value, index_value.value],
+            None,
+            item_type.clone(),
+            get_op.default_effects(),
+            Some(span),
+        );
+        ctx.store_local(var, item, item_type.clone(), Some(span));
+    }
+    source
 }
 
 /// Lowers PHP `new $class(...)` into the generic dynamic-new EIR opcode.

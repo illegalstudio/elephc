@@ -347,3 +347,30 @@ fn test_assignment_binds_to_lvalue_under_prefix_not() {
         other => panic!("expected Assign, got {:?}", other),
     }
 }
+
+/// Verifies that `[$a, $b] = $pairs` in expression position parses to an `ExprKind::ListUnpack`
+/// carrying the positional target names — the expression-position twin of the statement form.
+#[test]
+fn test_list_unpack_expression_parses() {
+    let stmts = parse_source("<?php $r = ([$a, $b] = $pairs);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::ListUnpack { vars, .. } => assert_eq!(vars, &["a".to_string(), "b".to_string()]),
+            other => panic!("expected ListUnpack, got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies that a list-destructuring assignment used directly as an `if` condition parses to a
+/// `ListUnpack` condition (the DeepClone.php:492 idiom `if ([$a, $b] = $x ?? null)`).
+#[test]
+fn test_list_unpack_as_if_condition_parses() {
+    let stmts = parse_source("<?php if ([$a, $b] = $pairs) { echo 1; }");
+    match &stmts[0].kind {
+        StmtKind::If { condition, .. } => {
+            assert!(matches!(condition.kind, ExprKind::ListUnpack { .. }));
+        }
+        other => panic!("expected If with ListUnpack condition, got {:?}", other),
+    }
+}

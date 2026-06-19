@@ -17,6 +17,7 @@ use crate::span::Span;
 
 use super::assignment_targets::{
     AssignmentExpressionLowerer, is_assignment_expression_target, is_non_local_assignment_target,
+    simple_positional_list_vars,
 };
 use super::calls::parse_first_class_callable_parens;
 use super::parse_args;
@@ -336,6 +337,27 @@ pub(super) fn parse_expr_bp(
         }
 
         if let Some((op, l_bp, r_bp)) = assignment_bp(&tokens[*pos].0) {
+            // `[$a, $b] = EXPR` in expression position: a simple positional list-destructuring
+            // assignment (e.g. `if ([$a, $b] = $pairs ?? null)`). Only plain `=` with an
+            // all-simple-`$variable` array-literal target qualifies; keyed/nested/non-variable
+            // targets fall through to ordinary handling and its "Invalid assignment target" error.
+            // A list target is a valid target, so — like an lvalue — it binds even below `min_bp`.
+            if matches!(op, AssignmentOperator::Assign) {
+                if let Some(vars) = simple_positional_list_vars(&lhs) {
+                    let span = tokens[*pos].1;
+                    *pos += 1;
+                    let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+                    lhs = Expr::new(
+                        ExprKind::ListUnpack {
+                            vars,
+                            value: Box::new(rhs),
+                        },
+                        span,
+                    );
+                    continue;
+                }
+            }
+
             // PHP binds `=` to the immediately-preceding lvalue even when the assignment sits in
             // the right operand of a higher-precedence operator: `false !== $x = f()` parses as
             // `false !== ($x = f())`, `1 + $b = 5` as `1 + ($b = 5)`, and `!$b = 7` as

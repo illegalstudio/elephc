@@ -198,6 +198,17 @@ $items = [0];
 
 PHP does not allow keyed and unkeyed entries in the same destructuring pattern, and elephc reports that as a compile-time error.
 
+A simple positional destructuring `[$a, $b] = EXPR` can also be used in **expression position** — for example as a condition. It binds the targets and evaluates to `EXPR` (the whole right-hand side), exactly as in PHP, so the classic assign-and-test idiom works:
+
+```php
+<?php
+if ([$id, $name] = $row) {
+    echo $id . ":" . $name;
+}
+```
+
+In expression position only the simple positional form (`[$a, $b]`) is supported; keyed or nested destructuring there is a compile-time error (it remains available as a statement).
+
 Destructuring can also appear directly in a `foreach` value pattern. The pattern is bound from each element (or each value, when a key is present), so you can unpack rows while iterating.
 
 ```php

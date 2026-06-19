@@ -63,6 +63,10 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             value: Box::new(walk_expr(*value, pass)),
             callable: Box::new(walk_expr(*callable, pass)),
         },
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars,
+            value: Box::new(walk_expr(*value, pass)),
+        },
         ExprKind::Assignment {
             target,
             value,

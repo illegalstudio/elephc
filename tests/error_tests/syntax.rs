@@ -585,3 +585,14 @@ fn test_error_assignment_to_non_lvalue() {
         "Invalid assignment target",
     );
 }
+
+/// Verifies that a keyed list target used in expression position is rejected: only simple
+/// positional `[$a, $b]` list-destructuring is supported as an expression, so the keyed form
+/// `["k" => $v] = $x` (valid only as a statement) reports "Invalid assignment target".
+#[test]
+fn test_error_keyed_list_unpack_in_expression() {
+    expect_error(
+        "<?php $x = []; $r = ([\"k\" => $v] = $x);",
+        "Invalid assignment target",
+    );
+}

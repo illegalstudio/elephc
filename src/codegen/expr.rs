@@ -134,6 +134,11 @@ pub fn emit_expr(
         ExprKind::Pipe { value, callable } => {
             calls::emit_pipe(value, callable, expr.span, emitter, ctx, data)
         }
+        // List-destructuring assignment in expression position is an EIR-only feature; the frozen
+        // direct AST backend does not emit it.
+        ExprKind::ListUnpack { .. } => unreachable!(
+            "ExprKind::ListUnpack is lowered only by the EIR backend; the frozen AST backend never receives it"
+        ),
         ExprKind::Assignment {
             target,
             value,

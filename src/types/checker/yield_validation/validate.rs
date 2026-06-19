@@ -297,6 +297,9 @@ fn visit_expr(expr: &Expr, st: &mut State) {
             visit_expr(value, st);
             visit_expr(callable, st);
         }
+        ExprKind::ListUnpack { value, .. } => {
+            visit_expr(value, st);
+        }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }

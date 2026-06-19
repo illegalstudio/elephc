@@ -30,3 +30,13 @@ foreach (['alice' => ['Alice', 30], 'bob' => ['Bob', 25]] as $key => [$who, $age
 foreach ([['id' => 1, 'name' => 'Alice'], ['id' => 2, 'name' => 'Bob']] as ['id' => $rowId, 'name' => $rowName]) {
     echo $rowId . ':' . $rowName . "\n";
 }
+
+// A positional list-destructuring assignment can also be used as an expression: it binds the
+// targets and evaluates to the right-hand side. A common idiom is assign-and-test in a condition,
+// where the destructured variables are then used in the body.
+$rows = [[1, 'one'], [2, 'two'], [3, 'three']];
+foreach ($rows as $row) {
+    if ([$num, $label] = $row) {
+        echo 'row ' . $num . ' = ' . $label . "\n";
+    }
+}

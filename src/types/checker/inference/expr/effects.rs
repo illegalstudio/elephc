@@ -61,6 +61,22 @@ impl Checker {
                     env,
                 )
             }
+            ExprKind::ListUnpack { vars, value } => {
+                // `[$a, $b] = EXPR` binds each positional target as a local (so later code,
+                // e.g. an `if` body, sees them defined) and evaluates to EXPR. Each target takes
+                // the source's element type, or `Mixed` when the source is not a statically-known
+                // array (e.g. `$pairs ?? null`, which PHP permits — targets become `null`).
+                let value_ty = self.infer_type_with_assignment_effects(value, env)?;
+                let elem_ty = match &value_ty {
+                    PhpType::Array(elem) => (**elem).clone(),
+                    PhpType::AssocArray { value: elem, .. } => (**elem).clone(),
+                    _ => PhpType::Mixed,
+                };
+                for var in vars {
+                    env.insert(var.clone(), elem_ty.clone());
+                }
+                Ok(value_ty)
+            }
             ExprKind::BinaryOp { left, op, right } => {
                 self.infer_type_with_assignment_effects(left, env)?;
                 if matches!(op, BinOp::And | BinOp::Or) {

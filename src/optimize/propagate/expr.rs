@@ -79,6 +79,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             value: Box::new(propagate_expr(*value, env)),
             callable: Box::new(propagate_expr(*callable, env)),
         },
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars,
+            value: Box::new(propagate_expr(*value, env)),
+        },
         ExprKind::Assignment {
             target,
             value,

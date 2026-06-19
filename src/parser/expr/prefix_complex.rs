@@ -338,6 +338,9 @@ fn collect_arrow_expr_captures(
             collect_arrow_expr_captures(value, bound, seen, captures);
             collect_arrow_expr_captures(callable, bound, seen, captures);
         }
+        ExprKind::ListUnpack { value, .. } => {
+            collect_arrow_expr_captures(value, bound, seen, captures);
+        }
         ExprKind::Assignment { target, value, .. } => {
             if !matches!(target.kind, ExprKind::Variable(_)) {
                 collect_arrow_expr_captures(target, bound, seen, captures);

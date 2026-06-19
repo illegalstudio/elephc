@@ -439,6 +439,13 @@ impl Checker {
                     &mut scoped_env,
                 )
             }
+            ExprKind::ListUnpack { value, .. } => {
+                // `[$a, $b] = EXPR` evaluates to EXPR, so the expression's type is the type of
+                // EXPR. The destructured target locals are typed by the statement-flow checker
+                // (env is immutable here, as for `ExprKind::Assignment`); their element type is
+                // recovered at codegen time in `lower_list_unpack_expr`.
+                self.infer_type(value, env)
+            }
             ExprKind::ConstRef(name) => {
                 self.constants.get(name.as_str()).cloned().ok_or_else(|| {
                     CompileError::new(expr.span, &format!("Undefined constant: {}", name))

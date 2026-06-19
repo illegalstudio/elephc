@@ -171,6 +171,7 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         ExprKind::Pipe { value, callable } => {
             expr_has_dynamic_instanceof(value) || expr_has_dynamic_instanceof(callable)
         }
+        ExprKind::ListUnpack { value, .. } => expr_has_dynamic_instanceof(value),
         ExprKind::Assignment {
             target,
             value,

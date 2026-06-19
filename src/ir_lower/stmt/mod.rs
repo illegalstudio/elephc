@@ -1802,7 +1802,7 @@ fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[String], value: 
 }
 
 /// Emits the positional integer key used to read one list-unpack element.
-fn lower_list_unpack_index(ctx: &mut LoweringContext<'_, '_>, index: usize, span: Span) -> LoweredValue {
+pub(super) fn lower_list_unpack_index(ctx: &mut LoweringContext<'_, '_>, index: usize, span: Span) -> LoweredValue {
     ctx.emit_value(
         Op::ConstI64,
         Vec::new(),
@@ -1814,7 +1814,7 @@ fn lower_list_unpack_index(ctx: &mut LoweringContext<'_, '_>, index: usize, span
 }
 
 /// Returns the element-read opcode for a list-unpack source value.
-fn list_unpack_get_op(source_type: IrType) -> Op {
+pub(super) fn list_unpack_get_op(source_type: IrType) -> Op {
     match source_type {
         IrType::Heap(crate::ir::IrHeapKind::Array) => Op::ArrayGet,
         IrType::Heap(crate::ir::IrHeapKind::Hash) => Op::HashGet,
@@ -1823,7 +1823,7 @@ fn list_unpack_get_op(source_type: IrType) -> Op {
 }
 
 /// Returns the PHP type assigned to each simple list-unpack destination.
-fn list_unpack_item_type(ctx: &LoweringContext<'_, '_>, source: crate::ir::ValueId) -> PhpType {
+pub(super) fn list_unpack_item_type(ctx: &LoweringContext<'_, '_>, source: crate::ir::ValueId) -> PhpType {
     let item_type = match ctx.builder.value_php_type(source).codegen_repr() {
         PhpType::Array(elem_ty) => *elem_ty,
         PhpType::AssocArray { value, .. } => *value,

@@ -344,6 +344,13 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
             collect_assignment_target_writes(target, &mut writes)?;
             Some(writes)
         }
+        ExprKind::ListUnpack { vars, value } => {
+            let mut writes = expr_local_writes(value)?;
+            for var in vars {
+                writes.insert(var.clone());
+            }
+            Some(writes)
+        }
         ExprKind::ArrayLiteral(items) => items.iter().try_fold(HashSet::new(), |mut acc, item| {
             acc.extend(expr_local_writes(item)?);
             Some(acc)

@@ -211,6 +211,9 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         ExprKind::Pipe { value, callable } => {
             expr_uses_variable(value, needle) || expr_uses_variable(callable, needle)
         }
+        ExprKind::ListUnpack { vars, value } => {
+            vars.iter().any(|var| var == needle) || expr_uses_variable(value, needle)
+        }
         ExprKind::Assignment {
             target,
             value,

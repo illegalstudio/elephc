@@ -249,6 +249,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .unwrap_or(Effect::PURE),
             )
             .with_side_effects(),
+        // `[$a, $b] = EXPR` reads EXPR and writes the target locals, so it is impure.
+        ExprKind::ListUnpack { value, .. } => expr_effect(value).with_side_effects(),
         ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)

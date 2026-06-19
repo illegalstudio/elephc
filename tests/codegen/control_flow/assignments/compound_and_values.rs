@@ -492,3 +492,52 @@ fn test_assignment_rhs_still_captures_ternary() {
     let out = compile_and_run("<?php $b = 0; $r = $b = 1 ? 10 : 20; echo $r . \":\" . $b;");
     assert_eq!(out, "10:10");
 }
+
+/// Verifies list-destructuring assignment used as an `if` condition: `if ([$a, $b] = $pairs)`
+/// assigns the elements (visible in the body) and tests the truthiness of the array. This is
+/// the Composer/Symfony idiom. Output cross-checked with `php -r`.
+#[test]
+fn test_list_unpack_expression_as_if_condition() {
+    let out = compile_and_run(
+        r#"<?php
+$pairs = [4, 9];
+if ([$a, $b] = $pairs) {
+    echo "sum:" . ($a + $b);
+}
+"#,
+    );
+    assert_eq!(out, "sum:13");
+}
+
+/// Verifies that a list-destructuring assignment used as an expression yields its right-hand
+/// side (the whole array), as in PHP. Cross-checked with `php -r`.
+#[test]
+fn test_list_unpack_expression_yields_rhs() {
+    let out = compile_and_run(
+        r#"<?php
+$src = [10, 20];
+$r = [$x, $y] = $src;
+echo $r[0] . "," . $r[1] . "|" . $x . "," . $y;
+"#,
+    );
+    assert_eq!(out, "10,20|10,20");
+}
+
+/// Verifies that a list-destructuring assignment over a `null` source is falsy and does not
+/// crash (PHP assigns `null` to each target and the expression is `null`). Cross-checked with
+/// `php -r`.
+#[test]
+fn test_list_unpack_expression_null_source_is_falsy() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe(): ?array { return null; }
+$v = maybe();
+if ([$a, $b] = $v) {
+    echo "truthy";
+} else {
+    echo "falsy";
+}
+"#,
+    );
+    assert_eq!(out, "falsy");
+}

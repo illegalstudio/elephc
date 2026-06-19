@@ -194,6 +194,7 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
             expr_refs_pdo(value) || expr_refs_pdo(default)
         }
         ExprKind::Pipe { value, callable } => expr_refs_pdo(value) || expr_refs_pdo(callable),
+        ExprKind::ListUnpack { value, .. } => expr_refs_pdo(value),
         ExprKind::Assignment {
             target,
             value,

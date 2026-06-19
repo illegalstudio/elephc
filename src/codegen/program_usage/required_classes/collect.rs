@@ -299,6 +299,9 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
             collect_required_class_names_in_expr(value, names);
             collect_required_class_names_in_expr(callable, names);
         }
+        ExprKind::ListUnpack { value, .. } => {
+            collect_required_class_names_in_expr(value, names);
+        }
         ExprKind::Assignment {
             target,
             value,

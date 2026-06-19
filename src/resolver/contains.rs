@@ -158,6 +158,7 @@ pub(super) fn expr_has_includes(expr: &Expr) -> bool {
         ExprKind::Pipe { value, callable } => {
             expr_has_includes(value) || expr_has_includes(callable)
         }
+        ExprKind::ListUnpack { value, .. } => expr_has_includes(value),
         ExprKind::Assignment {
             target,
             value,

@@ -389,6 +389,10 @@ fn rewrite_expr_includes(expr: Expr, always: bool, ctx: &mut HoistCtx) -> Result
             value: Box::new(rewrite_expr_includes(*value, always, ctx)?),
             callable: Box::new(rewrite_expr_includes(*callable, always, ctx)?),
         },
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars,
+            value: Box::new(rewrite_expr_includes(*value, always, ctx)?),
+        },
         ExprKind::Assignment {
             target,
             value,

@@ -69,6 +69,17 @@ pub enum ExprKind {
         prelude: Vec<Stmt>,
         conditional_value_temp: Option<String>,
     },
+    /// List-destructuring assignment used in expression position:
+    /// `[$a, $b] = EXPR` (e.g. `if ([$a, $b] = $pairs ?? null)`). Evaluates `value`
+    /// once, assigns each element positionally to the simple variables in `vars`, and
+    /// yields `value` (the whole right-hand side), matching PHP. This is the
+    /// expression-position twin of `StmtKind::ListUnpack`; the parser only produces it
+    /// for the all-simple-`$variable` positional case (keyed/nested/non-variable targets
+    /// stay statement-only).
+    ListUnpack {
+        vars: Vec<String>,
+        value: Box<Expr>,
+    },
     PreIncrement(String),
     PostIncrement(String),
     PreDecrement(String),
