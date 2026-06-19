@@ -210,6 +210,36 @@ return $named;"#,
     assert_eq!(values.get(result), FakeValue::String("B-named".to_string()));
 }
 
+/// Verifies eval-declared by-reference method params write back array-element lvalues.
+#[test]
+fn execute_program_writes_back_eval_method_by_ref_array_elements() {
+    let program = parse_fragment(
+        br#"class EvalByRefArrayElementMethodBox {
+    public function set(&$value, $next) {
+        $value = $next;
+    }
+    public function variadic(&...$items) {
+        $items[0] = "variadic";
+    }
+}
+$box = new EvalByRefArrayElementMethodBox();
+$items = ["k" => "old"];
+$box->set($items["k"], "changed");
+$box->set($missing["new"], "created");
+$box->variadic($items["k"]);
+echo $items["k"]; echo ":";
+return $missing["new"];"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "variadic:");
+    assert_eq!(values.get(result), FakeValue::String("created".to_string()));
+}
+
 /// Verifies eval-declared variadic methods reject duplicate named variadic keys.
 #[test]
 fn execute_program_rejects_duplicate_eval_method_variadic_named_arg() {

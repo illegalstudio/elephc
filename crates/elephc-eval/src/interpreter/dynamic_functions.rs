@@ -60,8 +60,8 @@ pub(in crate::interpreter) fn eval_call_arg_values(
 
         if let Some(name) = arg.name() {
             saw_named = true;
-            let ref_target = eval_call_ref_target(arg.value(), caller_scope);
-            let value = eval_expr(arg.value(), context, caller_scope, values)?;
+            let (value, ref_target) =
+                eval_call_arg_value(arg.value(), context, caller_scope, values)?;
             evaluated_args.push(EvaluatedCallArg {
                 name: Some(name.to_string()),
                 value,
@@ -73,8 +73,7 @@ pub(in crate::interpreter) fn eval_call_arg_values(
         if saw_named {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let ref_target = eval_call_ref_target(arg.value(), caller_scope);
-        let value = eval_expr(arg.value(), context, caller_scope, values)?;
+        let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
         evaluated_args.push(EvaluatedCallArg {
             name: None,
             value,
@@ -85,18 +84,44 @@ pub(in crate::interpreter) fn eval_call_arg_values(
     Ok(evaluated_args)
 }
 
-/// Returns a caller-side variable target that can satisfy pass-by-reference method parameters.
-fn eval_call_ref_target(
+/// Evaluates one call arg and captures caller-side storage for by-reference parameters.
+fn eval_call_arg_value(
     expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
-) -> Option<EvaluatedCallRefTarget> {
-    let EvalExpr::LoadVar(name) = expr else {
-        return None;
-    };
-    Some(EvaluatedCallRefTarget::Variable {
-        scope: caller_scope as *mut ElephcEvalScope,
-        name: name.clone(),
-    })
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvaluatedCallRefTarget>), EvalStatus> {
+    match expr {
+        EvalExpr::LoadVar(name) => {
+            let value = visible_scope_cell(context, caller_scope, name)
+                .map_or_else(|| values.null(), Ok)?;
+            Ok((
+                value,
+                Some(EvaluatedCallRefTarget::Variable {
+                    scope: caller_scope as *mut ElephcEvalScope,
+                    name: name.clone(),
+                }),
+            ))
+        }
+        EvalExpr::ArrayGet { array, index } => {
+            let EvalExpr::LoadVar(array_name) = array.as_ref() else {
+                return eval_expr(expr, context, caller_scope, values).map(|value| (value, None));
+            };
+            let array = visible_scope_cell(context, caller_scope, array_name)
+                .map_or_else(|| values.null(), Ok)?;
+            let index = eval_expr(index, context, caller_scope, values)?;
+            let value = values.array_get(array, index)?;
+            Ok((
+                value,
+                Some(EvaluatedCallRefTarget::ArrayElement {
+                    scope: caller_scope as *mut ElephcEvalScope,
+                    array_name: array_name.clone(),
+                    index,
+                }),
+            ))
+        }
+        _ => eval_expr(expr, context, caller_scope, values).map(|value| (value, None)),
+    }
 }
 
 /// Converts a `call_user_func_array` argument array into ordered call arguments.

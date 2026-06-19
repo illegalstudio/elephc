@@ -41,6 +41,11 @@ pub(super) enum EvaluatedCallRefTarget {
         scope: *mut ElephcEvalScope,
         name: String,
     },
+    ArrayElement {
+        scope: *mut ElephcEvalScope,
+        array_name: String,
+        index: RuntimeCellHandle,
+    },
 }
 
 /// One method argument after PHP parameter-order binding and default materialization.
