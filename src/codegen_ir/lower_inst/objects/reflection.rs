@@ -30,6 +30,7 @@ struct ReflectionOwnerMetadata {
     trait_names: Vec<String>,
     method_names: Vec<String>,
     property_names: Vec<String>,
+    constant_names: Vec<String>,
     method_members: Vec<ReflectionListedMember>,
     property_members: Vec<ReflectionListedMember>,
     constructor_member: Option<ReflectionListedMember>,
@@ -163,6 +164,11 @@ fn emit_reflection_owner_object(
                 "__property_names",
                 &metadata.property_names,
             )?;
+            emit_reflection_string_array_property_by_name(
+                ctx,
+                "__constant_names",
+                &metadata.constant_names,
+            )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
                 "__methods",
@@ -277,6 +283,7 @@ fn reflection_class_metadata_for_name(
         let is_enum = is_reflection_enum(ctx, class_name);
         let method_names = reflection_class_method_names(ctx, class_name);
         let property_names = reflection_class_property_names(ctx, class_name, info);
+        let constant_names = reflection_class_constant_names(ctx, class_name, info);
         let method_members = reflection_class_method_members(info, &method_names);
         let property_members =
             reflection_class_property_members(ctx, class_name, info, &property_names);
@@ -291,6 +298,7 @@ fn reflection_class_metadata_for_name(
             trait_names: info.used_traits.clone(),
             method_names,
             property_names,
+            constant_names,
             method_members,
             property_members,
             constructor_member,
@@ -316,6 +324,7 @@ fn reflection_class_metadata_for_name(
     if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
         let method_names = reflection_interface_method_names(ctx, interface_name);
         let property_names = reflection_interface_property_names(ctx, interface_name);
+        let constant_names = reflection_interface_constant_names(ctx, interface_name);
         let method_members = ctx
             .module
             .interface_infos
@@ -332,6 +341,7 @@ fn reflection_class_metadata_for_name(
             trait_names: Vec::new(),
             method_names,
             property_names,
+            constant_names,
             method_members,
             property_members,
             constructor_member,
@@ -358,6 +368,7 @@ fn reflection_class_metadata_for_name(
             .unwrap_or_default();
         let method_names = reflection_trait_method_names(ctx, trait_name);
         let property_names = reflection_trait_property_names(ctx, trait_name);
+        let constant_names = reflection_trait_constant_names(ctx, trait_name);
         let method_members = ctx
             .module
             .declared_trait_methods
@@ -374,6 +385,7 @@ fn reflection_class_metadata_for_name(
             trait_names,
             method_names,
             property_names,
+            constant_names,
             method_members,
             property_members,
             constructor_member,
@@ -467,6 +479,7 @@ fn reflection_method_owner_metadata(
         trait_names: Vec::new(),
         method_names: Vec::new(),
         property_names: Vec::new(),
+        constant_names: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
         constructor_member: None,
@@ -508,6 +521,7 @@ fn reflection_property_metadata(
                 trait_names: Vec::new(),
                 method_names: Vec::new(),
                 property_names: Vec::new(),
+                constant_names: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
@@ -661,6 +675,7 @@ fn reflection_class_constant_metadata(
             trait_names: Vec::new(),
             method_names: Vec::new(),
             property_names: Vec::new(),
+            constant_names: Vec::new(),
             method_members: Vec::new(),
             property_members: Vec::new(),
             constructor_member: None,
@@ -699,6 +714,7 @@ fn reflection_class_constant_metadata(
                     trait_names: Vec::new(),
                     method_names: Vec::new(),
                     property_names: Vec::new(),
+                    constant_names: Vec::new(),
                     method_members: Vec::new(),
                     property_members: Vec::new(),
                     constructor_member: None,
@@ -744,6 +760,7 @@ fn reflection_enum_case_metadata(
                 trait_names: Vec::new(),
                 method_names: Vec::new(),
                 property_names: Vec::new(),
+                constant_names: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
@@ -906,6 +923,41 @@ fn reflection_class_property_names(
     for (name, _) in &info.static_properties {
         if reflection_property_visible_from_class(info, class_name, name, true) {
             push_unique_property_name(name, &mut names, &mut seen);
+        }
+    }
+    names
+}
+
+/// Returns PHP case-sensitive class constant names visible to `ReflectionClass::hasConstant()`.
+fn reflection_class_constant_names(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    _info: &crate::types::ClassInfo,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(enum_info) = ctx.module.enum_infos.get(class_name) {
+        for case in &enum_info.cases {
+            push_unique_constant_name(&case.name, &mut names, &mut seen);
+        }
+    }
+    let mut current = Some(class_name.to_string());
+    while let Some(current_name) = current {
+        let Some((resolved_name, current_info)) = resolve_reflection_class(ctx, &current_name)
+        else {
+            break;
+        };
+        for constant in current_info.constants.keys() {
+            push_unique_constant_name(constant, &mut names, &mut seen);
+        }
+        for interface_name in &current_info.interfaces {
+            for constant in reflection_interface_constant_names(ctx, interface_name) {
+                push_unique_constant_name(&constant, &mut names, &mut seen);
+            }
+        }
+        current = current_info.parent.clone();
+        if current.as_deref() == Some(resolved_name) {
+            break;
         }
     }
     names
@@ -1288,6 +1340,25 @@ fn reflection_interface_property_names(
     names
 }
 
+/// Returns PHP case-sensitive constant names declared by an interface and its parents.
+fn reflection_interface_constant_names(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+) -> Vec<String> {
+    let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
+        return Vec::new();
+    };
+    let Some(info) = ctx.module.interface_infos.get(interface_name) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for constant in info.constants.keys() {
+        push_unique_constant_name(constant, &mut names, &mut seen);
+    }
+    names
+}
+
 /// Returns PHP case-insensitive direct method names declared by a trait.
 fn reflection_trait_method_names(ctx: &FunctionContext<'_>, trait_name: &str) -> Vec<String> {
     ctx.module
@@ -1301,6 +1372,15 @@ fn reflection_trait_method_names(ctx: &FunctionContext<'_>, trait_name: &str) ->
 fn reflection_trait_property_names(ctx: &FunctionContext<'_>, trait_name: &str) -> Vec<String> {
     ctx.module
         .declared_trait_property_names
+        .get(trait_name)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Returns PHP case-sensitive direct constant names declared by a trait.
+fn reflection_trait_constant_names(ctx: &FunctionContext<'_>, trait_name: &str) -> Vec<String> {
+    ctx.module
+        .declared_trait_constant_names
         .get(trait_name)
         .cloned()
         .unwrap_or_default()
@@ -1328,6 +1408,17 @@ fn push_unique_property_name(
 ) {
     if seen.insert(property_name.to_string()) {
         names.push(property_name.to_string());
+    }
+}
+
+/// Appends one case-sensitive class constant name while preserving first-seen order.
+fn push_unique_constant_name(
+    constant_name: &str,
+    names: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if seen.insert(constant_name.to_string()) {
+        names.push(constant_name.to_string());
     }
 }
 
@@ -1369,6 +1460,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         trait_names: Vec::new(),
         method_names: Vec::new(),
         property_names: Vec::new(),
+        constant_names: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
         constructor_member: None,

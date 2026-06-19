@@ -182,6 +182,9 @@ impl FakeOps {
             (FakeValue::Object(properties), "hasproperty") if args.len() == 1 => {
                 self.object_string_array_contains(&properties, "__property_names", args[0], false)
             }
+            (FakeValue::Object(properties), "hasconstant") if args.len() == 1 => {
+                self.object_string_array_contains(&properties, "__constant_names", args[0], false)
+            }
             (FakeValue::Object(properties), "implementsinterface") if args.len() == 1 => {
                 let direct = self.object_string_array_contains(
                     &properties,

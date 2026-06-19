@@ -826,6 +826,31 @@ impl ElephcEvalContext {
         names
     }
 
+    /// Returns PHP case-sensitive constant names visible to `ReflectionClass::hasConstant()`.
+    pub fn class_constant_names(&self, class_name: &str) -> Vec<String> {
+        let reflected_name = self
+            .resolve_class_name(class_name)
+            .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        if let Some(enum_decl) = self.enum_decl(&reflected_name) {
+            for case in enum_decl.cases() {
+                push_unique_constant_name(case.name(), &mut names, &mut seen);
+            }
+        }
+        for class in self.class_chain(&reflected_name).into_iter().rev() {
+            for constant in class.constants() {
+                push_unique_constant_name(constant.name(), &mut names, &mut seen);
+            }
+            for interface_name in class.interfaces() {
+                for constant in self.interface_constant_names(interface_name) {
+                    push_unique_constant_name(&constant, &mut names, &mut seen);
+                }
+            }
+        }
+        names
+    }
+
     /// Returns PHP case-insensitive method names declared by an eval interface hierarchy.
     pub fn interface_method_names(&self, interface_name: &str) -> Vec<String> {
         let mut names = Vec::new();
@@ -844,6 +869,32 @@ impl ElephcEvalContext {
             push_unique_property_name(property.name(), &mut names, &mut seen);
         }
         names
+    }
+
+    /// Returns PHP case-sensitive constant names declared by an eval interface hierarchy.
+    pub fn interface_constant_names(&self, interface_name: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        self.collect_interface_constant_names(interface_name, &mut names, &mut seen);
+        names
+    }
+
+    /// Collects eval interface constants without duplicating inherited names.
+    fn collect_interface_constant_names(
+        &self,
+        interface_name: &str,
+        names: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+    ) {
+        let Some(interface) = self.interface(interface_name) else {
+            return;
+        };
+        for parent in interface.parents() {
+            self.collect_interface_constant_names(parent, names, seen);
+        }
+        for constant in interface.constants() {
+            push_unique_constant_name(constant.name(), names, seen);
+        }
     }
 
     /// Returns PHP case-insensitive direct method names declared by an eval trait.
@@ -868,6 +919,19 @@ impl ElephcEvalContext {
         let mut seen = HashSet::new();
         for property in trait_decl.properties() {
             push_unique_property_name(property.name(), &mut names, &mut seen);
+        }
+        names
+    }
+
+    /// Returns PHP case-sensitive direct constant names declared by an eval trait.
+    pub fn trait_constant_names(&self, trait_name: &str) -> Vec<String> {
+        let Some(trait_decl) = self.trait_decl(trait_name) else {
+            return Vec::new();
+        };
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        for constant in trait_decl.constants() {
+            push_unique_constant_name(constant.name(), &mut names, &mut seen);
         }
         names
     }
@@ -1488,6 +1552,13 @@ fn push_unique_method_name(name: &str, names: &mut Vec<String>, seen: &mut HashS
 
 /// Pushes a case-sensitive PHP property name once for ReflectionClass metadata.
 fn push_unique_property_name(name: &str, names: &mut Vec<String>, seen: &mut HashSet<String>) {
+    if seen.insert(name.to_string()) {
+        names.push(name.to_string());
+    }
+}
+
+/// Pushes a case-sensitive PHP class constant name once for ReflectionClass metadata.
+fn push_unique_constant_name(name: &str, names: &mut Vec<String>, seen: &mut HashSet<String>) {
     if seen.insert(name.to_string()) {
         names.push(name.to_string());
     }

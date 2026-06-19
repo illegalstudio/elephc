@@ -520,6 +520,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__constant_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
                 "__methods",
                 Visibility::Private,
                 Some(object_array_type("ReflectionMethod")),
@@ -575,6 +581,7 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_int_method("getModifiers", "__modifiers"),
             builtin_reflection_class_has_name_method("hasMethod", "__method_names", true),
             builtin_reflection_class_has_name_method("hasProperty", "__property_names", false),
+            builtin_reflection_class_has_name_method("hasConstant", "__constant_names", false),
             builtin_reflection_class_implements_interface_method(),
             builtin_reflection_class_array_method(
                 "getMethods",

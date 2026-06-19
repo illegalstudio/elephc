@@ -6052,34 +6052,43 @@ echo (new ReflectionClass("EvalInstEnum"))->isInstantiable() ? "E" : "e";');
     assert_eq!(out.stdout, "aBCprite");
 }
 
-/// Verifies eval ReflectionClass reports method and property membership through the bridge.
+/// Verifies eval ReflectionClass reports method, property, and constant membership through the bridge.
 #[test]
 fn test_eval_reflection_class_member_existence() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalMemberParent {
+    const PARENT_CONST = 1;
     private function hiddenParent() {}
     protected static function parentStatic() {}
     private $hiddenProp;
     protected static $parentStaticProp;
 }
-class EvalMemberChild extends EvalMemberParent {
+interface EvalMemberClassIface {
+    const CLASS_LIMIT = 10;
+}
+class EvalMemberChild extends EvalMemberParent implements EvalMemberClassIface {
+    const CHILD_CONST = 2;
     public function ChildMethod() {}
     public $childProp;
 }
 interface EvalMemberIfaceParent {
+    const PARENT_LIMIT = 10;
     public function parentRequirement();
 }
 interface EvalMemberIface extends EvalMemberIfaceParent {
+    const CHILD_LIMIT = 20;
     public function childRequirement();
     public string $hook { get; }
 }
 trait EvalMemberTrait {
+    const TRAIT_CONST = 30;
     private function traitHidden() {}
     public $traitProp;
 }
 enum EvalMemberPureEnum {
     case Ready;
+    const LEVEL = 40;
     public function label() { return "ok"; }
 }
 enum EvalMemberBackedEnum: string {
@@ -6095,25 +6104,36 @@ echo $child->hasProperty("childProp") ? "C" : "c";
 echo $child->hasProperty("hiddenProp") ? "H" : "h";
 echo $child->hasProperty("parentStaticProp") ? "T" : "t";
 echo $child->hasProperty("childprop") ? "W" : "w";
+echo $child->hasConstant("CHILD_CONST") ? "D" : "d";
+echo $child->hasConstant("PARENT_CONST") ? "P" : "p";
+echo $child->hasConstant("CLASS_LIMIT") ? "A" : "a";
+echo $child->hasConstant("child_const") ? "Z" : "z";
 echo ":";
 $iface = new ReflectionClass("EvalMemberIface");
 echo $iface->hasMethod("parentrequirement") ? "I" : "i";
 echo $iface->hasMethod("childRequirement") ? "J" : "j";
 echo $iface->hasProperty("hook") ? "K" : "k";
+echo $iface->hasConstant("PARENT_LIMIT") ? "L" : "l";
+echo $iface->hasConstant("CHILD_LIMIT") ? "C" : "c";
 echo ":";
 $trait = new ReflectionClass("EvalMemberTrait");
 echo $trait->hasMethod("traithidden") ? "R" : "r";
 echo $trait->hasProperty("traitProp") ? "U" : "u";
+echo $trait->hasConstant("TRAIT_CONST") ? "K" : "k";
 echo ":";
 $pure = new ReflectionClass("EvalMemberPureEnum");
 echo $pure->hasMethod("cases") ? "E" : "e";
 echo $pure->hasMethod("label") ? "L" : "l";
 echo $pure->hasProperty("name") ? "N" : "n";
 echo $pure->hasProperty("value") ? "V" : "v";
+echo $pure->hasConstant("Ready") ? "G" : "g";
+echo $pure->hasConstant("LEVEL") ? "F" : "f";
+echo $pure->hasConstant("ready") ? "R" : "r";
 echo ":";
 $backed = new ReflectionClass("EvalMemberBackedEnum");
 echo $backed->hasMethod("tryfrom") ? "B" : "b";
-echo $backed->hasProperty("value") ? "Y" : "y";');
+echo $backed->hasProperty("value") ? "Y" : "y";
+echo $backed->hasConstant("Ready") ? "Q" : "q";');
 "#,
     );
     assert!(
@@ -6121,7 +6141,7 @@ echo $backed->hasProperty("value") ? "Y" : "y";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "MPSx:ChTw:IJK:RU:ELNv:BY");
+    assert_eq!(out.stdout, "MPSx:ChTwDPAz:IJKLC:RUK:ELNvGFr:BYQ");
 }
 
 /// Verifies eval ReflectionMethod and ReflectionProperty expose member predicates through the bridge.

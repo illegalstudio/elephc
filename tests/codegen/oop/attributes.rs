@@ -1063,35 +1063,44 @@ echo (new ReflectionClass(ReflectInstEnum::class))->isInstantiable() ? "E" : "e"
     assert_eq!(out, "aBCprite");
 }
 
-/// Verifies that `ReflectionClass::hasMethod()` and `hasProperty()` report
-/// PHP-visible members for static class-like metadata.
+/// Verifies that `ReflectionClass::hasMethod()`, `hasProperty()`, and
+/// `hasConstant()` report PHP-visible members for static class-like metadata.
 #[test]
 fn test_reflection_class_reports_member_existence() {
     let out = compile_and_run(
         r#"<?php
 class StaticMemberParent {
+    const PARENT_CONST = 1;
     private function hiddenParent() {}
     protected static function parentStatic() {}
     private $hiddenProp;
     protected static $parentStaticProp;
 }
-class StaticMemberChild extends StaticMemberParent {
+interface StaticMemberClassIface {
+    const CLASS_LIMIT = 10;
+}
+class StaticMemberChild extends StaticMemberParent implements StaticMemberClassIface {
+    const CHILD_CONST = 2;
     public function ChildMethod() {}
     public $childProp;
 }
 interface StaticMemberIfaceParent {
+    const PARENT_LIMIT = 10;
     public function parentRequirement();
 }
 interface StaticMemberIface extends StaticMemberIfaceParent {
+    const CHILD_LIMIT = 20;
     public function childRequirement();
     public string $hook { get; }
 }
 trait StaticMemberTrait {
+    const TRAIT_CONST = 30;
     private function traitHidden() {}
     public $traitProp;
 }
 enum StaticMemberPureEnum {
     case Ready;
+    const LEVEL = 40;
     public function label() { return "ok"; }
 }
 enum StaticMemberBackedEnum: string {
@@ -1107,29 +1116,40 @@ echo $child->hasProperty("childProp") ? "C" : "c";
 echo $child->hasProperty("hiddenProp") ? "H" : "h";
 echo $child->hasProperty("parentStaticProp") ? "T" : "t";
 echo $child->hasProperty("childprop") ? "W" : "w";
+echo $child->hasConstant("CHILD_CONST") ? "D" : "d";
+echo $child->hasConstant("PARENT_CONST") ? "P" : "p";
+echo $child->hasConstant("CLASS_LIMIT") ? "A" : "a";
+echo $child->hasConstant("child_const") ? "Z" : "z";
 echo ":";
 $iface = new ReflectionClass(StaticMemberIface::class);
 echo $iface->hasMethod("parentrequirement") ? "I" : "i";
 echo $iface->hasMethod("childRequirement") ? "J" : "j";
 echo $iface->hasProperty("hook") ? "K" : "k";
+echo $iface->hasConstant("PARENT_LIMIT") ? "L" : "l";
+echo $iface->hasConstant("CHILD_LIMIT") ? "C" : "c";
 echo ":";
 $trait = new ReflectionClass(StaticMemberTrait::class);
 echo $trait->hasMethod("traithidden") ? "R" : "r";
 echo $trait->hasProperty("traitProp") ? "U" : "u";
+echo $trait->hasConstant("TRAIT_CONST") ? "K" : "k";
 echo ":";
 $pure = new ReflectionClass(StaticMemberPureEnum::class);
 echo $pure->hasMethod("cases") ? "E" : "e";
 echo $pure->hasMethod("label") ? "L" : "l";
 echo $pure->hasProperty("name") ? "N" : "n";
 echo $pure->hasProperty("value") ? "V" : "v";
+echo $pure->hasConstant("Ready") ? "G" : "g";
+echo $pure->hasConstant("LEVEL") ? "F" : "f";
+echo $pure->hasConstant("ready") ? "R" : "r";
 echo ":";
 $backed = new ReflectionClass(StaticMemberBackedEnum::class);
 echo $backed->hasMethod("tryfrom") ? "B" : "b";
 echo $backed->hasProperty("name") ? "N" : "n";
 echo $backed->hasProperty("value") ? "Y" : "y";
+echo $backed->hasConstant("Ready") ? "Q" : "q";
 "#,
     );
-    assert_eq!(out, "MPSx:ChTw:IJK:RU:ELNv:BNY");
+    assert_eq!(out, "MPSx:ChTwDPAz:IJKLC:RUK:ELNvGFr:BNYQ");
 }
 
 /// Verifies that `ReflectionClass` reports implemented interface and used trait names.

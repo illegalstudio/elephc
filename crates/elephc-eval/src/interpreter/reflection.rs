@@ -143,6 +143,37 @@ pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
         .map(Some)
 }
 
+/// Handles eval-backed `ReflectionClass::hasConstant()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_has_constant_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("hasConstant") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
+    let constant_name = eval_reflection_string_arg(args[0], values)?;
+    let constant_names = if context.has_interface(&reflected_name) {
+        context.interface_constant_names(&reflected_name)
+    } else if context.has_trait(&reflected_name) {
+        context.trait_constant_names(&reflected_name)
+    } else {
+        context.class_constant_names(&reflected_name)
+    };
+    values
+        .bool_value(constant_names.iter().any(|name| name == &constant_name))
+        .map(Some)
+}
+
 /// Builds an eval-backed `ReflectionClass` object when the reflected class-like exists in eval.
 fn eval_reflection_class_new(
     evaluated_args: Vec<EvaluatedCallArg>,
