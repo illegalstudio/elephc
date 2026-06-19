@@ -67,6 +67,7 @@ fn params_property() -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(Expr::new(ExprKind::Null, Span::dummy())),
         span: Span::dummy(),
         attributes: Vec::new(),

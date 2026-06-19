@@ -6572,6 +6572,42 @@ echo $classReadonlyProp->getModifiers();');
     );
 }
 
+/// Verifies eval can observe AOT constructor-promotion metadata through
+/// `ReflectionProperty::isPromoted()`.
+#[test]
+fn test_eval_reflection_property_is_promoted_for_aot_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotPromotedBase {
+    public function __construct(public int $id, protected string $name = "Ada") {}
+}
+class EvalAotPromotedChild extends EvalAotPromotedBase {}
+class EvalAotPromotedPlain {
+    public int $id = 0;
+    public static int $count = 0;
+}
+eval('$id = new ReflectionProperty("EvalAotPromotedBase", "id");
+echo $id->isPromoted() ? "I" : "i";
+$root = new ReflectionProperty("\EvalAotPromotedBase", "id");
+echo $root->isPromoted() ? "I" : "i";
+$name = new ReflectionProperty("EvalAotPromotedBase", "name");
+echo $name->isPromoted() ? "N" : "n";
+$child = new ReflectionProperty("EvalAotPromotedChild", "id");
+echo $child->isPromoted() ? "C" : "c";
+$plain = new ReflectionProperty("EvalAotPromotedPlain", "id");
+echo $plain->isPromoted() ? "P" : "p";
+$static = new ReflectionProperty("EvalAotPromotedPlain", "count");
+echo $static->isPromoted() ? "S" : "s";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "IINCps");
+}
+
 /// Verifies eval ReflectionMethod constructor/destructor predicates through the bridge.
 #[test]
 fn test_eval_reflection_method_reports_constructor_and_destructor() {

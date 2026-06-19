@@ -241,6 +241,23 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         })
     }
 
+    /// Returns generated AOT ReflectionProperty flags, or `None` when no row matches.
+    fn reflection_property_flags(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Result<Option<u64>, EvalStatus> {
+        let flags = unsafe {
+            __elephc_eval_reflection_property_flags(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                property_name.as_ptr(),
+                property_name.len() as u64,
+            )
+        };
+        Ok((flags != 0).then_some(flags))
+    }
+
     /// Creates a boxed Mixed object through the generated dynamic class-name wrapper.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         let object = Self::handle(unsafe {

@@ -41,6 +41,7 @@ pub(super) struct ClassBuildState {
     pub(super) final_properties: HashSet<String>,
     pub(super) readonly_properties: HashSet<String>,
     pub(super) reference_properties: HashSet<String>,
+    pub(super) promoted_properties: HashSet<String>,
     pub(super) property_reference_slots: Vec<bool>,
     pub(super) abstract_properties: HashSet<String>,
     pub(super) abstract_property_hooks: HashMap<String, PropertyHookContract>,
@@ -173,6 +174,7 @@ impl ClassBuildState {
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
             reference_properties: self.reference_properties,
+            promoted_properties: self.promoted_properties,
             property_reference_slots: self.property_reference_slots,
             abstract_properties: self.abstract_properties,
             abstract_property_hooks: self.abstract_property_hooks,
@@ -273,6 +275,9 @@ impl ClassBuildState {
             }
             if parent.reference_properties.contains(name) {
                 self.reference_properties.insert(name.clone());
+            }
+            if parent.promoted_properties.contains(name) {
+                self.promoted_properties.insert(name.clone());
             }
             if parent.abstract_properties.contains(name) {
                 self.abstract_properties.insert(name.clone());

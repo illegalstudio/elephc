@@ -133,6 +133,13 @@ pub trait RuntimeValueOps {
         constructor: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns generated AOT ReflectionProperty flags for a class/property pair.
+    fn reflection_property_flags(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Result<Option<u64>, EvalStatus>;
+
     /// Creates a named runtime object without constructor arguments.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus>;
 

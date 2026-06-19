@@ -147,6 +147,7 @@ pub(super) fn parse_method_params(
                         is_static: false,
                         is_abstract: false,
                         by_ref: is_ref,
+                        is_promoted: true,
                         // PHP keeps constructor-promotion defaults on the parameter,
                         // not on the promoted property's default metadata.
                         default: None,

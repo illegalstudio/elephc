@@ -297,6 +297,11 @@ fn apply_instance_property(
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
     }
+    if prop.is_promoted {
+        state.promoted_properties.insert(prop.name.clone());
+    } else {
+        state.promoted_properties.remove(&prop.name);
+    }
     // Fresh declarations only ever add to `abstract_properties`. Concrete
     // declarations of a brand-new property never appear there in the first
     // place, so there is nothing to remove; the only path that clears a
@@ -415,6 +420,11 @@ fn apply_instance_property_redeclaration(
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
     }
+    if prop.is_promoted {
+        state.promoted_properties.insert(prop.name.clone());
+    } else {
+        state.promoted_properties.remove(&prop.name);
+    }
     Ok(())
 }
 
@@ -492,6 +502,11 @@ fn replace_active_property_flags(
         state.reference_properties.insert(prop.name.clone());
     } else {
         state.reference_properties.remove(&prop.name);
+    }
+    if prop.is_promoted {
+        state.promoted_properties.insert(prop.name.clone());
+    } else {
+        state.promoted_properties.remove(&prop.name);
     }
     if prop.is_abstract {
         state.abstract_properties.insert(prop.name.clone());

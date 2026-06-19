@@ -91,6 +91,7 @@ fn test_fold_string_concat_and_property_default() {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(Expr::new(
             ExprKind::BinaryOp {
                 left: Box::new(Expr::string_lit("hello ")),

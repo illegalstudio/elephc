@@ -48,6 +48,7 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
         is_static: property.is_static,
         is_abstract: property.is_abstract,
         by_ref: property.by_ref,
+        is_promoted: property.is_promoted,
         default: property
             .default
             .map(|expr| propagate_expr(expr, &HashMap::new())),

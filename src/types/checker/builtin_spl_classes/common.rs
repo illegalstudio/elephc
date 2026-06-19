@@ -135,6 +135,7 @@ pub(super) fn storage_property_with_visibility(
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default,
         span: crate::span::Span::dummy(),
         attributes: Vec::new(),

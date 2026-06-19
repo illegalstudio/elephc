@@ -19,6 +19,16 @@ use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::{escaped_ascii, escaped_bytes};
 
+const EVAL_REFLECTION_PROPERTY_FLAG_STATIC: u64 = 1;
+const EVAL_REFLECTION_PROPERTY_FLAG_PUBLIC: u64 = 2;
+const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED: u64 = 4;
+const EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE: u64 = 8;
+const EVAL_REFLECTION_PROPERTY_FLAG_FINAL: u64 = 16;
+const EVAL_REFLECTION_PROPERTY_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_PROPERTY_FLAG_READONLY: u64 = 64;
+const EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
+const EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED: u64 = 512;
+
 /// Emit the user-dependent data section — globals, statics, class metadata.
 /// This changes per program and cannot be cached.
 pub(crate) fn emit_runtime_data_user(
@@ -405,6 +415,8 @@ pub(crate) fn emit_runtime_data_user(
     emit_static_callable_method_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
     emit_classes_by_name_table(&mut out, &sorted_classes);
+    out.push_str(".p2align 3\n");
+    emit_eval_reflection_property_lookup_data(&mut out, &sorted_classes);
 
     // -- class-level PHP 8 attribute metadata table --
     // Per-class layout: count followed by (name_ptr, name_len) pairs.
@@ -830,6 +842,138 @@ fn emit_name_lookup_data(
     for (idx, name) in sorted_names.iter().enumerate() {
         out.push_str(&format!("    .quad {}_{}\n", label_prefix, idx));
         out.push_str(&format!("    .quad {}\n", name.len()));
+    }
+}
+
+/// Emits AOT property flag rows consumed by eval ReflectionProperty metadata probes.
+fn emit_eval_reflection_property_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+) {
+    let mut entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        for (slot, (property_name, _)) in class_info.properties.iter().enumerate() {
+            let flags = eval_reflection_instance_property_flags(class_info, slot, property_name);
+            let class_label = format!("_eval_reflection_property_class_{}", index);
+            let property_label = format!("_eval_reflection_property_name_{}", index);
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                class_label,
+                escaped_ascii(class_name)
+            ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                property_label,
+                escaped_ascii(property_name)
+            ));
+            entries.push((
+                class_label,
+                class_name.len(),
+                property_label,
+                property_name.len(),
+                flags,
+            ));
+            index += 1;
+        }
+        for (slot, (property_name, _)) in class_info.static_properties.iter().enumerate() {
+            let flags = eval_reflection_static_property_flags(class_info, slot, property_name);
+            let class_label = format!("_eval_reflection_property_class_{}", index);
+            let property_label = format!("_eval_reflection_property_name_{}", index);
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                class_label,
+                escaped_ascii(class_name)
+            ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                property_label,
+                escaped_ascii(property_name)
+            ));
+            entries.push((
+                class_label,
+                class_name.len(),
+                property_label,
+                property_name.len(),
+                flags,
+            ));
+            index += 1;
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _eval_reflection_property_count\n_eval_reflection_property_count:\n");
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _eval_reflection_properties\n_eval_reflection_properties:\n");
+    for (class_label, class_len, property_label, property_len, flags) in entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", property_label));
+        out.push_str(&format!("    .quad {}\n", property_len));
+        out.push_str(&format!("    .quad {}\n", flags));
+    }
+}
+
+/// Returns eval ReflectionProperty bitflags for one instance property slot.
+fn eval_reflection_instance_property_flags(
+    class_info: &ClassInfo,
+    slot: usize,
+    property_name: &str,
+) -> u64 {
+    let visibility = class_info
+        .property_visibilities
+        .get(property_name)
+        .unwrap_or(&Visibility::Public);
+    let mut flags = eval_reflection_visibility_flags(visibility);
+    if class_info.final_properties.contains(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_FINAL;
+    }
+    if class_info.abstract_properties.contains(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_ABSTRACT;
+    }
+    if class_info.readonly_properties.contains(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_READONLY;
+    }
+    if class_info.promoted_properties.contains(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED;
+    }
+    if class_info.defaults.get(slot).is_some_and(Option::is_some) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE;
+    }
+    flags
+}
+
+/// Returns eval ReflectionProperty bitflags for one static property slot.
+fn eval_reflection_static_property_flags(
+    class_info: &ClassInfo,
+    slot: usize,
+    property_name: &str,
+) -> u64 {
+    let visibility = class_info
+        .static_property_visibilities
+        .get(property_name)
+        .unwrap_or(&Visibility::Public);
+    let mut flags =
+        EVAL_REFLECTION_PROPERTY_FLAG_STATIC | eval_reflection_visibility_flags(visibility);
+    if class_info.final_static_properties.contains(property_name) {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_FINAL;
+    }
+    if class_info
+        .static_defaults
+        .get(slot)
+        .is_some_and(Option::is_some)
+    {
+        flags |= EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE;
+    }
+    flags
+}
+
+/// Converts a property visibility into eval ReflectionProperty bitflags.
+fn eval_reflection_visibility_flags(visibility: &Visibility) -> u64 {
+    match visibility {
+        Visibility::Public => EVAL_REFLECTION_PROPERTY_FLAG_PUBLIC,
+        Visibility::Protected => EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED,
+        Visibility::Private => EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE,
     }
 }
 
@@ -1266,6 +1410,7 @@ mod tests {
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
+            promoted_properties: HashSet::new(),
             property_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),

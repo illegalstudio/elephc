@@ -18,6 +18,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE: u64 = 128;
 const EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
+const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -151,6 +152,10 @@ impl FakeOps {
             }
             (FakeValue::Object(properties), "isreadonly") if args.is_empty() => {
                 Self::object_property(&properties, "__is_readonly")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "ispromoted") if args.is_empty() => {
+                Self::object_property(&properties, "__is_promoted")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
             (FakeValue::Object(properties), "isanonymous") if args.is_empty() => {
@@ -608,12 +613,15 @@ impl FakeOps {
                     self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY) != 0)?;
                 let has_default_value =
                     self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE) != 0)?;
+                let is_promoted =
+                    self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PROMOTED) != 0)?;
                 properties.push(("__is_final".to_string(), is_final));
                 properties.push(("__is_abstract".to_string(), is_abstract));
                 properties.push(("__is_readonly".to_string(), is_readonly));
                 properties.push(("__modifiers".to_string(), modifiers_cell));
                 properties.push(("__type".to_string(), method_objects));
                 properties.push(("__has_default_value".to_string(), has_default_value));
+                properties.push(("__is_promoted".to_string(), is_promoted));
                 properties.push(("__default_value".to_string(), property_objects));
             }
         }
@@ -849,6 +857,19 @@ impl FakeOps {
     /// Reports one fake AOT class for eval `class_exists` unit tests.
     pub(super) fn runtime_class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
         Ok(name.eq_ignore_ascii_case("KnownClass"))
+    }
+    /// Reports fake generated AOT ReflectionProperty flags for eval metadata unit tests.
+    pub(super) fn runtime_reflection_property_flags(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Result<Option<u64>, EvalStatus> {
+        if class_name.eq_ignore_ascii_case("KnownClass") && property_name == "promoted" {
+            return Ok(Some(
+                EVAL_REFLECTION_MEMBER_FLAG_PUBLIC | EVAL_REFLECTION_MEMBER_FLAG_PROMOTED,
+            ));
+        }
+        Ok(None)
     }
     /// Reports one fake AOT interface for eval `interface_exists` unit tests.
     pub(super) fn runtime_interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {

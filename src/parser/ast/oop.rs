@@ -148,6 +148,7 @@ pub struct ClassProperty {
     pub is_static: bool,
     pub is_abstract: bool,
     pub by_ref: bool,
+    pub is_promoted: bool,
     pub default: Option<Expr>,
     #[allow(dead_code)] // Used for error reporting in future phases
     pub span: Span,
@@ -168,6 +169,7 @@ impl PartialEq for ClassProperty {
             && self.is_static == other.is_static
             && self.is_abstract == other.is_abstract
             && self.by_ref == other.by_ref
+            && self.is_promoted == other.is_promoted
             && self.default == other.default
             && self.attributes == other.attributes
     }

@@ -257,9 +257,12 @@ parameters after method execution, write back mutated `&...$items` elements
 when the variadic container itself is not rebound, and are reported through
 `ReflectionParameter::isPassedByReference()`.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
-`isFinal()`, `isAbstract()`, `isReadOnly()`, `isDefault()`, and
+`isFinal()`, `isAbstract()`, `isReadOnly()`, `isPromoted()`, `isDefault()`, and
 `getModifiers()` report eval property metadata with PHP-compatible
-`ReflectionProperty::IS_*` constants for the bitmask.
+`ReflectionProperty::IS_*` constants for the bitmask. `isPromoted()` reports
+generated/AOT promoted-property metadata; eval-declared properties currently
+report `false` because eval fragments do not yet parse constructor promotion
+syntax.
 `ReflectionProperty::hasType()` and `getType()` expose retained property type
 metadata through `ReflectionNamedType`, `ReflectionUnionType`, and
 `ReflectionIntersectionType` where eval has retained a supported declared type.

@@ -210,6 +210,7 @@ pub struct ClassInfo {
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
     pub reference_properties: HashSet<String>,
+    pub promoted_properties: HashSet<String>,
     /// Per-layout-slot by-reference flags for instance properties.
     ///
     /// The name-keyed `reference_properties` map describes the currently
