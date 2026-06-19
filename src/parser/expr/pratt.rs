@@ -491,7 +491,7 @@ fn starts_unparenthesized_arrow_function(tokens: &[(Token, Span)], pos: usize) -
 ///
 /// `Named` holds a static identifier string. `Dynamic` holds an expression
 /// inside braces (`{$expr}`) used for computed property/method names.
-enum ObjectMember {
+pub(super) enum ObjectMember {
     Named(String),
     Dynamic(Expr),
 }
@@ -510,7 +510,7 @@ enum ObjectMember {
 /// # Inputs
 /// - `arrow_span`: span of the `->` or `?->` token, used for error reporting
 /// - `nullsafe`: whether the operator was `?->` (changes error messages)
-fn parse_object_member(
+pub(super) fn parse_object_member(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     arrow_span: Span,

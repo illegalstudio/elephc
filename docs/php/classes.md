@@ -602,6 +602,21 @@ echo gettype($bad);                      // "NULL"
 
 elephc resolves the class name case-insensitively against compile-time class metadata, matching PHP class lookup. A match dispatches through the same allocation path as `new ClassName()`, including constructor calls, declared property defaults, and supported built-in/SPL runtime storage initialization. An unknown name currently yields PHP `null`; the missing-class fatal path is not yet tightened.
 
+The class name does not have to be a bare variable. As in PHP, it can be any of the following expressions, with the trailing `(...)` always taken as the constructor argument list (never as a call on the expression itself):
+
+```php
+<?php
+$registry = ['json' => 'JsonRenderer', 'csv' => 'CsvRenderer'];
+$a = new $registry['json']('out');       // array element holds the class name
+
+$config = new RendererConfig();
+$b = new $config->default('fallback');   // object property holds the class name
+
+$c = new ($registry['json'])('chosen');  // PHP 8.0 parenthesized expression
+```
+
+Array offsets (`$arr['k']`) and property reads (`$obj->prop`) may be chained (`new $cfg['a']['b'](...)`). This is the pattern frameworks use to bootstrap from configuration — for example Symfony's runtime entry point does `new $_SERVER['APP_RUNTIME'](...)`. The resulting object is typed `mixed` at compile time (the class is only known at runtime), so it supports property and method access but not constructs that require a statically known class.
+
 ## Dynamic method and static calls
 
 A method or static method can be called by a name held in a variable:

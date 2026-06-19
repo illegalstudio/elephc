@@ -275,4 +275,58 @@ fn test_clone_new_object() {
     ));
 }
 
+/// Verifies `new $arr['k']()` parses as a dynamic `new` whose class-name expression is the
+/// array access, with the trailing `()` consumed as the (empty) constructor argument list
+/// rather than as a call on the array element.
+#[test]
+fn test_new_dynamic_array_access_class_name() {
+    let stmts = parse_source("<?php echo new $arr['k']();");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::NewDynamic { name_expr, args }
+            if args.is_empty()
+                && matches!(name_expr.kind, ExprKind::ArrayAccess { .. })
+    ));
+}
+
+/// Verifies `new $obj->kind(7)` parses as a dynamic `new` whose class-name expression is the
+/// property access, with `7` forwarded as a constructor argument — the `(7)` is the ctor
+/// argument list, not a method call on the property.
+#[test]
+fn test_new_dynamic_property_class_name() {
+    let stmts = parse_source("<?php echo new $obj->kind(7);");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::NewDynamic { name_expr, args }
+            if args.len() == 1
+                && matches!(name_expr.kind, ExprKind::PropertyAccess { ref property, .. } if property == "kind")
+    ));
+}
+
+/// Verifies `new $cfg['cars']['sport']()` parses the full nested array-access chain as the
+/// class-name expression (an `ArrayAccess` whose `array` is itself an `ArrayAccess`).
+#[test]
+fn test_new_dynamic_nested_array_access_class_name() {
+    let stmts = parse_source("<?php echo new $cfg['cars']['sport']();");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::NewDynamic { name_expr, .. }
+            if matches!(&name_expr.kind, ExprKind::ArrayAccess { array, .. }
+                if matches!(array.kind, ExprKind::ArrayAccess { .. }))
+    ));
+}
+
+/// Verifies the PHP 8.0 `new (expr)(args)` form parses the parenthesized expression as the
+/// class-name expression of a dynamic `new`, with the following `()` as the ctor arguments.
+#[test]
+fn test_new_dynamic_parenthesized_expr_class_name() {
+    let stmts = parse_source("<?php echo new (pick())(7);");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::NewDynamic { name_expr, args }
+            if args.len() == 1
+                && matches!(name_expr.kind, ExprKind::FunctionCall { .. })
+    ));
+}
+
 // --- Null coalescing precedence ---

@@ -536,3 +536,26 @@ fn test_error_extern_missing_function() {
         "Expected 'function', string literal, 'class', or 'global' after 'extern'",
     );
 }
+
+// --- Dynamic `new` with complex class-name expression errors ---
+
+/// Verifies that a dynamic-`new` class-name dereference chain without a constructor
+/// argument list (`new $arr['k']` with no following `(`) is rejected, since the `()` is
+/// required to distinguish object construction from a bare class-name expression.
+#[test]
+fn test_error_new_dynamic_array_access_missing_parens() {
+    expect_error(
+        "<?php $arr = []; $o = new $arr['k'];",
+        "Expected '(' after class-name expression in 'new'",
+    );
+}
+
+/// Verifies that the PHP 8.0 parenthesized `new (expr)` form without a constructor argument
+/// list (`new (pick())` with no following `(`) is rejected.
+#[test]
+fn test_error_new_dynamic_parenthesized_missing_ctor_parens() {
+    expect_error(
+        "<?php function pick(): string { return 'P'; } $o = new (pick());",
+        "Expected '(' after class-name expression in 'new'",
+    );
+}

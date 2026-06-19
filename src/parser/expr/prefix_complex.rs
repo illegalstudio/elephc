@@ -21,6 +21,7 @@ use crate::parser::stmt::{
 use crate::span::Span;
 
 use super::calls::parse_first_class_callable_parens;
+use super::pratt::{parse_object_member, ObjectMember};
 use super::{parse_args, parse_expr};
 
 /// Parses a PHP `match` expression: `match ($subject) { pattern => result, default => fallback }`.
@@ -808,22 +809,61 @@ pub(super) fn parse_new_object(
         ));
     }
 
-    // `new $variable(args)` — the class name is held in a variable; we'll
-    // resolve it through the runtime class table at codegen time.
-    if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
-        let var_name = name.clone();
+    // `new $variable(args)`, `new $arr['k'](args)`, `new $obj->prop(args)` — the class
+    // name is held by a variable, optionally dereferenced through a `new_variable` chain
+    // (array offsets and property reads). The resulting class-name expression is resolved
+    // through the runtime class table at codegen time.
+    if let Some((Token::Variable(name), var_span)) =
+        tokens.get(*pos).map(|(token, s)| (token.clone(), *s))
+    {
         *pos += 1;
+        let name_expr = parse_new_variable_chain(
+            tokens,
+            pos,
+            Expr::new(ExprKind::Variable(name), var_span),
+        )?;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             return Err(CompileError::new(
                 span,
-                "Expected '(' after class-name variable in 'new $var('",
+                "Expected '(' after class-name expression in 'new'",
             ));
         }
         *pos += 1;
         let args = parse_args(tokens, pos, span)?;
         return Ok(Expr::new(
             ExprKind::NewDynamic {
-                name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
+                name_expr: Box::new(name_expr),
+                args,
+            },
+            span,
+        ));
+    }
+
+    // `new (expr)(args)` — PHP 8.0 lets an arbitrary parenthesized expression name the class.
+    // The inner expression evaluates to a class-string (or object) and is resolved through the
+    // same runtime class table as `new $var(args)`.
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+        let paren_span = tokens[*pos].1;
+        *pos += 1;
+        let name_expr = parse_expr(tokens, pos)?;
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+            return Err(CompileError::new(
+                paren_span,
+                "Expected ')' after class-name expression in 'new'",
+            ));
+        }
+        *pos += 1;
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+            return Err(CompileError::new(
+                span,
+                "Expected '(' after class-name expression in 'new'",
+            ));
+        }
+        *pos += 1;
+        let args = parse_args(tokens, pos, span)?;
+        return Ok(Expr::new(
+            ExprKind::NewDynamic {
+                name_expr: Box::new(name_expr),
                 args,
             },
             span,
@@ -837,4 +877,65 @@ pub(super) fn parse_new_object(
     *pos += 1;
     let args = parse_args(tokens, pos, span)?;
     Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
+}
+
+/// Parses the PHP `new_variable` dereference chain that can follow `new $var` before the
+/// constructor argument list: array offsets (`['k']`) and property reads (`->prop`,
+/// `->{$expr}`, `->$v`), in any combination (e.g. `new $factories['k']->builder(...)`).
+///
+/// PHP's grammar allows the class-name reference in a `new` to be a chained dereference of a
+/// variable, not just a bare `$var`. This consumes those postfix operators starting from the
+/// already-parsed `base` expression, building the matching `ArrayAccess` / `PropertyAccess` /
+/// `DynamicPropertyAccess` nodes, and stops at the first token that is not part of the chain —
+/// in particular `(`, which begins the constructor arguments rather than a method call.
+/// The result is the class-name expression for a `NewDynamic`. Variable-variable bases
+/// (`$$name`) are intentionally unsupported, matching the rest of the compiler.
+fn parse_new_variable_chain(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    base: Expr,
+) -> Result<Expr, CompileError> {
+    let mut lhs = base;
+    loop {
+        match tokens.get(*pos).map(|(token, _)| token) {
+            Some(Token::LBracket) => {
+                let bracket_span = tokens[*pos].1;
+                *pos += 1;
+                let index = parse_expr(tokens, pos)?;
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
+                    return Err(CompileError::new(bracket_span, "Expected ']'"));
+                }
+                *pos += 1;
+                lhs = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(lhs),
+                        index: Box::new(index),
+                    },
+                    bracket_span,
+                );
+            }
+            Some(Token::Arrow) => {
+                let arrow_span = tokens[*pos].1;
+                *pos += 1;
+                lhs = match parse_object_member(tokens, pos, arrow_span, false)? {
+                    ObjectMember::Named(property) => Expr::new(
+                        ExprKind::PropertyAccess {
+                            object: Box::new(lhs),
+                            property,
+                        },
+                        arrow_span,
+                    ),
+                    ObjectMember::Dynamic(property) => Expr::new(
+                        ExprKind::DynamicPropertyAccess {
+                            object: Box::new(lhs),
+                            property: Box::new(property),
+                        },
+                        arrow_span,
+                    ),
+                };
+            }
+            _ => break,
+        }
+    }
+    Ok(lhs)
 }
