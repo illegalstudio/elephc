@@ -213,6 +213,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         parent_class: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
+        constant_value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe {
             __elephc_eval_reflection_owner_new(
@@ -229,6 +230,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 parent_class.as_ptr(),
                 flags,
                 modifiers,
+                constant_value.as_ptr(),
             )
         })
     }

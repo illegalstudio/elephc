@@ -170,6 +170,9 @@ impl FakeOps {
             (FakeValue::Object(properties), "getmodifiers") if args.is_empty() => {
                 Self::object_property(&properties, "__modifiers").map_or_else(|| self.int(0), Ok)
             }
+            (FakeValue::Object(properties), "getvalue") if args.is_empty() => {
+                Self::object_property(&properties, "__value").map_or_else(|| self.null(), Ok)
+            }
             (FakeValue::Object(properties), "isstatic") if args.is_empty() => {
                 Self::object_property(&properties, "__is_static")
                     .map_or_else(|| self.bool_value(false), Ok)
@@ -454,6 +457,7 @@ impl FakeOps {
         parent_class: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
+        constant_value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let class_name = match owner_kind {
             EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
@@ -563,6 +567,7 @@ impl FakeOps {
             properties.push(("__is_private".to_string(), is_private));
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__modifiers".to_string(), modifiers_cell));
+            properties.push(("__value".to_string(), constant_value));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_PARAMETER {
             let position = self.int(modifiers as i64)?;

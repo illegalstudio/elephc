@@ -1584,6 +1584,16 @@ fn add_reflection_member_flag_methods(
     }
     if class_name == "ReflectionClassConstant" {
         properties.push(builtin_property(
+            "__value",
+            Visibility::Private,
+            Some(mixed_type()),
+            Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
+        ));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getValue",
+            "__value",
+        ));
+        properties.push(builtin_property(
             "__is_final",
             Visibility::Private,
             Some(bool_type()),

@@ -6739,7 +6739,15 @@ echo $case->isPrivate() ? "R" : "r";
 echo $case->isProtected() ? "P" : "p";
 echo $case->isPublic() ? "U" : "u";
 echo $case->isFinal() ? "F" : "f";
-echo ":" . $case->getModifiers() . "\n";');
+echo ":" . $case->getModifiers() . "\n";
+echo "VALUES:" . $secret->getValue() . ":" . $limit->getValue() . ":" . $answer->getValue() . ":";
+echo $case->getValue() === EvalConstVisibilityEnum::Ready ? "E" : "e";
+echo "\n";
+foreach ((new ReflectionClass("EvalConstVisibilityTarget"))->getReflectionConstants() as $constant) {
+    if ($constant->getName() === "ANSWER") {
+        echo "LIST:" . $constant->getValue() . "\n";
+    }
+}');
 echo ReflectionClassConstant::IS_PUBLIC . ":";
 echo ReflectionClassConstant::IS_PROTECTED . ":";
 echo ReflectionClassConstant::IS_PRIVATE . ":";
@@ -6753,7 +6761,7 @@ echo ReflectionClassConstant::IS_FINAL;
     );
     assert_eq!(
         out.stdout,
-        "SECRET:Rpuf:4\nLIMIT:rPuf:2\nANSWER:rpUF:33\nReady:rpUf:1\n1:2:4:32"
+        "SECRET:Rpuf:4\nLIMIT:rPuf:2\nANSWER:rpUF:33\nReady:rpUf:1\nVALUES:1:2:3:E\nLIST:3\n1:2:4:32"
     );
 }
 

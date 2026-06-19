@@ -2446,12 +2446,20 @@ echo ":" . $case->getModifiers() . "\n";
 echo ReflectionClassConstant::IS_PUBLIC . ":";
 echo ReflectionClassConstant::IS_PROTECTED . ":";
 echo ReflectionClassConstant::IS_PRIVATE . ":";
-echo ReflectionClassConstant::IS_FINAL;
+echo ReflectionClassConstant::IS_FINAL . "\n";
+echo "VALUES:" . $secret->getValue() . ":" . $limit->getValue() . ":" . $answer->getValue() . ":";
+echo $case->getValue() === ConstVisibilityEnum::Ready ? "E" : "e";
+echo "\n";
+foreach ((new ReflectionClass(ConstVisibilityTarget::class))->getReflectionConstants() as $constant) {
+    if ($constant->getName() === "ANSWER") {
+        echo "LIST:" . $constant->getValue();
+    }
+}
 "#,
     );
     assert_eq!(
         out,
-        "SECRET:Rpuf:4\nLIMIT:rPuf:2\nANSWER:rpUF:33\nReady:rpUf:1\n1:2:4:32"
+        "SECRET:Rpuf:4\nLIMIT:rPuf:2\nANSWER:rpUF:33\nReady:rpUf:1\n1:2:4:32\nVALUES:1:2:3:E\nLIST:3"
     );
 }
 

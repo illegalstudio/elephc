@@ -241,7 +241,8 @@ when the variadic container itself is not rebound, and are reported through
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant
 and enum-case attributes through the same materialized `ReflectionAttribute`
 shape; their `getName()` methods return the reflected constant or case name,
-and `getDeclaringClass()` returns the declaring class or enum as a
+`ReflectionClassConstant::getValue()` returns the class-constant value or enum
+case object, and `getDeclaringClass()` returns the declaring class or enum as a
 `ReflectionClass`. `ReflectionClassConstant::isPublic()`, `isProtected()`,
 `isPrivate()`, `isFinal()`, and `getModifiers()` report visibility/finality
 metadata with PHP's `ReflectionClassConstant::IS_*` bitmasks; enum cases report

@@ -42,6 +42,7 @@ struct ReflectionOwnerMetadata {
     property_members: Vec<ReflectionListedMember>,
     constructor_member: Option<ReflectionListedMember>,
     parent_class_name: Option<String>,
+    constant_value: Option<ReflectionConstantValue>,
     parameter_members: Vec<ReflectionParameterMember>,
     required_parameter_count: i64,
     is_final: bool,
@@ -60,6 +61,7 @@ struct ReflectionClassConstantMetadata {
     declaring_class_name: String,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
+    value: ReflectionConstantValue,
     visibility: Visibility,
     is_final: bool,
 }
@@ -71,6 +73,7 @@ struct ReflectionListedMember {
     declaring_class_name: Option<String>,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
+    constant_value: Option<ReflectionConstantValue>,
     flags: ReflectionMemberFlags,
     required_parameter_count: i64,
     parameters: Vec<ReflectionParameterMember>,
@@ -339,6 +342,11 @@ fn emit_reflection_owner_object(
         )?;
     }
     if class_name == "ReflectionClassConstant" {
+        if let Some(value) = &metadata.constant_value {
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            emit_reflection_constant_value_as_mixed(ctx, value);
+            emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__value")?;
+        }
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
     }
     if class_name == "ReflectionParameter" {
@@ -439,6 +447,7 @@ fn reflection_class_metadata_for_name(
             property_members,
             constructor_member,
             parent_class_name: reflection_parent_class_name(ctx, info),
+            constant_value: None,
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: info.is_final,
@@ -463,7 +472,7 @@ fn reflection_class_metadata_for_name(
         let constant_names = reflection_interface_constant_names(ctx, interface_name);
         let constant_members = reflection_interface_constant_members(ctx, interface_name)?;
         let constant_reflection_members =
-            reflection_interface_constant_reflection_members(ctx, interface_name);
+            reflection_interface_constant_reflection_members(ctx, interface_name)?;
         let method_members = ctx
             .module
             .interface_infos
@@ -487,6 +496,7 @@ fn reflection_class_metadata_for_name(
             property_members,
             constructor_member,
             parent_class_name: None,
+            constant_value: None,
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: false,
@@ -512,7 +522,7 @@ fn reflection_class_metadata_for_name(
         let constant_names = reflection_trait_constant_names(ctx, trait_name);
         let constant_members = reflection_trait_constant_members(ctx, trait_name)?;
         let constant_reflection_members =
-            reflection_trait_constant_reflection_members(ctx, trait_name);
+            reflection_trait_constant_reflection_members(ctx, trait_name)?;
         let method_members = ctx
             .module
             .declared_trait_methods
@@ -536,6 +546,7 @@ fn reflection_class_metadata_for_name(
             property_members,
             constructor_member,
             parent_class_name: None,
+            constant_value: None,
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: false,
@@ -662,6 +673,7 @@ fn reflection_method_owner_metadata(
         property_members: Vec::new(),
         constructor_member: None,
         parent_class_name: member.declaring_class_name,
+        constant_value: member.constant_value,
         parameter_members: member.parameters,
         required_parameter_count: member.required_parameter_count,
         is_final: false,
@@ -710,6 +722,7 @@ fn reflection_property_metadata(
                 property_members: Vec::new(),
                 constructor_member: None,
                 parent_class_name: declaring_class_name,
+                constant_value: None,
                 parameter_members: Vec::new(),
                 required_parameter_count: 0,
                 is_final: false,
@@ -876,6 +889,10 @@ fn reflection_class_constant_metadata(
             property_members: Vec::new(),
             constructor_member: None,
             parent_class_name: Some(enum_name.to_string()),
+            constant_value: Some(ReflectionConstantValue::EnumCase {
+                enum_name: enum_name.to_string(),
+                case_name: constant_name.clone(),
+            }),
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: false,
@@ -889,7 +906,7 @@ fn reflection_class_constant_metadata(
             member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
         });
     }
-    Ok(reflection_class_constant_lookup(ctx, &reflected_class, &constant_name)
+    Ok(reflection_class_constant_lookup(ctx, &reflected_class, &constant_name)?
         .map(|metadata| reflection_class_constant_owner_metadata(constant_name, metadata))
         .unwrap_or_else(empty_reflection_metadata))
 }
@@ -925,6 +942,7 @@ fn reflection_enum_case_metadata(
                 property_members: Vec::new(),
                 constructor_member: None,
                 parent_class_name: Some(enum_name.to_string()),
+                constant_value: None,
                 parameter_members: Vec::new(),
                 required_parameter_count: 0,
                 is_final: false,
@@ -964,6 +982,7 @@ fn reflection_class_constant_owner_metadata(
         property_members: Vec::new(),
         constructor_member: None,
         parent_class_name: Some(metadata.declaring_class_name),
+        constant_value: Some(metadata.value),
         parameter_members: Vec::new(),
         required_parameter_count: 0,
         is_final,
@@ -983,11 +1002,15 @@ fn reflection_class_constant_lookup(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     constant_name: &str,
-) -> Option<ReflectionClassConstantMetadata> {
+) -> Result<Option<ReflectionClassConstantMetadata>> {
     if let Some((declaring_class_name, info)) =
         resolve_reflection_class_constant(ctx, class_name, constant_name)
     {
-        return Some(ReflectionClassConstantMetadata {
+        let Some(value_expr) = info.constants.get(constant_name) else {
+            return Ok(None);
+        };
+        let value = reflection_constant_value(ctx, declaring_class_name, Some(info), value_expr, 0)?;
+        return Ok(Some(ReflectionClassConstantMetadata {
             declaring_class_name: declaring_class_name.to_string(),
             attr_names: info
                 .constant_attribute_names
@@ -999,46 +1022,49 @@ fn reflection_class_constant_lookup(
                 .get(constant_name)
                 .cloned()
                 .unwrap_or_default(),
+            value,
             visibility: info
                 .constant_visibilities
                 .get(constant_name)
                 .cloned()
                 .unwrap_or(Visibility::Public),
             is_final: info.final_constants.contains(constant_name),
-        });
+        }));
     }
     if let Some((_, class_info)) = resolve_reflection_class(ctx, class_name) {
         for interface_name in &class_info.interfaces {
             if let Some(metadata) =
-                reflection_interface_class_constant_lookup(ctx, interface_name, constant_name)
+                reflection_interface_class_constant_lookup(ctx, interface_name, constant_name)?
             {
-                return Some(metadata);
+                return Ok(Some(metadata));
             }
         }
     }
     if let Some(interface_name) = resolve_reflection_interface(ctx, class_name) {
         if let Some(metadata) =
-            reflection_interface_class_constant_lookup(ctx, interface_name, constant_name)
+            reflection_interface_class_constant_lookup(ctx, interface_name, constant_name)?
         {
-            return Some(metadata);
+            return Ok(Some(metadata));
         }
     }
     if let Some(trait_name) = resolve_reflection_trait(ctx, class_name) {
-        if ctx
+        if let Some(value_expr) = ctx
             .module
             .declared_trait_constants
             .get(trait_name)
-            .is_some_and(|constants| constants.contains_key(constant_name))
+            .and_then(|constants| constants.get(constant_name))
         {
             let is_final = ctx
                 .module
                 .declared_trait_final_constants
                 .get(trait_name)
                 .is_some_and(|constants| constants.contains(constant_name));
-            return Some(ReflectionClassConstantMetadata {
+            let value = reflection_constant_value(ctx, trait_name, None, value_expr, 0)?;
+            return Ok(Some(ReflectionClassConstantMetadata {
                 declaring_class_name: trait_name.to_string(),
                 attr_names: Vec::new(),
                 attr_args: Vec::new(),
+                value,
                 visibility: ctx
                     .module
                     .declared_trait_constant_visibilities
@@ -1047,10 +1073,10 @@ fn reflection_class_constant_lookup(
                     .cloned()
                     .unwrap_or(Visibility::Public),
                 is_final,
-            });
+            }));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Resolves interface constant metadata with the original declaring interface preserved.
@@ -1058,12 +1084,16 @@ fn reflection_interface_class_constant_lookup(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
     constant_name: &str,
-) -> Option<ReflectionClassConstantMetadata> {
-    let interface_name = resolve_reflection_interface(ctx, interface_name)?;
-    let info = ctx.module.interface_infos.get(interface_name)?;
-    if !info.constants.contains_key(constant_name) {
-        return None;
-    }
+) -> Result<Option<ReflectionClassConstantMetadata>> {
+    let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
+        return Ok(None);
+    };
+    let Some(info) = ctx.module.interface_infos.get(interface_name) else {
+        return Ok(None);
+    };
+    let Some(value_expr) = info.constants.get(constant_name) else {
+        return Ok(None);
+    };
     let declaring_interface =
         interface_constant_declaring_interface(info, interface_name, constant_name);
     let is_final = ctx
@@ -1071,13 +1101,15 @@ fn reflection_interface_class_constant_lookup(
         .interface_infos
         .get(declaring_interface)
         .is_some_and(|info| info.final_constants.contains(constant_name));
-    Some(ReflectionClassConstantMetadata {
+    let value = reflection_constant_value(ctx, declaring_interface, None, value_expr, 0)?;
+    Ok(Some(ReflectionClassConstantMetadata {
         declaring_class_name: declaring_interface.to_string(),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
+        value,
         visibility: Visibility::Public,
         is_final,
-    })
+    }))
 }
 
 /// Returns the interface that originally declared a visible interface constant.
@@ -1389,6 +1421,10 @@ fn reflection_class_constant_reflection_members(
                 class_name,
                 case.attribute_names.clone(),
                 case.attribute_args.clone(),
+                ReflectionConstantValue::EnumCase {
+                    enum_name: class_name.to_string(),
+                    case_name: case.name.clone(),
+                },
                 Visibility::Public,
                 false,
                 &mut members,
@@ -1402,10 +1438,12 @@ fn reflection_class_constant_reflection_members(
         else {
             break;
         };
-        for constant_name in current_info.constants.keys() {
+        for (constant_name, value_expr) in &current_info.constants {
             if seen.contains(constant_name) {
                 continue;
             }
+            let value =
+                reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
             push_unique_constant_reflection_member(
                 constant_name,
                 resolved_name,
@@ -1419,6 +1457,7 @@ fn reflection_class_constant_reflection_members(
                     .get(constant_name)
                     .cloned()
                     .unwrap_or_default(),
+                value,
                 current_info
                     .constant_visibilities
                     .get(constant_name)
@@ -1430,7 +1469,7 @@ fn reflection_class_constant_reflection_members(
             );
         }
         for interface_name in &current_info.interfaces {
-            for member in reflection_interface_constant_reflection_members(ctx, interface_name) {
+            for member in reflection_interface_constant_reflection_members(ctx, interface_name)? {
                 push_unique_listed_constant_member(member, &mut members, &mut seen);
             }
         }
@@ -1446,11 +1485,11 @@ fn reflection_class_constant_reflection_members(
 fn reflection_interface_constant_reflection_members(
     ctx: &FunctionContext<'_>,
     interface_name: &str,
-) -> Vec<ReflectionListedMember> {
+) -> Result<Vec<ReflectionListedMember>> {
     let mut members = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    collect_interface_constant_reflection_members(ctx, interface_name, &mut members, &mut seen);
-    members
+    collect_interface_constant_reflection_members(ctx, interface_name, &mut members, &mut seen)?;
+    Ok(members)
 }
 
 /// Appends flattened interface constant-reflector objects with declaring-interface metadata.
@@ -1459,11 +1498,11 @@ fn collect_interface_constant_reflection_members(
     interface_name: &str,
     members: &mut Vec<ReflectionListedMember>,
     seen: &mut std::collections::HashSet<String>,
-) {
+) -> Result<()> {
     let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
-        return;
+        return Ok(());
     };
-    for constant_name in interface_info.constants.keys() {
+    for (constant_name, value_expr) in &interface_info.constants {
         let declaring_interface =
             interface_constant_declaring_interface(interface_info, interface_name, constant_name);
         let is_final = ctx
@@ -1471,51 +1510,53 @@ fn collect_interface_constant_reflection_members(
             .interface_infos
             .get(declaring_interface)
             .is_some_and(|info| info.final_constants.contains(constant_name));
+        let value = reflection_constant_value(ctx, declaring_interface, None, value_expr, 0)?;
         push_unique_constant_reflection_member(
             constant_name,
             declaring_interface,
             Vec::new(),
             Vec::new(),
+            value,
             Visibility::Public,
             is_final,
             members,
             seen,
         );
     }
+    Ok(())
 }
 
 /// Returns constant-reflector objects for direct trait constants.
 fn reflection_trait_constant_reflection_members(
     ctx: &FunctionContext<'_>,
     trait_name: &str,
-) -> Vec<ReflectionListedMember> {
-    ctx.module
-        .declared_trait_constants
-        .get(trait_name)
-        .map(|constants| {
-            let mut members = Vec::new();
-            let mut seen = std::collections::HashSet::new();
-            let final_constants = ctx.module.declared_trait_final_constants.get(trait_name);
-            for constant_name in constants.keys() {
-                push_unique_constant_reflection_member(
-                    constant_name,
-                    trait_name,
-                    Vec::new(),
-                    Vec::new(),
-                    ctx.module
-                        .declared_trait_constant_visibilities
-                        .get(trait_name)
-                        .and_then(|constants| constants.get(constant_name))
-                        .cloned()
-                        .unwrap_or(Visibility::Public),
-                    final_constants.is_some_and(|constants| constants.contains(constant_name)),
-                    &mut members,
-                    &mut seen,
-                );
-            }
-            members
-        })
-        .unwrap_or_default()
+) -> Result<Vec<ReflectionListedMember>> {
+    let mut members = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let Some(constants) = ctx.module.declared_trait_constants.get(trait_name) else {
+        return Ok(members);
+    };
+    let final_constants = ctx.module.declared_trait_final_constants.get(trait_name);
+    for (constant_name, value_expr) in constants {
+        let value = reflection_constant_value(ctx, trait_name, None, value_expr, 0)?;
+        push_unique_constant_reflection_member(
+            constant_name,
+            trait_name,
+            Vec::new(),
+            Vec::new(),
+            value,
+            ctx.module
+                .declared_trait_constant_visibilities
+                .get(trait_name)
+                .and_then(|constants| constants.get(constant_name))
+                .cloned()
+                .unwrap_or(Visibility::Public),
+            final_constants.is_some_and(|constants| constants.contains(constant_name)),
+            &mut members,
+            &mut seen,
+        );
+    }
+    Ok(members)
 }
 
 /// Appends one constant-reflector member if a constant with this name was not already visible.
@@ -1524,6 +1565,7 @@ fn push_unique_constant_reflection_member(
     declaring_class_name: &str,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
+    value: ReflectionConstantValue,
     visibility: Visibility,
     is_final: bool,
     members: &mut Vec<ReflectionListedMember>,
@@ -1537,6 +1579,7 @@ fn push_unique_constant_reflection_member(
         declaring_class_name: Some(declaring_class_name.to_string()),
         attr_names,
         attr_args,
+        constant_value: Some(value),
         flags: reflection_member_flags(false, &visibility, is_final, false, false),
         required_parameter_count: 0,
         parameters: Vec::new(),
@@ -1729,6 +1772,7 @@ fn reflection_class_method_member(
         declaring_class_name,
         attr_names,
         attr_args,
+        constant_value: None,
         flags,
         required_parameter_count,
         parameters,
@@ -1787,6 +1831,7 @@ fn reflection_interface_method_member(
         declaring_class_name: Some(declaring_class_name),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
+        constant_value: None,
         flags,
         required_parameter_count,
         parameters,
@@ -1834,6 +1879,7 @@ fn reflection_trait_method_member(
         declaring_class_name: Some(trait_name.to_string()),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
+        constant_value: None,
         flags,
         required_parameter_count,
         parameters: reflection_parameter_members_with_declaring_class(
@@ -1888,6 +1934,7 @@ fn reflection_class_property_member(
             .get(property_name)
             .cloned()
             .unwrap_or_default(),
+        constant_value: None,
         flags,
         required_parameter_count: 0,
         parameters: Vec::new(),
@@ -1907,6 +1954,7 @@ fn default_method_members(
             declaring_class_name: Some(declaring_class_name.to_string()),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
+            constant_value: None,
             flags: reflection_member_flags(false, &Visibility::Public, false, is_interface, false),
             required_parameter_count: 0,
             parameters: Vec::new(),
@@ -1927,6 +1975,7 @@ fn default_property_members(
             declaring_class_name: Some(declaring_class_name.to_string()),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
+            constant_value: None,
             flags: reflection_member_flags(false, &Visibility::Public, false, is_interface, false),
             required_parameter_count: 0,
             parameters: Vec::new(),
@@ -2571,6 +2620,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         property_members: Vec::new(),
         constructor_member: None,
         parent_class_name: None,
+        constant_value: None,
         parameter_members: Vec::new(),
         required_parameter_count: 0,
         is_final: false,
@@ -3196,6 +3246,11 @@ fn emit_reflection_member_object(
         )?;
     }
     if member_class_name == "ReflectionClassConstant" {
+        if let Some(value) = &member.constant_value {
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            emit_reflection_constant_value_as_mixed(ctx, value);
+            emit_reflection_owner_mixed_property_from_result(ctx, member_class_name, "__value")?;
+        }
         emit_reflection_owner_int_property(
             ctx,
             member_class_name,
@@ -3871,6 +3926,28 @@ fn emit_reflection_owner_int_property(
     abi::emit_load_int_immediate(ctx.emitter, value_reg, value);
     abi::emit_store_to_address(ctx.emitter, value_reg, result_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, result_reg, high_offset);
+    Ok(())
+}
+
+/// Stores the current boxed Mixed result into one Reflection owner property.
+fn emit_reflection_owner_mixed_property_from_result(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property_name: &str,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    let high_offset = low_offset + 8;
+    let value_reg = abi::int_result_reg(ctx.emitter);
+    let owner_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, owner_reg);
+    abi::emit_store_to_address(ctx.emitter, value_reg, owner_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, owner_reg, high_offset);
+    abi::emit_reg_move(ctx.emitter, value_reg, owner_reg);
     Ok(())
 }
 

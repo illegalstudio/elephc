@@ -397,6 +397,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
         &member.parameters,
         flags,
         member.required_parameter_count as u64,
+        None,
         context,
         values,
     )
@@ -440,6 +441,8 @@ fn eval_reflection_class_constant_object_result(
     let (declaring_class_name, attributes, visibility, is_final) =
         eval_reflection_class_constant_metadata(reflected_name, constant_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
+    let constant_value = eval_reflection_constant_value(reflected_name, constant_name, context)
+        .ok_or(EvalStatus::RuntimeFatal)?;
     let flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
     let modifiers = eval_reflection_class_constant_modifiers(visibility, is_final);
     eval_reflection_owner_object(
@@ -454,6 +457,7 @@ fn eval_reflection_class_constant_object_result(
         &[],
         flags,
         modifiers,
+        Some(constant_value),
         context,
         values,
     )
@@ -521,6 +525,7 @@ fn eval_reflection_class_new(
         &[],
         metadata.flags,
         metadata.modifiers,
+        None,
         context,
         values,
     )
@@ -563,6 +568,7 @@ fn eval_reflection_method_new(
         &method.parameters,
         flags,
         method.required_parameter_count as u64,
+        None,
         context,
         values,
     )
@@ -605,6 +611,7 @@ fn eval_reflection_property_new(
         &[],
         flags,
         0,
+        None,
         context,
         values,
     )
@@ -629,6 +636,8 @@ fn eval_reflection_class_constant_new(
     let (declaring_class_name, attributes, visibility, is_final) =
         eval_reflection_class_constant_metadata(&class_name, &constant_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
+    let constant_value = eval_reflection_constant_value(&class_name, &constant_name, context)
+        .ok_or(EvalStatus::RuntimeFatal)?;
     let flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
     let modifiers = eval_reflection_class_constant_modifiers(visibility, is_final);
     eval_reflection_owner_object(
@@ -643,6 +652,7 @@ fn eval_reflection_class_constant_new(
         &[],
         flags,
         modifiers,
+        Some(constant_value),
         context,
         values,
     )
@@ -689,6 +699,7 @@ fn eval_reflection_enum_case_new(
         &[],
         0,
         0,
+        None,
         context,
         values,
     )
@@ -708,6 +719,7 @@ fn eval_reflection_owner_object(
     parameter_metadata: &[EvalReflectionParameterMetadata],
     flags: u64,
     modifiers: u64,
+    constant_value: Option<RuntimeCellHandle>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -723,6 +735,7 @@ fn eval_reflection_owner_object(
         parameter_metadata,
         flags,
         modifiers,
+        constant_value,
         true,
         context,
         values,
@@ -742,6 +755,7 @@ fn eval_reflection_owner_object_with_members(
     parameter_metadata: &[EvalReflectionParameterMetadata],
     flags: u64,
     modifiers: u64,
+    constant_value: Option<RuntimeCellHandle>,
     include_class_members: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -782,6 +796,10 @@ fn eval_reflection_owner_object_with_members(
         context,
         values,
     )?;
+    let (constant_value_cell, release_constant_value) = match constant_value {
+        Some(value) => (value, false),
+        None => (values.null()?, true),
+    };
     let object = values.reflection_owner_new(
         owner_kind,
         reflected_name,
@@ -795,6 +813,7 @@ fn eval_reflection_owner_object_with_members(
         parent_class,
         flags,
         modifiers,
+        constant_value_cell,
     )?;
     if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
         let identity = values.object_identity(object)?;
@@ -808,6 +827,9 @@ fn eval_reflection_owner_object_with_members(
     values.release(method_objects)?;
     values.release(property_objects)?;
     values.release(parent_class)?;
+    if release_constant_value {
+        values.release(constant_value_cell)?;
+    }
     Ok(object)
 }
 
@@ -859,6 +881,7 @@ fn eval_reflection_full_class_object_result(
         &[],
         metadata.flags,
         metadata.modifiers,
+        None,
         context,
         values,
     )
@@ -885,6 +908,7 @@ fn eval_reflection_shallow_class_object_result(
         &[],
         metadata.flags,
         metadata.modifiers,
+        None,
         false,
         context,
         values,
@@ -949,6 +973,7 @@ fn eval_reflection_parameter_object_result(
         Some(default) => eval_method_parameter_default(default, context, values)?,
         None => values.null()?,
     };
+    let constant_value = values.null()?;
     let flags = eval_reflection_parameter_flags(parameter);
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_PARAMETER,
@@ -963,6 +988,7 @@ fn eval_reflection_parameter_object_result(
         parent_class,
         flags,
         parameter.position as u64,
+        constant_value,
     )?;
     values.release(attrs)?;
     values.release(declaring_function)?;
@@ -973,6 +999,7 @@ fn eval_reflection_parameter_object_result(
     values.release(type_value)?;
     values.release(default_value)?;
     values.release(parent_class)?;
+    values.release(constant_value)?;
     Ok(object)
 }
 
@@ -994,6 +1021,7 @@ fn eval_reflection_declaring_function_object_result(
         &[],
         metadata.flags,
         metadata.required_parameter_count as u64,
+        None,
         context,
         values,
     )
@@ -1030,6 +1058,7 @@ fn eval_reflection_named_type_object_result(
     let method_objects = values.array_new(0)?;
     let property_objects = values.array_new(0)?;
     let parent_class = values.bool_value(false)?;
+    let constant_value = values.null()?;
     let flags = eval_reflection_named_type_flags(type_metadata);
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_NAMED_TYPE,
@@ -1044,6 +1073,7 @@ fn eval_reflection_named_type_object_result(
         parent_class,
         flags,
         0,
+        constant_value,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -1053,6 +1083,7 @@ fn eval_reflection_named_type_object_result(
     values.release(method_objects)?;
     values.release(property_objects)?;
     values.release(parent_class)?;
+    values.release(constant_value)?;
     Ok(object)
 }
 
@@ -1069,6 +1100,7 @@ fn eval_reflection_union_type_object_result(
     let types = eval_reflection_named_type_object_array_result(&type_metadata.types, values)?;
     let property_objects = values.array_new(0)?;
     let parent_class = values.bool_value(false)?;
+    let constant_value = values.null()?;
     let flags = eval_reflection_union_type_flags(type_metadata);
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_UNION_TYPE,
@@ -1083,6 +1115,7 @@ fn eval_reflection_union_type_object_result(
         parent_class,
         flags,
         0,
+        constant_value,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -1092,6 +1125,7 @@ fn eval_reflection_union_type_object_result(
     values.release(types)?;
     values.release(property_objects)?;
     values.release(parent_class)?;
+    values.release(constant_value)?;
     Ok(object)
 }
 
@@ -1108,6 +1142,7 @@ fn eval_reflection_intersection_type_object_result(
     let types = eval_reflection_named_type_object_array_result(&type_metadata.types, values)?;
     let property_objects = values.array_new(0)?;
     let parent_class = values.bool_value(false)?;
+    let constant_value = values.null()?;
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_INTERSECTION_TYPE,
         "",
@@ -1121,6 +1156,7 @@ fn eval_reflection_intersection_type_object_result(
         parent_class,
         0,
         0,
+        constant_value,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -1130,6 +1166,7 @@ fn eval_reflection_intersection_type_object_result(
     values.release(types)?;
     values.release(property_objects)?;
     values.release(parent_class)?;
+    values.release(constant_value)?;
     Ok(object)
 }
 
@@ -1181,6 +1218,7 @@ fn eval_reflection_member_object_array_result(
             &member.parameters,
             flags,
             member.required_parameter_count as u64,
+            None,
             context,
             values,
         )?;
