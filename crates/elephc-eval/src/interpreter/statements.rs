@@ -2487,6 +2487,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     )? {
         return Ok(result);
     }
+    if let Some(result) = eval_reflection_method_invoke_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     if let Some(result) = eval_reflection_property_get_value_result(
         identity,
         method_name,
@@ -3018,6 +3027,29 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_dynamic_method_with_values_and_ref_flags(
+        class_name,
+        called_class_name,
+        method,
+        object,
+        method.parameter_is_by_ref(),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Executes one eval-declared class method with caller-selected by-ref binding flags.
+pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_flags(
+    class_name: &str,
+    called_class_name: &str,
+    method: &EvalClassMethod,
+    object: RuntimeCellHandle,
+    parameter_is_by_ref: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let qualified_method_name =
         format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
     let static_names = static_var_names(method.body());
@@ -3028,7 +3060,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
-        method.parameter_is_by_ref(),
+        parameter_is_by_ref,
         method.parameter_is_variadic(),
         evaluated_args,
         context,
@@ -3047,7 +3079,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     bind_method_scope_args(
         &mut method_scope,
         method.params(),
-        method.parameter_is_by_ref(),
+        parameter_is_by_ref,
         &evaluated_args,
     );
     let result = execute_statements(method.body(), context, &mut method_scope, values);
@@ -3090,6 +3122,27 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_dynamic_static_method_with_values_and_ref_flags(
+        class_name,
+        called_class_name,
+        method,
+        method.parameter_is_by_ref(),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Executes one eval-declared static method with caller-selected by-ref binding flags.
+pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_flags(
+    class_name: &str,
+    called_class_name: &str,
+    method: &EvalClassMethod,
+    parameter_is_by_ref: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let qualified_method_name =
         format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
     let static_names = static_var_names(method.body());
@@ -3100,7 +3153,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
-        method.parameter_is_by_ref(),
+        parameter_is_by_ref,
         method.parameter_is_variadic(),
         evaluated_args,
         context,
@@ -3118,7 +3171,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
     bind_method_scope_args(
         &mut method_scope,
         method.params(),
-        method.parameter_is_by_ref(),
+        parameter_is_by_ref,
         &evaluated_args,
     );
     let result = execute_statements(method.body(), context, &mut method_scope, values);

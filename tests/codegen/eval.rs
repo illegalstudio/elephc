@@ -7457,6 +7457,79 @@ echo $second->label();');
     assert_eq!(out, "EF:GH");
 }
 
+/// Verifies eval ReflectionMethod::invoke and invokeArgs call eval-declared methods.
+#[test]
+fn test_eval_reflection_method_invoke_calls_eval_method() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalReflectInvokeBase {
+    private function hidden($label = "H") {
+        return "hidden:" . $label;
+    }
+    public function who() {
+        return static::class;
+    }
+    public static function make($left, $right = "S") {
+        return static::class . ":" . $left . $right;
+    }
+}
+class EvalReflectInvokeChild extends EvalReflectInvokeBase {
+    public function join($a, $b = "B") {
+        return $a . $b;
+    }
+    public function mutate(&$value) {
+        $value = $value . "!";
+        return $value;
+    }
+}
+$object = new EvalReflectInvokeChild();
+$hidden = new ReflectionMethod("EvalReflectInvokeBase", "hidden");
+echo $hidden->invoke($object, "X") . ":";
+$who = (new ReflectionClass("EvalReflectInvokeChild"))->getMethod("who");
+echo $who->invoke($object) . ":";
+$static = new ReflectionMethod("EvalReflectInvokeBase", "make");
+echo $static->invoke(null, right: "Y", left: "X") . ":";
+echo $static->invoke($object, "A") . ":";
+$join = null;
+foreach ((new ReflectionClass("EvalReflectInvokeChild"))->getMethods() as $method) {
+    if ($method->getName() === "join") {
+        $join = $method;
+    }
+}
+$value = "Q";
+$mutate = new ReflectionMethod("EvalReflectInvokeChild", "mutate");
+echo $join->invokeArgs($object, ["b" => "2", "a" => "1"]) . ":";
+echo $mutate->invoke($object, $value) . ":" . $value;');
+"#,
+    );
+    assert_eq!(
+        out,
+        "hidden:X:EvalReflectInvokeChild:EvalReflectInvokeBase:XY:EvalReflectInvokeBase:AS:12:Q!:Q"
+    );
+}
+
+/// Verifies eval ReflectionMethod::invoke throws on incompatible receivers.
+#[test]
+fn test_eval_reflection_method_invoke_rejects_wrong_object() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalReflectInvokeOwner {
+    public function run() {
+        return "owner";
+    }
+}
+class EvalReflectInvokeOther {}
+try {
+    (new ReflectionMethod("EvalReflectInvokeOwner", "run"))->invoke(new EvalReflectInvokeOther());
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo "caught";
+}');
+"#,
+    );
+    assert_eq!(out, "caught");
+}
+
 /// Verifies eval ReflectionClass::newInstanceWithoutConstructor allocates without constructors.
 #[test]
 fn test_eval_reflection_class_new_instance_without_constructor_allocates_eval_class() {

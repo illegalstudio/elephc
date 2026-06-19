@@ -1199,6 +1199,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionMethod::isConstructor()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getConstructor()` | Return whether the reflected method is the constructor |
 | `ReflectionMethod::isDestructor()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is the destructor |
 | `ReflectionMethod::getModifiers()` | `new ReflectionMethod($class_name, $method_name)` | Return PHP's `ReflectionMethod::IS_*` visibility/static/finality/abstract bitmask |
+| `ReflectionMethod::invoke()` / `invokeArgs()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Invoke eval-declared reflected methods with PHP visibility-bypassing reflection semantics and forwarded named arguments |
 | `ReflectionMethod::getParameters()` | `new ReflectionMethod($class_name, $method_name)` | Return `ReflectionParameter` objects for the reflected method parameters |
 | `ReflectionMethod::getNumberOfParameters()` | `new ReflectionMethod($class_name, $method_name)` | Return the total number of reflected method parameters |
 | `ReflectionMethod::getNumberOfRequiredParameters()` | `new ReflectionMethod($class_name, $method_name)` | Return the number of required reflected method parameters |

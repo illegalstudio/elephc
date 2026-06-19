@@ -1719,6 +1719,91 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod::invoke dispatches eval-declared methods.
+#[test]
+fn execute_program_reflection_method_invoke_calls_eval_method() {
+    let program = parse_fragment(
+        br#"class EvalReflectInvokeBase {
+    private function hidden($label = "H") {
+        return "hidden:" . $label;
+    }
+    public function who() {
+        return static::class;
+    }
+    public static function make($left, $right = "S") {
+        return static::class . ":" . $left . $right;
+    }
+}
+class EvalReflectInvokeChild extends EvalReflectInvokeBase {
+    public function join($a, $b = "B") {
+        return $a . $b;
+    }
+    public function mutate(&$value) {
+        $value = $value . "!";
+        return $value;
+    }
+}
+$object = new EvalReflectInvokeChild();
+$hidden = new ReflectionMethod("EvalReflectInvokeBase", "hidden");
+echo $hidden->invoke($object, "X"); echo ":";
+$who = (new ReflectionClass("EvalReflectInvokeChild"))->getMethod("who");
+echo $who->invoke($object); echo ":";
+$static = new ReflectionMethod("EvalReflectInvokeBase", "make");
+echo $static->invoke(null, right: "Y", left: "X"); echo ":";
+echo $static->invoke($object, "A"); echo ":";
+$join = null;
+foreach ((new ReflectionClass("EvalReflectInvokeChild"))->getMethods() as $method) {
+    if ($method->getName() === "join") {
+        $join = $method;
+    }
+}
+$value = "Q";
+$mutate = new ReflectionMethod("EvalReflectInvokeChild", "mutate");
+echo $join->invokeArgs($object, ["b" => "2", "a" => "1"]); echo ":";
+echo $mutate->invoke($object, $value); echo ":"; echo $value;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "hidden:X:EvalReflectInvokeChild:EvalReflectInvokeBase:XY:EvalReflectInvokeBase:AS:12:Q!:Q"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies ReflectionMethod::invoke throws for incompatible eval receivers.
+#[test]
+fn execute_program_reflection_method_invoke_rejects_wrong_object() {
+    let program = parse_fragment(
+        br#"class EvalReflectInvokeOwner {
+    public function run() {
+        return "owner";
+    }
+}
+class EvalReflectInvokeOther {}
+try {
+    (new ReflectionMethod("EvalReflectInvokeOwner", "run"))->invoke(new EvalReflectInvokeOther());
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo "caught";
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "caught");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::newInstanceWithoutConstructor skips eval constructors.
 #[test]
 fn execute_program_reflection_class_new_instance_without_constructor_allocates_eval_class() {
