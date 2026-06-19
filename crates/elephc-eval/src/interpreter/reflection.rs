@@ -605,7 +605,10 @@ fn eval_reflection_method_metadata(
                 is_static: method.is_static(),
                 is_final: method.is_final(),
                 is_abstract: method.is_abstract(),
-                parameters: eval_reflection_parameters_from_names(method.params()),
+                parameters: eval_reflection_parameters_from_names_and_type_flags(
+                    method.params(),
+                    method.parameter_has_types(),
+                ),
             });
     }
     if context.has_interface(class_name) {
@@ -619,7 +622,10 @@ fn eval_reflection_method_metadata(
                 is_static: false,
                 is_final: false,
                 is_abstract: true,
-                parameters: eval_reflection_parameters_from_names(method.params()),
+                parameters: eval_reflection_parameters_from_names_and_type_flags(
+                    method.params(),
+                    method.parameter_has_types(),
+                ),
             });
     }
     context.trait_decl(class_name).and_then(|trait_decl| {
@@ -633,7 +639,10 @@ fn eval_reflection_method_metadata(
                 is_static: method.is_static(),
                 is_final: method.is_final(),
                 is_abstract: method.is_abstract(),
-                parameters: eval_reflection_parameters_from_names(method.params()),
+                parameters: eval_reflection_parameters_from_names_and_type_flags(
+                    method.params(),
+                    method.parameter_has_types(),
+                ),
             })
     })
 }
@@ -686,9 +695,10 @@ fn eval_reflection_property_metadata(
     })
 }
 
-/// Builds parameter reflection metadata from the currently supported eval parameter syntax.
-fn eval_reflection_parameters_from_names(
+/// Builds parameter reflection metadata from eval parameter names and type flags.
+fn eval_reflection_parameters_from_names_and_type_flags(
     names: &[String],
+    has_type_flags: &[bool],
 ) -> Vec<EvalReflectionParameterMetadata> {
     names
         .iter()
@@ -699,7 +709,7 @@ fn eval_reflection_parameters_from_names(
             is_optional: false,
             is_variadic: false,
             is_passed_by_reference: false,
-            has_type: false,
+            has_type: has_type_flags.get(position).copied().unwrap_or(false),
         })
         .collect()
 }

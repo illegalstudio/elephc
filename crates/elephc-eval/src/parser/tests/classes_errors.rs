@@ -559,6 +559,29 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
         ))]
     );
 }
+
+/// Verifies eval method parameters retain declared-type presence for reflection metadata.
+#[test]
+fn parse_fragment_accepts_typed_method_parameter_metadata() {
+    let program = parse_fragment(
+        br#"class DynEvalTypedParams {
+    public function run(int $id, ?\App\Name $name, string|null $label) {}
+}"#,
+    )
+    .expect("fragment should parse");
+    let [EvalStmt::ClassDecl(class)] = program.statements() else {
+        panic!("expected one class declaration");
+    };
+    let [method] = class.methods() else {
+        panic!("expected one class method");
+    };
+    assert_eq!(
+        method.params(),
+        &["id".to_string(), "name".to_string(), "label".to_string()]
+    );
+    assert_eq!(method.parameter_has_types(), &[true, true, true]);
+}
+
 /// Verifies trait declarations and class trait uses lower into dynamic metadata.
 #[test]
 fn parse_fragment_accepts_trait_declaration_and_class_use() {
