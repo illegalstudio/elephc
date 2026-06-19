@@ -466,6 +466,7 @@ impl FakeOps {
         parent_class: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
+        method_modifiers: u64,
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -561,10 +562,12 @@ impl FakeOps {
             let is_final = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL) != 0)?;
             let is_abstract =
                 self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT) != 0)?;
+            let method_modifiers = self.int(method_modifiers as i64)?;
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__is_abstract".to_string(), is_abstract));
             properties.push(("__parameters".to_string(), method_objects));
             properties.push(("__required_parameter_count".to_string(), modifiers_cell));
+            properties.push(("__modifiers".to_string(), method_modifiers));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
             let is_public = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PUBLIC) != 0)?;

@@ -1477,6 +1477,16 @@ fn builtin_reflection_owner_class(
 
 /// Returns public class constants exposed by a synthetic reflection owner.
 fn reflection_owner_constants(class_name: &str) -> Vec<ClassConst> {
+    if class_name == "ReflectionMethod" {
+        return vec![
+            builtin_class_const("IS_PUBLIC", 1),
+            builtin_class_const("IS_PROTECTED", 2),
+            builtin_class_const("IS_PRIVATE", 4),
+            builtin_class_const("IS_STATIC", 16),
+            builtin_class_const("IS_FINAL", 32),
+            builtin_class_const("IS_ABSTRACT", 64),
+        ];
+    }
     if class_name == "ReflectionClassConstant" {
         return vec![
             builtin_class_const("IS_PUBLIC", 1),
@@ -1559,6 +1569,18 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_class_bool_method(
             "isStatic",
             "__is_static",
+        ));
+    }
+    if class_name == "ReflectionMethod" {
+        properties.push(builtin_property(
+            "__modifiers",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        methods.push(builtin_reflection_class_int_method(
+            "getModifiers",
+            "__modifiers",
         ));
     }
     if class_name == "ReflectionProperty" {
@@ -2171,6 +2193,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
+                    sig.return_type = PhpType::Int;
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParameters")) {
                     sig.return_type = PhpType::Array(Box::new(PhpType::Object(

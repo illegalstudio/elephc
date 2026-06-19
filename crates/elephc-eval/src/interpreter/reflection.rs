@@ -386,6 +386,16 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
         member.is_abstract,
         member.is_readonly,
     );
+    let method_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        eval_reflection_method_modifiers(
+            member.visibility,
+            member.is_static,
+            member.is_final,
+            member.is_abstract,
+        )
+    } else {
+        0
+    };
     eval_reflection_owner_object(
         owner_kind,
         &member_name,
@@ -398,6 +408,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
         &member.parameters,
         flags,
         member.required_parameter_count as u64,
+        method_modifiers,
         None,
         None,
         context,
@@ -462,6 +473,7 @@ fn eval_reflection_class_constant_object_result(
         &[],
         flags,
         modifiers,
+        0,
         Some(constant_value),
         None,
         context,
@@ -531,6 +543,7 @@ fn eval_reflection_class_new(
         &[],
         metadata.flags,
         metadata.modifiers,
+        0,
         None,
         None,
         context,
@@ -575,6 +588,12 @@ fn eval_reflection_method_new(
         &method.parameters,
         flags,
         method.required_parameter_count as u64,
+        eval_reflection_method_modifiers(
+            method.visibility,
+            method.is_static,
+            method.is_final,
+            method.is_abstract,
+        ),
         None,
         None,
         context,
@@ -618,6 +637,7 @@ fn eval_reflection_property_new(
         property.declaring_class_name.as_deref(),
         &[],
         flags,
+        0,
         0,
         None,
         None,
@@ -664,6 +684,7 @@ fn eval_reflection_class_constant_new(
         &[],
         flags,
         modifiers,
+        0,
         Some(constant_value),
         None,
         context,
@@ -724,6 +745,7 @@ fn eval_reflection_enum_case_new(
         &[],
         0,
         0,
+        0,
         Some(case_value),
         backing_value,
         context,
@@ -745,6 +767,7 @@ fn eval_reflection_owner_object(
     parameter_metadata: &[EvalReflectionParameterMetadata],
     flags: u64,
     modifiers: u64,
+    method_modifiers: u64,
     constant_value: Option<RuntimeCellHandle>,
     backing_value: Option<RuntimeCellHandle>,
     context: &mut ElephcEvalContext,
@@ -762,6 +785,7 @@ fn eval_reflection_owner_object(
         parameter_metadata,
         flags,
         modifiers,
+        method_modifiers,
         constant_value,
         backing_value,
         true,
@@ -783,6 +807,7 @@ fn eval_reflection_owner_object_with_members(
     parameter_metadata: &[EvalReflectionParameterMetadata],
     flags: u64,
     modifiers: u64,
+    method_modifiers: u64,
     constant_value: Option<RuntimeCellHandle>,
     backing_value: Option<RuntimeCellHandle>,
     include_class_members: bool,
@@ -846,6 +871,7 @@ fn eval_reflection_owner_object_with_members(
         parent_class,
         flags,
         modifiers,
+        method_modifiers,
         constant_value_cell,
         backing_value_cell,
     )?;
@@ -918,6 +944,7 @@ fn eval_reflection_full_class_object_result(
         &[],
         metadata.flags,
         metadata.modifiers,
+        0,
         None,
         None,
         context,
@@ -946,6 +973,7 @@ fn eval_reflection_shallow_class_object_result(
         &[],
         metadata.flags,
         metadata.modifiers,
+        0,
         None,
         None,
         false,
@@ -1028,6 +1056,7 @@ fn eval_reflection_parameter_object_result(
         parent_class,
         flags,
         parameter.position as u64,
+        0,
         constant_value,
         backing_value,
     )?;
@@ -1063,6 +1092,7 @@ fn eval_reflection_declaring_function_object_result(
         &[],
         metadata.flags,
         metadata.required_parameter_count as u64,
+        eval_reflection_method_modifiers_from_flags(metadata.flags),
         None,
         None,
         context,
@@ -1117,6 +1147,7 @@ fn eval_reflection_named_type_object_result(
         parent_class,
         flags,
         0,
+        0,
         constant_value,
         backing_value,
     )?;
@@ -1162,6 +1193,7 @@ fn eval_reflection_union_type_object_result(
         parent_class,
         flags,
         0,
+        0,
         constant_value,
         backing_value,
     )?;
@@ -1204,6 +1236,7 @@ fn eval_reflection_intersection_type_object_result(
         types,
         property_objects,
         parent_class,
+        0,
         0,
         0,
         constant_value,
@@ -1258,6 +1291,16 @@ fn eval_reflection_member_object_array_result(
             member.is_abstract,
             member.is_readonly,
         );
+        let method_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+            eval_reflection_method_modifiers(
+                member.visibility,
+                member.is_static,
+                member.is_final,
+                member.is_abstract,
+            )
+        } else {
+            0
+        };
         let member_object = eval_reflection_owner_object(
             owner_kind,
             name,
@@ -1270,6 +1313,7 @@ fn eval_reflection_member_object_array_result(
             &member.parameters,
             flags,
             member.required_parameter_count as u64,
+            method_modifiers,
             None,
             None,
             context,
@@ -1436,6 +1480,54 @@ fn eval_reflection_class_constant_modifiers(visibility: EvalVisibility, is_final
     };
     if is_final {
         modifiers |= 32;
+    }
+    modifiers
+}
+
+/// Computes PHP's `ReflectionMethod::getModifiers()` bitmask for eval metadata.
+fn eval_reflection_method_modifiers(
+    visibility: EvalVisibility,
+    is_static: bool,
+    is_final: bool,
+    is_abstract: bool,
+) -> u64 {
+    let mut modifiers = match visibility {
+        EvalVisibility::Public => 1,
+        EvalVisibility::Protected => 2,
+        EvalVisibility::Private => 4,
+    };
+    if is_static {
+        modifiers |= 16;
+    }
+    if is_final {
+        modifiers |= 32;
+    }
+    if is_abstract {
+        modifiers |= 64;
+    }
+    modifiers
+}
+
+/// Computes PHP's `ReflectionMethod::getModifiers()` bitmask from eval member flags.
+fn eval_reflection_method_modifiers_from_flags(flags: u64) -> u64 {
+    let mut modifiers = 0;
+    if (flags & EVAL_REFLECTION_MEMBER_FLAG_PUBLIC) != 0 {
+        modifiers |= 1;
+    }
+    if (flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED) != 0 {
+        modifiers |= 2;
+    }
+    if (flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE) != 0 {
+        modifiers |= 4;
+    }
+    if (flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC) != 0 {
+        modifiers |= 16;
+    }
+    if (flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL) != 0 {
+        modifiers |= 32;
+    }
+    if (flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT) != 0 {
+        modifiers |= 64;
     }
     modifiers
 }

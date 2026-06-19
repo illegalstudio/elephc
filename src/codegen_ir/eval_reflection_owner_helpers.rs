@@ -375,11 +375,13 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("str x8, [sp, #136]");                                  // save the boxed ReflectionClass parent value
     emitter.instruction("ldr x8, [sp, #184]");                                  // load ReflectionClass modifier flags from the fourth stack argument
     emitter.instruction("str x8, [sp, #48]");                                   // save ReflectionClass modifier flags
-    emitter.instruction("ldr x8, [sp, #192]");                                  // load ReflectionClass getModifiers bitmask from the fifth stack argument
-    emitter.instruction("str x8, [sp, #96]");                                   // save ReflectionClass getModifiers bitmask
-    emitter.instruction("ldr x8, [sp, #200]");                                  // load boxed ReflectionClassConstant value from the sixth stack argument
+    emitter.instruction("ldr x8, [sp, #192]");                                  // load owner modifier/count metadata from the fifth stack argument
+    emitter.instruction("str x8, [sp, #96]");                                   // save owner modifier/count metadata
+    emitter.instruction("ldr x8, [sp, #200]");                                  // load ReflectionMethod getModifiers bitmask from the sixth stack argument
+    emitter.instruction("str x8, [sp, #72]");                                   // save ReflectionMethod getModifiers bitmask
+    emitter.instruction("ldr x8, [sp, #208]");                                  // load boxed ReflectionClassConstant value from the seventh stack argument
     emitter.instruction("str x8, [sp, #56]");                                   // save boxed ReflectionClassConstant value
-    emitter.instruction("ldr x8, [sp, #208]");                                  // load boxed ReflectionEnumBackedCase backing value from the seventh stack argument
+    emitter.instruction("ldr x8, [sp, #216]");                                  // load boxed ReflectionEnumBackedCase backing value from the eighth stack argument
     emitter.instruction("str x8, [sp, #64]");                                   // save boxed ReflectionEnumBackedCase backing value
     emitter.instruction("cmp x0, #0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("b.eq {}", class_label));                      // allocate a ReflectionClass owner
@@ -532,11 +534,13 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("mov QWORD PTR [rbp - 144], rax");                      // save the boxed ReflectionClass parent value
     emitter.instruction("mov rax, QWORD PTR [rbp + 56]");                       // load ReflectionClass modifier flags from the sixth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save ReflectionClass modifier flags
-    emitter.instruction("mov rax, QWORD PTR [rbp + 64]");                       // load ReflectionClass getModifiers bitmask from the seventh stack argument
-    emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // save ReflectionClass getModifiers bitmask
-    emitter.instruction("mov rax, QWORD PTR [rbp + 72]");                       // load boxed ReflectionClassConstant value from the eighth stack argument
+    emitter.instruction("mov rax, QWORD PTR [rbp + 64]");                       // load owner modifier/count metadata from the seventh stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // save owner modifier/count metadata
+    emitter.instruction("mov rax, QWORD PTR [rbp + 72]");                       // load ReflectionMethod getModifiers bitmask from the eighth stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save ReflectionMethod getModifiers bitmask
+    emitter.instruction("mov rax, QWORD PTR [rbp + 80]");                       // load boxed ReflectionClassConstant value from the ninth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save boxed ReflectionClassConstant value
-    emitter.instruction("mov rax, QWORD PTR [rbp + 80]");                       // load boxed ReflectionEnumBackedCase backing value from the ninth stack argument
+    emitter.instruction("mov rax, QWORD PTR [rbp + 88]");                       // load boxed ReflectionEnumBackedCase backing value from the tenth stack argument
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save boxed ReflectionEnumBackedCase backing value
     emitter.instruction("cmp rdi, 0");                                          // owner kind 0 means ReflectionClass
     emitter.instruction(&format!("je {}", class_label));                        // allocate a ReflectionClass owner
@@ -1135,7 +1139,11 @@ fn emit_set_owner_member_flags_property_aarch64(
         abi::emit_store_zero_to_address(emitter, "x9", is_readonly_hi);
     }
     if let (Some(modifiers_lo), Some(modifiers_hi)) = (layout.modifiers_lo, layout.modifiers_hi) {
-        emitter.instruction("ldr x10, [sp, #96]");                              // reload PHP Reflection member getModifiers() bitmask
+        if layout.required_parameter_count_lo.is_some() {
+            emitter.instruction("ldr x10, [sp, #72]");                          // reload PHP ReflectionMethod::getModifiers() bitmask
+        } else {
+            emitter.instruction("ldr x10, [sp, #96]");                          // reload PHP Reflection member getModifiers() bitmask
+        }
         abi::emit_store_to_address(emitter, "x10", "x9", modifiers_lo);
         abi::emit_store_zero_to_address(emitter, "x9", modifiers_hi);
     }
@@ -1236,7 +1244,11 @@ fn emit_set_owner_member_flags_property_x86_64(
         abi::emit_store_zero_to_address(emitter, "r10", is_readonly_hi);
     }
     if let (Some(modifiers_lo), Some(modifiers_hi)) = (layout.modifiers_lo, layout.modifiers_hi) {
-        emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                  // reload PHP Reflection member getModifiers() bitmask
+        if layout.required_parameter_count_lo.is_some() {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 80]");               // reload PHP ReflectionMethod::getModifiers() bitmask
+        } else {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 104]");              // reload PHP Reflection member getModifiers() bitmask
+        }
         abi::emit_store_to_address(emitter, "rax", "r10", modifiers_lo);
         abi::emit_store_zero_to_address(emitter, "r10", modifiers_hi);
     }

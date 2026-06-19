@@ -1691,13 +1691,18 @@ $ref = new ReflectionClass(ReflectListTarget::class);
 $methods = $ref->getMethods();
 $properties = $ref->getProperties();
 echo count($methods) . ":" . count($properties) . ":";
+echo ReflectionMethod::IS_STATIC . ":" . ReflectionMethod::IS_PRIVATE . ":";
+$direct = new ReflectionMethod(ReflectListTarget::class, "helper");
+echo "D" . $direct->getModifiers() . ":";
 foreach ($methods as $method) {
     if ($method->getName() === "first") {
         echo "F" . count($method->getAttributes());
+        echo "M" . $method->getModifiers();
     }
     if ($method->getName() === "helper") {
         echo $method->isStatic() ? "S" : "s";
         echo $method->isPrivate() ? "R" : "r";
+        echo "M" . $method->getModifiers();
     }
 }
 echo ":";
@@ -1718,7 +1723,7 @@ foreach ($properties as $property) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:2:F1SR:V1PTR");
+    assert_eq!(out.stdout, "2:2:16:4:D20:F1M1SRM20:V1PTR");
 }
 
 /// Verifies that `ReflectionClass::getMethod()` and `getProperty()` return

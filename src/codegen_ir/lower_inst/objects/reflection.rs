@@ -370,6 +370,9 @@ fn emit_reflection_owner_object(
         )?;
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
     }
+    if class_name == "ReflectionMethod" {
+        emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
+    }
     if class_name == "ReflectionParameter" {
         if let Some(parameter) = metadata.parameter_members.first() {
             emit_reflection_parameter_properties(ctx, parameter)?;
@@ -712,7 +715,7 @@ fn reflection_method_owner_metadata(
         is_enum: false,
         is_readonly: false,
         is_instantiable: false,
-        modifiers: 0,
+        modifiers: reflection_method_modifiers_from_flags(member.flags),
         member_flags: member.flags,
     }
 }
@@ -3306,6 +3309,12 @@ fn emit_reflection_member_object(
             "__required_parameter_count",
             member.required_parameter_count,
         )?;
+        emit_reflection_owner_int_property(
+            ctx,
+            member_class_name,
+            "__modifiers",
+            reflection_method_modifiers_from_flags(member.flags),
+        )?;
     }
     if member_class_name == "ReflectionClassConstant" {
         if let Some(value) = &member.constant_value {
@@ -4062,6 +4071,30 @@ fn reflection_class_constant_modifiers_from_flags(flags: ReflectionMemberFlags) 
         Visibility::Public
     };
     reflection_class_constant_modifiers(&visibility, flags.is_final)
+}
+
+/// Computes PHP's `ReflectionMethod::getModifiers()` bitmask from method flags.
+fn reflection_method_modifiers_from_flags(flags: ReflectionMemberFlags) -> i64 {
+    let mut modifiers = 0;
+    if flags.is_public {
+        modifiers |= 1;
+    }
+    if flags.is_protected {
+        modifiers |= 2;
+    }
+    if flags.is_private {
+        modifiers |= 4;
+    }
+    if flags.is_static {
+        modifiers |= 16;
+    }
+    if flags.is_final {
+        modifiers |= 32;
+    }
+    if flags.is_abstract {
+        modifiers |= 64;
+    }
+    modifiers
 }
 
 /// Returns one declared property offset from a synthetic Reflection class layout.

@@ -412,6 +412,32 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval can read built-in Reflection `IS_*` class constants.
+#[test]
+fn execute_program_reads_builtin_reflection_modifier_constants() {
+    let program = parse_fragment(
+        br#"echo ReflectionClass::IS_FINAL; echo ":";
+echo ReflectionClass::IS_EXPLICIT_ABSTRACT; echo ":";
+echo ReflectionClass::IS_READONLY; echo ":";
+echo ReflectionMethod::IS_STATIC; echo ":";
+echo ReflectionMethod::IS_PRIVATE; echo ":";
+echo ReflectionMethod::IS_ABSTRACT; echo ":";
+echo ReflectionClassConstant::IS_PUBLIC; echo ":";
+echo ReflectionClassConstant::IS_PROTECTED; echo ":";
+echo ReflectionClassConstant::IS_PRIVATE; echo ":";
+echo ReflectionClassConstant::IS_FINAL;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "32:64:65536:16:4:64:1:2:4:32");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes eval readonly class metadata.
 #[test]
 fn execute_program_reflects_eval_class_readonly_predicate() {
@@ -948,13 +974,18 @@ $ref = new ReflectionClass("EvalReflectListTarget");
 $methods = $ref->getMethods();
 $properties = $ref->getProperties();
 echo count($methods); echo ":"; echo count($properties); echo ":";
+echo ReflectionMethod::IS_STATIC; echo ":"; echo ReflectionMethod::IS_PRIVATE; echo ":";
+$direct = new ReflectionMethod("EvalReflectListTarget", "helper");
+echo "D"; echo $direct->getModifiers(); echo ":";
 foreach ($methods as $method) {
     if ($method->getName() === "first") {
         echo "F"; echo count($method->getAttributes());
+        echo "M"; echo $method->getModifiers();
     }
     if ($method->getName() === "helper") {
         echo $method->isStatic() ? "S" : "s";
         echo $method->isPrivate() ? "R" : "r";
+        echo "M"; echo $method->getModifiers();
     }
 }
 echo ":";
@@ -976,7 +1007,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "2:2:F1SR:V1PTR");
+    assert_eq!(values.output, "2:2:16:4:D20:F1M1SRM20:V1PTR");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

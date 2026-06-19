@@ -1834,8 +1834,12 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     class_name: &str,
     constant_name: &str,
     context: &mut ElephcEvalContext,
-    _values: &mut impl RuntimeValueOps,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(value) = eval_builtin_reflection_class_constant(class_name, constant_name, values)?
+    {
+        return Ok(value);
+    }
     let class_name = resolve_eval_static_class_like_name(class_name, context)?;
     if let Some(case) = context.enum_case(&class_name, constant_name) {
         return Ok(case);
@@ -1847,6 +1851,45 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     context
         .class_constant_cell(&declaring_class, constant.name())
         .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Resolves eval-visible built-in Reflection class constants.
+fn eval_builtin_reflection_class_constant(
+    class_name: &str,
+    constant_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let class_name = class_name.trim_start_matches('\\');
+    let value = if class_name.eq_ignore_ascii_case("ReflectionClass") {
+        match constant_name {
+            "IS_IMPLICIT_ABSTRACT" => Some(16),
+            "IS_FINAL" => Some(32),
+            "IS_EXPLICIT_ABSTRACT" => Some(64),
+            "IS_READONLY" => Some(65_536),
+            _ => None,
+        }
+    } else if class_name.eq_ignore_ascii_case("ReflectionMethod") {
+        match constant_name {
+            "IS_PUBLIC" => Some(1),
+            "IS_PROTECTED" => Some(2),
+            "IS_PRIVATE" => Some(4),
+            "IS_STATIC" => Some(16),
+            "IS_FINAL" => Some(32),
+            "IS_ABSTRACT" => Some(64),
+            _ => None,
+        }
+    } else if class_name.eq_ignore_ascii_case("ReflectionClassConstant") {
+        match constant_name {
+            "IS_PUBLIC" => Some(1),
+            "IS_PROTECTED" => Some(2),
+            "IS_PRIVATE" => Some(4),
+            "IS_FINAL" => Some(32),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    value.map(|value| values.int(value)).transpose()
 }
 
 /// Returns the PHP class-name literal for `ClassName::class`-style eval expressions.

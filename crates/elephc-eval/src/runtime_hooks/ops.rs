@@ -213,6 +213,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         parent_class: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
+        method_modifiers: u64,
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -231,6 +232,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 parent_class.as_ptr(),
                 flags,
                 modifiers,
+                method_modifiers,
                 constant_value.as_ptr(),
                 backing_value.as_ptr(),
             )

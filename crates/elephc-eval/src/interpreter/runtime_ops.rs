@@ -127,6 +127,7 @@ pub trait RuntimeValueOps {
         parent_class: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
+        method_modifiers: u64,
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;

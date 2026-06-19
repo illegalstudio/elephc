@@ -136,6 +136,7 @@ impl RuntimeValueOps for FakeOps {
         parent_class: RuntimeCellHandle,
         flags: u64,
         modifiers: u64,
+        method_modifiers: u64,
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -152,6 +153,7 @@ impl RuntimeValueOps for FakeOps {
             parent_class,
             flags,
             modifiers,
+            method_modifiers,
             constant_value,
             backing_value,
         )
