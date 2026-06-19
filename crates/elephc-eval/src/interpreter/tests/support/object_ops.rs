@@ -162,6 +162,10 @@ impl FakeOps {
                 Self::object_property(&properties, "__declaring_class")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "getdeclaringfunction") if args.is_empty() => {
+                Self::object_property(&properties, "__declaring_function")
+                    .map_or_else(|| self.null(), Ok)
+            }
             (FakeValue::Object(properties), "getmodifiers") if args.is_empty() => {
                 Self::object_property(&properties, "__modifiers").map_or_else(|| self.int(0), Ok)
             }
@@ -560,6 +564,7 @@ impl FakeOps {
             properties.push(("__type".to_string(), method_objects));
             properties.push(("__has_default_value".to_string(), has_default_value));
             properties.push(("__default_value".to_string(), property_objects));
+            properties.push(("__declaring_function".to_string(), interface_names));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_NAMED_TYPE {
             let allows_null = self.bool_value((flags & 1) != 0)?;

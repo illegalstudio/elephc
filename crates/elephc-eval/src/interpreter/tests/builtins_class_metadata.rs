@@ -845,8 +845,11 @@ class EvalDeclaringParamChild extends EvalDeclaringParamBase {
 }
 $inherited = (new ReflectionMethod("EvalDeclaringParamChild", "inherited"))->getParameters()[0];
 echo $inherited->getDeclaringClass()->getName(); echo ":";
+echo $inherited->getDeclaringFunction()->getName(); echo ":";
+echo $inherited->getDeclaringFunction()->getDeclaringClass()->getName(); echo ":";
 $listed = (new ReflectionMethod("EvalDeclaringParamChild", "own"))->getParameters()[0];
-echo $listed->getDeclaringClass()->getName();
+echo $listed->getDeclaringClass()->getName(); echo ":";
+echo $listed->getDeclaringFunction()->getName();
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -857,7 +860,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "EvalDeclaringParamBase:EvalDeclaringParamChild"
+        "EvalDeclaringParamBase:inherited:EvalDeclaringParamBase:EvalDeclaringParamChild:own"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

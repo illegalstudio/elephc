@@ -1808,9 +1808,13 @@ class ReflectDeclaringParamChild extends ReflectDeclaringParamBase {
 }
 $inherited = new ReflectionParameter([ReflectDeclaringParamChild::class, "inherited"], "base");
 echo $inherited->getDeclaringClass()->getName() . ":";
+echo $inherited->getDeclaringFunction()->getName() . ":";
+echo $inherited->getDeclaringFunction()->getDeclaringClass()->getName() . ":";
 $listed = (new ReflectionMethod(ReflectDeclaringParamChild::class, "own"))->getParameters()[0];
 echo $listed->getDeclaringClass()->getName() . ":";
+echo $listed->getDeclaringFunction()->getName() . ":";
 $function = new ReflectionParameter("reflect_declaring_function", "value");
+echo $function->getDeclaringFunction()->getName() . ":";
 echo is_null($function->getDeclaringClass()) ? "null" : "bad";
 "#,
     );
@@ -1821,7 +1825,7 @@ echo is_null($function->getDeclaringClass()) ? "null" : "bad";
     );
     assert_eq!(
         out.stdout,
-        "ReflectDeclaringParamBase:ReflectDeclaringParamChild:null"
+        "ReflectDeclaringParamBase:inherited:ReflectDeclaringParamBase:ReflectDeclaringParamChild:own:reflect_declaring_function:null"
     );
 }
 

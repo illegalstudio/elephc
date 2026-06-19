@@ -90,6 +90,8 @@ struct ReflectionOwnerLayout {
     has_default_value_hi: Option<usize>,
     default_value_lo: Option<usize>,
     default_value_hi: Option<usize>,
+    declaring_function_lo: Option<usize>,
+    declaring_function_hi: Option<usize>,
     allows_null_lo: Option<usize>,
     allows_null_hi: Option<usize>,
     is_builtin_lo: Option<usize>,
@@ -224,6 +226,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let parameter_type_lo = reflection_property_offset(info, "__type");
     let has_default_value_lo = reflection_property_offset(info, "__has_default_value");
     let default_value_lo = reflection_property_offset(info, "__default_value");
+    let declaring_function_lo = reflection_property_offset(info, "__declaring_function");
     let allows_null_lo = reflection_property_offset(info, "__allows_null");
     let is_builtin_lo = reflection_property_offset(info, "__is_builtin");
     Some(ReflectionOwnerLayout {
@@ -295,6 +298,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         has_default_value_hi: has_default_value_lo.map(|offset| offset + 8),
         default_value_lo,
         default_value_hi: default_value_lo.map(|offset| offset + 8),
+        declaring_function_lo,
+        declaring_function_hi: declaring_function_lo.map(|offset| offset + 8),
         allows_null_lo,
         allows_null_hi: allows_null_lo.map(|offset| offset + 8),
         is_builtin_lo,
@@ -649,6 +654,7 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_named_type_flags_property_aarch64(emitter, layout);
     emit_set_owner_metadata_arrays_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_parent_class_property_aarch64(emitter, layout, fail_label);
+    emit_set_owner_declaring_function_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_aarch64(emitter, layout, fail_label);
     emitter.instruction(&format!("b {}", box_label));                           // box this populated Reflection owner object
 }
@@ -677,6 +683,7 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_named_type_flags_property_x86_64(emitter, layout);
     emit_set_owner_metadata_arrays_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_parent_class_property_x86_64(emitter, layout, fail_label);
+    emit_set_owner_declaring_function_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_attrs_property_x86_64(emitter, layout, fail_label);
     emitter.instruction(&format!("jmp {}", box_label));                         // box this populated Reflection owner object
 }
@@ -1606,6 +1613,51 @@ fn emit_set_owner_parent_class_property_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed parent value across incref
     emitter.instruction("call __rt_incref");                                    // retain the boxed parent value for ReflectionClass storage
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed parent value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "rdi", "r10", low);
+    abi::emit_store_zero_to_address(emitter, "r10", high);
+}
+
+/// Stores a retained ARM64 boxed declaring ReflectionFunction/Method cell.
+fn emit_set_owner_declaring_function_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(low), Some(high)) = (
+        layout.declaring_function_lo,
+        layout.declaring_function_hi,
+    ) else {
+        return;
+    };
+    emitter.instruction("ldr x0, [sp, #80]");                                   // reload the boxed ReflectionParameter declaring function
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null declaring-function metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed declaring function across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the declaring function for ReflectionParameter storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained declaring function value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", low);
+    abi::emit_store_zero_to_address(emitter, "x9", high);
+}
+
+/// Stores a retained x86_64 boxed declaring ReflectionFunction/Method cell.
+fn emit_set_owner_declaring_function_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(low), Some(high)) = (
+        layout.declaring_function_lo,
+        layout.declaring_function_hi,
+    ) else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the boxed ReflectionParameter declaring function
+    emitter.instruction("test rax, rax");                                       // check whether the declaring-function value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null declaring-function metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed declaring function across incref
+    emitter.instruction("call __rt_incref");                                    // retain the declaring function for ReflectionParameter storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained declaring function value
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low);
     abi::emit_store_zero_to_address(emitter, "r10", high);

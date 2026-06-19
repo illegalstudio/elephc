@@ -211,8 +211,10 @@ metadata is exposed through `ReflectionIntersectionType::getTypes()` and
 `allowsNull()`. Eval method parameter attributes are exposed through
 `ReflectionParameter::getAttributes()` using materialized `ReflectionAttribute`
 objects. `ReflectionParameter::getDeclaringClass()` returns the declaring
-class-like symbol for eval method parameters. Defaulted eval method parameters
-are bound when omitted and reported through
+class-like symbol for eval method parameters, and
+`ReflectionParameter::getDeclaringFunction()` returns a `ReflectionMethod`
+object for the declaring eval method. Defaulted eval method parameters are bound
+when omitted and reported through
 `ReflectionParameter::isOptional()`, `isDefaultValueAvailable()`, and
 `getDefaultValue()`. Supported default expressions include
 scalar literals, arrays whose keys and values are supported default

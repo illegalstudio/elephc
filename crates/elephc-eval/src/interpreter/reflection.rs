@@ -62,6 +62,7 @@ struct EvalReflectionMemberMetadata {
 struct EvalReflectionParameterMetadata {
     name: String,
     declaring_class_name: Option<String>,
+    declaring_function: Option<EvalReflectionDeclaringFunctionMetadata>,
     attributes: Vec<EvalAttribute>,
     position: usize,
     is_optional: bool,
@@ -70,6 +71,16 @@ struct EvalReflectionParameterMetadata {
     has_type: bool,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
+}
+
+/// Eval metadata needed for `ReflectionParameter::getDeclaringFunction()`.
+#[derive(Clone)]
+struct EvalReflectionDeclaringFunctionMetadata {
+    name: String,
+    declaring_class_name: Option<String>,
+    attributes: Vec<EvalAttribute>,
+    flags: u64,
+    required_parameter_count: usize,
 }
 
 /// Eval metadata needed to materialize one parameter `ReflectionType` object.
@@ -900,7 +911,12 @@ fn eval_reflection_parameter_object_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let attrs = eval_reflection_attribute_array_result(&parameter.attributes, context, values)?;
-    let interface_names = values.array_new(0)?;
+    let declaring_function = match parameter.declaring_function.as_ref() {
+        Some(metadata) => {
+            eval_reflection_declaring_function_object_result(metadata, context, values)?
+        }
+        None => values.null()?,
+    };
     let trait_names = values.array_new(0)?;
     let method_names = values.array_new(0)?;
     let property_names = values.array_new(0)?;
@@ -924,7 +940,7 @@ fn eval_reflection_parameter_object_result(
         EVAL_REFLECTION_OWNER_PARAMETER,
         &parameter.name,
         attrs,
-        interface_names,
+        declaring_function,
         trait_names,
         method_names,
         property_names,
@@ -935,7 +951,7 @@ fn eval_reflection_parameter_object_result(
         parameter.position as u64,
     )?;
     values.release(attrs)?;
-    values.release(interface_names)?;
+    values.release(declaring_function)?;
     values.release(trait_names)?;
     values.release(method_names)?;
     values.release(property_names)?;
@@ -944,6 +960,29 @@ fn eval_reflection_parameter_object_result(
     values.release(default_value)?;
     values.release(parent_class)?;
     Ok(object)
+}
+
+/// Builds a shallow ReflectionMethod object for a parameter's declaring function metadata.
+fn eval_reflection_declaring_function_object_result(
+    metadata: &EvalReflectionDeclaringFunctionMetadata,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reflection_owner_object(
+        EVAL_REFLECTION_OWNER_METHOD,
+        &metadata.name,
+        &metadata.attributes,
+        &[],
+        &[],
+        &[],
+        &[],
+        metadata.declaring_class_name.as_deref(),
+        &[],
+        metadata.flags,
+        metadata.required_parameter_count as u64,
+        context,
+        values,
+    )
 }
 
 /// Materializes one parameter ReflectionType object through the shared reflection helper.
@@ -1384,8 +1423,26 @@ fn eval_reflection_method_metadata(
         return context
             .class_method(class_name, method_name)
             .map(|(declaring_class, method)| {
+                let required_parameter_count = eval_reflection_required_parameter_count(
+                    method.parameter_defaults(),
+                    method.parameter_is_variadic(),
+                );
+                let flags = eval_reflection_member_flags(
+                    method.visibility(),
+                    method.is_static(),
+                    method.is_final(),
+                    method.is_abstract(),
+                );
+                let declaring_function = EvalReflectionDeclaringFunctionMetadata {
+                    name: method.name().to_string(),
+                    declaring_class_name: Some(declaring_class.clone()),
+                    attributes: method.attributes().to_vec(),
+                    flags,
+                    required_parameter_count,
+                };
                 let parameters = eval_reflection_parameters_from_names_and_type_flags(
                     Some(declaring_class.as_str()),
+                    Some(&declaring_function),
                     method.params(),
                     method.parameter_has_types(),
                     method.parameter_types(),
@@ -1401,10 +1458,7 @@ fn eval_reflection_method_metadata(
                     is_static: method.is_static(),
                     is_final: method.is_final(),
                     is_abstract: method.is_abstract(),
-                    required_parameter_count: eval_reflection_required_parameter_count(
-                        method.parameter_defaults(),
-                        method.parameter_is_variadic(),
-                    ),
+                    required_parameter_count,
                     parameters,
                 }
             });
@@ -1414,19 +1468,27 @@ fn eval_reflection_method_metadata(
             .interface_method_requirements(class_name)
             .into_iter()
             .find(|method| method.name().eq_ignore_ascii_case(method_name))
-            .map(|method| EvalReflectionMemberMetadata {
-                declaring_class_name: Some(class_name.to_string()),
-                attributes: method.attributes().to_vec(),
-                visibility: EvalVisibility::Public,
-                is_static: method.is_static(),
-                is_final: false,
-                is_abstract: true,
-                required_parameter_count: eval_reflection_required_parameter_count(
+            .map(|method| {
+                let required_parameter_count = eval_reflection_required_parameter_count(
                     method.parameter_defaults(),
                     method.parameter_is_variadic(),
-                ),
-                parameters: eval_reflection_parameters_from_names_and_type_flags(
+                );
+                let flags = eval_reflection_member_flags(
+                    EvalVisibility::Public,
+                    method.is_static(),
+                    false,
+                    true,
+                );
+                let declaring_function = EvalReflectionDeclaringFunctionMetadata {
+                    name: method.name().to_string(),
+                    declaring_class_name: Some(class_name.to_string()),
+                    attributes: method.attributes().to_vec(),
+                    flags,
+                    required_parameter_count,
+                };
+                let parameters = eval_reflection_parameters_from_names_and_type_flags(
                     Some(class_name),
+                    Some(&declaring_function),
                     method.params(),
                     method.parameter_has_types(),
                     method.parameter_types(),
@@ -1434,7 +1496,17 @@ fn eval_reflection_method_metadata(
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
-                ),
+                );
+                EvalReflectionMemberMetadata {
+                    declaring_class_name: Some(class_name.to_string()),
+                    attributes: method.attributes().to_vec(),
+                    visibility: EvalVisibility::Public,
+                    is_static: method.is_static(),
+                    is_final: false,
+                    is_abstract: true,
+                    required_parameter_count,
+                    parameters,
+                }
             });
     }
     context.trait_decl(class_name).and_then(|trait_decl| {
@@ -1442,19 +1514,27 @@ fn eval_reflection_method_metadata(
             .methods()
             .iter()
             .find(|method| method.name().eq_ignore_ascii_case(method_name))
-            .map(|method| EvalReflectionMemberMetadata {
-                declaring_class_name: Some(trait_decl.name().to_string()),
-                attributes: method.attributes().to_vec(),
-                visibility: method.visibility(),
-                is_static: method.is_static(),
-                is_final: method.is_final(),
-                is_abstract: method.is_abstract(),
-                required_parameter_count: eval_reflection_required_parameter_count(
+            .map(|method| {
+                let required_parameter_count = eval_reflection_required_parameter_count(
                     method.parameter_defaults(),
                     method.parameter_is_variadic(),
-                ),
-                parameters: eval_reflection_parameters_from_names_and_type_flags(
+                );
+                let flags = eval_reflection_member_flags(
+                    method.visibility(),
+                    method.is_static(),
+                    method.is_final(),
+                    method.is_abstract(),
+                );
+                let declaring_function = EvalReflectionDeclaringFunctionMetadata {
+                    name: method.name().to_string(),
+                    declaring_class_name: Some(trait_decl.name().to_string()),
+                    attributes: method.attributes().to_vec(),
+                    flags,
+                    required_parameter_count,
+                };
+                let parameters = eval_reflection_parameters_from_names_and_type_flags(
                     Some(trait_decl.name()),
+                    Some(&declaring_function),
                     method.params(),
                     method.parameter_has_types(),
                     method.parameter_types(),
@@ -1462,7 +1542,17 @@ fn eval_reflection_method_metadata(
                     method.parameter_defaults(),
                     method.parameter_is_by_ref(),
                     method.parameter_is_variadic(),
-                ),
+                );
+                EvalReflectionMemberMetadata {
+                    declaring_class_name: Some(trait_decl.name().to_string()),
+                    attributes: method.attributes().to_vec(),
+                    visibility: method.visibility(),
+                    is_static: method.is_static(),
+                    is_final: method.is_final(),
+                    is_abstract: method.is_abstract(),
+                    required_parameter_count,
+                    parameters,
+                }
             })
     })
 }
@@ -1538,6 +1628,7 @@ fn eval_reflection_required_parameter_count(
 /// Builds parameter reflection metadata from eval parameter names and type flags.
 fn eval_reflection_parameters_from_names_and_type_flags(
     declaring_class_name: Option<&str>,
+    declaring_function: Option<&EvalReflectionDeclaringFunctionMetadata>,
     names: &[String],
     has_type_flags: &[bool],
     parameter_types: &[Option<EvalParameterType>],
@@ -1552,6 +1643,7 @@ fn eval_reflection_parameters_from_names_and_type_flags(
         .map(|(position, name)| EvalReflectionParameterMetadata {
             name: name.clone(),
             declaring_class_name: declaring_class_name.map(str::to_string),
+            declaring_function: declaring_function.cloned(),
             attributes: parameter_attributes
                 .get(position)
                 .cloned()

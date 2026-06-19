@@ -72,6 +72,7 @@ struct ReflectionListedMember {
 struct ReflectionParameterMember {
     name: String,
     declaring_class_name: Option<String>,
+    declaring_function: Option<ReflectionDeclaringFunctionMember>,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
     position: i64,
@@ -81,6 +82,25 @@ struct ReflectionParameterMember {
     has_type: bool,
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
+}
+
+/// Metadata needed for `ReflectionParameter::getDeclaringFunction()`.
+#[derive(Clone)]
+enum ReflectionDeclaringFunctionMember {
+    Function {
+        name: String,
+        attr_names: Vec<String>,
+        attr_args: Vec<Option<Vec<AttrArgValue>>>,
+        required_parameter_count: i64,
+    },
+    Method {
+        name: String,
+        declaring_class_name: Option<String>,
+        attr_names: Vec<String>,
+        attr_args: Vec<Option<Vec<AttrArgValue>>>,
+        flags: ReflectionMemberFlags,
+        required_parameter_count: i64,
+    },
 }
 
 /// Metadata for one `ReflectionType` object returned by `ReflectionParameter::getType()`.
@@ -552,12 +572,21 @@ fn reflection_function_metadata(
     let Some(signature) = function.signature.as_ref() else {
         return Ok(empty_reflection_metadata());
     };
+    let reflected_name = function.name.trim_start_matches('\\').to_string();
+    let required_parameter_count = reflection_required_parameter_count(signature);
+    let declaring_function = ReflectionDeclaringFunctionMember::Function {
+        name: reflected_name.clone(),
+        attr_names: function.attribute_names.clone(),
+        attr_args: function.attribute_args.clone(),
+        required_parameter_count,
+    };
     let mut metadata = empty_reflection_metadata();
-    metadata.reflected_name = Some(function.name.trim_start_matches('\\').to_string());
+    metadata.reflected_name = Some(reflected_name);
     metadata.attr_names = function.attribute_names.clone();
     metadata.attr_args = function.attribute_args.clone();
-    metadata.parameter_members = reflection_parameter_members(signature);
-    metadata.required_parameter_count = reflection_required_parameter_count(signature);
+    metadata.parameter_members =
+        reflection_parameter_members_with_declaring_function(signature, None, Some(declaring_function));
+    metadata.required_parameter_count = required_parameter_count;
     Ok(metadata)
 }
 
@@ -735,7 +764,15 @@ fn reflection_function_parameter_metadata(
     let Some(signature) = function.signature.as_ref() else {
         return Ok(empty_reflection_metadata());
     };
-    let parameters = reflection_parameter_members(signature);
+    let reflected_name = function.name.trim_start_matches('\\').to_string();
+    let declaring_function = ReflectionDeclaringFunctionMember::Function {
+        name: reflected_name,
+        attr_names: function.attribute_names.clone(),
+        attr_args: function.attribute_args.clone(),
+        required_parameter_count: reflection_required_parameter_count(signature),
+    };
+    let parameters =
+        reflection_parameter_members_with_declaring_function(signature, None, Some(declaring_function));
     let Some(parameter) = reflection_parameter_member_for_selector(&parameters, selector) else {
         return Ok(empty_reflection_metadata());
     };
@@ -1501,25 +1538,38 @@ fn reflection_class_method_member(
         .get(&method_key)
         .or_else(|| info.static_methods.get(&method_key))?;
     let declaring_class_name = reflection_method_declaring_class_name(info, &method_key);
+    let attr_names = info
+        .method_attribute_names
+        .get(&method_key)
+        .cloned()
+        .unwrap_or_default();
+    let attr_args = info
+        .method_attribute_args
+        .get(&method_key)
+        .cloned()
+        .unwrap_or_default();
+    let flags = reflection_method_member_flags(info, &method_key)?;
+    let required_parameter_count = reflection_required_parameter_count(sig);
+    let declaring_function = ReflectionDeclaringFunctionMember::Method {
+        name: method_key.clone(),
+        declaring_class_name: declaring_class_name.clone(),
+        attr_names: attr_names.clone(),
+        attr_args: attr_args.clone(),
+        flags,
+        required_parameter_count,
+    };
     let parameters = reflection_parameter_members_with_declaring_class(
         sig,
         declaring_class_name.as_deref(),
+        Some(declaring_function),
     );
     Some(ReflectionListedMember {
         name: method_key.clone(),
         declaring_class_name,
-        attr_names: info
-            .method_attribute_names
-            .get(&method_key)
-            .cloned()
-            .unwrap_or_default(),
-        attr_args: info
-            .method_attribute_args
-            .get(&method_key)
-            .cloned()
-            .unwrap_or_default(),
-        flags: reflection_method_member_flags(info, &method_key)?,
-        required_parameter_count: reflection_required_parameter_count(sig),
+        attr_names,
+        attr_args,
+        flags,
+        required_parameter_count,
         parameters,
     })
 }
@@ -1556,15 +1606,28 @@ fn reflection_interface_method_member(
         .or_else(|| info.static_method_declaring_interfaces.get(&method_key))
         .cloned()
         .unwrap_or_else(|| interface_name.to_string());
-    let parameters =
-        reflection_parameter_members_with_declaring_class(sig, Some(declaring_class_name.as_str()));
+    let required_parameter_count = reflection_required_parameter_count(sig);
+    let flags = reflection_member_flags(is_static, &Visibility::Public, false, true);
+    let declaring_function = ReflectionDeclaringFunctionMember::Method {
+        name: method_key.clone(),
+        declaring_class_name: Some(declaring_class_name.clone()),
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        flags,
+        required_parameter_count,
+    };
+    let parameters = reflection_parameter_members_with_declaring_class(
+        sig,
+        Some(declaring_class_name.as_str()),
+        Some(declaring_function),
+    );
     Some(ReflectionListedMember {
         name: method_key,
         declaring_class_name: Some(declaring_class_name),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
-        flags: reflection_member_flags(is_static, &Visibility::Public, false, true),
-        required_parameter_count: reflection_required_parameter_count(sig),
+        flags,
+        required_parameter_count,
         parameters,
     })
 }
@@ -1589,21 +1652,32 @@ fn reflection_trait_method_member(
 ) -> Option<ReflectionListedMember> {
     let method_key = php_symbol_key(method_name);
     let info = methods.get(&method_key)?;
+    let flags = reflection_member_flags(
+        info.is_static,
+        &info.visibility,
+        info.is_final,
+        info.is_abstract,
+    );
+    let required_parameter_count = reflection_required_parameter_count(&info.signature);
+    let declaring_function = ReflectionDeclaringFunctionMember::Method {
+        name: method_key.clone(),
+        declaring_class_name: Some(trait_name.to_string()),
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        flags,
+        required_parameter_count,
+    };
     Some(ReflectionListedMember {
         name: method_key,
         declaring_class_name: Some(trait_name.to_string()),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
-        flags: reflection_member_flags(
-            info.is_static,
-            &info.visibility,
-            info.is_final,
-            info.is_abstract,
-        ),
-        required_parameter_count: reflection_required_parameter_count(&info.signature),
+        flags,
+        required_parameter_count,
         parameters: reflection_parameter_members_with_declaring_class(
             &info.signature,
             Some(trait_name),
+            Some(declaring_function),
         ),
     })
 }
@@ -1714,15 +1788,24 @@ fn reflection_required_parameter_count(sig: &FunctionSig) -> i64 {
         .map_or(0, |index| index as i64 + 1)
 }
 
-/// Builds reflected parameter metadata from a method/function signature.
-fn reflection_parameter_members(sig: &FunctionSig) -> Vec<ReflectionParameterMember> {
-    reflection_parameter_members_with_declaring_class(sig, None)
-}
-
 /// Builds reflected parameter metadata and attaches declaring class metadata when present.
 fn reflection_parameter_members_with_declaring_class(
     sig: &FunctionSig,
     declaring_class_name: Option<&str>,
+    declaring_function: Option<ReflectionDeclaringFunctionMember>,
+) -> Vec<ReflectionParameterMember> {
+    reflection_parameter_members_with_declaring_function(
+        sig,
+        declaring_class_name,
+        declaring_function,
+    )
+}
+
+/// Builds reflected parameter metadata with optional declaring owner metadata.
+fn reflection_parameter_members_with_declaring_function(
+    sig: &FunctionSig,
+    declaring_class_name: Option<&str>,
+    declaring_function: Option<ReflectionDeclaringFunctionMember>,
 ) -> Vec<ReflectionParameterMember> {
     sig.params
         .iter()
@@ -1733,6 +1816,7 @@ fn reflection_parameter_members_with_declaring_class(
             ReflectionParameterMember {
                 name: name.clone(),
                 declaring_class_name: declaring_class_name.map(str::to_string),
+                declaring_function: declaring_function.clone(),
                 attr_names: sig
                     .param_attributes
                     .get(index)
@@ -3035,6 +3119,71 @@ fn emit_reflection_parameter_properties(
     )?;
     emit_reflection_parameter_default_property(ctx, parameter)?;
     emit_reflection_parameter_declaring_class_property(ctx, parameter)?;
+    emit_reflection_parameter_declaring_function_property(ctx, parameter)?;
+    Ok(())
+}
+
+/// Writes one ReflectionParameter object's declaring-function slot.
+fn emit_reflection_parameter_declaring_function_property(
+    ctx: &mut FunctionContext<'_>,
+    parameter: &ReflectionParameterMember,
+) -> Result<()> {
+    let declaring_function_offset = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionParameter")
+            .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+        reflection_property_offset(class_info, "__declaring_function")?
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    match parameter.declaring_function.as_ref() {
+        Some(ReflectionDeclaringFunctionMember::Function {
+            name,
+            attr_names,
+            attr_args,
+            required_parameter_count,
+        }) => {
+            let mut metadata = empty_reflection_metadata();
+            metadata.reflected_name = Some(name.clone());
+            metadata.attr_names = attr_names.clone();
+            metadata.attr_args = attr_args.clone();
+            metadata.required_parameter_count = *required_parameter_count;
+            emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
+            emit_box_current_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Object("ReflectionFunction".to_string()),
+            );
+        }
+        Some(ReflectionDeclaringFunctionMember::Method {
+            name,
+            declaring_class_name,
+            attr_names,
+            attr_args,
+            flags,
+            required_parameter_count,
+        }) => {
+            let mut metadata = empty_reflection_metadata();
+            metadata.reflected_name = Some(name.clone());
+            metadata.parent_class_name = declaring_class_name.clone();
+            metadata.attr_names = attr_names.clone();
+            metadata.attr_args = attr_args.clone();
+            metadata.member_flags = *flags;
+            metadata.required_parameter_count = *required_parameter_count;
+            emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
+            emit_box_current_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Object("ReflectionMethod".to_string()),
+            );
+        }
+        None => emit_boxed_null_literal_to_result(ctx),
+    }
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, declaring_function_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, declaring_function_offset + 8);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
     Ok(())
 }
 

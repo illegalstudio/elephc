@@ -6519,8 +6519,11 @@ class EvalDeclaringParamChild extends EvalDeclaringParamBase {
 }
 $inherited = (new ReflectionMethod("EvalDeclaringParamChild", "inherited"))->getParameters()[0];
 echo $inherited->getDeclaringClass()->getName() . ":";
+echo $inherited->getDeclaringFunction()->getName() . ":";
+echo $inherited->getDeclaringFunction()->getDeclaringClass()->getName() . ":";
 $listed = (new ReflectionMethod("EvalDeclaringParamChild", "own"))->getParameters()[0];
-echo $listed->getDeclaringClass()->getName();');
+echo $listed->getDeclaringClass()->getName() . ":";
+echo $listed->getDeclaringFunction()->getName();');
 "#,
     );
     assert!(
@@ -6528,7 +6531,10 @@ echo $listed->getDeclaringClass()->getName();');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "EvalDeclaringParamBase:EvalDeclaringParamChild");
+    assert_eq!(
+        out.stdout,
+        "EvalDeclaringParamBase:inherited:EvalDeclaringParamBase:EvalDeclaringParamChild:own"
+    );
 }
 
 /// Verifies eval ReflectionClass::newInstance constructs eval-declared classes.

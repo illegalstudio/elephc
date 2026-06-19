@@ -1616,6 +1616,12 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
             Some(mixed_type()),
             null_expr(),
         ),
+        builtin_property(
+            "__declaring_function",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ),
     ];
     let methods = vec![
         builtin_reflection_owner_constructor_method(vec![
@@ -1633,6 +1639,7 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
         builtin_reflection_class_bool_method("isDefaultValueAvailable", "__has_default_value"),
         builtin_reflection_parameter_get_default_value_method(),
         builtin_reflection_class_mixed_method("getDeclaringClass", "__declaring_class"),
+        builtin_reflection_class_mixed_method("getDeclaringFunction", "__declaring_function"),
     ];
     FlattenedClass {
         name: "ReflectionParameter".to_string(),
