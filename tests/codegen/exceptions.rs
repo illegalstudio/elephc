@@ -446,3 +446,29 @@ echo $out;
     );
     assert_eq!(out, "xoxo");
 }
+
+/// Regression for a DCE tail-sinking blowup: many sequential `try`/`catch`
+/// blocks (each with a may-throw method call in the try body and a
+/// fall-through, empty catch body) in one function used to make the optimizer
+/// clone the tail into every fall-through path, compounding exponentially
+/// (2^n copies) so that ~8 such blocks overflowed the AArch64 conditional-
+/// branch range and the assembler was killed (`fixup value out of range`).
+/// After the fix the tail is kept as a sibling (lowered into a single shared
+/// after-block), so the emitted code grows linearly. This compiles 16 of them
+/// and checks the fall-through continuation runs exactly once, which would not
+/// assemble before the fix.
+#[test]
+fn test_sequential_try_catch_does_not_blow_up_codegen() {
+    let mut php = String::from("<?php class G { public function f($n) { echo $n; } } $g = new G(); ");
+    let mut expected = String::new();
+    for i in 1..=16 {
+        php.push_str("try { $g->f(");
+        php.push_str(&i.to_string());
+        php.push_str("); } catch (Exception $e) {} ");
+        expected.push_str(&i.to_string());
+    }
+    php.push_str("echo \"Z\";");
+    expected.push('Z');
+    let out = compile_and_run(&php);
+    assert_eq!(out, expected);
+}

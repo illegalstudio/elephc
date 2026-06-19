@@ -27,6 +27,7 @@ mod lexer;
 mod list_id_prelude;
 mod magic_constants;
 mod name_resolver;
+mod image_prelude;
 mod names;
 mod optimize;
 mod parser;
