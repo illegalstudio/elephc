@@ -241,6 +241,33 @@ pub(in crate::interpreter) fn eval_reflection_class_is_subclass_of_result(
     values.bool_value(result).map(Some)
 }
 
+/// Handles eval-backed `ReflectionClass::isInstance()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_is_instance_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("isInstance") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let args = bind_evaluated_function_args(&[String::from("object")], evaluated_args)?;
+    let object = args[0];
+    if values.type_tag(object)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let result = dynamic_object_is_a(object, &reflected_name, false, context, values)?
+        .map_or_else(|| values.object_is_a(object, &reflected_name, false), Ok)?;
+    values.bool_value(result).map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::hasConstant()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_has_constant_result(
     identity: u64,

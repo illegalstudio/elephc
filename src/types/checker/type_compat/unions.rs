@@ -84,7 +84,8 @@ impl Checker {
             },
             PhpType::Object(expected_name) => match actual {
                 PhpType::Object(actual_name) => {
-                    expected_name == actual_name
+                    expected_name.is_empty()
+                        || expected_name == actual_name
                         || self.is_subclass_of(actual_name, expected_name)
                         || self.class_implements_interface(actual_name, expected_name)
                         || self.interface_extends_interface(actual_name, expected_name)

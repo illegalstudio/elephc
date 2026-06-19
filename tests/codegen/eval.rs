@@ -5994,6 +5994,65 @@ echo $impl->isSubclassOf("EvalAotSubclassIface") ? "I" : "i";');
     assert_eq!(out.stdout, "PsI");
 }
 
+/// Verifies eval ReflectionClass::isInstance reports eval-declared object
+/// relations through the linked eval bridge.
+#[test]
+fn test_eval_reflection_class_is_instance_predicate() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalInstanceIface {}
+class EvalInstanceBase {}
+class EvalInstanceChild extends EvalInstanceBase implements EvalInstanceIface {}
+trait EvalInstanceTrait {}
+enum EvalInstanceEnum implements EvalInstanceIface { case Ready; }
+$base = new ReflectionClass("EvalInstanceBase");
+$child = new ReflectionClass("EvalInstanceChild");
+$iface = new ReflectionClass("EvalInstanceIface");
+$trait = new ReflectionClass("EvalInstanceTrait");
+$enum = new ReflectionClass("EvalInstanceEnum");
+$childObj = new EvalInstanceChild();
+echo $base->isInstance($childObj) ? "B" : "b";
+echo $child->isInstance(new EvalInstanceBase()) ? "C" : "c";
+echo $iface->isInstance($childObj) ? "I" : "i";
+echo $trait->isInstance($childObj) ? "T" : "t";
+echo $enum->isInstance(EvalInstanceEnum::Ready) ? "E" : "e";
+echo $iface->isInstance(EvalInstanceEnum::Ready) ? "N" : "n";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "BcItEN");
+}
+
+/// Verifies eval ReflectionClass::isInstance can query generated AOT object
+/// relations when the reflected class was declared outside the eval fragment.
+#[test]
+fn test_eval_reflection_class_is_instance_aot_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotInstanceParent {}
+class EvalAotInstanceChild extends EvalAotInstanceParent {}
+interface EvalAotInstanceIface {}
+class EvalAotInstanceImpl implements EvalAotInstanceIface {}
+eval('$parent = new ReflectionClass("EvalAotInstanceParent");
+echo $parent->isInstance(new EvalAotInstanceChild()) ? "P" : "p";
+$child = new ReflectionClass("EvalAotInstanceChild");
+echo $child->isInstance(new EvalAotInstanceParent()) ? "C" : "c";
+$iface = new ReflectionClass("EvalAotInstanceIface");
+echo $iface->isInstance(new EvalAotInstanceImpl()) ? "I" : "i";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "PcI");
+}
+
 /// Verifies eval ReflectionClass::getParentClass crosses the generated runtime bridge.
 #[test]
 fn test_eval_reflection_class_get_parent_class() {

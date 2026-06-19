@@ -1424,6 +1424,39 @@ try {
     assert_eq!(out.stdout, "PBIsJxtqE:missing");
 }
 
+/// Verifies that `ReflectionClass::isInstance()` reports class, interface,
+/// trait, and enum instance relations using runtime object metadata.
+#[test]
+fn test_reflection_class_is_instance() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface StaticInstanceIface {}
+class StaticInstanceBase {}
+class StaticInstanceChild extends StaticInstanceBase implements StaticInstanceIface {}
+trait StaticInstanceTrait {}
+enum StaticInstanceEnum implements StaticInstanceIface { case Ready; }
+$base = new ReflectionClass(StaticInstanceBase::class);
+$child = new ReflectionClass(StaticInstanceChild::class);
+$iface = new ReflectionClass(StaticInstanceIface::class);
+$trait = new ReflectionClass(StaticInstanceTrait::class);
+$enum = new ReflectionClass(StaticInstanceEnum::class);
+$childObj = new StaticInstanceChild();
+echo $base->isInstance($childObj) ? "B" : "b";
+echo $child->isInstance(new StaticInstanceBase()) ? "C" : "c";
+echo $iface->isInstance($childObj) ? "I" : "i";
+echo $trait->isInstance($childObj) ? "T" : "t";
+echo $enum->isInstance(StaticInstanceEnum::Ready) ? "E" : "e";
+echo $iface->isInstance(StaticInstanceEnum::Ready) ? "N" : "n";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "BcItEN");
+}
+
 /// Verifies that `ReflectionClass::getParentClass()` returns a ReflectionClass
 /// object for subclasses and `false` for parentless classes.
 #[test]

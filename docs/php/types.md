@@ -20,7 +20,7 @@ sidebar:
 | `iterable`       | Yes              | PHP pseudo-type for `array \| Traversable`. Supports indexed arrays, associative arrays, `Iterator`, and `IteratorAggregate`; runtime operations (`foreach`, `echo`, `gettype()`, `var_dump()`, `===`, casts, `is_iterable()`) dispatch on heap-kind, value-type, or interface metadata as needed. |
 | `resource`       | Inferred only    | File handles and standard streams are modeled separately from integers. `fopen()` returns `resource\|false`, and `STDIN`, `STDOUT`, and `STDERR` are stream resources. PHP does not allow `resource` as a type declaration, so elephc does not accept `resource` annotations. |
 | `callable`       | Yes              | Closures, arrow functions, first-class callables, and FFI callback parameters.                                         |
-| `object`         | Yes              | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)`                                                    |
+| `object`         | Yes              | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)`; the generic `object` type hint accepts any class, interface, or enum object. |
 | `enum`           | Yes              | Pure and backed enums. Cases are singletons. Backed enums support `->value`, `::from()`, `::tryFrom()`, `::cases()`.   |
 | `int|string`     | Yes              | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime.                                    |
 | `?int`           | Yes              | Nullable shorthand — sugar for `int|null`.                                                                             |

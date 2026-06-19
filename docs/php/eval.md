@@ -180,6 +180,9 @@ returns traits used directly by eval classes.
 implemented or extended interfaces case-insensitively. It excludes the reflected
 symbol itself, returns `false` for trait and enum targets, and throws a
 catchable `ReflectionException` when the target name is missing.
+`ReflectionClass::isInstance()` checks eval-created or generated/AOT objects
+against the reflected class-like metadata, including parent, interface, and enum
+relations; trait targets return `false`.
 `ReflectionClass::hasMethod()` and `ReflectionClass::hasProperty()` report
 method and property membership for eval classes, interfaces, traits, and enums;
 method lookup is case-insensitive, while property lookup is case-sensitive.

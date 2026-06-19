@@ -16,8 +16,8 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::names::Name;
 use crate::parser::ast::{
-    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr,
-    Visibility,
+    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind,
+    TypeExpr, Visibility,
 };
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
@@ -259,6 +259,11 @@ fn object_array_type(class_name: &str) -> TypeExpr {
 /// Returns a nullable object type expression for one synthetic reflection class.
 fn nullable_object_type(class_name: &str) -> TypeExpr {
     TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(class_name))))
+}
+
+/// Returns a `TypeExpr` for PHP's generic `object` type.
+fn object_type() -> TypeExpr {
+    TypeExpr::Named(Name::unqualified("object"))
 }
 
 /// Returns a `TypeExpr` for the unqualified name `mixed`.
@@ -630,6 +635,7 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_get_reflection_constant_method(),
             builtin_reflection_class_implements_interface_method(),
             builtin_reflection_class_is_subclass_of_method(),
+            builtin_reflection_class_is_instance_method(),
             builtin_reflection_class_array_method(
                 "getMethods",
                 "__methods",
@@ -1198,6 +1204,38 @@ fn builtin_reflection_class_is_subclass_of_method() -> ClassMethod {
             ),
             Stmt::new(StmtKind::Return(false_bool()), dummy_span),
         ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::isInstance()` backed by PHP's class relation predicate.
+fn builtin_reflection_class_is_instance_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "isInstance".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(object_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::InstanceOf {
+                    value: Box::new(variable_expr("object", dummy_span)),
+                    target: InstanceOfTarget::Expr(Box::new(reflection_this_property(
+                        "__name", dummy_span,
+                    ))),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
         span: dummy_span,
         attributes: Vec::new(),
     }
@@ -2414,6 +2452,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "hasproperty",
                     "implementsinterface",
                     "issubclassof",
+                    "isinstance",
                 ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
