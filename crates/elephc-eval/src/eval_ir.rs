@@ -568,6 +568,7 @@ impl EvalInterfaceProperty {
 pub struct EvalInterfaceMethod {
     name: String,
     attributes: Vec<EvalAttribute>,
+    is_static: bool,
     params: Vec<String>,
     parameter_has_types: Vec<bool>,
     parameter_types: Vec<Option<EvalParameterType>>,
@@ -587,6 +588,7 @@ impl EvalInterfaceMethod {
         Self {
             name: name.into(),
             attributes: Vec::new(),
+            is_static: false,
             params,
             parameter_has_types,
             parameter_types,
@@ -594,6 +596,12 @@ impl EvalInterfaceMethod {
             parameter_is_by_ref,
             parameter_is_variadic,
         }
+    }
+
+    /// Returns a copy of this interface method with its static modifier flag set.
+    pub fn with_static(mut self, is_static: bool) -> Self {
+        self.is_static = is_static;
+        self
     }
 
     /// Returns a copy of this interface method with declaration attributes attached.
@@ -641,6 +649,11 @@ impl EvalInterfaceMethod {
     /// Returns attributes declared directly on this interface method.
     pub fn attributes(&self) -> &[EvalAttribute] {
         &self.attributes
+    }
+
+    /// Returns whether this interface method was declared `static`.
+    pub const fn is_static(&self) -> bool {
+        self.is_static
     }
 
     /// Returns source-order parameter names without leading `$`.

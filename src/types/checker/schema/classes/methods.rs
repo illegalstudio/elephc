@@ -134,7 +134,7 @@ fn apply_static_method(
     if let Some(parent_sig) = state.static_sigs.get(&method_key) {
         validate_override_signature(checker, &class.name, method, parent_sig, true)?;
     } else if has_override_attribute(method)
-        && !interface_declares_method(checker, class, &method_key)
+        && !interface_declares_method(checker, class, &method_key, true)
     {
         return Err(missing_override_target(class, method));
     }
@@ -231,7 +231,7 @@ fn apply_instance_method(
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
         validate_override_signature(checker, &class.name, method, parent_sig, false)?;
     } else if has_override_attribute(method)
-        && !interface_declares_method(checker, class, &method_key)
+        && !interface_declares_method(checker, class, &method_key, false)
     {
         return Err(missing_override_target(class, method));
     }
@@ -313,13 +313,15 @@ fn has_override_attribute(method: &ClassMethod) -> bool {
 }
 
 /// Returns `true` if any interface implemented by the class (directly or
-/// transitively via parent interfaces) declares the method. Uses
+/// transitively via parent interfaces) declares the method with the requested
+/// static/instance kind. Uses
 /// `class.implements` because `apply_methods` runs before `collect_interfaces`
 /// has populated `state.interfaces`.
 fn interface_declares_method(
     checker: &Checker,
     class: &FlattenedClass,
     method_key: &str,
+    is_static: bool,
 ) -> bool {
     let mut visited = std::collections::HashSet::new();
     let mut queue: Vec<String> = class.implements.clone();
@@ -330,7 +332,12 @@ fn interface_declares_method(
         let Some(info) = checker.interfaces.get(&name) else {
             continue;
         };
-        if info.methods.contains_key(method_key) {
+        let declares_method = if is_static {
+            info.static_methods.contains_key(method_key)
+        } else {
+            info.methods.contains_key(method_key)
+        };
+        if declares_method {
             return true;
         }
         queue.extend(info.parents.iter().cloned());

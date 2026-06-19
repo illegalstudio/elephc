@@ -137,7 +137,7 @@ contract checks, abstract property hook contracts, property-level `readonly`,
 `readonly class`, `__construct()`, abstract classes and methods, final classes
 and methods, trait composition with `insteadof` conflict resolution and `as`
 aliases/visibility adaptations, interface implementation checks, static
-properties, static methods, class constants, interface constants, trait
+properties, static methods, static interface method contracts, class constants, interface constants, trait
 constants, class-level attributes, and `ClassName::class` literals. Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,

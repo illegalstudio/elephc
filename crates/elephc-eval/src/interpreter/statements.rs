@@ -1324,7 +1324,7 @@ fn class_has_interface_method(
 ) -> bool {
     if let Some(method) = class.method(requirement.name()) {
         return method.visibility() == EvalVisibility::Public
-            && !method.is_static()
+            && method.is_static() == requirement.is_static()
             && !method.is_abstract()
             && class_method_satisfies_interface_signature(method, requirement);
     }
@@ -1333,7 +1333,7 @@ fn class_has_interface_method(
         .and_then(|parent| context.class_method(parent, requirement.name()))
         .is_some_and(|(_, method)| {
             method.visibility() == EvalVisibility::Public
-                && !method.is_static()
+                && method.is_static() == requirement.is_static()
                 && !method.is_abstract()
                 && class_method_satisfies_interface_signature(&method, requirement)
         })

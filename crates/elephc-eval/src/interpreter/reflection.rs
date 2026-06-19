@@ -820,7 +820,7 @@ fn eval_reflection_method_metadata(
             .map(|method| EvalReflectionMemberMetadata {
                 attributes: method.attributes().to_vec(),
                 visibility: EvalVisibility::Public,
-                is_static: false,
+                is_static: method.is_static(),
                 is_final: false,
                 is_abstract: true,
                 required_parameter_count: eval_reflection_required_parameter_count(

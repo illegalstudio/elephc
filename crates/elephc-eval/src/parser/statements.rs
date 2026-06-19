@@ -1210,13 +1210,34 @@ impl Parser {
         methods: &mut Vec<EvalInterfaceMethod>,
     ) -> Result<(), EvalParseError> {
         let attributes = self.parse_optional_member_attributes()?;
-        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "public")) {
-            self.advance();
-        } else if matches!(self.current(), TokenKind::Ident(name) if is_unsupported_class_member_modifier(name))
-        {
-            return Err(EvalParseError::UnsupportedConstruct);
+        let mut is_static = false;
+        let mut saw_public = false;
+        loop {
+            match self.current() {
+                TokenKind::Ident(name) if ident_eq(name, "public") => {
+                    if saw_public {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    saw_public = true;
+                    self.advance();
+                }
+                TokenKind::Ident(name) if ident_eq(name, "static") => {
+                    if is_static {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    is_static = true;
+                    self.advance();
+                }
+                TokenKind::Ident(name) if is_unsupported_class_member_modifier(name) => {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                _ => break,
+            }
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
+            if is_static {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             constants.push(
                 self.parse_class_const_decl(EvalVisibility::Public)?
                     .with_attributes(attributes),
@@ -1225,10 +1246,13 @@ impl Parser {
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
             methods.push(
-                self.parse_interface_method_decl_after_function_keyword()?
+                self.parse_interface_method_decl_after_function_keyword(is_static)?
                     .with_attributes(attributes),
             );
             return Ok(());
+        }
+        if is_static {
+            return Err(EvalParseError::UnsupportedConstruct);
         }
         properties.push(
             self.parse_interface_property_decl()?
@@ -1240,6 +1264,7 @@ impl Parser {
     /// Parses one eval interface method signature after `function` has been selected.
     pub(super) fn parse_interface_method_decl_after_function_keyword(
         &mut self,
+        is_static: bool,
     ) -> Result<EvalInterfaceMethod, EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
@@ -1258,6 +1283,7 @@ impl Parser {
             self.parse_method_params()?;
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)
+            .with_static(is_static)
             .with_parameter_types(parameter_types)
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)

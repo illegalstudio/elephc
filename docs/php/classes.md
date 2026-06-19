@@ -44,8 +44,9 @@ class Product implements Named {
     public function label() { return strtoupper($this->name()); }
 }
 ```
-- signature-only methods and PHP 8.4 property hook contracts; method and hook bodies are not allowed in interfaces
+- signature-only instance/static methods and PHP 8.4 property hook contracts; method and hook bodies are not allowed in interfaces
 - interface inheritance flattened transitively with cycle detection
+- static interface methods must be implemented by public static methods; instance and static methods cannot satisfy each other's contracts
 
 Interface properties must be hooked contracts. A concrete class can satisfy a `{ get; }` contract with a public readable property, a `{ set; }` contract with a public writable property, or both with an invariant public property. Get-only contracts allow covariant concrete types; set-only contracts allow contravariant concrete types.
 

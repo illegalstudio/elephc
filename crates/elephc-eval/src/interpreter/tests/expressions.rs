@@ -836,6 +836,50 @@ class EvalMissingRead implements EvalNeedsRead {}"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies eval static interface method contracts are satisfied by public static methods.
+#[test]
+fn execute_program_accepts_static_dynamic_interface_method() {
+    let program = parse_fragment(
+        br#"interface EvalNeedsStaticRead {
+    public static function read($n);
+}
+class EvalStaticReader implements EvalNeedsStaticRead {
+    public static function read($n) {
+        return $n . "!";
+    }
+}
+return EvalStaticReader::read("ok");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("ok!".to_string()));
+}
+
+/// Verifies eval rejects instance methods for static interface method contracts.
+#[test]
+fn execute_program_rejects_instance_method_for_static_dynamic_interface_method() {
+    let program = parse_fragment(
+        br#"interface EvalNeedsStaticRead {
+    public static function read();
+}
+class EvalInstanceReader implements EvalNeedsStaticRead {
+    public function read() {}
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("instance method should not satisfy static interface method");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval interface method contracts require matching by-reference parameters.
 #[test]
 fn execute_program_validates_interface_method_by_ref_parameters() {

@@ -906,12 +906,16 @@ fn reflection_interface_method_member(
     method_name: &str,
 ) -> Option<ReflectionListedMember> {
     let method_key = php_symbol_key(method_name);
-    let sig = info.methods.get(&method_key)?;
+    let (sig, is_static) = info
+        .methods
+        .get(&method_key)
+        .map(|sig| (sig, false))
+        .or_else(|| info.static_methods.get(&method_key).map(|sig| (sig, true)))?;
     Some(ReflectionListedMember {
         name: method_key,
         attr_names: Vec::new(),
         attr_args: Vec::new(),
-        flags: reflection_member_flags(false, &Visibility::Public, false, true),
+        flags: reflection_member_flags(is_static, &Visibility::Public, false, true),
         required_parameter_count: reflection_required_parameter_count(sig),
         parameters: reflection_parameter_members(sig),
     })
@@ -1121,6 +1125,7 @@ fn reflection_interface_method_names(
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
+    push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
     names
 }
 

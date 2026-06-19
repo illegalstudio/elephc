@@ -51,17 +51,29 @@ impl PartialEq for PropertyHookContract {
 }
 
 /// Interface metadata for resolved declarations. Tracks parents, properties,
-/// methods, constants, and vtable layout after name resolution and inheritance flattening.
+/// instance/static methods, constants, and instance vtable layout after name
+/// resolution and inheritance flattening.
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
     pub interface_id: u64,
     pub parents: Vec<String>,
     pub properties: HashMap<String, PropertyHookContract>,
     pub property_order: Vec<String>,
+    /// Instance method contracts, keyed by PHP's case-insensitive method key.
+    ///
+    /// These entries are the only methods that participate in interface
+    /// dispatch tables and `method_slots`.
     pub methods: HashMap<String, FunctionSig>,
     pub method_declaring_interfaces: HashMap<String, String>,
     pub method_order: Vec<String>,
     pub method_slots: HashMap<String, usize>,
+    /// Static method contracts, keyed by PHP's case-insensitive method key.
+    ///
+    /// PHP requires implementors to provide matching public static methods, but
+    /// these entries never participate in instance interface dispatch tables.
+    pub static_methods: HashMap<String, FunctionSig>,
+    pub static_method_declaring_interfaces: HashMap<String, String>,
+    pub static_method_order: Vec<String>,
     /// Interface constants (PHP 5.0+). Inherited from parent interfaces.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
 }

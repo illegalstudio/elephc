@@ -88,7 +88,9 @@ impl Checker {
             );
         }
         if let Some(interface_info) = self.interfaces.get(class_name) {
-            if interface_info.methods.contains_key(&method_key) {
+            if interface_info.methods.contains_key(&method_key)
+                || interface_info.static_methods.contains_key(&method_key)
+            {
                 return Ok(());
             }
             return Err(CompileError::new(

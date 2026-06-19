@@ -5333,6 +5333,51 @@ echo EvalStaticBase::baseRead();');
     assert_eq!(out.stdout, "1:3:3:14:5:5");
 }
 
+/// Verifies eval-declared static interface methods are validated and reflected.
+#[test]
+fn test_eval_declared_static_interface_methods() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalStaticContract {
+    public static function make($value);
+}
+class EvalStaticContractImpl implements EvalStaticContract {
+    public static function make($value) {
+        return "S:" . $value;
+    }
+}
+echo EvalStaticContractImpl::make("box") . ":";
+$listed = (new ReflectionClass(EvalStaticContract::class))->getMethods()[0];
+echo $listed->getName() . ":";
+echo $listed->isStatic() ? "static" : "instance";
+echo ":";
+$method = new ReflectionMethod(EvalStaticContract::class, "make");
+echo $method->isStatic() ? "S" : "s";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "S:box:make:static:S");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalStaticMismatch {
+    public static function read();
+}
+class EvalStaticMismatchImpl implements EvalStaticMismatch {
+    public function read() {}
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared constructors and methods bind named arguments.
 #[test]
 fn test_eval_declared_method_named_arguments() {
