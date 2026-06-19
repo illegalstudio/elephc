@@ -8,6 +8,7 @@
 //! Key details:
 //! - Runtime cells are opaque handles; these types do not own or release values by themselves.
 
+use crate::context::ElephcEvalExecutionScope;
 use crate::scope::ElephcEvalScope;
 use crate::value::RuntimeCellHandle;
 
@@ -45,6 +46,11 @@ pub(super) enum EvaluatedCallRefTarget {
         scope: *mut ElephcEvalScope,
         array_name: String,
         index: RuntimeCellHandle,
+    },
+    ObjectProperty {
+        object: RuntimeCellHandle,
+        property: String,
+        access_scope: ElephcEvalExecutionScope,
     },
 }
 

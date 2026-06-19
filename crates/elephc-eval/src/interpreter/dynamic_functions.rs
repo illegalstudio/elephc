@@ -120,6 +120,20 @@ fn eval_call_arg_value(
                 }),
             ))
         }
+        EvalExpr::PropertyGet { object, property } => {
+            let access_scope = context.execution_scope();
+            let object = eval_expr(object, context, caller_scope, values)?;
+            let value = eval_property_get_result(object, property, context, values)?;
+            validate_property_ref_target(object, property, context, values)?;
+            Ok((
+                value,
+                Some(EvaluatedCallRefTarget::ObjectProperty {
+                    object,
+                    property: property.clone(),
+                    access_scope,
+                }),
+            ))
+        }
         _ => eval_expr(expr, context, caller_scope, values).map(|value| (value, None)),
     }
 }

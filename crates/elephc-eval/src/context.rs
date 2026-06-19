@@ -28,6 +28,14 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 pub type NativeFunctionInvoker =
     unsafe extern "C" fn(*mut c_void, *mut RuntimeCell) -> *mut RuntimeCell;
 
+/// Snapshot of eval execution stacks used to restore caller-sensitive access checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElephcEvalExecutionScope {
+    function_stack: Vec<String>,
+    class_stack: Vec<String>,
+    called_class_stack: Vec<String>,
+}
+
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
@@ -1308,6 +1316,30 @@ impl ElephcEvalContext {
     /// Returns the current late-static-bound eval class scope, if execution is inside a method.
     pub fn current_called_class_scope(&self) -> Option<&str> {
         self.called_class_stack.last().map(String::as_str)
+    }
+
+    /// Captures the current eval execution stacks for later caller-context-sensitive work.
+    pub fn execution_scope(&self) -> ElephcEvalExecutionScope {
+        ElephcEvalExecutionScope {
+            function_stack: self.function_stack.clone(),
+            class_stack: self.class_stack.clone(),
+            called_class_stack: self.called_class_stack.clone(),
+        }
+    }
+
+    /// Replaces eval execution stacks and returns the previous stacks for restoration.
+    pub fn replace_execution_scope(
+        &mut self,
+        scope: ElephcEvalExecutionScope,
+    ) -> ElephcEvalExecutionScope {
+        ElephcEvalExecutionScope {
+            function_stack: std::mem::replace(&mut self.function_stack, scope.function_stack),
+            class_stack: std::mem::replace(&mut self.class_stack, scope.class_stack),
+            called_class_stack: std::mem::replace(
+                &mut self.called_class_stack,
+                scope.called_class_stack,
+            ),
+        }
     }
 
     /// Records a Throwable cell that escaped from an eval-executed function call.

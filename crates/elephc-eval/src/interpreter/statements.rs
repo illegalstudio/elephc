@@ -1597,6 +1597,34 @@ pub(in crate::interpreter) fn eval_property_set_result(
     values.property_set(object, property_name, value)
 }
 
+/// Validates that an object property may be used as a by-reference method argument.
+pub(in crate::interpreter) fn validate_property_ref_target(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        return Ok(());
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return Ok(());
+    };
+    let object_class_name = class.name().to_string();
+    if context.has_enum(&object_class_name) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Some((declaring_class, property)) =
+        eval_dynamic_property_for_access(&object_class_name, property_name, context)
+    {
+        validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+        if property.is_readonly() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
 /// Returns true while executing the named hook accessor for one property.
 fn current_eval_property_hook_is(
     declaring_class: &str,
@@ -2396,7 +2424,7 @@ fn write_back_method_ref_args(
     params: &[String],
     bound_args: &[BoundMethodArg],
     method_scope: &ElephcEvalScope,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for (position, bound_arg) in bound_args.iter().enumerate() {
@@ -2422,7 +2450,7 @@ fn write_back_method_variadic_ref_args(
     param: &str,
     bound_arg: &BoundMethodArg,
     method_scope: &ElephcEvalScope,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if bound_arg.variadic_ref_targets.is_empty() {
@@ -2448,7 +2476,7 @@ fn write_back_method_variadic_ref_args(
 fn write_back_method_ref_target(
     target: &EvaluatedCallRefTarget,
     value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match target {
@@ -2484,6 +2512,18 @@ fn write_back_method_ref_target(
                 values,
             )
         }
+        EvaluatedCallRefTarget::ObjectProperty {
+            object,
+            property,
+            access_scope,
+        } => write_back_method_object_property_ref_target(
+            *object,
+            property,
+            access_scope.clone(),
+            value,
+            context,
+            values,
+        ),
     }
 }
 
@@ -2520,6 +2560,21 @@ fn write_back_method_array_element_ref_target(
         values.release(replaced)?;
     }
     Ok(())
+}
+
+/// Stores one by-reference method result in a caller-side object property.
+fn write_back_method_object_property_ref_target(
+    object: RuntimeCellHandle,
+    property: &str,
+    access_scope: ElephcEvalExecutionScope,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let previous_scope = context.replace_execution_scope(access_scope);
+    let result = eval_property_set_result(object, property, value, context, values);
+    context.replace_execution_scope(previous_scope);
+    result
 }
 
 /// Creates an indexed or associative array according to the first write key.

@@ -28,7 +28,9 @@ mod runtime_ops;
 mod scope_cells;
 mod statements;
 
-use crate::context::{ElephcEvalContext, NativeCallableSignature, NativeFunction};
+use crate::context::{
+    ElephcEvalContext, ElephcEvalExecutionScope, NativeCallableSignature, NativeFunction,
+};
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
     EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch,

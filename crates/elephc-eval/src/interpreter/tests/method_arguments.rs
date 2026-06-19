@@ -240,6 +240,92 @@ return $missing["new"];"#,
     assert_eq!(values.get(result), FakeValue::String("created".to_string()));
 }
 
+/// Verifies eval-declared by-reference method params write back object-property lvalues.
+#[test]
+fn execute_program_writes_back_eval_method_by_ref_object_properties() {
+    let program = parse_fragment(
+        br#"class EvalByRefPropertyChanger {
+    public function set(&$value, $next) {
+        $value = $next;
+    }
+    public function variadic(&...$items) {
+        $items[0] = "variadic";
+    }
+}
+class EvalByRefPublicPropertyBox {
+    public string $value = "old";
+}
+class EvalByRefPrivatePropertyBox {
+    private string $value = "private";
+    public function update($changer) {
+        $changer->set($this->value, "secret");
+        return $this->value;
+    }
+}
+$changer = new EvalByRefPropertyChanger();
+$public = new EvalByRefPublicPropertyBox();
+$changer->set($public->value, "changed");
+$changer->variadic($public->value);
+echo $public->value; echo ":";
+$private = new EvalByRefPrivatePropertyBox();
+return $private->update($changer);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "variadic:");
+    assert_eq!(values.get(result), FakeValue::String("secret".to_string()));
+}
+
+/// Verifies eval-declared by-reference method params keep property access restrictions.
+#[test]
+fn execute_program_rejects_invalid_eval_method_by_ref_object_property_targets() {
+    let private_program = parse_fragment(
+        br#"class EvalByRefPrivatePropertyFailChanger {
+    public function set(&$value) {
+        $value = "bad";
+    }
+}
+class EvalByRefPrivatePropertyFailBox {
+    private string $value = "private";
+}
+$changer = new EvalByRefPrivatePropertyFailChanger();
+$box = new EvalByRefPrivatePropertyFailBox();
+$changer->set($box->value);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&private_program, &mut scope, &mut values)
+        .expect_err("private property by-ref target should fail from global scope");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let readonly_program = parse_fragment(
+        br#"class EvalByRefReadonlyPropertyFailChanger {
+    public function set(&$value) {
+        $value = "bad";
+    }
+}
+class EvalByRefReadonlyPropertyFailBox {
+    public readonly string $value;
+    public function __construct($changer) {
+        $this->value = "old";
+        $changer->set($this->value);
+    }
+}
+new EvalByRefReadonlyPropertyFailBox(new EvalByRefReadonlyPropertyFailChanger());"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&readonly_program, &mut scope, &mut values)
+        .expect_err("readonly property by-ref target should fail as an indirect modification");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval-declared variadic methods reject duplicate named variadic keys.
 #[test]
 fn execute_program_rejects_duplicate_eval_method_variadic_named_arg() {

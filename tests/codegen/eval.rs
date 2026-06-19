@@ -5407,6 +5407,9 @@ eval('class EvalByRefMethodBox {
         $items["named"] = $items["named"] . "-named";
     }
 }
+class EvalByRefPropertyBox {
+    public string $value = "D";
+}
 $box = new EvalByRefMethodBox();
 $value = "A";
 $box->change($value);
@@ -5415,7 +5418,9 @@ $named = "B";
 $box->changeVariadic($value, named: $named);
 $items = ["k" => "C"];
 $box->change($items["k"]);
-echo $value . ":" . $named . ":" . $items["k"];');
+$prop = new EvalByRefPropertyBox();
+$box->change($prop->value);
+echo $value . ":" . $named . ":" . $items["k"] . ":" . $prop->value;');
 "#,
     );
     assert!(
@@ -5423,7 +5428,7 @@ echo $value . ":" . $named . ":" . $items["k"];');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "A-method-static-variadic:B-named:C-method");
+    assert_eq!(out.stdout, "A-method-static-variadic:B-named:C-method:D-method");
 }
 
 /// Verifies eval dynamic static callables dispatch eval-declared static methods.
