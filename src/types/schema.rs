@@ -311,6 +311,7 @@ pub struct ClassInfo {
     /// caller). The object allocates a cell per such property at construction and releases
     /// it on destruction.
     pub owned_reference_properties: HashSet<String>,
+    pub promoted_properties: HashSet<String>,
     /// Per-layout-slot by-reference flags for instance properties.
     ///
     /// The name-keyed `reference_properties` map describes the currently

@@ -1257,6 +1257,7 @@ pub struct EvalClassProperty {
     is_static: bool,
     is_final: bool,
     is_readonly: bool,
+    is_promoted: bool,
     is_abstract: bool,
     has_get_hook: bool,
     has_set_hook: bool,
@@ -1325,6 +1326,7 @@ impl EvalClassProperty {
             is_static,
             is_final,
             is_readonly,
+            is_promoted: false,
             is_abstract: false,
             has_get_hook: false,
             has_set_hook: false,
@@ -1398,6 +1400,11 @@ impl EvalClassProperty {
     /// Returns whether this property was declared `readonly`.
     pub const fn is_readonly(&self) -> bool {
         self.is_readonly
+    }
+
+    /// Returns whether this property came from constructor property promotion.
+    pub const fn is_promoted(&self) -> bool {
+        self.is_promoted
     }
 
     /// Returns whether this property is an abstract property hook contract.

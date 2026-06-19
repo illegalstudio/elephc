@@ -180,6 +180,7 @@ fn builtin_property(
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default,
         span: crate::span::Span::dummy(),
         attributes: Vec::new(),
@@ -2335,6 +2336,12 @@ fn add_reflection_member_flag_methods(
             false_bool(),
         ));
         properties.push(builtin_property(
+            "__is_promoted",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
             "__default_value",
             Visibility::Private,
             Some(mixed_type()),
@@ -2355,6 +2362,10 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_class_bool_method(
             "hasDefaultValue",
             "__has_default_value",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isPromoted",
+            "__is_promoted",
         ));
         methods.push(builtin_reflection_constant_bool_method("isDefault", true));
         methods.push(builtin_reflection_class_mixed_method(
@@ -2675,7 +2686,13 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionProperty" {
-                for method_name in ["isfinal", "isabstract", "isreadonly", "isdefault"] {
+                for method_name in [
+                    "isfinal",
+                    "isabstract",
+                    "isreadonly",
+                    "isdefault",
+                    "ispromoted",
+                ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }

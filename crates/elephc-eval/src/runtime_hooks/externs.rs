@@ -93,6 +93,12 @@ unsafe extern "C" {
         backing_value: *mut RuntimeCell,
         constructor: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_reflection_property_flags(
+        class_ptr: *const u8,
+        class_len: u64,
+        property_ptr: *const u8,
+        property_len: u64,
+    ) -> u64;
     pub(super) fn __elephc_eval_value_new_object(
         name_ptr: *const u8,
         name_len: u64,

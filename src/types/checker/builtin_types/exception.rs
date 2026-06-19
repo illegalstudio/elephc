@@ -31,6 +31,7 @@ pub(super) fn builtin_exception_message_property() -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(Expr::new(
             ExprKind::StringLiteral(String::new()),
             crate::span::Span::dummy(),
@@ -118,6 +119,7 @@ pub(super) fn builtin_exception_code_property() -> ClassProperty {
         is_static: false,
         is_abstract: false,
         by_ref: false,
+        is_promoted: false,
         default: Some(Expr::new(
             ExprKind::IntLiteral(0),
             crate::span::Span::dummy(),

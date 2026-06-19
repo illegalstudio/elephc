@@ -2022,6 +2022,44 @@ echo $classReadonlyProp->getModifiers();
     );
 }
 
+/// Verifies that `ReflectionProperty::isPromoted()` reports constructor property
+/// promotion metadata for direct, inherited, and listed reflected properties.
+#[test]
+fn test_reflection_property_is_promoted() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectPromotedBase {
+    public function __construct(public int $id, protected string $name = "Ada") {}
+}
+class ReflectPromotedChild extends ReflectPromotedBase {}
+class ReflectPromotedPlain {
+    public int $id = 0;
+    public static int $count = 0;
+}
+$id = new ReflectionProperty(ReflectPromotedBase::class, "id");
+echo $id->isPromoted() ? "I" : "i";
+$name = new ReflectionProperty(ReflectPromotedBase::class, "name");
+echo $name->isPromoted() ? "N" : "n";
+$child = new ReflectionProperty(ReflectPromotedChild::class, "id");
+echo $child->isPromoted() ? "C" : "c";
+$plain = new ReflectionProperty(ReflectPromotedPlain::class, "id");
+echo $plain->isPromoted() ? "P" : "p";
+$static = new ReflectionProperty(ReflectPromotedPlain::class, "count");
+echo $static->isPromoted() ? "S" : "s";
+echo ":";
+foreach ((new ReflectionClass(ReflectPromotedBase::class))->getProperties() as $property) {
+    if ($property->getName() === "id") {
+        echo $property->isPromoted() ? "L" : "l";
+    }
+    if ($property->getName() === "name") {
+        echo $property->isPromoted() ? "M" : "m";
+    }
+}
+"#,
+    );
+    assert_eq!(out, "INCps:LM");
+}
+
 /// Verifies that `ReflectionMethod::isConstructor()` and `isDestructor()` derive
 /// their result from the reflected method name.
 #[test]

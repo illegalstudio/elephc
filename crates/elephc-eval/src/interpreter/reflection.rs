@@ -32,6 +32,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE: u64 = 128;
 const EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
+const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -62,6 +63,7 @@ struct EvalReflectionMemberMetadata {
     is_final: bool,
     is_abstract: bool,
     is_readonly: bool,
+    is_promoted: bool,
     modifiers: u64,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
@@ -720,6 +722,20 @@ fn eval_reflection_property_new(
     )?;
     let class_name = eval_reflection_string_arg(args[0], values)?;
     if !eval_reflection_class_like_exists(&class_name, context) {
+        let property_name = eval_reflection_string_arg(args[1], values)?;
+        let runtime_class_name = class_name.trim_start_matches('\\');
+        if let Some(flags) = values.reflection_property_flags(runtime_class_name, &property_name)? {
+            let property =
+                eval_reflection_aot_property_metadata(runtime_class_name, flags, &property_name);
+            return eval_reflection_member_object_result(
+                EVAL_REFLECTION_OWNER_PROPERTY,
+                &property_name,
+                &property,
+                context,
+                values,
+            )
+            .map(Some);
+        }
         return Ok(None);
     }
     let property_name = eval_reflection_string_arg(args[1], values)?;
@@ -733,6 +749,47 @@ fn eval_reflection_property_new(
         values,
     )
     .map(Some)
+}
+
+/// Converts AOT property flag metadata into the eval ReflectionProperty shape.
+fn eval_reflection_aot_property_metadata(
+    class_name: &str,
+    flags: u64,
+    _property_name: &str,
+) -> EvalReflectionMemberMetadata {
+    let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
+        EvalVisibility::Protected
+    } else {
+        EvalVisibility::Public
+    };
+    let is_static = flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
+    let is_final = flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0;
+    let is_abstract = flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT != 0;
+    let is_readonly = flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY != 0;
+    EvalReflectionMemberMetadata {
+        declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
+        attributes: Vec::new(),
+        visibility,
+        is_static,
+        is_final,
+        is_abstract,
+        is_readonly,
+        is_promoted: flags & EVAL_REFLECTION_MEMBER_FLAG_PROMOTED != 0,
+        modifiers: eval_reflection_property_modifiers(
+            visibility,
+            is_static,
+            is_final,
+            is_abstract,
+            is_readonly,
+            false,
+        ),
+        type_metadata: None,
+        default_value: None,
+        required_parameter_count: 0,
+        parameters: Vec::new(),
+    }
 }
 
 /// Builds an eval-backed `ReflectionClassConstant` object for a class constant or enum case.
@@ -1437,6 +1494,9 @@ fn eval_reflection_member_object_result(
     if member.default_value.is_some() {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE;
     }
+    if member.is_promoted {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_PROMOTED;
+    }
     let owner_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
         member.required_parameter_count as u64
     } else {
@@ -2042,6 +2102,7 @@ fn eval_reflection_method_metadata(
                     is_final: method.is_final(),
                     is_abstract: method.is_abstract(),
                     is_readonly: false,
+                    is_promoted: false,
                     modifiers: eval_reflection_method_modifiers(
                         method.visibility(),
                         method.is_static(),
@@ -2098,6 +2159,7 @@ fn eval_reflection_method_metadata(
                     is_final: false,
                     is_abstract: true,
                     is_readonly: false,
+                    is_promoted: false,
                     modifiers: eval_reflection_method_modifiers(
                         EvalVisibility::Public,
                         method.is_static(),
@@ -2154,6 +2216,7 @@ fn eval_reflection_method_metadata(
                     is_final: method.is_final(),
                     is_abstract: method.is_abstract(),
                     is_readonly: false,
+                    is_promoted: false,
                     modifiers: eval_reflection_method_modifiers(
                         method.visibility(),
                         method.is_static(),
@@ -2187,6 +2250,7 @@ fn eval_reflection_property_metadata(
                     is_final: property.is_final(),
                     is_abstract: property.is_abstract(),
                     is_readonly: property.is_readonly(),
+                    is_promoted: property.is_promoted(),
                     modifiers: eval_reflection_property_modifiers(
                         property.visibility(),
                         property.is_static(),
@@ -2218,6 +2282,7 @@ fn eval_reflection_property_metadata(
                 is_final: false,
                 is_abstract: true,
                 is_readonly: false,
+                is_promoted: false,
                 modifiers: eval_reflection_property_modifiers(
                     EvalVisibility::Public,
                     false,
@@ -2249,6 +2314,7 @@ fn eval_reflection_property_metadata(
                     is_final: property.is_final(),
                     is_abstract: property.is_abstract(),
                     is_readonly: property.is_readonly(),
+                    is_promoted: property.is_promoted(),
                     modifiers: eval_reflection_property_modifiers(
                         property.visibility(),
                         property.is_static(),

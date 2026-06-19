@@ -50,6 +50,7 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
         is_static: property.is_static,
         is_abstract: property.is_abstract,
         by_ref: property.by_ref,
+        is_promoted: property.is_promoted,
         default: property.default.map(fold_expr),
         span: property.span,
         attributes: property.attributes,
