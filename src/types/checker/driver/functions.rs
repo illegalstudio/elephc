@@ -276,7 +276,7 @@ impl Checker {
                 .param_types
                 .iter()
                 .map(|type_ann| type_ann.is_some())
-                .chain(decl.variadic.iter().map(|_| false))
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
                 .collect(),
             variadic: decl.variadic,
             deprecation: None,

@@ -7833,27 +7833,28 @@ fn lower_new_object(
     )
 }
 
-/// Lowers validated `ReflectionParameter` constructor arguments into metadata
-/// operands: reflected class, reflected method, and selected parameter.
+/// Lowers validated `ReflectionParameter` constructor arguments into metadata operands.
+///
+/// Method targets lower as `[class, method, parameter]`; function targets lower
+/// as `[function, parameter]`.
 fn lower_reflection_parameter_constructor_operands(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
 ) -> Option<Vec<ValueId>> {
-    let (class_arg, method_arg, parameter_arg) =
-        reflection_parameter_constructor_arg_exprs(ctx, args)?;
-    Some(vec![
-        lower_expr(ctx, &class_arg).value,
-        lower_expr(ctx, &method_arg).value,
-        lower_expr(ctx, &parameter_arg).value,
-    ])
+    let arg_exprs = reflection_parameter_constructor_arg_exprs(ctx, args)?;
+    Some(
+        arg_exprs
+            .iter()
+            .map(|arg| lower_expr(ctx, arg).value)
+            .collect(),
+    )
 }
 
-/// Returns class/method/parameter expressions from a normalized static
-/// `ReflectionParameter` constructor call.
+/// Returns metadata operand expressions from a normalized static `ReflectionParameter` call.
 fn reflection_parameter_constructor_arg_exprs(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
-) -> Option<(Expr, Expr, Expr)> {
+) -> Option<Vec<Expr>> {
     let args = expand_static_call_spread_args(args);
     if args.iter().any(is_spread_arg) {
         return None;
@@ -7888,13 +7889,13 @@ fn reflection_parameter_constructor_arg_exprs(
     } else {
         (args.first()?.clone(), args.get(1)?.clone())
     };
-    let ExprKind::ArrayLiteral(items) = &target.kind else {
-        return None;
-    };
-    if items.len() != 2 {
-        return None;
+    match &target.kind {
+        ExprKind::ArrayLiteral(items) if items.len() == 2 => {
+            Some(vec![items[0].clone(), items[1].clone(), parameter])
+        }
+        ExprKind::StringLiteral(_) => Some(vec![target, parameter]),
+        _ => None,
     }
-    Some((items[0].clone(), items[1].clone(), parameter))
 }
 
 /// Lowers PHP `new $class(...)` into the generic dynamic-new EIR opcode.

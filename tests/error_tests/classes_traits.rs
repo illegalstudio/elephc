@@ -538,6 +538,25 @@ fn test_error_reflection_parameter_constructor_unknown_name() {
     );
 }
 
+/// Verifies that `new ReflectionParameter()` rejects unknown function targets.
+#[test]
+fn test_error_reflection_parameter_constructor_unknown_function() {
+    expect_error(
+        "<?php $r = new ReflectionParameter('missing_reflect_function', 'a');",
+        "Function missing_reflect_function() does not exist",
+    );
+}
+
+/// Verifies that `new ReflectionParameter()` rejects dynamic function names
+/// because runtime function reflection lookup metadata is not available.
+#[test]
+fn test_error_reflection_parameter_constructor_dynamic_function_name() {
+    expect_error(
+        "<?php function reflected_function($a) {} $f = 'reflected_function'; $r = new ReflectionParameter($f, 'a');",
+        "requires a string literal function name",
+    );
+}
+
 /// Verifies that `new ReflectionParameter()` still rejects dynamic method names
 /// because runtime reflection lookup metadata is not available.
 #[test]

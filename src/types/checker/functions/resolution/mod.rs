@@ -167,7 +167,12 @@ impl Checker {
             return_type: PhpType::Int,
             declared_return: decl.return_type.is_some(),
             ref_params: decl.ref_params.clone(),
-            declared_params: decl.param_types.iter().map(|type_ann| type_ann.is_some()).collect(),
+            declared_params: decl
+                .param_types
+                .iter()
+                .map(|type_ann| type_ann.is_some())
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.is_some()))
+                .collect(),
             variadic: decl.variadic.clone(),
             deprecation: None,
         };

@@ -191,8 +191,8 @@ impl Checker {
     }
 
     /// Builds the initial parameter type list for a function declaration, resolving type hints,
-    /// validating defaults, and inferring types for untyped parameters. Adds variadic parameter
-    /// type as `PhpType::Array(Int)` if the function is variadic.
+    /// validating defaults, and inferring types for untyped parameters. Adds a variadic parameter
+    /// array type, using the declared element type for typed variadics.
     pub(crate) fn initial_function_param_types(
         &self,
         name: &str,
@@ -220,10 +220,16 @@ impl Checker {
             }
         }
         if let Some(variadic_name) = decl.variadic.as_ref() {
-            param_types.push((
-                variadic_name.clone(),
-                PhpType::Array(Box::new(PhpType::Int)),
-            ));
+            let elem_ty = if let Some(type_ann) = decl.variadic_type.as_ref() {
+                self.resolve_declared_param_type_hint(
+                    type_ann,
+                    decl.span,
+                    &format!("Function '{}' variadic parameter ${}", name, variadic_name),
+                )?
+            } else {
+                PhpType::Int
+            };
+            param_types.push((variadic_name.clone(), PhpType::Array(Box::new(elem_ty))));
         }
         Ok(param_types)
     }

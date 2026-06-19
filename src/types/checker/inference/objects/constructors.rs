@@ -23,6 +23,15 @@ enum ReflectionParameterSelector {
     Position(i64),
 }
 
+/// Compile-time function or method target accepted by `ReflectionParameter::__construct()`.
+enum ReflectionParameterTarget {
+    Function(String),
+    Method {
+        class_name: String,
+        method_name: String,
+    },
+}
+
 impl Checker {
     /// Infers the type of a `new Class(...)` expression.
     ///
@@ -280,10 +289,10 @@ impl Checker {
         }
     }
 
-    /// Validates `new ReflectionParameter([ClassName::class, "method"], param)`.
+    /// Validates `new ReflectionParameter(target, param)`.
     ///
-    /// The currently supported constructor target is a statically known
-    /// class/interface/trait method array. The parameter selector must be an
+    /// Supported targets are statically known user function names and
+    /// class/interface/trait method arrays. The parameter selector must be an
     /// integer position or string name known at compile time.
     fn validate_reflection_parameter_constructor(
         &mut self,
@@ -291,19 +300,34 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
-        let (class_name, method_name) =
-            self.reflection_parameter_method_target(args.first(), env)?;
-        let sig = self
-            .reflection_method_signature(&class_name, &method_name)
-            .ok_or_else(|| {
-                CompileError::new(
-                    expr.span,
-                    &format!(
-                        "ReflectionParameter::__construct(): undefined method '{}::{}'",
-                        class_name, method_name
-                    ),
-                )
-            })?;
+        let target = self.reflection_parameter_target(args.first(), env)?;
+        let sig = match target {
+            ReflectionParameterTarget::Function(function_name) => self
+                .reflection_function_signature(&function_name)?
+                .ok_or_else(|| {
+                    CompileError::new(
+                        expr.span,
+                        &format!(
+                            "ReflectionParameter::__construct(): Function {}() does not exist",
+                            function_name
+                        ),
+                    )
+                })?,
+            ReflectionParameterTarget::Method {
+                class_name,
+                method_name,
+            } => self
+                .reflection_method_signature(&class_name, &method_name)
+                .ok_or_else(|| {
+                    CompileError::new(
+                        expr.span,
+                        &format!(
+                            "ReflectionParameter::__construct(): undefined method '{}::{}'",
+                            class_name, method_name
+                        ),
+                    )
+                })?,
+        };
         let selector = self.reflection_parameter_selector_arg(args.get(1), env)?;
         match selector {
             ReflectionParameterSelector::Name(name) => {
@@ -329,13 +353,39 @@ impl Checker {
         }
     }
 
-    /// Extracts the class and method names from the ReflectionParameter target array.
-    fn reflection_parameter_method_target(
+    /// Extracts the function or class-method target from a ReflectionParameter call.
+    fn reflection_parameter_target(
         &mut self,
         arg: Option<&Expr>,
         env: &TypeEnv,
-    ) -> Result<(String, String), CompileError> {
+    ) -> Result<ReflectionParameterTarget, CompileError> {
         let arg = arg.expect("reflection parameter constructor arity was validated");
+        let arg_ty = self.infer_type(arg, env)?;
+        match arg_ty.codegen_repr() {
+            PhpType::Str => self
+                .reflection_string_literal_arg(
+                    "ReflectionParameter",
+                    "function name",
+                    Some(arg),
+                    env,
+                )
+                .map(ReflectionParameterTarget::Function),
+            PhpType::Array(_) | PhpType::Mixed => {
+                self.reflection_parameter_method_target(arg, env)
+            }
+            _ => Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() first argument must be a function name string or class-method array",
+            )),
+        }
+    }
+
+    /// Extracts the class and method names from the ReflectionParameter target array.
+    fn reflection_parameter_method_target(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<ReflectionParameterTarget, CompileError> {
         let arg_ty = self.infer_type(arg, env)?;
         if !matches!(arg_ty.codegen_repr(), PhpType::Array(_) | PhpType::Mixed) {
             return Err(CompileError::new(
@@ -363,7 +413,35 @@ impl Checker {
             items.get(1),
             env,
         )?;
-        Ok((class_name, method_name))
+        Ok(ReflectionParameterTarget::Method {
+            class_name,
+            method_name,
+        })
+    }
+
+    /// Returns the reflected signature for a statically declared user function.
+    fn reflection_function_signature(
+        &mut self,
+        function_name: &str,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        let canonical =
+            match self.canonical_function_name_folded(function_name.trim_start_matches('\\')) {
+                Some(canonical) => canonical,
+                None => return Ok(None),
+            };
+        if let Some(sig) = self.functions.get(&canonical).cloned() {
+            return Ok(Some(sig));
+        }
+        if self.function_variant_groups.contains_key(&canonical) {
+            self.ensure_function_variant_group_signature(&canonical, crate::span::Span::dummy())?;
+            return Ok(self.functions.get(&canonical).cloned());
+        }
+        if let Some(decl) = self.fn_decls.get(&canonical).cloned() {
+            let param_types = self.initial_function_param_types(&canonical, &decl)?;
+            self.resolve_function_signature(&canonical, &decl, param_types)?;
+            return Ok(self.functions.get(&canonical).cloned());
+        }
+        Ok(None)
     }
 
     /// Extracts the name or position selector for `ReflectionParameter`.

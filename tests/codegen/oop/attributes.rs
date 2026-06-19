@@ -1647,6 +1647,40 @@ echo $named->getName() . "#" . $named->getPosition();
     assert_eq!(out.stdout, "name#1tRBv|rest#3tObV|name#1O|rest#2TOV|id#0");
 }
 
+/// Verifies direct `new ReflectionParameter()` construction for statically known
+/// user function targets.
+#[test]
+fn test_reflection_parameter_constructor_reflects_function_parameters() {
+    let out = compile_and_run_capture(
+        r##"<?php
+function reflect_direct_function(int $id, &$name, string $mode = "x", string ...$rest) {}
+$byName = new ReflectionParameter("reflect_direct_function", "name");
+echo $byName->getName() . "#" . $byName->getPosition();
+echo ($byName->hasType() ? "T" : "t");
+echo ($byName->isOptional() ? "O" : "R");
+echo ($byName->isPassedByReference() ? "B" : "b");
+echo ($byName->isVariadic() ? "V" : "v");
+echo "|";
+$byPosition = new ReflectionParameter("REFLECT_DIRECT_FUNCTION", 3);
+echo $byPosition->getName() . "#" . $byPosition->getPosition();
+echo ($byPosition->hasType() ? "T" : "t");
+echo ($byPosition->isOptional() ? "O" : "R");
+echo ($byPosition->isPassedByReference() ? "B" : "b");
+echo ($byPosition->isVariadic() ? "V" : "v");
+echo "|";
+$named = new ReflectionParameter(param: "id", function: "\\reflect_direct_function");
+echo $named->getName() . "#" . $named->getPosition();
+echo ($named->hasType() ? "T" : "t");
+"##,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "name#1tRBv|rest#3TObV|id#0T");
+}
+
 /// Verifies that ReflectionMethod objects returned from `ReflectionClass::getMethods()`
 /// carry the same parameter metadata as directly constructed method reflectors.
 #[test]

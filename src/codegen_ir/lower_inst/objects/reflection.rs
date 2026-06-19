@@ -502,11 +502,14 @@ fn reflection_property_metadata(
         .unwrap_or_else(empty_reflection_metadata))
 }
 
-/// Resolves `ReflectionParameter([class, method], parameter)` metadata.
+/// Resolves `ReflectionParameter(target, parameter)` metadata.
 fn reflection_parameter_metadata(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<ReflectionOwnerMetadata> {
+    if inst.operands.len() == 2 {
+        return reflection_function_parameter_metadata(ctx, inst);
+    }
     let Some(class_operand) = inst.operands.first().copied() else {
         return Ok(empty_reflection_metadata());
     };
@@ -525,6 +528,33 @@ fn reflection_parameter_metadata(
         .as_ref()
         .and_then(|method| reflection_parameter_member_for_selector(&method.parameters, selector))
     else {
+        return Ok(empty_reflection_metadata());
+    };
+    Ok(reflection_parameter_owner_metadata(parameter))
+}
+
+/// Resolves `ReflectionParameter(function, parameter)` metadata.
+fn reflection_function_parameter_metadata(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some(function_operand) = inst.operands.first().copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let Some(parameter_operand) = inst.operands.get(1).copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let function_name =
+        const_required_string_operand(ctx, function_operand, "ReflectionParameter")?;
+    let selector = const_parameter_selector_operand(ctx, parameter_operand)?;
+    let Some(function) = ctx.function_by_name(&function_name) else {
+        return Ok(empty_reflection_metadata());
+    };
+    let Some(signature) = function.signature.as_ref() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let parameters = reflection_parameter_members(signature);
+    let Some(parameter) = reflection_parameter_member_for_selector(&parameters, selector) else {
         return Ok(empty_reflection_metadata());
     };
     Ok(reflection_parameter_owner_metadata(parameter))
