@@ -225,6 +225,9 @@ returns a materialized `ReflectionClass` for eval-declared parent classes or
 `false` when no parent class exists. `ReflectionClass::newInstance()` constructs
 eval-declared reflected classes and forwards constructor arguments through
 eval's positional, named, and unpacking-aware call binding.
+`ReflectionClass::newInstanceWithoutConstructor()` allocates eval-declared
+reflected classes, initializes supported property defaults, and skips
+`__construct()`.
 Eval-declared method parameter type hints are checked when the method is
 entered. Supported checks include scalar hints with PHP-style weak scalar
 coercion, `array`, `object`, `iterable`, `mixed`, nullable/union forms, and

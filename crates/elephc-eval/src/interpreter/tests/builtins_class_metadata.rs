@@ -1617,6 +1617,41 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::newInstanceWithoutConstructor skips eval constructors.
+#[test]
+fn execute_program_reflection_class_new_instance_without_constructor_allocates_eval_class() {
+    let program = parse_fragment(
+        br#"class EvalReflectNoCtorTarget {
+    public $label = "default";
+    private $secret = "hidden";
+    public function __construct() {
+        $this->label = "ctor";
+    }
+    public function label() {
+        return $this->label;
+    }
+    public function secret() {
+        return $this->secret;
+    }
+}
+$ref = new ReflectionClass("EvalReflectNoCtorTarget");
+$without = $ref->newInstanceWithoutConstructor();
+echo $without->label(); echo ":";
+echo $without->secret(); echo ":";
+$with = $ref->newInstance();
+echo $with->label();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "default:hidden:ctor");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClassConstant/EnumCase expose eval-declared attribute metadata.
 #[test]
 fn execute_program_reflects_eval_constant_and_enum_case_attributes() {
