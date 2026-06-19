@@ -248,6 +248,7 @@ eval/runtime class or interface names.
 with PHP-compatible `ReflectionMethod::IS_*` constants for the bitmask.
 `ReflectionMethod::isConstructor()` and `isDestructor()` report whether the
 reflected method is `__construct` or `__destruct`.
+`ReflectionMethod::setAccessible()` is accepted as a PHP-compatible no-op.
 `ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
 `getNumberOfRequiredParameters()` report eval-declared method parameter
 metadata. Eval currently exposes parameter names and zero-based positions there,
@@ -293,6 +294,7 @@ metadata through `ReflectionNamedType`, `ReflectionUnionType`, and
 `ReflectionProperty::hasDefaultValue()` and `getDefaultValue()` expose
 materialized property default metadata, including PHP's implicit `null` default
 for untyped concrete properties without an explicit initializer.
+`ReflectionProperty::setAccessible()` is accepted as a PHP-compatible no-op.
 `ReflectionProperty::getValue()` and `setValue()` read and write eval-declared
 instance and static property values, bypass public/protected/private visibility
 like PHP reflection, route concrete property hooks through their accessors, and

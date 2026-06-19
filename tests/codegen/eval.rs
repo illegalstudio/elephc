@@ -7534,6 +7534,29 @@ try {
     assert_eq!(out, "caught");
 }
 
+/// Verifies eval ReflectionMethod/Property::setAccessible are PHP-compatible no-ops.
+#[test]
+fn test_eval_reflection_set_accessible_is_noop() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalReflectAccessTarget {
+    private $secret = "s";
+    private function hidden() {
+        return $this->secret;
+    }
+}
+$object = new EvalReflectAccessTarget();
+$method = new ReflectionMethod("EvalReflectAccessTarget", "hidden");
+echo is_null($method->setAccessible(false)) ? "M" : "m"; echo ":";
+echo $method->invoke($object); echo ":";
+$property = new ReflectionProperty("EvalReflectAccessTarget", "secret");
+echo is_null($property->setAccessible(accessible: true)) ? "P" : "p"; echo ":";
+echo $property->getValue($object);');
+"#,
+    );
+    assert_eq!(out, "M:s:P:s");
+}
+
 /// Verifies eval ReflectionClass::newInstanceWithoutConstructor allocates without constructors.
 #[test]
 fn test_eval_reflection_class_new_instance_without_constructor_allocates_eval_class() {

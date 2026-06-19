@@ -1090,6 +1090,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionMethod::isConstructor()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getConstructor()` | Return whether the reflected method is the constructor |
 | `ReflectionMethod::isDestructor()` | `new ReflectionMethod($class_name, $method_name)` | Return whether the reflected method is the destructor |
 | `ReflectionMethod::getModifiers()` | `new ReflectionMethod($class_name, $method_name)` | Return PHP's `ReflectionMethod::IS_*` visibility/static/finality/abstract bitmask |
+| `ReflectionMethod::setAccessible()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Accepted as a PHP-compatible no-op for eval-backed method reflection |
 | `ReflectionMethod::invoke()` / `invokeArgs()` | `new ReflectionMethod($class_name, $method_name)` or `ReflectionClass::getMethod()` / `getMethods()` / `getConstructor()` | Invoke eval-declared reflected methods with PHP visibility-bypassing reflection semantics and forwarded named arguments |
 | `ReflectionMethod::getParameters()` | `new ReflectionMethod($class_name, $method_name)` | Return `ReflectionParameter` objects for the reflected method parameters |
 | `ReflectionMethod::getNumberOfParameters()` | `new ReflectionMethod($class_name, $method_name)` | Return the total number of reflected method parameters |
@@ -1127,6 +1128,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionProperty::getType()` | Same as `ReflectionProperty::hasType()` | Return a `ReflectionNamedType`, `ReflectionUnionType`, or `ReflectionIntersectionType` for supported property types, or `null` when no type is declared |
 | `ReflectionProperty::hasDefaultValue()` | Same as `ReflectionProperty::hasType()` | Return whether the reflected property has a materialized default value; untyped concrete properties without an explicit initializer report PHP's implicit `null` default |
 | `ReflectionProperty::getDefaultValue()` | Same as `ReflectionProperty::hasDefaultValue()` | Return supported materialized property defaults, or `null` when no default is available |
+| `ReflectionProperty::setAccessible()` | `new ReflectionProperty($class_name, $property_name)` or `ReflectionClass::getProperty()` / `getProperties()` | Accepted as a PHP-compatible no-op for eval-backed property reflection |
 | `ReflectionClassConstant::getName()` | `new ReflectionClassConstant($class_name, $constant_name)` or `ReflectionClass::getReflectionConstant()` / `getReflectionConstants()` | Return the reflected class constant or enum-case name |
 | `ReflectionClassConstant::getAttributes()` | Same as `ReflectionClassConstant::getName()` | Return `ReflectionAttribute` objects for class-constant or enum-case attributes |
 | `ReflectionClassConstant::getDeclaringClass()` | Same as `ReflectionClassConstant::getName()` | Return a `ReflectionClass` object for the class-like symbol that declares the reflected constant or enum case |

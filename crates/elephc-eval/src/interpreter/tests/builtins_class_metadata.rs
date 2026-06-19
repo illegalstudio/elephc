@@ -1808,6 +1808,35 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod/Property::setAccessible are PHP-compatible no-ops.
+#[test]
+fn execute_program_reflection_set_accessible_is_noop() {
+    let program = parse_fragment(
+        br#"class EvalReflectAccessTarget {
+    private $secret = "s";
+    private function hidden() {
+        return $this->secret;
+    }
+}
+$object = new EvalReflectAccessTarget();
+$method = new ReflectionMethod("EvalReflectAccessTarget", "hidden");
+echo is_null($method->setAccessible(false)) ? "M" : "m"; echo ":";
+echo $method->invoke($object); echo ":";
+$property = new ReflectionProperty("EvalReflectAccessTarget", "secret");
+echo is_null($property->setAccessible(accessible: true)) ? "P" : "p"; echo ":";
+echo $property->getValue($object);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "M:s:P:s");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::newInstanceWithoutConstructor skips eval constructors.
 #[test]
 fn execute_program_reflection_class_new_instance_without_constructor_allocates_eval_class() {
