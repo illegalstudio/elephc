@@ -168,6 +168,13 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<Option<u64>, EvalStatus> {
         self.runtime_reflection_method_flags(class_name, method_name)
     }
+    /// Reports fake generated AOT ReflectionMethod names for metadata bridge tests.
+    fn reflection_method_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_reflection_method_names(class_name)
+    }
     /// Reports fake generated AOT ReflectionProperty flags for metadata bridge tests.
     fn reflection_property_flags(
         &mut self,
@@ -175,6 +182,13 @@ impl RuntimeValueOps for FakeOps {
         property_name: &str,
     ) -> Result<Option<u64>, EvalStatus> {
         self.runtime_reflection_property_flags(class_name, property_name)
+    }
+    /// Reports fake generated AOT ReflectionProperty names for metadata bridge tests.
+    fn reflection_property_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_reflection_property_names(class_name)
     }
     /// Creates one fake object for eval `new` unit tests.
     fn new_object(&mut self, _class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {

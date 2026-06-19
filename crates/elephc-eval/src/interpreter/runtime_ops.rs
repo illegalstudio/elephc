@@ -140,12 +140,24 @@ pub trait RuntimeValueOps {
         method_name: &str,
     ) -> Result<Option<u64>, EvalStatus>;
 
+    /// Returns generated AOT ReflectionMethod names visible for one class.
+    fn reflection_method_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Returns generated AOT ReflectionProperty flags for a class/property pair.
     fn reflection_property_flags(
         &mut self,
         class_name: &str,
         property_name: &str,
     ) -> Result<Option<u64>, EvalStatus>;
+
+    /// Returns generated AOT ReflectionProperty names visible for one class.
+    fn reflection_property_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Creates a named runtime object without constructor arguments.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus>;

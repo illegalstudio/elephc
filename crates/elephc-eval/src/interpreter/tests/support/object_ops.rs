@@ -878,6 +878,19 @@ impl FakeOps {
             _ => Ok(None),
         }
     }
+    /// Reports fake generated AOT ReflectionMethod names for eval metadata unit tests.
+    pub(super) fn runtime_reflection_method_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut array = self.runtime_string_array_new(3)?;
+        if class_name.eq_ignore_ascii_case("KnownClass") {
+            array = self.runtime_string_array_push(array, "run")?;
+            array = self.runtime_string_array_push(array, "helper")?;
+            array = self.runtime_string_array_push(array, "locked")?;
+        }
+        Ok(array)
+    }
     /// Reports fake generated AOT ReflectionProperty flags for eval metadata unit tests.
     pub(super) fn runtime_reflection_property_flags(
         &mut self,
@@ -890,6 +903,17 @@ impl FakeOps {
             ));
         }
         Ok(None)
+    }
+    /// Reports fake generated AOT ReflectionProperty names for eval metadata unit tests.
+    pub(super) fn runtime_reflection_property_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut array = self.runtime_string_array_new(1)?;
+        if class_name.eq_ignore_ascii_case("KnownClass") {
+            array = self.runtime_string_array_push(array, "promoted")?;
+        }
+        Ok(array)
     }
     /// Reports one fake AOT interface for eval `interface_exists` unit tests.
     pub(super) fn runtime_interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
