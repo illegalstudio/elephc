@@ -15,6 +15,7 @@ use crate::parser::ast::{BinOp, ClassMethod, ClassProperty, Expr, Stmt, TypeExpr
 use crate::types::traits::FlattenedClass;
 
 use super::common::*;
+use super::recursive_array::assume_recursive_iterator_expr;
 
 /// Inserts classes into the supplied builtin metadata registry.
 pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
@@ -210,7 +211,11 @@ pub(super) fn inner_void_body(method: &str) -> Vec<Stmt> {
 
 /// Builds the synthetic method body for recursive inner return.
 pub(super) fn recursive_inner_return_body(method: &str) -> Vec<Stmt> {
-    return_body(method_call(inner_expr(), method, Vec::new()))
+    return_body(method_call(
+        assume_recursive_iterator_expr(inner_expr()),
+        method,
+        Vec::new(),
+    ))
 }
 
 /// Builds the AST expression for limit position.

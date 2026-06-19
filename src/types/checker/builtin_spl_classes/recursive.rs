@@ -154,7 +154,14 @@ fn spl_parent_iterator_methods() -> Vec<ClassMethod> {
 /// Builds the synthetic method body for recursive filter get children.
 fn recursive_filter_get_children_body() -> Vec<Stmt> {
     vec![
-        assign_stmt("child", method_call(inner_expr(), "getChildren", Vec::new())),
+        assign_stmt(
+            "child",
+            method_call(
+                assume_recursive_iterator_expr(inner_expr()),
+                "getChildren",
+                Vec::new(),
+            ),
+        ),
         if_stmt(
             function_call("is_null", vec![var_expr("child")]),
             return_body(null_expr()),
@@ -167,7 +174,14 @@ fn recursive_filter_get_children_body() -> Vec<Stmt> {
 /// Builds the synthetic method body for recursive callback filter get children.
 fn recursive_callback_filter_get_children_body() -> Vec<Stmt> {
     vec![
-        assign_stmt("child", method_call(inner_expr(), "getChildren", Vec::new())),
+        assign_stmt(
+            "child",
+            method_call(
+                assume_recursive_iterator_expr(inner_expr()),
+                "getChildren",
+                Vec::new(),
+            ),
+        ),
         if_stmt(
             function_call("is_null", vec![var_expr("child")]),
             return_body(null_expr()),
@@ -195,7 +209,14 @@ fn recursive_callback_filter_get_children_body() -> Vec<Stmt> {
 /// Builds the synthetic method body for parent iterator get children.
 fn parent_iterator_get_children_body() -> Vec<Stmt> {
     vec![
-        assign_stmt("child", method_call(inner_expr(), "getChildren", Vec::new())),
+        assign_stmt(
+            "child",
+            method_call(
+                assume_recursive_iterator_expr(inner_expr()),
+                "getChildren",
+                Vec::new(),
+            ),
+        ),
         if_stmt(
             function_call("is_null", vec![var_expr("child")]),
             return_body(null_expr()),
