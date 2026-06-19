@@ -1409,8 +1409,7 @@ fn method_signature_by_refs_accept(
             implementation_by_refs,
             implementation_variadics,
             position,
-        )
-            == method_signature_effective_by_ref(required_by_refs, required_variadics, position)
+        ) == method_signature_effective_by_ref(required_by_refs, required_variadics, position)
     })
 }
 
@@ -1720,7 +1719,11 @@ fn eval_instance_property_storage_name(
     property: &EvalClassProperty,
 ) -> String {
     if property.visibility() == EvalVisibility::Private {
-        format!("\0{}\0{}", declaring_class.trim_start_matches('\\'), property.name())
+        format!(
+            "\0{}\0{}",
+            declaring_class.trim_start_matches('\\'),
+            property.name()
+        )
     } else {
         property.name().to_string()
     }
@@ -2168,6 +2171,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             return eval_reflection_attribute_new_instance_result(&attribute, context, values);
         }
     }
+    if let Some(result) = eval_reflection_class_implements_interface_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     if let Some(instance) = eval_reflection_class_new_instance_result(
         identity,
         method_name,
@@ -2403,10 +2415,7 @@ fn alias_duplicate_method_ref_args(
 }
 
 /// Returns true when two evaluated arguments target the same caller-side variable.
-fn same_method_ref_target(
-    left: &EvaluatedCallRefTarget,
-    right: &EvaluatedCallRefTarget,
-) -> bool {
+fn same_method_ref_target(left: &EvaluatedCallRefTarget, right: &EvaluatedCallRefTarget) -> bool {
     match (left, right) {
         (
             EvaluatedCallRefTarget::Variable {
@@ -2429,9 +2438,7 @@ fn same_method_ref_target(
                 array_name: right_name,
                 index: right_index,
             },
-        ) => {
-            left_scope == right_scope && left_name == right_name && left_index == right_index
-        }
+        ) => left_scope == right_scope && left_name == right_name && left_index == right_index,
         _ => false,
     }
 }
@@ -2521,12 +2528,7 @@ fn write_back_method_ref_target(
                 return Err(EvalStatus::RuntimeFatal);
             };
             write_back_method_array_element_ref_target(
-                scope,
-                array_name,
-                *index,
-                value,
-                context,
-                values,
+                scope, array_name, *index, value, context, values,
             )
         }
         EvaluatedCallRefTarget::ObjectProperty {
@@ -2567,13 +2569,7 @@ fn write_back_method_array_element_ref_target(
         eval_new_array_for_index(index, values)?
     };
     let array = values.array_set(array, index, value)?;
-    for replaced in set_scope_cell(
-        context,
-        scope,
-        array_name.to_string(),
-        array,
-        ownership,
-    )? {
+    for replaced in set_scope_cell(context, scope, array_name.to_string(), array, ownership)? {
         values.release(replaced)?;
     }
     Ok(())

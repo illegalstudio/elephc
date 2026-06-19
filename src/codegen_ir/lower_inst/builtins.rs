@@ -9,6 +9,8 @@
 //! - Runtime conversions reuse existing target-aware helpers instead of duplicating parsing logic.
 //! - Selected Mixed predicates inspect the boxed runtime tag through shared predicate lowering.
 
+use std::collections::BTreeSet;
+
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
@@ -24,27 +26,26 @@ use super::{
 };
 use crate::codegen_ir::{CodegenIrError, Result};
 
-pub(in crate::codegen_ir::lower_inst) mod attributes;
 mod arrays;
+pub(in crate::codegen_ir::lower_inst) mod attributes;
 mod buffers;
 mod class_relations;
 mod ctype;
 mod debug;
 mod eval;
 mod io;
-mod isset;
 mod is_numeric;
+mod isset;
 mod json;
 mod math;
 mod pointers;
 mod regex;
 mod spl;
-mod system;
 mod strings;
+mod system;
 mod types;
 
-const DEFINE_ALREADY_DEFINED_WARNING: &str =
-    "Warning: define(): Constant already defined\n";
+const DEFINE_ALREADY_DEFINED_WARNING: &str = "Warning: define(): Constant already defined\n";
 
 /// Lowers a scalar builtin call by matching the canonical PHP function name.
 pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -61,10 +62,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "fdiv" => math::lower_fdiv(ctx, inst),
         "fmod" => math::lower_fmod(ctx, inst),
         "pow" => math::lower_pow(ctx, inst),
-        "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh"
-        | "tanh" | "log2" | "log10" | "exp" => {
-            math::lower_unary_libm(ctx, inst, key.as_str())
-        }
+        "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "log2"
+        | "log10" | "exp" => math::lower_unary_libm(ctx, inst, key.as_str()),
         "log" => math::lower_log(ctx, inst),
         "atan2" => math::lower_atan2(ctx, inst),
         "hypot" => math::lower_hypot(ctx, inst),
@@ -360,25 +359,21 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_infinite" => math::lower_is_infinite(ctx, inst),
         "is_finite" => math::lower_is_finite(ctx, inst),
         "number_format" => strings::lower_number_format(ctx, inst),
-        "strtolower" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "strtolower",
-            "__rt_strtolower",
-        ),
-        "strtoupper" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "strtoupper",
-            "__rt_strtoupper",
-        ),
+        "strtolower" => {
+            strings::lower_unary_string_runtime(ctx, inst, "strtolower", "__rt_strtolower")
+        }
+        "strtoupper" => {
+            strings::lower_unary_string_runtime(ctx, inst, "strtoupper", "__rt_strtoupper")
+        }
         "strrev" => strings::lower_unary_string_runtime(ctx, inst, "strrev", "__rt_strrev"),
         "grapheme_strrev" => strings::lower_grapheme_strrev(ctx, inst),
         "str_repeat" => strings::lower_str_repeat(ctx, inst),
         "substr" => strings::lower_substr(ctx, inst),
         "substr_replace" => strings::lower_substr_replace(ctx, inst),
         "strstr" => strings::lower_strstr(ctx, inst),
-        "str_replace" => strings::lower_string_replace(ctx, inst, "str_replace", "__rt_str_replace"),
+        "str_replace" => {
+            strings::lower_string_replace(ctx, inst, "str_replace", "__rt_str_replace")
+        }
         "str_ireplace" => {
             strings::lower_string_replace(ctx, inst, "str_ireplace", "__rt_str_ireplace")
         }
@@ -407,26 +402,17 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             "str_starts_with",
             "__rt_str_starts_with",
         ),
-        "str_ends_with" => strings::lower_binary_string_runtime(
-            ctx,
-            inst,
-            "str_ends_with",
-            "__rt_str_ends_with",
-        ),
+        "str_ends_with" => {
+            strings::lower_binary_string_runtime(ctx, inst, "str_ends_with", "__rt_str_ends_with")
+        }
         "ord" => strings::lower_ord(ctx, inst),
         "chr" => strings::lower_chr(ctx, inst),
-        "addslashes" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "addslashes",
-            "__rt_addslashes",
-        ),
-        "stripslashes" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "stripslashes",
-            "__rt_stripslashes",
-        ),
+        "addslashes" => {
+            strings::lower_unary_string_runtime(ctx, inst, "addslashes", "__rt_addslashes")
+        }
+        "stripslashes" => {
+            strings::lower_unary_string_runtime(ctx, inst, "stripslashes", "__rt_stripslashes")
+        }
         "nl2br" => strings::lower_unary_string_runtime(ctx, inst, "nl2br", "__rt_nl2br"),
         "wordwrap" => strings::lower_wordwrap(ctx, inst),
         "bin2hex" => strings::lower_unary_string_runtime(ctx, inst, "bin2hex", "__rt_bin2hex"),
@@ -437,54 +423,33 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             "htmlspecialchars",
             "__rt_htmlspecialchars",
         ),
-        "htmlentities" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "htmlentities",
-            "__rt_htmlspecialchars",
-        ),
+        "htmlentities" => {
+            strings::lower_unary_string_runtime(ctx, inst, "htmlentities", "__rt_htmlspecialchars")
+        }
         "html_entity_decode" => strings::lower_unary_string_runtime(
             ctx,
             inst,
             "html_entity_decode",
             "__rt_html_entity_decode",
         ),
-        "urlencode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "urlencode",
-            "__rt_urlencode",
-        ),
-        "urldecode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "urldecode",
-            "__rt_urldecode",
-        ),
-        "rawurlencode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "rawurlencode",
-            "__rt_rawurlencode",
-        ),
-        "rawurldecode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "rawurldecode",
-            "__rt_urldecode",
-        ),
-        "base64_encode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "base64_encode",
-            "__rt_base64_encode",
-        ),
-        "base64_decode" => strings::lower_unary_string_runtime(
-            ctx,
-            inst,
-            "base64_decode",
-            "__rt_base64_decode",
-        ),
+        "urlencode" => {
+            strings::lower_unary_string_runtime(ctx, inst, "urlencode", "__rt_urlencode")
+        }
+        "urldecode" => {
+            strings::lower_unary_string_runtime(ctx, inst, "urldecode", "__rt_urldecode")
+        }
+        "rawurlencode" => {
+            strings::lower_unary_string_runtime(ctx, inst, "rawurlencode", "__rt_rawurlencode")
+        }
+        "rawurldecode" => {
+            strings::lower_unary_string_runtime(ctx, inst, "rawurldecode", "__rt_urldecode")
+        }
+        "base64_encode" => {
+            strings::lower_unary_string_runtime(ctx, inst, "base64_encode", "__rt_base64_encode")
+        }
+        "base64_decode" => {
+            strings::lower_unary_string_runtime(ctx, inst, "base64_decode", "__rt_base64_decode")
+        }
         "md5" => strings::lower_md5(ctx, inst),
         "sha1" => strings::lower_sha1(ctx, inst),
         "hash" => strings::lower_hash(ctx, inst),
@@ -515,7 +480,9 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "ctype_alnum" => ctype::lower_ctype_alnum(ctx, inst),
         "ctype_space" => ctype::lower_ctype_space(ctx, inst),
         "spl_autoload_register" => spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_register"),
-        "spl_autoload_unregister" => spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_unregister"),
+        "spl_autoload_unregister" => {
+            spl::lower_spl_autoload_bool(ctx, inst, "spl_autoload_unregister")
+        }
         "spl_autoload_functions" => spl::lower_spl_autoload_functions(ctx, inst),
         "spl_autoload_extensions" => spl::lower_spl_autoload_extensions(ctx, inst),
         "spl_autoload_call" => spl::lower_spl_autoload_void(ctx, inst, "spl_autoload_call"),
@@ -526,7 +493,10 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "iterator_apply" => spl::lower_iterator_apply(ctx, inst),
         "iterator_count" => spl::lower_iterator_count(ctx, inst),
         "iterator_to_array" => spl::lower_iterator_to_array(ctx, inst),
-        _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
+        _ => Err(CodegenIrError::unsupported(format!(
+            "builtin call {}",
+            name
+        ))),
     }
 }
 
@@ -587,8 +557,10 @@ fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
     let flag_symbol = ctx.data.add_comm(define_seen_symbol(&constant_name), 8);
     let global_symbol = ir_global_symbol(&constant_name);
     let value_ty = ctx.value_php_type(value)?;
-    ctx.data
-        .add_comm(global_symbol.clone(), value_ty.codegen_repr().stack_size().max(8));
+    ctx.data.add_comm(
+        global_symbol.clone(),
+        value_ty.codegen_repr().stack_size().max(8),
+    );
 
     let first_label = ctx.next_label("define_first");
     let done_label = ctx.next_label("define_done");
@@ -614,12 +586,20 @@ fn emit_duplicate_define_warning(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.adrp("x1", "_diag_define_already_defined_msg");
-            ctx.emitter.add_lo12("x1", "x1", "_diag_define_already_defined_msg");
-            ctx.emitter.instruction(&format!("mov x2, #{}", DEFINE_ALREADY_DEFINED_WARNING.len())); // pass the duplicate-define warning byte length
+            ctx.emitter
+                .add_lo12("x1", "x1", "_diag_define_already_defined_msg");
+            ctx.emitter.instruction(&format!(
+                "mov x2, #{}",
+                DEFINE_ALREADY_DEFINED_WARNING.len()
+            )); // pass the duplicate-define warning byte length
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("lea rdi, [rip + _diag_define_already_defined_msg]"); // pass the duplicate-define warning pointer
-            ctx.emitter.instruction(&format!("mov esi, {}", DEFINE_ALREADY_DEFINED_WARNING.len())); // pass the duplicate-define warning byte length
+            ctx.emitter
+                .instruction("lea rdi, [rip + _diag_define_already_defined_msg]"); // pass the duplicate-define warning pointer
+            ctx.emitter.instruction(&format!(
+                "mov esi, {}",
+                DEFINE_ALREADY_DEFINED_WARNING.len()
+            )); // pass the duplicate-define warning byte length
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
@@ -635,7 +615,9 @@ fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
             ctx.emitter.ldr_lo12("d0", "x9", &label);                          // load the M_PI floating constant into the floating result register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label)); // load the M_PI floating constant into the floating result register
+            ctx.emitter
+                .instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label));
+            // load the M_PI floating constant into the floating result register
         }
     }
     store_if_result(ctx, inst)
@@ -728,7 +710,12 @@ fn emit_branch_on_gettype_mixed_tag(ctx: &mut FunctionContext<'_>, tag: u8, labe
 }
 
 /// Selects one static PHP type-name string and rejoins the `gettype()` dispatch.
-fn emit_mixed_gettype_case(ctx: &mut FunctionContext<'_>, label: &str, type_name: &[u8], done: &str) {
+fn emit_mixed_gettype_case(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    type_name: &[u8],
+    done: &str,
+) {
     ctx.emitter.label(label);
     emit_type_name_result(ctx, type_name);
     abi::emit_jump(ctx.emitter, done);
@@ -798,7 +785,7 @@ fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     store_if_result(ctx, inst)
 }
 
-/// Lowers AOT class/interface/enum existence checks for literal names.
+/// Lowers AOT class/interface/enum existence checks for literal or dynamic string names.
 fn lower_class_like_exists(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -806,7 +793,7 @@ fn lower_class_like_exists(
 ) -> Result<()> {
     ensure_arg_count_between(inst, name, 1, 2)?;
     let value = expect_operand(inst, 0)?;
-    let symbol_name = const_string_operand(ctx, value)?;
+    if let Some(symbol_name) = maybe_const_string_operand(ctx, value)? {
     let exists = match name {
         "class_exists" => contains_folded(
             ctx.module
@@ -821,7 +808,110 @@ fn lower_class_like_exists(
         _ => false,
     };
     emit_static_bool(ctx, exists);
+    } else {
+        lower_dynamic_class_like_exists(ctx, name, value)?;
+    };
     store_if_result(ctx, inst)
+}
+
+/// Lowers a dynamic string `class_exists()`-family lookup against known AOT metadata.
+fn lower_dynamic_class_like_exists(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    value: ValueId,
+) -> Result<()> {
+    if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} with non-string dynamic name",
+            name
+        )));
+    }
+    let candidates = dynamic_class_like_exists_candidates(ctx, name);
+    if candidates.is_empty() {
+        emit_static_bool(ctx, false);
+        return Ok(());
+    }
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    let matched_label = ctx.next_label(&format!("{}_dynamic_match", name));
+    let done_label = ctx.next_label(&format!("{}_dynamic_done", name));
+    for candidate in candidates {
+        emit_branch_if_dynamic_class_like_exists_candidate(ctx, &candidate, &matched_label);
+    }
+    emit_static_bool(ctx, false);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&matched_label);
+    emit_static_bool(ctx, true);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Collects deterministic class-like name candidates for a dynamic existence lookup.
+fn dynamic_class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<String> {
+    let mut candidates = BTreeSet::new();
+    match name {
+        "class_exists" => {
+            candidates.extend(
+                ctx.module
+                    .class_infos
+                    .keys()
+                    .filter(|class_name| !is_internal_synthetic_class_name(class_name))
+                    .cloned(),
+            );
+        }
+        "interface_exists" => candidates.extend(ctx.module.interface_infos.keys().cloned()),
+        "trait_exists" => candidates.extend(ctx.module.trait_table.names.iter().cloned()),
+        "enum_exists" => candidates.extend(ctx.module.enum_infos.keys().cloned()),
+        _ => {}
+    }
+    candidates.into_iter().collect()
+}
+
+/// Branches when the saved dynamic class-like string matches a metadata candidate.
+fn emit_branch_if_dynamic_class_like_exists_candidate(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &str,
+    matched_label: &str,
+) {
+    let bare_candidate = candidate.trim_start_matches('\\');
+    emit_dynamic_class_like_exists_compare(ctx, bare_candidate.as_bytes(), matched_label);
+    let qualified_candidate = format!("\\{}", bare_candidate);
+    emit_dynamic_class_like_exists_compare(ctx, qualified_candidate.as_bytes(), matched_label);
+}
+
+/// Emits one case-insensitive comparison for the saved dynamic class-like lookup.
+fn emit_dynamic_class_like_exists_compare(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &[u8],
+    matched_label: &str,
+) {
+    let (candidate_label, candidate_len) = ctx.data.add_string(candidate);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
+            abi::emit_symbol_address(ctx.emitter, "x3", &candidate_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter.instruction("cmp x0, #0");                              // did the dynamic class-like name match this metadata entry?
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // report existence when the runtime name matches case-insensitively
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+            abi::emit_symbol_address(ctx.emitter, "rdx", &candidate_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", candidate_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+            ctx.emitter.instruction("test rax, rax");                           // did the dynamic class-like name match this metadata entry?
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // report existence when the runtime name matches case-insensitively
+        }
+    }
 }
 
 /// Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers.
@@ -833,7 +923,10 @@ fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         PhpType::Str => {
             if let Ok(function_name) = const_string_operand(ctx, value) {
                 if let Some((class_name, method_name)) = function_name.rsplit_once("::") {
-                    emit_static_bool(ctx, static_method_string_is_callable(ctx, class_name, method_name));
+                    emit_static_bool(
+                        ctx,
+                        static_method_string_is_callable(ctx, class_name, method_name),
+                    );
                 } else {
                     emit_static_bool(ctx, callable_name_exists(ctx, &function_name));
                 }
@@ -908,9 +1001,12 @@ fn static_method_string_is_callable(
     method_name: &str,
 ) -> bool {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
-    let Some((_, class_info)) = ctx.module.class_infos.iter().find(|(candidate, _)| {
-        php_symbol_key(candidate.trim_start_matches('\\')) == class_key
-    }) else {
+    let Some((_, class_info)) = ctx
+        .module
+        .class_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
+    else {
         return false;
     };
     let method_key = php_symbol_key(method_name);
@@ -932,7 +1028,8 @@ fn emit_variant_function_exists(ctx: &mut FunctionContext<'_>, function_name: &s
             ctx.emitter.instruction(&format!("cset {}, ne", result_reg));       // return true only when a function variant is active
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // test whether an include has activated this function variant
+            ctx.emitter
+                .instruction(&format!("test {}, {}", result_reg, result_reg)); // test whether an include has activated this function variant
             ctx.emitter.instruction("setne al");                                // return true only when a function variant is active
             ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
@@ -959,7 +1056,8 @@ fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
         PhpType::Object(class_name)
             if super::class_implements_interface(ctx, &class_name, "Countable") =>
         {
-            if let Some(intrinsic) = super::runtime_backed_instance_intrinsic(&class_name, "count") {
+            if let Some(intrinsic) = super::runtime_backed_instance_intrinsic(&class_name, "count")
+            {
                 super::lower_instance_runtime_intrinsic(ctx, inst, &class_name, "count", intrinsic)
             } else {
                 super::lower_runtime_object_method_call(ctx, inst, &class_name, "count")
@@ -993,10 +1091,12 @@ fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
     let len_reg = abi::string_result_regs(ctx.emitter).1;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
         }
     }
     store_if_result(ctx, inst)
@@ -1148,7 +1248,10 @@ fn lower_empty(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
 }
 
 /// Emits true for a tagged scalar that is null or an integer zero.
-fn emit_tagged_scalar_empty_bool(ctx: &mut FunctionContext<'_>, value: crate::ir::ValueId) -> Result<()> {
+fn emit_tagged_scalar_empty_bool(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+) -> Result<()> {
     let empty_label = ctx.next_label("empty_tagged_true");
     let done_label = ctx.next_label("empty_tagged_done");
     ctx.load_value_to_result(value)?;
@@ -1252,10 +1355,7 @@ fn lower_static_type_predicate(
 }
 
 /// Emits `is_int()` for a tagged scalar by checking that its tag is not null.
-fn emit_tagged_scalar_int_predicate(
-    ctx: &mut FunctionContext<'_>,
-    value: ValueId,
-) -> Result<()> {
+fn emit_tagged_scalar_int_predicate(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     ctx.load_value_to_result(value)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -1416,11 +1516,7 @@ fn emit_mixed_is_iterable(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resu
 }
 
 /// Emits the object half of runtime `is_iterable()` by checking Traversable interfaces.
-fn emit_runtime_object_iterable_check(
-    ctx: &mut FunctionContext<'_>,
-    true_case: &str,
-    done: &str,
-) {
+fn emit_runtime_object_iterable_check(ctx: &mut FunctionContext<'_>, true_case: &str, done: &str) {
     let object_true = ctx.next_label("is_iterable_object_true");
     let interface_ids = traversable_interface_ids(ctx);
     if interface_ids.is_empty() {
@@ -1578,10 +1674,7 @@ fn callable_name_exists(ctx: &FunctionContext<'_>, name: &str) -> bool {
 }
 
 /// Checks whether a PHP symbol is present in an iterator of known names.
-fn contains_folded<'a>(
-    mut names: impl Iterator<Item = &'a String>,
-    needle: &str,
-) -> bool {
+fn contains_folded<'a>(mut names: impl Iterator<Item = &'a String>, needle: &str) -> bool {
     let needle_key = php_symbol_key(needle.trim_start_matches('\\'));
     names.any(|name| php_symbol_key(name.trim_start_matches('\\')) == needle_key)
 }
@@ -1593,23 +1686,26 @@ fn is_internal_synthetic_class_name(name: &str) -> bool {
 
 /// Returns a string literal value defined by a `ConstStr` instruction.
 fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<String> {
+    maybe_const_string_operand(ctx, value)?.ok_or_else(|| {
+        CodegenIrError::unsupported("function_exists with non-literal function name")
+    })
+}
+
+/// Returns a string literal operand when a value is produced by `ConstStr`.
+fn maybe_const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<String>> {
     let value_ref = ctx
         .function
         .value(value)
         .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
     let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Err(CodegenIrError::unsupported(
-            "function_exists with non-literal function name",
-        ));
+        return Ok(None);
     };
     let inst_ref = ctx
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     if inst_ref.op != Op::ConstStr {
-        return Err(CodegenIrError::unsupported(
-            "function_exists with non-literal function name",
-        ));
+        return Ok(None);
     }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
         return Err(CodegenIrError::invalid_module(
@@ -1621,6 +1717,7 @@ fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Str
         .strings
         .get(data.as_raw() as usize)
         .cloned()
+        .map(Some)
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
 
@@ -1651,12 +1748,7 @@ fn ensure_min_arg_count(inst: &Instruction, name: &str, expected: usize) -> Resu
 }
 
 /// Verifies that the builtin call has between the expected lowered operand counts.
-fn ensure_arg_count_between(
-    inst: &Instruction,
-    name: &str,
-    min: usize,
-    max: usize,
-) -> Result<()> {
+fn ensure_arg_count_between(inst: &Instruction, name: &str, min: usize, max: usize) -> Result<()> {
     if (min..=max).contains(&inst.operands.len()) {
         return Ok(());
     }

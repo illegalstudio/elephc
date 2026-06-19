@@ -53,15 +53,15 @@ impl Clone for InterfaceDeclInfo {
     }
 }
 
-/// Registers the nine builtin exception/error types (Throwable, Error, TypeError,
-/// ValueError, Exception, RuntimeException, JsonException, Fiber, FiberError) in
+/// Registers the builtin throwable hierarchy and Fiber declarations in
 /// `interface_map` and `class_map`.
 ///
 /// Checks for name collisions with user-declared types before inserting; returns
 /// `CompileError` if any builtin name is already present. Insertion order sets
 /// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError
-/// extend Error; RuntimeException extends Exception; JsonException extends
-/// RuntimeException; FiberError extends Error. Fiber is final with no parent.
+/// extend Error; RuntimeException/ReflectionException extend Exception;
+/// JsonException extends RuntimeException; FiberError extends Error. Fiber is
+/// final with no parent.
 pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
@@ -73,6 +73,7 @@ pub(crate) fn inject_builtin_throwables(
         "ValueError",
         "Exception",
         "RuntimeException",
+        "ReflectionException",
         "JsonException",
         "Fiber",
         "FiberError",
@@ -161,13 +162,29 @@ pub(crate) fn inject_builtin_throwables(
             used_traits: Vec::new(),
         },
     );
-    // RuntimeException and JsonException inherit the Throwable API from
-    // Exception via the standard inheritance machinery; they don't need to
-    // redeclare anything locally.
+    // RuntimeException, ReflectionException, and JsonException inherit the
+    // Throwable API from Exception via the standard inheritance machinery; they
+    // don't need to redeclare anything locally.
     class_map.insert(
         "RuntimeException".to_string(),
         FlattenedClass {
             name: "RuntimeException".to_string(),
+            extends: Some("Exception".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+        },
+    );
+    class_map.insert(
+        "ReflectionException".to_string(),
+        FlattenedClass {
+            name: "ReflectionException".to_string(),
             extends: Some("Exception".to_string()),
             implements: Vec::new(),
             is_abstract: false,

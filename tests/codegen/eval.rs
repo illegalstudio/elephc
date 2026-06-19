@@ -5506,7 +5506,10 @@ echo $value . ":" . $named . ":" . $items["k"] . ":" . $prop->value;');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "A-method-static-variadic:B-named:C-method:D-method");
+    assert_eq!(
+        out.stdout,
+        "A-method-static-variadic:B-named:C-method:D-method"
+    );
 }
 
 /// Verifies eval dynamic static callables dispatch eval-declared static methods.
@@ -5794,6 +5797,57 @@ echo (new ReflectionClass("EvalImplTrait"))->implementsInterface("EvalImplBase")
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "CBEIPt");
+}
+
+/// Verifies eval `ReflectionClass::implementsInterface()` throws ReflectionException
+/// for missing or non-interface argument names.
+#[test]
+fn test_eval_reflection_class_implements_interface_rejects_non_interfaces() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalImplRejectIface {}
+interface EvalImplRejectOther {}
+class EvalImplRejectTarget implements EvalImplRejectIface {}
+class EvalImplRejectClass {}
+trait EvalImplRejectTrait {}
+enum EvalImplRejectEnum { case Ready; }
+$ref = new ReflectionClass("EvalImplRejectTarget");
+echo $ref->implementsInterface("EvalImplRejectOther") ? "T" : "F";
+try {
+    $ref->implementsInterface("EvalImplRejectClass");
+    echo ":ok";
+} catch (ReflectionException $e) {
+    echo ":" . get_class($e) . ":" . $e->getMessage();
+}
+try {
+    $ref->implementsInterface("EvalImplRejectTrait");
+    echo ":ok";
+} catch (ReflectionException $e) {
+    echo ":" . get_class($e) . ":" . $e->getMessage();
+}
+try {
+    $ref->implementsInterface("EvalImplRejectEnum");
+    echo ":ok";
+} catch (ReflectionException $e) {
+    echo ":" . get_class($e) . ":" . $e->getMessage();
+}
+try {
+    $ref->implementsInterface("EvalImplRejectMissing");
+    echo ":ok";
+} catch (ReflectionException $e) {
+    echo ":" . get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "F:ReflectionException:EvalImplRejectClass is not an interface:ReflectionException:EvalImplRejectTrait is not an interface:ReflectionException:EvalImplRejectEnum is not an interface:ReflectionException:Interface \"EvalImplRejectMissing\" does not exist"
+    );
 }
 
 /// Verifies eval ReflectionClass::getParentClass crosses the generated runtime bridge.

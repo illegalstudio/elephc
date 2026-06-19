@@ -286,6 +286,56 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::implementsInterface rejects non-interface names with catchable errors.
+#[test]
+fn execute_program_reflection_class_implements_interface_rejects_non_interfaces() {
+    let program = parse_fragment(
+        br#"interface EvalImplRejectIface {}
+class EvalImplRejectTarget {}
+class EvalImplRejectClass {}
+trait EvalImplRejectTrait {}
+enum EvalImplRejectEnum { case Ready; }
+$ref = new ReflectionClass("EvalImplRejectTarget");
+echo $ref->implementsInterface("EvalImplRejectIface") ? "T" : "F";
+try {
+    $ref->implementsInterface("EvalImplRejectClass");
+    echo ":bad";
+} catch (ReflectionException $e) {
+    echo ":"; echo get_class($e); echo ":"; echo $e->getMessage();
+}
+try {
+    $ref->implementsInterface("EvalImplRejectTrait");
+    echo ":bad";
+} catch (ReflectionException $e) {
+    echo ":"; echo get_class($e); echo ":"; echo $e->getMessage();
+}
+try {
+    $ref->implementsInterface("EvalImplRejectEnum");
+    echo ":bad";
+} catch (ReflectionException $e) {
+    echo ":"; echo get_class($e); echo ":"; echo $e->getMessage();
+}
+try {
+    $ref->implementsInterface("EvalImplRejectMissing");
+    echo ":bad";
+} catch (ReflectionException $e) {
+    echo ":"; echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "F:ReflectionException:EvalImplRejectClass is not an interface:ReflectionException:EvalImplRejectTrait is not an interface:ReflectionException:EvalImplRejectEnum is not an interface:ReflectionException:Interface \"EvalImplRejectMissing\" does not exist"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes eval class-like final and abstract flags.
 #[test]
 fn execute_program_reflects_eval_class_modifier_flags() {
@@ -575,10 +625,7 @@ return true;"##,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(
-        values.output,
-        "3/1:first#0rvRT|second#1OvbT|rest#2OVRt|"
-    );
+    assert_eq!(values.output, "3/1:first#0rvRT|second#1OvbT|rest#2OVRt|");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

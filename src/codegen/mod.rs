@@ -10,13 +10,11 @@
 
 pub(crate) mod abi;
 pub(crate) mod builtins;
-pub(crate) mod cdylib;
 pub(crate) mod callable_descriptor;
 pub(crate) mod callable_dispatch;
-pub(crate) mod runtime_callable_invoker;
 mod callables;
+pub(crate) mod cdylib;
 mod class_methods;
-mod property_init_thunks;
 /// Codegen context module.
 pub mod context;
 pub(crate) mod data_section;
@@ -33,8 +31,10 @@ mod main_emission;
 pub mod platform;
 mod prescan;
 mod program_usage;
+mod property_init_thunks;
 pub(crate) mod reflection;
 pub(crate) mod runtime;
+pub(crate) mod runtime_callable_invoker;
 mod runtime_features;
 pub(crate) mod sentinels;
 mod stmt;
@@ -130,34 +130,33 @@ use crate::types::{
     PackedClassInfo, PhpType, TypeEnv,
 };
 use class_methods::emit_class_methods;
-use property_init_thunks::emit_property_init_thunk;
 use data_section::DataSection;
 use driver_support::align16;
-use emit::Emitter;
-use interface_wrappers::emit_interface_return_wrappers;
-use main_emission::emit_main_and_finalize;
 pub(crate) use driver_support::{
     emit_box_current_expr_value_as_mixed_for_container, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, emit_box_iterable_value_for_mixed_container,
-    emit_box_runtime_payload_as_mixed, emit_deferred_closures,
-    emit_write_current_string_stderr, emit_write_literal_stderr,
-    emit_normalized_hash_key, emit_release_pushed_refcounted_temp_after_array_push,
-    runtime_value_tag,
+    emit_box_runtime_payload_as_mixed, emit_deferred_closures, emit_normalized_hash_key,
+    emit_release_pushed_refcounted_temp_after_array_push, emit_write_current_string_stderr,
+    emit_write_literal_stderr, runtime_value_tag,
 };
-pub(crate) use expr::arrays::emit_array_value_type_stamp;
-pub(crate) use functions::{emit_fiber_wrapper, emit_generator_with_label};
-pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
-pub use sentinels::{set_null_repr, NullRepr};
 #[allow(unused_imports)]
 pub use driver_support::{
     generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
 };
+use emit::Emitter;
+pub(crate) use expr::arrays::emit_array_value_type_stamp;
+pub(crate) use functions::{emit_fiber_wrapper, emit_generator_with_label};
+use interface_wrappers::emit_interface_return_wrappers;
+use main_emission::emit_main_and_finalize;
+use platform::Target;
+pub(crate) use prescan::collect_constants;
+use property_init_thunks::emit_property_init_thunk;
+pub use runtime_features::RuntimeFeatures;
 pub use runtime_features::{
     required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
 };
-pub use runtime_features::RuntimeFeatures;
-use platform::Target;
-pub(crate) use prescan::collect_constants;
+pub use sentinels::{set_null_repr, NullRepr};
+pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
 
 /// Output artifact kind selected by the compiler's `--emit` flag.
 ///
@@ -259,16 +258,28 @@ pub fn generate_user_asm(
                 StmtKind::FunctionDecl { name: n, body, .. } if n == name => Some(body),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("codegen bug: function '{}' declared in signatures but body not found in AST", name));
+            .unwrap_or_else(|| {
+                panic!(
+                    "codegen bug: function '{}' declared in signatures but body not found in AST",
+                    name
+                )
+            });
 
         functions::emit_function(
-            &mut emitter, &mut data, name, sig, body, functions,
+            &mut emitter,
+            &mut data,
+            name,
+            sig,
+            body,
+            functions,
             callable_param_sigs,
             callable_return_sigs,
             callable_array_return_sigs,
             &fiber_return_sigs,
             &function_variant_group_names,
-            &global_constants, &all_global_var_names, &all_static_vars,
+            &global_constants,
+            &all_global_var_names,
+            &all_static_vars,
             interfaces,
             &declared_traits,
             Some(classes),
@@ -605,6 +616,7 @@ fn collect_emitted_class_names(
         "Exception",
         "LogicException",
         "RuntimeException",
+        "ReflectionException",
         "JsonException",
         "InvalidArgumentException",
         "OutOfBoundsException",
@@ -703,9 +715,9 @@ fn collect_dynamic_object_factory_classes_in_stmt(
     match &stmt.kind {
         StmtKind::ClassDecl { methods, .. }
         | StmtKind::TraitDecl { methods, .. }
-        | StmtKind::InterfaceDecl { methods, .. } => methods
-            .iter()
-            .for_each(|method| collect_dynamic_object_factory_classes(&method.body, classes, names)),
+        | StmtKind::InterfaceDecl { methods, .. } => methods.iter().for_each(|method| {
+            collect_dynamic_object_factory_classes(&method.body, classes, names)
+        }),
         StmtKind::FunctionDecl { body, .. }
         | StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
@@ -862,8 +874,7 @@ fn collect_dynamic_object_factory_classes_in_expr(
         | ExprKind::PtrCast { expr, .. } => {
             collect_dynamic_object_factory_classes_in_expr(expr, classes, names);
         }
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default } => {
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             collect_dynamic_object_factory_classes_in_expr(value, classes, names);
             collect_dynamic_object_factory_classes_in_expr(default, classes, names);
         }
@@ -951,7 +962,9 @@ fn collect_dynamic_object_factory_classes_in_expr(
             collect_dynamic_object_factory_classes_in_expr(then_expr, classes, names);
             collect_dynamic_object_factory_classes_in_expr(else_expr, classes, names);
         }
-        ExprKind::Closure { body, .. } => collect_dynamic_object_factory_classes(body, classes, names),
+        ExprKind::Closure { body, .. } => {
+            collect_dynamic_object_factory_classes(body, classes, names)
+        }
         ExprKind::NamedArg { value, .. } => {
             collect_dynamic_object_factory_classes_in_expr(value, classes, names);
         }
@@ -983,8 +996,7 @@ fn collect_dynamic_object_factory_classes_in_expr(
             }
         }
         ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Method {
-            object,
-            ..
+            object, ..
         }) => collect_dynamic_object_factory_classes_in_expr(object, classes, names),
         ExprKind::BufferNew { len, .. } => {
             collect_dynamic_object_factory_classes_in_expr(len, classes, names);

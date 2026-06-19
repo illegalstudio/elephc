@@ -64,6 +64,7 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
     "RangeException",
     "UnderflowException",
     "UnexpectedValueException",
+    "ReflectionException",
     "JsonException",
     "FiberError",
 ];
@@ -121,12 +122,7 @@ fn collect_eval_method_slots(module: &Module) -> Vec<EvalMethodSlot> {
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
-        collect_class_method_slots(
-            class_name,
-            class_info,
-            &emitted_methods,
-            &mut slots,
-        );
+        collect_class_method_slots(class_name, class_info, &emitted_methods, &mut slots);
     }
     slots
 }
@@ -138,12 +134,7 @@ fn collect_eval_static_method_slots(module: &Module) -> Vec<EvalStaticMethodSlot
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
-        collect_class_static_method_slots(
-            class_name,
-            class_info,
-            &emitted_methods,
-            &mut slots,
-        );
+        collect_class_static_method_slots(class_name, class_info, &emitted_methods, &mut slots);
     }
     slots
 }

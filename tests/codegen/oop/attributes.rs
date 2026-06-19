@@ -1186,6 +1186,57 @@ echo (new ReflectionClass(StaticImplTrait::class))->implementsInterface(StaticIm
     assert_eq!(out.stdout, "CBEIPt");
 }
 
+/// Verifies that `ReflectionClass::implementsInterface()` throws PHP-compatible
+/// ReflectionException objects for missing or non-interface argument names.
+#[test]
+fn test_reflection_class_implements_interface_rejects_non_interfaces() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface StaticImplRejectIface {}
+interface StaticImplRejectOther {}
+class StaticImplRejectTarget implements StaticImplRejectIface {}
+class StaticImplRejectClass {}
+trait StaticImplRejectTrait {}
+enum StaticImplRejectEnum { case Ready; }
+$ref = new ReflectionClass(StaticImplRejectTarget::class);
+echo $ref->implementsInterface(StaticImplRejectOther::class) ? "T" : "F";
+try {
+    $ref->implementsInterface("StaticImplRejectClass");
+    echo ":ok";
+} catch (ReflectionException $e) {
+    echo ":" . get_class($e) . ":" . $e->getMessage();
+}
+try {
+    $ref->implementsInterface("StaticImplRejectTrait");
+    echo ":ok";
+} catch (ReflectionException $e) {
+    echo ":" . get_class($e) . ":" . $e->getMessage();
+}
+try {
+    $ref->implementsInterface("StaticImplRejectEnum");
+    echo ":ok";
+} catch (ReflectionException $e) {
+    echo ":" . get_class($e) . ":" . $e->getMessage();
+}
+try {
+    $ref->implementsInterface("StaticImplRejectMissing");
+    echo ":ok";
+} catch (ReflectionException $e) {
+    echo ":" . get_class($e) . ":" . $e->getMessage();
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "F:ReflectionException:StaticImplRejectClass is not an interface:ReflectionException:StaticImplRejectTrait is not an interface:ReflectionException:StaticImplRejectEnum is not an interface:ReflectionException:Interface \"StaticImplRejectMissing\" does not exist"
+    );
+}
+
 /// Verifies that `ReflectionClass::getParentClass()` returns a ReflectionClass
 /// object for subclasses and `false` for parentless classes.
 #[test]

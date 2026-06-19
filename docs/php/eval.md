@@ -171,8 +171,9 @@ modifier bitmask for eval class-like metadata.
 classes and parent interfaces for eval interfaces.
 `ReflectionClass::implementsInterface()` checks those relations
 case-insensitively and returns true when reflecting the requested interface
-itself, while `ReflectionClass::getTraitNames()` returns traits used directly by
-eval classes.
+itself. It throws catchable `ReflectionException` values when the argument names
+a class, trait, enum, or missing interface, while `ReflectionClass::getTraitNames()`
+returns traits used directly by eval classes.
 `ReflectionClass::hasMethod()` and `ReflectionClass::hasProperty()` report
 method and property membership for eval classes, interfaces, traits, and enums;
 method lookup is case-insensitive, while property lookup is case-sensitive.
@@ -376,10 +377,9 @@ broader parameter/return ABI shapes are still outside that bridge.
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Method/Parameter/Property/attribute slice, richer
-ReflectionParameter type metadata beyond presence flags,
-`ReflectionClass::implementsInterface()` `ReflectionException` validation for
-missing or non-interface argument names, and broader generated/AOT method bridge
-signatures beyond the current public non-by-reference fixed scalar/Mixed slice.
+ReflectionParameter type metadata beyond presence flags, and broader
+generated/AOT method bridge signatures beyond the current public
+non-by-reference fixed scalar/Mixed slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

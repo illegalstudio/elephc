@@ -24,8 +24,8 @@ use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::scalars;
 use crate::codegen::abi;
-use crate::codegen::NULL_SENTINEL;
 use crate::codegen::platform::Arch;
+use crate::codegen::NULL_SENTINEL;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, StaticReceiver};
 use crate::types::PhpType;
@@ -146,6 +146,7 @@ pub(crate) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static 
         "OverflowException",
         "RangeException",
         "RecursiveCallbackFilterIterator",
+        "ReflectionException",
         "ReflectionClass",
         "ReflectionClassConstant",
         "ReflectionEnumBackedCase",
@@ -215,6 +216,7 @@ fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
         "ReflectionClassConstant",
         "ReflectionEnumBackedCase",
         "ReflectionEnumUnitCase",
+        "ReflectionException",
         "ReflectionMethod",
         "ReflectionProperty",
         "RegexIterator",
@@ -287,10 +289,7 @@ fn emit_box_current_object_result(emitter: &mut Emitter) {
 }
 
 /// Invokes the legacy runtime dynamic-new registry and boxes object/null results.
-fn emit_new_dynamic_fallback(
-    emitter: &mut Emitter,
-    ctx: &mut Context,
-) {
+fn emit_new_dynamic_fallback(emitter: &mut Emitter, ctx: &mut Context) {
     let null_label = ctx.next_label("new_dynamic_null");
     let done_label = ctx.next_label("new_dynamic_fallback_done");
     match emitter.target.arch {
@@ -572,7 +571,10 @@ fn class_is_same_or_descends_from(class_name: &str, base_class: &str, ctx: &Cont
         if class_names_match(name, base_class) {
             return true;
         }
-        current = ctx.classes.get(name).and_then(|info| info.parent.as_deref());
+        current = ctx
+            .classes
+            .get(name)
+            .and_then(|info| info.parent.as_deref());
     }
     false
 }
@@ -583,10 +585,7 @@ fn class_names_match(left: &str, right: &str) -> bool {
 }
 
 /// Collects all concrete dynamic factory targets that satisfy the required parent.
-fn sorted_dynamic_new_classes_by_id(
-    required_parent: &str,
-    ctx: &Context,
-) -> Vec<(String, u64)> {
+fn sorted_dynamic_new_classes_by_id(required_parent: &str, ctx: &Context) -> Vec<(String, u64)> {
     let mut classes: Vec<(String, u64)> = ctx
         .classes
         .iter()
@@ -624,11 +623,7 @@ fn emit_push_dynamic_new_class_id(emitter: &mut Emitter) {
 }
 
 /// Compares the saved dynamic factory class id with a concrete candidate class.
-fn emit_compare_dynamic_new_class_id(
-    class_id: u64,
-    matched_label: &str,
-    emitter: &mut Emitter,
-) {
+fn emit_compare_dynamic_new_class_id(class_id: u64, matched_label: &str, emitter: &mut Emitter) {
     let scratch = abi::temp_int_reg(emitter.target);
     abi::emit_load_temporary_stack_slot(emitter, scratch, 0);
     match emitter.target.arch {
@@ -744,11 +739,7 @@ pub(super) fn emit_unbox_mixed_object_or_null_branch(null_label: &str, emitter: 
 }
 
 /// Emits a runtime warning diagnostic with the given message.
-pub(super) fn emit_runtime_warning(
-    message: &[u8],
-    emitter: &mut Emitter,
-    data: &mut DataSection,
-) {
+pub(super) fn emit_runtime_warning(message: &[u8], emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) = data.add_string(message);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -765,11 +756,7 @@ pub(super) fn emit_runtime_warning(
 
 /// Emits a boxed null value (tagged nullable pointer) into expression result registers.
 pub(super) fn emit_boxed_null(emitter: &mut Emitter) {
-    abi::emit_load_int_immediate(
-        emitter,
-        abi::int_result_reg(emitter),
-        NULL_SENTINEL,
-    );
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), NULL_SENTINEL);
     crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
 }
 

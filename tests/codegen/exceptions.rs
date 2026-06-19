@@ -62,6 +62,22 @@ fn test_builtin_exception_message_api() {
     assert_eq!(out, "boom:boom");
 }
 
+/// Checks that Exception messages built from temporary string results survive the throw.
+#[test]
+fn test_builtin_exception_message_persists_concatenated_temporary() {
+    let out = compile_and_run(
+        r#"<?php
+$name = "dynamic";
+try {
+    throw new Exception($name . " boom");
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "dynamic boom");
+}
+
 /// Verifies builtin throwable catches exception.
 #[test]
 fn test_builtin_throwable_catches_exception() {
@@ -75,8 +91,7 @@ fn test_builtin_throwable_catches_exception() {
 #[test]
 fn test_builtin_throwable_catches_error() {
     // Throwable (the root interface) catches a builtin Error.
-    let out =
-        compile_and_run("<?php try { throw new Error(); } catch (Throwable $e) { echo 13; }");
+    let out = compile_and_run("<?php try { throw new Error(); } catch (Throwable $e) { echo 13; }");
     assert_eq!(out, "13");
 }
 

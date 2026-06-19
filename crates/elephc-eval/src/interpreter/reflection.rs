@@ -101,6 +101,48 @@ pub(in crate::interpreter) fn eval_reflection_owner_new_object(
     }
 }
 
+/// Handles eval-backed `ReflectionClass::implementsInterface()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("implementsInterface") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let args = bind_evaluated_function_args(&[String::from("interface")], evaluated_args)?;
+    let interface_name = eval_reflection_string_arg(args[0], values)?;
+    if !eval_reflection_interface_exists(&interface_name, context, values)? {
+        if eval_reflection_non_interface_exists(&interface_name, context, values)? {
+            return eval_throw_reflection_exception(
+                &format!("{} is not an interface", interface_name),
+                context,
+                values,
+            );
+        }
+        return eval_throw_reflection_exception(
+            &format!("Interface \"{}\" does not exist", interface_name),
+            context,
+            values,
+        );
+    }
+    values
+        .bool_value(eval_reflection_class_implements_interface_name(
+            &reflected_name,
+            &interface_name,
+            context,
+        ))
+        .map(Some)
+}
+
 /// Builds an eval-backed `ReflectionClass` object when the reflected class-like exists in eval.
 fn eval_reflection_class_new(
     evaluated_args: Vec<EvaluatedCallArg>,
@@ -672,6 +714,74 @@ fn eval_reflection_class_like_exists(name: &str, context: &ElephcEvalContext) ->
         || context.has_interface(name)
         || context.has_trait(name)
         || context.has_enum(name)
+}
+
+/// Returns true when one name exists as an eval or runtime interface.
+fn eval_reflection_interface_exists(
+    name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(context.has_interface(name) || values.interface_exists(name)?)
+}
+
+/// Returns true when one name exists as a non-interface class-like symbol.
+fn eval_reflection_non_interface_exists(
+    name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if context.has_class(name)
+        || context.has_trait(name)
+        || context.has_enum(name)
+        || values.class_exists(name)?
+        || values.trait_exists(name)?
+    {
+        return Ok(true);
+    }
+    values.enum_exists(name)
+}
+
+/// Returns true when reflected eval metadata implements or extends an interface name.
+fn eval_reflection_class_implements_interface_name(
+    reflected_name: &str,
+    interface_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    if context.has_interface(reflected_name) {
+        return eval_reflection_same_class_like_name(reflected_name, interface_name)
+            || context
+                .interface_parent_names(reflected_name)
+                .iter()
+                .any(|parent| eval_reflection_same_class_like_name(parent, interface_name));
+    }
+    if context.has_class(reflected_name) || context.has_enum(reflected_name) {
+        return context
+            .class_interface_names(reflected_name)
+            .iter()
+            .any(|interface| eval_reflection_same_class_like_name(interface, interface_name));
+    }
+    false
+}
+
+/// Returns true when two PHP class-like names match case-insensitively.
+fn eval_reflection_same_class_like_name(left: &str, right: &str) -> bool {
+    left.trim_start_matches('\\')
+        .eq_ignore_ascii_case(right.trim_start_matches('\\'))
+}
+
+/// Creates a catchable `ReflectionException` and propagates it through eval throw state.
+fn eval_throw_reflection_exception(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let exception = values.new_object("ReflectionException")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
 }
 
 /// Returns method metadata for a method-like member on an eval class-like symbol.

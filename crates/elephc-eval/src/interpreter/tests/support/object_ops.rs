@@ -462,7 +462,8 @@ impl FakeOps {
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC) != 0)?;
             let is_passed_by_reference =
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_BY_REF) != 0)?;
-            let has_type = self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE) != 0)?;
+            let has_type =
+                self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE) != 0)?;
             properties.push(("__position".to_string(), position));
             properties.push(("__is_optional".to_string(), is_optional));
             properties.push(("__is_variadic".to_string(), is_variadic));
@@ -643,7 +644,13 @@ impl FakeOps {
 
 /// Returns whether a fake runtime class stores PHP Throwable constructor state.
 fn fake_runtime_exception_like_class(class_name: &str) -> bool {
-    ["Exception", "JsonException", "Error", "ValueError"]
+    [
+        "Exception",
+        "JsonException",
+        "ReflectionException",
+        "Error",
+        "ValueError",
+    ]
         .iter()
         .any(|known| class_name.eq_ignore_ascii_case(known))
 }
@@ -673,7 +680,7 @@ fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exclude_self: 
         return fake_runtime_exception_like_class(class_name);
     }
     if target_class.eq_ignore_ascii_case("Exception") {
-        return ["Exception", "JsonException"]
+        return ["Exception", "JsonException", "ReflectionException"]
             .iter()
             .any(|known| class_name.eq_ignore_ascii_case(known));
     }

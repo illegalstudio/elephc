@@ -40,6 +40,7 @@ const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "RangeException",
     "UnderflowException",
     "UnexpectedValueException",
+    "ReflectionException",
     "JsonException",
     "FiberError",
 ];
@@ -99,12 +100,7 @@ fn collect_eval_constructor_slots(module: &Module) -> Vec<EvalConstructorSlot> {
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
-        collect_class_constructor_slot(
-            class_name,
-            class_info,
-            &emitted_methods,
-            &mut slots,
-        );
+        collect_class_constructor_slot(class_name, class_info, &emitted_methods, &mut slots);
     }
     slots
 }
@@ -140,8 +136,8 @@ fn collect_class_constructor_slot(
     if !emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), false)) {
         return;
     }
-    let supported = constructor_is_public(class_info, &method_key)
-        && constructor_signature_supported(sig);
+    let supported =
+        constructor_is_public(class_info, &method_key) && constructor_signature_supported(sig);
     let params = if supported {
         sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect()
     } else {
@@ -197,7 +193,9 @@ fn emit_constructor_helper(
         Arch::AArch64 => {
             emit_constructor_aarch64(module, emitter, slots, builtin_throwable_class_ids)
         }
-        Arch::X86_64 => emit_constructor_x86_64(module, emitter, slots, builtin_throwable_class_ids),
+        Arch::X86_64 => {
+            emit_constructor_x86_64(module, emitter, slots, builtin_throwable_class_ids)
+        }
     }
 }
 

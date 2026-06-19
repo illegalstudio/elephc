@@ -14,8 +14,8 @@ use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
-use super::canonical_builtin_function_name;
 use super::super::Checker;
+use super::canonical_builtin_function_name;
 
 mod preg_replace_callback;
 
@@ -236,8 +236,7 @@ fn infer_object_or_array_callable_runtime_return(
 ) -> Result<Option<PhpType>, CompileError> {
     if let ExprKind::Variable(var_name) = &callback.kind {
         if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
-            return infer_callable_target_runtime_return(checker, &target, callback, env)
-                .map(Some);
+            return infer_callable_target_runtime_return(checker, &target, callback, env).map(Some);
         }
     }
 
@@ -372,7 +371,10 @@ fn infer_static_method_callable_runtime_return(
         if class_info.methods.contains_key(method) {
             CompileError::new(
                 callback.span,
-                &format!("Cannot call instance method statically: {}::{}", class_name, method),
+                &format!(
+                    "Cannot call instance method statically: {}::{}",
+                    class_name, method
+                ),
             )
         } else {
             CompileError::new(
@@ -450,7 +452,13 @@ fn check_callable_target_call(
                     env,
                 )
             } else {
-                checker.infer_static_method_call_type(receiver, method, callback_args, callback, env)
+                checker.infer_static_method_call_type(
+                    receiver,
+                    method,
+                    callback_args,
+                    callback,
+                    env,
+                )
             }
         }
         CallableTarget::Function(name) => {
@@ -481,8 +489,9 @@ fn static_callable_receiver(
     span: crate::span::Span,
 ) -> Result<Option<StaticReceiver>, CompileError> {
     let class_name = match &receiver.kind {
-        ExprKind::StringLiteral(class_name) => resolve_class_name(checker, class_name)
-            .map(str::to_string),
+        ExprKind::StringLiteral(class_name) => {
+            resolve_class_name(checker, class_name).map(str::to_string)
+        }
         ExprKind::ClassConstant { receiver } => {
             Some(resolve_static_receiver_class(checker, receiver, span)?)
         }
@@ -501,10 +510,11 @@ fn resolve_static_receiver_class(
         StaticReceiver::Named(name) => resolve_class_name(checker, name.as_str())
             .map(str::to_string)
             .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", name))),
-        StaticReceiver::Self_ | StaticReceiver::Static => checker
-            .current_class
-            .clone()
-            .ok_or_else(|| CompileError::new(span, "Cannot use self::class outside a class context")),
+        StaticReceiver::Self_ | StaticReceiver::Static => {
+            checker.current_class.clone().ok_or_else(|| {
+                CompileError::new(span, "Cannot use self::class outside a class context")
+            })
+        }
         StaticReceiver::Parent => {
             let current_class = checker.current_class.as_ref().ok_or_else(|| {
                 CompileError::new(span, "Cannot use parent::class outside a class context")
@@ -558,10 +568,7 @@ impl CallbackDescriptorEnvOwnership {
 }
 
 /// Returns true when a callback builtin can use a descriptor-backed callback wrapper.
-fn callback_builtin_allows_complex_descriptor_env(
-    label: &str,
-    callback: &Expr,
-) -> bool {
+fn callback_builtin_allows_complex_descriptor_env(label: &str, callback: &Expr) -> bool {
     matches!(
         label,
         "array_map() callback"
@@ -573,8 +580,7 @@ fn callback_builtin_allows_complex_descriptor_env(
             | "uksort() callback"
             | "uasort() callback"
             | "iterator_apply() callback"
-    )
-        && callback_supports_complex_descriptor_env(callback)
+    ) && callback_supports_complex_descriptor_env(callback)
 }
 
 /// Returns true when a complex callback expression can be retained in a descriptor environment.
@@ -605,8 +611,7 @@ fn callback_descriptor_env_ownership(callback: &Expr) -> CallbackDescriptorEnvOw
             ..
         } => callback_descriptor_env_ownership(then_expr)
             .merge(callback_descriptor_env_ownership(else_expr)),
-        ExprKind::ShortTernary { value, default }
-        | ExprKind::NullCoalesce { value, default } => {
+        ExprKind::ShortTernary { value, default } | ExprKind::NullCoalesce { value, default } => {
             callback_descriptor_env_ownership(value)
                 .merge(callback_descriptor_env_ownership(default))
         }
@@ -643,14 +648,19 @@ pub(crate) fn check_callback_builtin_call(
     }
 
     if let ExprKind::FirstClassCallable(target) = &callback.kind {
-        let sig = checker.specialize_first_class_callable_target(target, callback_args, span, env)?;
+        let sig =
+            checker.specialize_first_class_callable_target(target, callback_args, span, env)?;
         return checker.check_known_callable_call(&sig, callback_args, span, env, label);
     }
 
     if let ExprKind::Variable(var_name) = &callback.kind {
         if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() {
-            let sig =
-                checker.specialize_first_class_callable_target(&target, callback_args, span, env)?;
+            let sig = checker.specialize_first_class_callable_target(
+                &target,
+                callback_args,
+                span,
+                env,
+            )?;
             checker.callable_sigs.insert(var_name.clone(), sig.clone());
             checker
                 .closure_return_types
@@ -665,7 +675,11 @@ pub(crate) fn check_callback_builtin_call(
         }
         if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
             let effective_arg_count = callback_args.len();
-            let required = decl.defaults.iter().filter(|default| default.is_none()).count();
+            let required = decl
+                .defaults
+                .iter()
+                .filter(|default| default.is_none())
+                .count();
             if decl.variadic.is_some() {
                 if effective_arg_count < required {
                     return Err(CompileError::new(
@@ -699,8 +713,7 @@ pub(crate) fn check_callback_builtin_call(
         return checker.check_known_callable_call(&sig, callback_args, span, env, label);
     }
 
-    if let Some(ret_ty) =
-        check_object_or_array_callable_call(
+    if let Some(ret_ty) = check_object_or_array_callable_call(
             checker,
             callback,
             callback_args,
@@ -708,8 +721,7 @@ pub(crate) fn check_callback_builtin_call(
             env,
             false,
             callback_builtin_allows_runtime_callable_array(label),
-        )?
-    {
+    )? {
         return Ok(ret_ty);
     }
 
@@ -774,7 +786,10 @@ pub(super) fn check_builtin(
         "preg_replace_callback" => preg_replace_callback::check(checker, args, span, env),
         "array_map" => {
             if args.len() != 2 {
-                return Err(CompileError::new(span, "array_map() takes exactly 2 arguments"));
+                return Err(CompileError::new(
+                    span,
+                    "array_map() takes exactly 2 arguments",
+                ));
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
@@ -863,7 +878,10 @@ pub(super) fn check_builtin(
         }
         "array_walk" => {
             if args.len() != 2 {
-                return Err(CompileError::new(span, "array_walk() takes exactly 2 arguments"));
+                return Err(CompileError::new(
+                    span,
+                    "array_walk() takes exactly 2 arguments",
+                ));
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
@@ -923,7 +941,9 @@ pub(super) fn check_builtin(
                 } else {
                     checker.resolve_first_class_callable_sig(target, span, env)?
                 };
-                validate_call_user_func_array_dynamic_arg_array(checker, &sig, &args[1], span, env)?;
+                validate_call_user_func_array_dynamic_arg_array(
+                    checker, &sig, &args[1], span, env,
+                )?;
                 let arg_array_ty = checker.infer_type(&args[1], env)?;
                 specialize_dynamic_assoc_variadic_first_class_callback(
                     checker,
@@ -955,11 +975,7 @@ pub(super) fn check_builtin(
                         .closure_return_types
                         .insert(var_name.clone(), sig.return_type.clone());
                     validate_call_user_func_array_dynamic_arg_array(
-                        checker,
-                        &sig,
-                        &args[1],
-                        span,
-                        env,
+                        checker, &sig, &args[1], span, env,
                     )?;
                     let arg_array_ty = checker.infer_type(&args[1], env)?;
                     specialize_dynamic_assoc_variadic_first_class_callback(
@@ -1021,20 +1037,12 @@ pub(super) fn check_builtin(
                 }
                 if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
                     validate_call_user_func_array_dynamic_arg_array(
-                        checker,
-                        &sig,
-                        &args[1],
-                        span,
-                        env,
+                        checker, &sig, &args[1], span, env,
                     )?;
                     let arg_array_ty = checker.infer_type(&args[1], env)?;
                     if matches!(arg_array_ty, PhpType::AssocArray { .. }) && sig.variadic.is_some()
                     {
-                        specialize_dynamic_assoc_variadic_user_callback(
-                            checker,
-                            &cb_name,
-                            &sig,
-                        )?;
+                        specialize_dynamic_assoc_variadic_user_callback(checker, &cb_name, &sig)?;
                     }
                     if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                         let ret_ty = checker.check_known_callable_call(
@@ -1095,8 +1103,7 @@ pub(super) fn check_builtin(
                 ExprKind::Spread(Box::new(args[1].clone())),
                 args[1].span,
             )];
-            if let Some(ret_ty) =
-                check_object_or_array_callable_call(
+            if let Some(ret_ty) = check_object_or_array_callable_call(
                     checker,
                     &args[0],
                     &spread_args,
@@ -1104,8 +1111,7 @@ pub(super) fn check_builtin(
                     env,
                     true,
                     true,
-                )?
-            {
+            )? {
                 if !call_user_func_array_arg_container_is_supported(&arg_array_ty) {
                     return Err(CompileError::new(
                         args[1].span,
@@ -1115,7 +1121,9 @@ pub(super) fn check_builtin(
                 return Ok(Some(ret_ty));
             }
             if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
-                validate_call_user_func_array_dynamic_arg_array(checker, &sig, &args[1], span, env)?;
+                validate_call_user_func_array_dynamic_arg_array(
+                    checker, &sig, &args[1], span, env,
+                )?;
                 if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                     let ret_ty = checker.check_known_callable_call(
                         &sig,
@@ -1155,8 +1163,12 @@ pub(super) fn check_builtin(
                 checker.infer_type(arg, env)?;
             }
             if let ExprKind::FirstClassCallable(target) = &args[0].kind {
-                let sig =
-                    checker.specialize_first_class_callable_target(target, &args[1..], span, env)?;
+                let sig = checker.specialize_first_class_callable_target(
+                    target,
+                    &args[1..],
+                    span,
+                    env,
+                )?;
                 let ret_ty = checker.check_known_callable_call(
                     &sig,
                     &args[1..],
@@ -1218,8 +1230,7 @@ pub(super) fn check_builtin(
                 let ret_ty = checker.check_function_call(&cb_name, &cb_args, span, env)?;
                 return Ok(Some(ret_ty));
             }
-            if let Some(ret_ty) =
-                check_object_or_array_callable_call(
+            if let Some(ret_ty) = check_object_or_array_callable_call(
                     checker,
                     &args[0],
                     &args[1..],
@@ -1227,8 +1238,7 @@ pub(super) fn check_builtin(
                     env,
                     true,
                     true,
-                )?
-            {
+            )? {
                 return Ok(Some(ret_ty));
             }
             if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
@@ -1281,26 +1291,19 @@ pub(super) fn check_builtin(
                     &format!("{}() takes 1 or 2 arguments", name),
                 ));
             }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            if !matches!(args[0].kind, ExprKind::StringLiteral(_)) {
+            let class_name_ty = checker.infer_type(&args[0], env)?;
+            if class_name_ty.codegen_repr() != PhpType::Str {
                 return Err(CompileError::new(
-                    span,
-                    &format!("{}() first argument must be a string literal in AOT mode", name),
+                    args[0].span,
+                    &format!("{}() first argument must be a string", name),
                 ));
             }
             if let Some(autoload_arg) = args.get(1) {
-                if !matches!(
-                    autoload_arg.kind,
-                    ExprKind::BoolLiteral(_) | ExprKind::IntLiteral(_)
-                ) {
+                let autoload_ty = checker.infer_type(autoload_arg, env)?;
+                if !matches!(autoload_ty.codegen_repr(), PhpType::Bool | PhpType::Int) {
                     return Err(CompileError::new(
-                        span,
-                        &format!(
-                            "{}() autoload argument must be a literal bool or int in AOT mode",
-                            name
-                        ),
+                        autoload_arg.span,
+                        &format!("{}() autoload argument must be a bool or int", name),
                     ));
                 }
             }
@@ -1417,7 +1420,9 @@ pub(super) fn check_builtin(
                             .collect();
                         let _ = checker.check_function_call(&cb_name, &dummy_args, span, env);
                     }
-                } else if checker.function_variant_groups.contains_key(cb_name.as_str())
+                } else if checker
+                    .function_variant_groups
+                    .contains_key(cb_name.as_str())
                     && !checker.functions.contains_key(cb_name.as_str())
                 {
                     let _ = checker.ensure_function_variant_group_signature(&cb_name, span);
