@@ -70,7 +70,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Expression area | Support |
 |---|---|
 | Scalars | `null`, booleans, integers, floats, and strings. |
-| Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, eval object property access including `__get()` / `__set()` fallback for missing or inaccessible eval properties, `isset()`, `empty()`, and `unset()` magic property dispatch through `__isset()` / `__unset()`, static property access, and class constant fetches through the bridge. |
+| Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, eval object property access including `__get()` / `__set()` fallback for missing or inaccessible eval properties, `isset()`, `empty()`, and `unset()` magic property dispatch through `__isset()` / `__unset()`, `instanceof` over static and dynamic class/interface targets, static property access, and class constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, and string-key reads/writes. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, invokable eval objects, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
 | Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking for supported public scalar/Mixed constructor signatures. |
@@ -149,7 +149,9 @@ trait, and enum constants including `final` constants, class-level attributes,
 `__callStatic()`, and magic property fallback through `__get()` and `__set()`.
 `isset()`, `empty()`, and `unset()` on missing or inaccessible eval properties
 dispatch through `__isset()` and `__unset()` using PHP's `empty()` gate
-ordering.
+ordering. `instanceof` works with eval-declared classes and interfaces,
+generated/AOT runtime objects, dynamic string targets, dynamic object targets,
+and parenthesized target expressions.
 Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,
@@ -339,7 +341,7 @@ objects. Eval `__clone()` hooks are invoked on the cloned object after storage
 copying and use the same runtime visibility checks as method calls.
 
 AOT and eval-declared class-name probes are visible through `class_exists()`.
-Eval object relation probes through `is_a()` and `is_subclass_of()` use
+Eval object relation probes through `instanceof`, `is_a()`, and `is_subclass_of()` use
 generated AOT class/interface metadata and eval-created object metadata.
 `interface_exists()`, `trait_exists()`, and `enum_exists()` can probe generated
 AOT metadata. Eval-declared classes, interfaces, traits, and class aliases are

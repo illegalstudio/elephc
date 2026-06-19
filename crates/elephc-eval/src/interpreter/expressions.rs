@@ -45,6 +45,9 @@ pub(in crate::interpreter) fn eval_expr(
             required,
             once,
         } => eval_include_expr(path, *required, *once, context, scope, values),
+        EvalExpr::InstanceOf { value, target } => {
+            eval_instanceof_expr(value, target, context, scope, values)
+        }
         EvalExpr::LoadVar(name) => {
             visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok)
         }
@@ -248,6 +251,108 @@ fn eval_new_object_class_name(
             .resolve_class_name(class_name)
             .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string())),
     }
+}
+
+/// Evaluates PHP's `instanceof` operator over static and dynamic class targets.
+fn eval_instanceof_expr(
+    value: &EvalExpr,
+    target: &EvalInstanceOfTarget,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = eval_expr(value, context, scope, values)?;
+    let result = match target {
+        EvalInstanceOfTarget::ClassName(class_name) => {
+            if values.type_tag(value)? != EVAL_TAG_OBJECT {
+                return values.bool_value(false);
+            }
+            let target_class = eval_instanceof_static_target_name(class_name, context)?;
+            eval_instanceof_object_result(value, &target_class, context, values)?
+        }
+        EvalInstanceOfTarget::Expr(target) => {
+            let target = eval_expr(target, context, scope, values)?;
+            let target_class = eval_instanceof_dynamic_target_name(target, context, values)?;
+            if values.type_tag(value)? == EVAL_TAG_OBJECT {
+                eval_instanceof_object_result(value, &target_class, context, values)?
+            } else {
+                false
+            }
+        }
+    };
+    values.bool_value(result)
+}
+
+/// Resolves a static `instanceof` target according to eval class aliases and scope keywords.
+fn eval_instanceof_static_target_name(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<String, EvalStatus> {
+    match class_name.to_ascii_lowercase().as_str() {
+        "self" | "parent" | "static" => resolve_eval_static_class_name(class_name, context),
+        _ => Ok(eval_instanceof_resolved_target_name(class_name, context)),
+    }
+}
+
+/// Resolves a dynamic `instanceof` target cell to the PHP class name it represents.
+fn eval_instanceof_dynamic_target_name(
+    target: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    match values.type_tag(target)? {
+        EVAL_TAG_STRING => {
+            let target = eval_instanceof_string_target_name(target, values)?;
+            Ok(eval_instanceof_resolved_target_name(&target, context))
+        }
+        EVAL_TAG_OBJECT => eval_instanceof_object_target_name(target, context, values),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Reads and normalizes one string-valued dynamic `instanceof` target.
+fn eval_instanceof_string_target_name(
+    target: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let bytes = values.string_bytes(target)?;
+    let target = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok(target.trim_start_matches('\\').to_string())
+}
+
+/// Reads the runtime class of an object-valued dynamic `instanceof` target.
+fn eval_instanceof_object_target_name(
+    target: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let identity = values.object_identity(target)?;
+    if let Some(class) = context.dynamic_object_class(identity) {
+        return Ok(class.name().to_string());
+    }
+    let class_name = values.object_class_name(target)?;
+    let bytes = values.string_bytes(class_name);
+    values.release(class_name)?;
+    let class_name = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok(class_name.trim_start_matches('\\').to_string())
+}
+
+/// Applies eval alias resolution to a target class name without requiring it to exist.
+fn eval_instanceof_resolved_target_name(target: &str, context: &ElephcEvalContext) -> String {
+    context
+        .resolve_class_name(target)
+        .unwrap_or_else(|| target.trim_start_matches('\\').to_string())
+}
+
+/// Tests one object cell against a resolved `instanceof` target class/interface name.
+fn eval_instanceof_object_result(
+    value: RuntimeCellHandle,
+    target_class: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    dynamic_object_is_a(value, target_class, false, context, values)?
+        .map_or_else(|| values.object_is_a(value, target_class, false), Ok)
 }
 
 /// Evaluates a PHP `match` expression with strict comparison and lazy arm values.

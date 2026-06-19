@@ -78,6 +78,57 @@ fn parse_fragment_accepts_strict_equality_source() {
         }))]
     );
 }
+/// Verifies static `instanceof` parses as a high-precedence EvalIR expression.
+#[test]
+fn parse_fragment_accepts_static_instanceof_source() {
+    let program =
+        parse_fragment(br#"return !$object instanceof App\Box;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Unary {
+            op: EvalUnaryOp::LogicalNot,
+            expr: Box::new(EvalExpr::InstanceOf {
+                value: Box::new(EvalExpr::LoadVar("object".to_string())),
+                target: EvalInstanceOfTarget::ClassName("App\\Box".to_string()),
+            }),
+        }))]
+    );
+}
+
+/// Verifies dynamic `instanceof` targets parse from variables, properties, arrays, and parens.
+#[test]
+fn parse_fragment_accepts_dynamic_instanceof_targets() {
+    let program = parse_fragment(
+        br#"return $object instanceof $names[0] . ":" . ($object instanceof ($prefix . $suffix));"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Binary {
+            op: EvalBinOp::Concat,
+            left: Box::new(EvalExpr::Binary {
+                op: EvalBinOp::Concat,
+                left: Box::new(EvalExpr::InstanceOf {
+                    value: Box::new(EvalExpr::LoadVar("object".to_string())),
+                    target: EvalInstanceOfTarget::Expr(Box::new(EvalExpr::ArrayGet {
+                        array: Box::new(EvalExpr::LoadVar("names".to_string())),
+                        index: Box::new(EvalExpr::Const(EvalConst::Int(0))),
+                    })),
+                }),
+                right: Box::new(EvalExpr::Const(EvalConst::String(":".to_string()))),
+            }),
+            right: Box::new(EvalExpr::InstanceOf {
+                value: Box::new(EvalExpr::LoadVar("object".to_string())),
+                target: EvalInstanceOfTarget::Expr(Box::new(EvalExpr::Binary {
+                    op: EvalBinOp::Concat,
+                    left: Box::new(EvalExpr::LoadVar("prefix".to_string())),
+                    right: Box::new(EvalExpr::LoadVar("suffix".to_string())),
+                })),
+            }),
+        }))]
+    );
+}
+
 /// Verifies logical operators parse with `&&` binding tighter than `||`.
 #[test]
 fn parse_fragment_accepts_short_circuit_logical_source() {

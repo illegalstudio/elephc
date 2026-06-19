@@ -4769,6 +4769,46 @@ echo function_exists("is_a"); echo function_exists("is_subclass_of");');
     assert_eq!(out, "YYYNYYYYN11");
 }
 
+/// Verifies eval `instanceof` probes AOT and eval-declared class metadata.
+#[test]
+fn test_eval_fragment_instanceof_probes_class_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalInstanceAotIface {}
+class EvalInstanceAotParent {}
+class EvalInstanceAotChild extends EvalInstanceAotParent implements EvalInstanceAotIface {}
+
+eval('interface EvalInstanceDynIface {}
+class EvalInstanceDynBase {}
+class EvalInstanceDynChild extends EvalInstanceDynBase implements EvalInstanceDynIface {}
+$aot = new EvalInstanceAotChild();
+$dyn = new EvalInstanceDynChild();
+$dynName = "EvalInstanceDynChild";
+$dynTargets = ["EvalInstanceDynIface"];
+$prefix = "EvalInstanceDyn";
+$suffix = "Base";
+$dynTargetObject = new EvalInstanceDynChild();
+echo $aot instanceof EvalInstanceAotChild ? "A" : "a";
+echo $aot instanceof EvalInstanceAotParent ? "P" : "p";
+echo $aot instanceof EvalInstanceAotIface ? "I" : "i";
+echo $dyn instanceof EvalInstanceDynChild ? "C" : "c";
+echo $dyn instanceof EvalInstanceDynBase ? "B" : "b";
+echo $dyn instanceof EvalInstanceDynIface ? "F" : "f";
+echo $dyn instanceof $dynName ? "D" : "d";
+echo $dyn instanceof $dynTargets[0] ? "T" : "t";
+echo $dyn instanceof ($prefix . $suffix) ? "X" : "x";
+echo $dyn instanceof $dynTargetObject ? "O" : "o";
+echo 7 instanceof MissingEvalInstance ? "bad" : "S";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "APICBFDTXOS");
+}
+
 /// Verifies eval-declared class inheritance uses dynamic methods and metadata.
 #[test]
 fn test_eval_declared_class_inherits_methods_and_metadata() {

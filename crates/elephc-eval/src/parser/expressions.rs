@@ -12,8 +12,8 @@ use super::cursor::*;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalMagicConst, EvalMatchArm,
-    EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalInstanceOfTarget,
+    EvalMagicConst, EvalMatchArm, EvalUnaryOp,
 };
 use crate::lexer::TokenKind;
 
@@ -338,7 +338,89 @@ impl Parser {
                 expr: Box::new(expr),
             });
         }
-        self.parse_power()
+        self.parse_instanceof()
+    }
+
+    /// Parses left-associative `instanceof` with PHP's high operator precedence.
+    pub(super) fn parse_instanceof(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let mut expr = self.parse_power()?;
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "instanceof")) {
+            self.advance();
+            let target = self.parse_instanceof_target()?;
+            expr = EvalExpr::InstanceOf {
+                value: Box::new(expr),
+                target,
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses a static or dynamic target after PHP's `instanceof` operator.
+    pub(super) fn parse_instanceof_target(
+        &mut self,
+    ) -> Result<EvalInstanceOfTarget, EvalParseError> {
+        if self.consume(TokenKind::LParen) {
+            let expr = self.parse_expr()?;
+            self.expect(TokenKind::RParen)?;
+            return Ok(EvalInstanceOfTarget::Expr(Box::new(expr)));
+        }
+        if matches!(self.current(), TokenKind::DollarIdent(_)) {
+            let target = self.parse_instanceof_variable_target()?;
+            return Ok(EvalInstanceOfTarget::Expr(Box::new(target)));
+        }
+        let name = self.parse_qualified_name()?;
+        let class_name = self.resolve_static_class_name(name);
+        if self.consume(TokenKind::DoubleColon) {
+            let TokenKind::DollarIdent(property) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            let property = property.clone();
+            self.advance();
+            return Ok(EvalInstanceOfTarget::Expr(Box::new(
+                EvalExpr::StaticPropertyGet {
+                    class_name,
+                    property,
+                },
+            )));
+        }
+        Ok(EvalInstanceOfTarget::ClassName(class_name))
+    }
+
+    /// Parses PHP's unparenthesized dynamic `instanceof` variable/property/array target.
+    pub(super) fn parse_instanceof_variable_target(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let TokenKind::DollarIdent(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let mut expr = EvalExpr::LoadVar(name.clone());
+        self.advance();
+        loop {
+            if self.consume(TokenKind::LBracket) {
+                let index = self.parse_expr()?;
+                self.expect(TokenKind::RBracket)?;
+                expr = EvalExpr::ArrayGet {
+                    array: Box::new(expr),
+                    index: Box::new(index),
+                };
+                continue;
+            }
+            if self.consume(TokenKind::Arrow) {
+                let TokenKind::Ident(member) = self.current() else {
+                    return Err(EvalParseError::UnexpectedToken);
+                };
+                let member = member.clone();
+                self.advance();
+                if matches!(self.current(), TokenKind::LParen) {
+                    return Err(EvalParseError::UnexpectedToken);
+                }
+                expr = EvalExpr::PropertyGet {
+                    object: Box::new(expr),
+                    property: member,
+                };
+                continue;
+            }
+            break;
+        }
+        Ok(expr)
     }
 
     /// Parses right-associative exponentiation with higher precedence than unary prefix operators.
