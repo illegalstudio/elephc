@@ -753,7 +753,7 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let params = self.parse_function_params()?;
+        let (params, parameter_has_types) = self.parse_method_params()?;
         let body = if is_abstract {
             self.expect_semicolon()?;
             Vec::new()
@@ -768,7 +768,8 @@ impl Parser {
             is_final,
             params,
             body,
-        ))
+        )
+        .with_parameter_type_flags(parameter_has_types))
     }
 
     /// Parses one public property declaration with an optional initializer.
@@ -1236,9 +1237,9 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let params = self.parse_function_params()?;
+        let (params, parameter_has_types) = self.parse_method_params()?;
         self.expect_semicolon()?;
-        Ok(EvalInterfaceMethod::new(name, params))
+        Ok(EvalInterfaceMethod::new(name, params).with_parameter_type_flags(parameter_has_types))
     }
 
     /// Parses one interface property hook contract.
@@ -1647,6 +1648,64 @@ impl Parser {
         }
         self.expect(TokenKind::RParen)?;
         Ok(params)
+    }
+
+    /// Parses a method parameter list and records whether each parameter declared a type.
+    pub(super) fn parse_method_params(
+        &mut self,
+    ) -> Result<(Vec<String>, Vec<bool>), EvalParseError> {
+        let mut params = Vec::new();
+        let mut parameter_has_types = Vec::new();
+        if self.consume(TokenKind::RParen) {
+            return Ok((params, parameter_has_types));
+        }
+        loop {
+            let has_type = self.parse_optional_parameter_type()?;
+            let TokenKind::DollarIdent(name) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            params.push(name.clone());
+            parameter_has_types.push(has_type);
+            self.advance();
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            if matches!(self.current(), TokenKind::RParen) {
+                return Err(EvalParseError::ExpectedVariable);
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok((params, parameter_has_types))
+    }
+
+    /// Consumes a supported method parameter type and reports whether one existed.
+    fn parse_optional_parameter_type(&mut self) -> Result<bool, EvalParseError> {
+        if matches!(self.current(), TokenKind::DollarIdent(_)) {
+            return Ok(false);
+        }
+        let nullable_shorthand = self.consume(TokenKind::Question);
+        if nullable_shorthand && matches!(self.current(), TokenKind::DollarIdent(_)) {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        self.parse_parameter_type_name()?;
+        if nullable_shorthand && matches!(self.current(), TokenKind::Pipe) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        while self.consume(TokenKind::Pipe) {
+            self.parse_parameter_type_name()?;
+        }
+        Ok(true)
+    }
+
+    /// Consumes one simple qualified method parameter type name.
+    fn parse_parameter_type_name(&mut self) -> Result<(), EvalParseError> {
+        match self.current() {
+            TokenKind::Ident(_) | TokenKind::Backslash => {
+                let _ = self.parse_qualified_name()?;
+                Ok(())
+            }
+            _ => Err(EvalParseError::UnexpectedToken),
+        }
     }
 
     /// Parses the optional first clause of a `for` loop.

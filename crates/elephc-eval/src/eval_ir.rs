@@ -527,21 +527,30 @@ pub struct EvalInterfaceMethod {
     name: String,
     attributes: Vec<EvalAttribute>,
     params: Vec<String>,
+    parameter_has_types: Vec<bool>,
 }
 
 impl EvalInterfaceMethod {
     /// Creates one dynamic eval interface method signature.
     pub fn new(name: impl Into<String>, params: Vec<String>) -> Self {
+        let parameter_has_types = vec![false; params.len()];
         Self {
             name: name.into(),
             attributes: Vec::new(),
             params,
+            parameter_has_types,
         }
     }
 
     /// Returns a copy of this interface method with declaration attributes attached.
     pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
         self.attributes = attributes;
+        self
+    }
+
+    /// Returns a copy of this interface method with parameter type-presence flags.
+    pub fn with_parameter_type_flags(mut self, parameter_has_types: Vec<bool>) -> Self {
+        self.parameter_has_types = parameter_has_types;
         self
     }
 
@@ -558,6 +567,11 @@ impl EvalInterfaceMethod {
     /// Returns source-order parameter names without leading `$`.
     pub fn params(&self) -> &[String] {
         &self.params
+    }
+
+    /// Returns source-order flags for whether each parameter declared a type.
+    pub fn parameter_has_types(&self) -> &[bool] {
+        &self.parameter_has_types
     }
 }
 
@@ -1210,6 +1224,7 @@ pub struct EvalClassMethod {
     is_abstract: bool,
     is_final: bool,
     params: Vec<String>,
+    parameter_has_types: Vec<bool>,
     body: Vec<EvalStmt>,
 }
 
@@ -1248,6 +1263,7 @@ impl EvalClassMethod {
         params: Vec<String>,
         body: Vec<EvalStmt>,
     ) -> Self {
+        let parameter_has_types = vec![false; params.len()];
         Self {
             name: name.into(),
             attributes: Vec::new(),
@@ -1256,6 +1272,7 @@ impl EvalClassMethod {
             is_abstract,
             is_final,
             params,
+            parameter_has_types,
             body,
         }
     }
@@ -1268,6 +1285,12 @@ impl EvalClassMethod {
     /// Returns a copy of this method with declaration attributes attached.
     pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
         self.attributes = attributes;
+        self
+    }
+
+    /// Returns a copy of this method with source-order parameter type-presence flags.
+    pub fn with_parameter_type_flags(mut self, parameter_has_types: Vec<bool>) -> Self {
+        self.parameter_has_types = parameter_has_types;
         self
     }
 
@@ -1313,6 +1336,11 @@ impl EvalClassMethod {
     /// Returns source-order parameter names without leading `$`.
     pub fn params(&self) -> &[String] {
         &self.params
+    }
+
+    /// Returns source-order flags for whether each parameter declared a type.
+    pub fn parameter_has_types(&self) -> &[bool] {
+        &self.parameter_has_types
     }
 
     /// Returns the dynamic EvalIR statements that form the method body.
