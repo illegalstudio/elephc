@@ -1776,6 +1776,37 @@ fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> Cl
     }
 }
 
+/// Returns a `ReflectionMethod` predicate derived from its case-insensitive method name.
+fn builtin_reflection_method_name_predicate_method(
+    method_name: &str,
+    expected_name: &str,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let lower_name = strtolower_call(reflection_this_property("__name", dummy_span), dummy_span);
+    let comparison = binary_expr(
+        lower_name,
+        BinOp::StrictEq,
+        string_lit(expected_name, dummy_span),
+        dummy_span,
+    );
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![Stmt::new(StmtKind::Return(Some(comparison)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns `ReflectionProperty::hasType()` backed by a nullable private `__type` slot.
 fn builtin_reflection_property_has_type_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -2021,6 +2052,14 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_class_int_method(
             "getModifiers",
             "__modifiers",
+        ));
+        methods.push(builtin_reflection_method_name_predicate_method(
+            "isConstructor",
+            "__construct",
+        ));
+        methods.push(builtin_reflection_method_name_predicate_method(
+            "isDestructor",
+            "__destruct",
         ));
     }
     if class_name == "ReflectionProperty" {
@@ -2390,7 +2429,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionMethod" {
-                for method_name in ["isfinal", "isabstract"] {
+                for method_name in ["isfinal", "isabstract", "isconstructor", "isdestructor"] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }

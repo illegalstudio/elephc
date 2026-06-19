@@ -1852,6 +1852,37 @@ echo $classReadonlyProp->getModifiers();
     );
 }
 
+/// Verifies that `ReflectionMethod::isConstructor()` and `isDestructor()` derive
+/// their result from the reflected method name.
+#[test]
+fn test_reflection_method_reports_constructor_and_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectLifecycle {
+    public function __construct() {}
+    public function __destruct() {}
+    public function run() {}
+}
+$ctor = new ReflectionMethod(ReflectLifecycle::class, "__CONSTRUCT");
+echo $ctor->isConstructor() ? "C" : "c";
+echo $ctor->isDestructor() ? "D" : "d";
+echo ":";
+$dtor = new ReflectionMethod(ReflectLifecycle::class, "__destruct");
+echo $dtor->isConstructor() ? "C" : "c";
+echo $dtor->isDestructor() ? "D" : "d";
+echo ":";
+$run = new ReflectionMethod(ReflectLifecycle::class, "run");
+echo $run->isConstructor() ? "C" : "c";
+echo $run->isDestructor() ? "D" : "d";
+echo ":";
+$listed = (new ReflectionClass(ReflectLifecycle::class))->getConstructor();
+echo $listed->isConstructor() ? "C" : "c";
+echo $listed->isDestructor() ? "D" : "d";
+"#,
+    );
+    assert_eq!(out, "Cd:cD:cd:Cd");
+}
+
 /// Verifies member and enum-case reflectors expose their declaring class object.
 #[test]
 fn test_reflection_members_report_declaring_class() {
