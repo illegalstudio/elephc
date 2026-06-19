@@ -283,6 +283,10 @@ metadata through `ReflectionNamedType`, `ReflectionUnionType`, and
 `ReflectionProperty::hasDefaultValue()` and `getDefaultValue()` expose
 materialized property default metadata, including PHP's implicit `null` default
 for untyped concrete properties without an explicit initializer.
+`ReflectionProperty::getValue()` and `setValue()` read and write eval-declared
+instance and static property values, bypass public/protected/private visibility
+like PHP reflection, route concrete property hooks through their accessors, and
+still reject readonly writes.
 `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant
