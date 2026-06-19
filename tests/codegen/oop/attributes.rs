@@ -1555,6 +1555,45 @@ try {
     );
 }
 
+/// Verifies that `ReflectionClass::isSubclassOf()` reports parent classes and
+/// inherited interfaces while excluding self and accepting trait/enum targets as false.
+#[test]
+fn test_reflection_class_is_subclass_of() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface StaticSubclassIface {}
+interface StaticSubclassChildIface extends StaticSubclassIface {}
+class StaticSubclassBase {}
+class StaticSubclassParent extends StaticSubclassBase {}
+class StaticSubclassChild extends StaticSubclassParent implements StaticSubclassChildIface {}
+trait StaticSubclassTrait {}
+enum StaticSubclassEnum implements StaticSubclassIface { case Ready; }
+$ref = new ReflectionClass(StaticSubclassChild::class);
+echo $ref->isSubclassOf(StaticSubclassParent::class) ? "P" : "p";
+echo $ref->isSubclassOf("staticsubclassbase") ? "B" : "b";
+echo $ref->isSubclassOf(StaticSubclassIface::class) ? "I" : "i";
+echo $ref->isSubclassOf(StaticSubclassChild::class) ? "S" : "s";
+echo (new ReflectionClass(StaticSubclassChildIface::class))->isSubclassOf(StaticSubclassIface::class) ? "J" : "j";
+echo (new ReflectionClass(StaticSubclassIface::class))->isSubclassOf(StaticSubclassIface::class) ? "X" : "x";
+echo $ref->isSubclassOf(StaticSubclassTrait::class) ? "T" : "t";
+echo $ref->isSubclassOf(StaticSubclassEnum::class) ? "Q" : "q";
+echo (new ReflectionClass(StaticSubclassEnum::class))->isSubclassOf(StaticSubclassIface::class) ? "E" : "e";
+try {
+    $ref->isSubclassOf("StaticSubclassMissing");
+    echo ":bad";
+} catch (ReflectionException $e) {
+    echo ":missing";
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "PBIsJxtqE:missing");
+}
+
 /// Verifies that `ReflectionClass::getParentClass()` returns a ReflectionClass
 /// object for subclasses and `false` for parentless classes.
 #[test]

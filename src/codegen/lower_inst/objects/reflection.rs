@@ -36,6 +36,7 @@ struct ReflectionOwnerMetadata {
     attr_args: Vec<Option<Vec<AttrArgEntry>>>,
     interface_names: Vec<String>,
     trait_names: Vec<String>,
+    parent_names: Vec<String>,
     method_names: Vec<String>,
     property_names: Vec<String>,
     constant_names: Vec<String>,
@@ -275,6 +276,11 @@ fn emit_reflection_owner_object(
             )?;
             emit_reflection_string_array_property_by_name(
                 ctx,
+                "__parent_names",
+                &metadata.parent_names,
+            )?;
+            emit_reflection_string_array_property_by_name(
+                ctx,
                 "__method_names",
                 &metadata.method_names,
             )?;
@@ -505,6 +511,7 @@ fn reflection_class_metadata_for_name(
             attr_args: info.attribute_args.clone(),
             interface_names: info.interfaces.clone(),
             trait_names: info.used_traits.clone(),
+            parent_names: reflection_parent_class_names(ctx, info),
             method_names,
             property_names,
             constant_names,
@@ -558,6 +565,7 @@ fn reflection_class_metadata_for_name(
             attr_args: Vec::new(),
             interface_names: reflection_interface_parent_names(ctx, interface_name),
             trait_names: Vec::new(),
+            parent_names: Vec::new(),
             method_names,
             property_names,
             constant_names,
@@ -612,6 +620,7 @@ fn reflection_class_metadata_for_name(
             attr_args: Vec::new(),
             interface_names: Vec::new(),
             trait_names,
+            parent_names: Vec::new(),
             method_names,
             property_names,
             constant_names,
@@ -745,6 +754,7 @@ fn reflection_method_owner_metadata(
         attr_args: member.attr_args,
         interface_names: Vec::new(),
         trait_names: Vec::new(),
+        parent_names: Vec::new(),
         method_names: Vec::new(),
         property_names: Vec::new(),
         constant_names: Vec::new(),
@@ -796,6 +806,7 @@ fn reflection_property_metadata(
                 attr_args: info.property_attribute_args.get(&property_name)?.clone(),
                 interface_names: Vec::new(),
                 trait_names: Vec::new(),
+                parent_names: Vec::new(),
                 method_names: Vec::new(),
                 property_names: Vec::new(),
                 constant_names: Vec::new(),
@@ -970,6 +981,7 @@ fn reflection_class_constant_metadata(
             attr_args: case.attribute_args.clone(),
             interface_names: Vec::new(),
             trait_names: Vec::new(),
+            parent_names: Vec::new(),
             method_names: Vec::new(),
             property_names: Vec::new(),
             constant_names: Vec::new(),
@@ -1029,6 +1041,7 @@ fn reflection_enum_case_metadata(
                 attr_args: case.attribute_args.clone(),
                 interface_names: Vec::new(),
                 trait_names: Vec::new(),
+                parent_names: Vec::new(),
                 method_names: Vec::new(),
                 property_names: Vec::new(),
                 constant_names: Vec::new(),
@@ -1076,6 +1089,7 @@ fn reflection_class_constant_owner_metadata(
         attr_args: metadata.attr_args,
         interface_names: Vec::new(),
         trait_names: Vec::new(),
+        parent_names: Vec::new(),
         method_names: Vec::new(),
         property_names: Vec::new(),
         constant_names: Vec::new(),
@@ -1287,6 +1301,27 @@ fn reflection_parent_class_name(
     resolve_reflection_class(ctx, parent)
         .map(|(parent_name, _)| parent_name.to_string())
         .or_else(|| Some(parent.trim_start_matches('\\').to_string()))
+}
+
+/// Returns direct and inherited parent class names for `ReflectionClass::isSubclassOf()`.
+fn reflection_parent_class_names(
+    ctx: &FunctionContext<'_>,
+    info: &crate::types::ClassInfo,
+) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut current = reflection_parent_class_name(ctx, info);
+    while let Some(parent_name) = current {
+        if names
+            .iter()
+            .any(|name| php_symbol_key(name) == php_symbol_key(&parent_name))
+        {
+            break;
+        }
+        current = resolve_reflection_class(ctx, &parent_name)
+            .and_then(|(_, parent_info)| reflection_parent_class_name(ctx, parent_info));
+        names.push(parent_name);
+    }
+    names
 }
 
 /// Returns PHP's `ReflectionClass::isInstantiable()` value for static class metadata.
@@ -2823,6 +2858,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         attr_args: Vec::new(),
         interface_names: Vec::new(),
         trait_names: Vec::new(),
+        parent_names: Vec::new(),
         method_names: Vec::new(),
         property_names: Vec::new(),
         constant_names: Vec::new(),

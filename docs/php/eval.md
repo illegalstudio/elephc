@@ -176,6 +176,10 @@ case-insensitively and returns true when reflecting the requested interface
 itself. It throws catchable `ReflectionException` values when the argument names
 a class, trait, enum, or missing interface, while `ReflectionClass::getTraitNames()`
 returns traits used directly by eval classes.
+`ReflectionClass::isSubclassOf()` checks eval parent-class chains and
+implemented or extended interfaces case-insensitively. It excludes the reflected
+symbol itself, returns `false` for trait and enum targets, and throws a
+catchable `ReflectionException` when the target name is missing.
 `ReflectionClass::hasMethod()` and `ReflectionClass::hasProperty()` report
 method and property membership for eval classes, interfaces, traits, and enums;
 method lookup is case-insensitive, while property lookup is case-sensitive.

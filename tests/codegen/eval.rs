@@ -5930,6 +5930,70 @@ try {
     );
 }
 
+/// Verifies eval ReflectionClass::isSubclassOf reports parent and interface
+/// metadata through the linked eval bridge.
+#[test]
+fn test_eval_reflection_class_is_subclass_of_predicate() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalSubclassIface {}
+interface EvalSubclassChildIface extends EvalSubclassIface {}
+class EvalSubclassBase {}
+class EvalSubclassParent extends EvalSubclassBase {}
+class EvalSubclassChild extends EvalSubclassParent implements EvalSubclassChildIface {}
+trait EvalSubclassTrait {}
+enum EvalSubclassEnum implements EvalSubclassIface { case Ready; }
+$ref = new ReflectionClass("EvalSubclassChild");
+echo $ref->isSubclassOf("EvalSubclassParent") ? "P" : "p";
+echo $ref->isSubclassOf("evalsubclassbase") ? "B" : "b";
+echo $ref->isSubclassOf("EvalSubclassIface") ? "I" : "i";
+echo $ref->isSubclassOf("EvalSubclassChild") ? "S" : "s";
+echo (new ReflectionClass("EvalSubclassChildIface"))->isSubclassOf("EvalSubclassIface") ? "J" : "j";
+echo (new ReflectionClass("EvalSubclassIface"))->isSubclassOf("EvalSubclassIface") ? "X" : "x";
+echo $ref->isSubclassOf("EvalSubclassTrait") ? "T" : "t";
+echo $ref->isSubclassOf("EvalSubclassEnum") ? "Q" : "q";
+echo (new ReflectionClass("EvalSubclassEnum"))->isSubclassOf("EvalSubclassIface") ? "E" : "e";
+try {
+    $ref->isSubclassOf("EvalSubclassMissing");
+    echo ":bad";
+} catch (ReflectionException $e) {
+    echo ":missing";
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "PBIsJxtqE:missing");
+}
+
+/// Verifies eval ReflectionClass::isSubclassOf can query generated AOT class
+/// relations when the reflected class was declared outside the eval fragment.
+#[test]
+fn test_eval_reflection_class_is_subclass_of_aot_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotSubclassParent {}
+class EvalAotSubclassChild extends EvalAotSubclassParent {}
+interface EvalAotSubclassIface {}
+class EvalAotSubclassImpl implements EvalAotSubclassIface {}
+eval('$child = new ReflectionClass("EvalAotSubclassChild");
+echo $child->isSubclassOf("EvalAotSubclassParent") ? "P" : "p";
+echo $child->isSubclassOf("EvalAotSubclassChild") ? "S" : "s";
+$impl = new ReflectionClass("EvalAotSubclassImpl");
+echo $impl->isSubclassOf("EvalAotSubclassIface") ? "I" : "i";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "PsI");
+}
+
 /// Verifies eval ReflectionClass::getParentClass crosses the generated runtime bridge.
 #[test]
 fn test_eval_reflection_class_get_parent_class() {

@@ -857,6 +857,9 @@ impl FakeOps {
                 Ok(!exclude_self)
             }
             FakeValue::Object(_) if target_class.eq_ignore_ascii_case("ParentClass") => Ok(true),
+            FakeValue::String(name) => {
+                Ok(fake_runtime_object_is_a(&name, target_class, exclude_self))
+            }
             _ => Ok(false),
         }
     }
