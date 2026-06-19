@@ -6,8 +6,9 @@
 #   ./scripts/test-linux-x86_64.sh test_fizz      # run tests matching a pattern
 #   ./scripts/test-linux-x86_64.sh --rebuild      # force rebuild the Docker image
 #
-# The Cargo target volume is derived from the worktree path so parallel worktrees
-# do not share stale test binaries. Override with ELEPHC_DOCKER_TARGET_VOLUME.
+# The Cargo target volume is temporary per run and removed during cleanup.
+# Override with ELEPHC_DOCKER_TARGET_VOLUME; set ELEPHC_KEEP_DOCKER_TARGET_VOLUME=1
+# to keep it for debugging.
 #
 set -euo pipefail
 
@@ -22,7 +23,8 @@ if command -v sha256sum >/dev/null 2>&1; then
 else
     WORKTREE_SHA="$(printf '%s' "$PROJECT_DIR" | shasum -a 256 | awk '{print substr($1, 1, 16)}')"
 fi
-TARGET_VOLUME="${ELEPHC_DOCKER_TARGET_VOLUME:-elephc-target-linux-x86_64-$WORKTREE_SHA}"
+TARGET_VOLUME="${ELEPHC_DOCKER_TARGET_VOLUME:-elephc-target-linux-x86_64-$WORKTREE_SHA-$$}"
+KEEP_TARGET_VOLUME="${ELEPHC_KEEP_DOCKER_TARGET_VOLUME:-0}"
 DOCKERFILE="$PROJECT_DIR/Dockerfile.test-linux-x86_64"
 if command -v sha256sum >/dev/null 2>&1; then
     DOCKERFILE_SHA="$(sha256sum "$DOCKERFILE" | awk '{print $1}')"
@@ -54,6 +56,9 @@ fi
 
 cleanup() {
     docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    if [ "$KEEP_TARGET_VOLUME" != "1" ]; then
+        docker volume rm "$TARGET_VOLUME" >/dev/null 2>&1 || true
+    fi
 }
 
 trap cleanup EXIT INT TERM
@@ -62,9 +67,8 @@ trap cleanup EXIT INT TERM
 # crates first so libelephc_tls.a / libelephc_pdo.a / libelephc_crypto.a /
 # libelephc_phar.a / libelephc_tz.a exist in the target dir — `cargo test` alone
 # never emits the staticlib crate-type.
-# Cached after the first run, so it is a no-op for unrelated test runs.
 if [ ${#TEST_ARGS[@]} -eq 0 ]; then
-    echo "Running all tests on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using target volume '$TARGET_VOLUME'..."
+    echo "Running all tests on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using temporary target volume '$TARGET_VOLUME'..."
     docker run \
         --platform "$PLATFORM" \
         --name "$CONTAINER_NAME" \
@@ -78,7 +82,7 @@ if [ ${#TEST_ARGS[@]} -eq 0 ]; then
         "$IMAGE" \
         sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz && cargo test'
 else
-    echo "Running tests matching '${TEST_ARGS[*]}' on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using target volume '$TARGET_VOLUME'..."
+    echo "Running tests matching '${TEST_ARGS[*]}' on Linux x86_64 with RUST_TEST_THREADS=$TEST_THREADS using temporary target volume '$TARGET_VOLUME'..."
     docker run \
         --platform "$PLATFORM" \
         --name "$CONTAINER_NAME" \
