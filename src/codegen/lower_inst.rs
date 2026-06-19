@@ -613,6 +613,7 @@ fn function_signature_from_eir_with_param_count(
             .take(param_count)
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
+        param_type_exprs: vec![None; param_count],
         defaults: function
             .params
             .iter()
@@ -658,6 +659,7 @@ fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     signature.defaults.push(None);
     signature.ref_params.push(false);
     signature.declared_params.push(false);
+    signature.param_type_exprs.push(None);
 }
 
 /// Lowers a concrete include-loaded function variant activation marker.

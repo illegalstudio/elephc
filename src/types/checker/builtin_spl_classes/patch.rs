@@ -47,6 +47,7 @@ pub(super) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
                     "class".to_string(),
                     PhpType::Union(vec![PhpType::Str, PhpType::Void]),
                 ));
+                sig.param_type_exprs.push(None);
                 sig.defaults.push(Some(null_expr()));
                 sig.ref_params.push(false);
                 sig.declared_params.push(true);

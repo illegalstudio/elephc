@@ -456,6 +456,7 @@ impl FakeOps {
             EVAL_REFLECTION_OWNER_PARAMETER => "ReflectionParameter",
             EVAL_REFLECTION_OWNER_NAMED_TYPE => "ReflectionNamedType",
             EVAL_REFLECTION_OWNER_UNION_TYPE => "ReflectionUnionType",
+            EVAL_REFLECTION_OWNER_INTERSECTION_TYPE => "ReflectionIntersectionType",
             _ => return Err(EvalStatus::RuntimeFatal),
         };
         let name = self.string(reflected_name)?;
@@ -553,6 +554,11 @@ impl FakeOps {
         }
         if owner_kind == EVAL_REFLECTION_OWNER_UNION_TYPE {
             let allows_null = self.bool_value((flags & 1) != 0)?;
+            properties.push(("__types".to_string(), method_objects));
+            properties.push(("__allows_null".to_string(), allows_null));
+        }
+        if owner_kind == EVAL_REFLECTION_OWNER_INTERSECTION_TYPE {
+            let allows_null = self.bool_value(false)?;
             properties.push(("__types".to_string(), method_objects));
             properties.push(("__allows_null".to_string(), allows_null));
         }

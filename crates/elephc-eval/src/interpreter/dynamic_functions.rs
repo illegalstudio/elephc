@@ -509,6 +509,9 @@ fn eval_method_parameter_value(
     if eval_method_parameter_type_accepts_exact(param_type, value, context, values)? {
         return Ok(value);
     }
+    if param_type.is_intersection() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     for variant in param_type.variants() {
         if let Some(coerced) = eval_method_parameter_scalar_coercion(variant, value, values)? {
             return Ok(coerced);
@@ -526,6 +529,14 @@ fn eval_method_parameter_type_accepts_exact(
 ) -> Result<bool, EvalStatus> {
     let tag = values.type_tag(value)?;
     if tag == EVAL_TAG_NULL && param_type.allows_null() {
+        return Ok(true);
+    }
+    if param_type.is_intersection() {
+        for variant in param_type.variants() {
+            if !eval_method_parameter_variant_accepts_exact(variant, value, tag, context, values)? {
+                return Ok(false);
+            }
+        }
         return Ok(true);
     }
     for variant in param_type.variants() {

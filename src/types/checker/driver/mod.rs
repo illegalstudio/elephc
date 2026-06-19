@@ -399,6 +399,12 @@ fn trait_method_reflection_sig(method: &ClassMethod) -> FunctionSig {
         .collect();
     callable_wrapper_sig(&FunctionSig {
         params,
+        param_type_exprs: method
+            .params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.clone())
+            .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
+            .collect(),
         defaults,
         return_type: PhpType::Mixed,
         declared_return: method.return_type.is_some(),

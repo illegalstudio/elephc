@@ -9,7 +9,7 @@
 //! Key details:
 //! - Builtin signatures must match PHP so named arguments, first-class callables, and mutation semantics stay coherent.
 
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{Expr, ExprKind, TypeExpr};
 use crate::span::Span;
 
 use super::PhpType;
@@ -22,6 +22,7 @@ use super::PhpType;
 /// named arguments, callable aliases, and mutation semantics.
 pub struct FunctionSig {
     pub params: Vec<(String, PhpType)>,
+    pub param_type_exprs: Vec<Option<TypeExpr>>,
     pub defaults: Vec<Option<Expr>>,
     pub return_type: PhpType,
     pub declared_return: bool,
@@ -66,6 +67,7 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
     wrapper_sig.defaults.push(None);
     wrapper_sig.ref_params.push(false);
     wrapper_sig.declared_params.push(false);
+    wrapper_sig.param_type_exprs.push(None);
     wrapper_sig
 }
 
@@ -705,6 +707,7 @@ fn legacy_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "strlen" => Some(FunctionSig {
             params: vec![("string".to_string(), PhpType::Str)],
+            param_type_exprs: vec![None],
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -722,6 +725,7 @@ fn legacy_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
                     value: Box::new(PhpType::Mixed),
                 },
             )],
+            param_type_exprs: vec![None],
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -733,6 +737,7 @@ fn legacy_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         }),
         "buffer_len" => Some(FunctionSig {
             params: vec![("buffer".to_string(), PhpType::Buffer(Box::new(PhpType::Int)))],
+            param_type_exprs: vec![None],
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -1139,6 +1144,7 @@ fn make_sig(params: &[&str], defaults: Vec<Option<Expr>>, variadic: Option<&str>
             .iter()
             .map(|name| ((*name).to_string(), PhpType::Mixed))
             .collect(),
+        param_type_exprs: vec![None; params.len()],
         defaults,
         return_type: PhpType::Mixed,
         declared_return: false,
@@ -1178,6 +1184,7 @@ mod tests {
     fn variadic_sig(params: Vec<(String, PhpType)>) -> FunctionSig {
         FunctionSig {
             defaults: vec![None; params.len()],
+            param_type_exprs: vec![None; params.len()],
             return_type: PhpType::Mixed,
             declared_return: false,
             by_ref_return: false,

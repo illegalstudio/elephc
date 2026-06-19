@@ -41,6 +41,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionParameter",
         "ReflectionNamedType",
         "ReflectionUnionType",
+        "ReflectionIntersectionType",
         "ReflectionClassConstant",
         "ReflectionEnumUnitCase",
         "ReflectionEnumBackedCase",
@@ -134,6 +135,10 @@ pub(crate) fn inject_builtin_reflection(
     class_map.insert(
         "ReflectionUnionType".to_string(),
         builtin_reflection_union_type(),
+    );
+    class_map.insert(
+        "ReflectionIntersectionType".to_string(),
+        builtin_reflection_intersection_type(),
     );
     for class_name in [
         "ReflectionClassConstant",
@@ -707,6 +712,45 @@ fn builtin_reflection_named_type() -> FlattenedClass {
 fn builtin_reflection_union_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionUnionType".to_string(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties: vec![
+            builtin_property(
+                "__types",
+                Visibility::Private,
+                Some(object_array_type("ReflectionNamedType")),
+                empty_array(),
+            ),
+            builtin_property("__attrs", Visibility::Private, Some(array_type()), empty_array()),
+            builtin_property(
+                "__allows_null",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+        ],
+        methods: vec![
+            builtin_reflection_private_constructor_method(),
+            builtin_reflection_class_array_method(
+                "getTypes",
+                "__types",
+                object_array_type("ReflectionNamedType"),
+            ),
+            builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
+        ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+    }
+}
+
+/// Builds the `ReflectionIntersectionType` shell returned for supported intersection hints.
+fn builtin_reflection_intersection_type() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionIntersectionType".to_string(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -1926,6 +1970,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
         "ReflectionParameter",
         "ReflectionNamedType",
         "ReflectionUnionType",
+        "ReflectionIntersectionType",
         "ReflectionClassConstant",
         "ReflectionEnumUnitCase",
         "ReflectionEnumBackedCase",
@@ -1943,6 +1988,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     | "ReflectionParameter"
                     | "ReflectionNamedType"
                     | "ReflectionUnionType"
+                    | "ReflectionIntersectionType"
                     | "ReflectionClassConstant"
                     | "ReflectionEnumUnitCase"
                     | "ReflectionEnumBackedCase"
@@ -2025,6 +2071,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if !sig.params.iter().any(|(name, _)| name == "args") {
                         sig.params
                             .push(("args".to_string(), PhpType::Array(Box::new(PhpType::Mixed))));
+                        sig.param_type_exprs.push(None);
                         sig.defaults.push(None);
                         sig.ref_params.push(false);
                         sig.declared_params.push(false);
@@ -2105,6 +2152,16 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     sig.return_type = PhpType::Bool;
                 }
             }
+            if class_name == "ReflectionIntersectionType" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTypes")) {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionNamedType".to_string(),
+                    )));
+                }
+                if let Some(sig) = class_info.methods.get_mut("allowsnull") {
+                    sig.return_type = PhpType::Bool;
+                }
+            }
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getAttributes")) {
                 sig.return_type =
                     PhpType::Array(Box::new(PhpType::Object("ReflectionAttribute".to_string())));
@@ -2123,10 +2180,11 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
     }
     if let Some(class_info) = checker.classes.get_mut("ReflectionParameter") {
         if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getType")) {
-            // ReflectionNamedType|ReflectionUnionType|null for supported parameter types.
+            // ReflectionNamedType|ReflectionUnionType|ReflectionIntersectionType|null.
             sig.return_type = PhpType::Union(vec![
                 PhpType::Object("ReflectionNamedType".to_string()),
                 PhpType::Object("ReflectionUnionType".to_string()),
+                PhpType::Object("ReflectionIntersectionType".to_string()),
                 PhpType::Void,
             ]);
         }

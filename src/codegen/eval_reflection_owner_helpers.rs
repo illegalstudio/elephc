@@ -1,7 +1,7 @@
 //! Purpose:
 //! Emits user-assembly helpers that let libelephc-eval materialize
 //! ReflectionClass, ReflectionMethod, ReflectionParameter, ReflectionProperty,
-//! ReflectionClassConstant, ReflectionEnum*, and ReflectionNamedType objects
+//! ReflectionClassConstant, ReflectionEnum*, and ReflectionType objects
 //! with private metadata slots populated from runtime eval declarations.
 //!
 //! Called from:
@@ -107,6 +107,7 @@ struct ReflectionOwnerLayouts {
     parameter: ReflectionOwnerLayout,
     named_type: ReflectionOwnerLayout,
     union_type: ReflectionOwnerLayout,
+    intersection_type: ReflectionOwnerLayout,
 }
 
 /// Emits eval Reflection owner helpers when any lowered function owns an eval context.
@@ -176,6 +177,10 @@ fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
         parameter: reflection_owner_layout(module.class_infos.get("ReflectionParameter")?, true)?,
         named_type: reflection_owner_layout(module.class_infos.get("ReflectionNamedType")?, true)?,
         union_type: reflection_owner_layout(module.class_infos.get("ReflectionUnionType")?, false)?,
+        intersection_type: reflection_owner_layout(
+            module.class_infos.get("ReflectionIntersectionType")?,
+            false,
+        )?,
     })
 }
 
@@ -332,6 +337,7 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     let parameter_label = "__elephc_eval_reflection_owner_new_parameter";
     let named_type_label = "__elephc_eval_reflection_owner_new_named_type";
     let union_type_label = "__elephc_eval_reflection_owner_new_union_type";
+    let intersection_type_label = "__elephc_eval_reflection_owner_new_intersection_type";
     emitter.instruction("sub sp, sp, #160");                                    // reserve helper frame for inputs, object, arrays, scratch, and fp/lr
     emitter.instruction("stp x29, x30, [sp, #144]");                            // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #144");                                   // establish a stable helper frame pointer
@@ -371,6 +377,8 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction(&format!("b.eq {}", named_type_label));                 // allocate a ReflectionNamedType owner
     emitter.instruction("cmp x0, #8");                                          // owner kind 8 means ReflectionUnionType
     emitter.instruction(&format!("b.eq {}", union_type_label));                 // allocate a ReflectionUnionType owner
+    emitter.instruction("cmp x0, #9");                                          // owner kind 9 means ReflectionIntersectionType
+    emitter.instruction(&format!("b.eq {}", intersection_type_label));          // allocate a ReflectionIntersectionType owner
     emitter.instruction(&format!("b {}", fail_label));                          // reject unknown owner kinds
     emit_aarch64_owner_kind_body(
         emitter,
@@ -444,6 +452,14 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
         fail_label,
         box_label,
     );
+    emit_aarch64_owner_kind_body(
+        emitter,
+        intersection_type_label,
+        &layouts.intersection_type,
+        false,
+        fail_label,
+        box_label,
+    );
     emitter.label(box_label);
     emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
     emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
@@ -472,6 +488,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let parameter_label = "__elephc_eval_reflection_owner_new_parameter_x";
     let named_type_label = "__elephc_eval_reflection_owner_new_named_type_x";
     let union_type_label = "__elephc_eval_reflection_owner_new_union_type_x";
+    let intersection_type_label = "__elephc_eval_reflection_owner_new_intersection_type_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction("sub rsp, 144");                                        // reserve slots for inputs, object, metadata arrays, and name parts
@@ -513,6 +530,8 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction(&format!("je {}", named_type_label));                   // allocate a ReflectionNamedType owner
     emitter.instruction("cmp rdi, 8");                                          // owner kind 8 means ReflectionUnionType
     emitter.instruction(&format!("je {}", union_type_label));                   // allocate a ReflectionUnionType owner
+    emitter.instruction("cmp rdi, 9");                                          // owner kind 9 means ReflectionIntersectionType
+    emitter.instruction(&format!("je {}", intersection_type_label));            // allocate a ReflectionIntersectionType owner
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject unknown owner kinds
     emit_x86_64_owner_kind_body(
         emitter,
@@ -582,6 +601,14 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
         emitter,
         union_type_label,
         &layouts.union_type,
+        false,
+        fail_label,
+        box_label,
+    );
+    emit_x86_64_owner_kind_body(
+        emitter,
+        intersection_type_label,
+        &layouts.intersection_type,
         false,
         fail_label,
         box_label,

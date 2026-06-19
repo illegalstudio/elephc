@@ -78,6 +78,7 @@ fn contextual_closure_sig(
 
     let mut closure_env = env.clone();
     let mut param_types = Vec::new();
+    let mut param_type_exprs = Vec::new();
     let mut defaults = Vec::new();
     let mut ref_params = Vec::new();
     let mut declared_params = Vec::new();
@@ -119,6 +120,7 @@ fn contextual_closure_sig(
 
         closure_env.insert(name.clone(), env_ty);
         param_types.push((name.clone(), sig_ty));
+        param_type_exprs.push(type_ann.clone());
         defaults.push(default.clone());
         ref_params.push(*is_ref);
         declared_params.push(declared);
@@ -127,6 +129,7 @@ fn contextual_closure_sig(
     if let Some(name) = variadic {
         closure_env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Int)));
         param_types.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
+        param_type_exprs.push(None);
         defaults.push(None);
         ref_params.push(false);
         declared_params.push(false);
@@ -136,6 +139,7 @@ fn contextual_closure_sig(
         checker.resolve_closure_return_type(body, return_type, callback.span, &closure_env)?;
     Ok(Some(FunctionSig {
         params: param_types,
+        param_type_exprs,
         defaults,
         return_type,
         declared_return,
