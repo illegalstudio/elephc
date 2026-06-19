@@ -545,3 +545,48 @@ echo $u->id();
     );
     assert_eq!(out, "7");
 }
+
+/// Regression: `get_class()` on a Mixed value holding an object (here the result of a dynamic
+/// `new $class()`, which is typed Mixed) used to fail with an EIR "unsupported feature" error.
+/// It now unboxes the Mixed and reads the class name. Output cross-checked with `php -r`.
+#[test]
+fn test_get_class_on_dynamic_new_mixed_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Roadster {}
+$c = "Roadster";
+$o = new $c();
+echo get_class($o);
+"#,
+    );
+    assert_eq!(out, "Roadster");
+}
+
+/// Regression: `get_class()` / `get_parent_class()` on a Mixed object resolves the runtime class
+/// and its parent.
+#[test]
+fn test_get_class_and_parent_on_mixed_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {}
+class Derived extends Base {}
+$c = "Derived";
+$o = new $c();
+echo get_class($o) . "|" . get_parent_class($o);
+"#,
+    );
+    assert_eq!(out, "Derived|Base");
+}
+
+/// Regression: `get_class()` on a heterogeneous (Mixed-element) array entry holding an object.
+#[test]
+fn test_get_class_on_mixed_array_element_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Widget {}
+$registry = ["w" => new Widget()];
+echo get_class($registry["w"]);
+"#,
+    );
+    assert_eq!(out, "Widget");
+}

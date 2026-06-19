@@ -350,15 +350,13 @@ pub(super) fn lower_class_name_lookup(
             let parent = parent_of(ctx, &class_name);
             emit_string_result(ctx, parent.as_bytes());
         }
-        other => {
+        PhpType::Mixed | PhpType::Union(_) => {
+            // A boxed value may hold an object at runtime (e.g. the result of `new $class()` or a
+            // heterogeneous array element). Unbox and read the class name when it does.
+            emit_mixed_object_class_name(ctx, value, name)?;
+        }
+        _ => {
             ctx.load_value_to_result(value)?;
-            if matches!(other, PhpType::Mixed | PhpType::Union(_)) {
-                return Err(CodegenIrError::unsupported(format!(
-                    "{} for PHP type {:?}",
-                    name,
-                    other
-                )));
-            }
             emit_string_result(ctx, b"");
         }
     }
@@ -523,6 +521,42 @@ fn emit_dynamic_object_class_name_x86_64(
     ctx.emitter.instruction("xor edx, edx");                                    // return zero bytes for the empty class name
 
     ctx.emitter.label(done_label);
+}
+
+/// Emits `get_class()`/`get_parent_class()` for a boxed Mixed/Union value: unbox it, and when it
+/// holds an object (runtime tag 6) read the class name from the object's class id; otherwise yield
+/// an empty class name (matching the result on a non-object). `__rt_mixed_unbox` returns the tag in
+/// `x0`/`rax` and the payload (the object pointer for tag 6) in `x1` (AArch64) / `rdi` (x86_64).
+fn emit_mixed_object_class_name(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    name: &str,
+) -> Result<()> {
+    let object_label = ctx.next_label("get_class_mixed_obj");
+    let done_label = ctx.next_label("get_class_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_label);
+
+    // -- non-object payloads have no class name --
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, "_class_name_missing");
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    // -- object payload: move the unboxed object pointer into the class-name lookup input --
+    ctx.emitter.label(&object_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed object pointer into the class-name lookup register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                           // move the unboxed object pointer into the class-name lookup register
+        }
+    }
+    emit_dynamic_object_class_name(ctx, name);
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Emits `bytes` as the current string result register pair.
