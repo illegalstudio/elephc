@@ -6761,6 +6761,7 @@ eval('class EvalReflectPropertyDefaultTarget {
 foreach (["implicit", "typed", "nullableTyped", "explicitNull", "count", "label"] as $name) {
     $property = new ReflectionProperty("EvalReflectPropertyDefaultTarget", $name);
     echo $property->getName() . ":";
+    echo $property->isDefault() ? "Y:" : "N:";
     echo $property->hasDefaultValue() ? "D:" : "d:";
     $value = $property->getDefaultValue();
     echo $value === null ? "null" : $value;
@@ -6768,6 +6769,7 @@ foreach (["implicit", "typed", "nullableTyped", "explicitNull", "count", "label"
 }
 $listed = (new ReflectionClass("EvalReflectPropertyDefaultTarget"))->getProperty("implicit");
 echo "listed:";
+echo $listed->isDefault() ? "Y:" : "N:";
 echo $listed->hasDefaultValue() ? "D:" : "d:";
 echo $listed->getDefaultValue() === null ? "null" : "bad";');
 "#,
@@ -6779,7 +6781,7 @@ echo $listed->getDefaultValue() === null ? "null" : "bad";');
     );
     assert_eq!(
         out.stdout,
-        "implicit:D:null|typed:d:null|nullableTyped:d:null|explicitNull:D:null|count:D:7|label:D:ok|listed:D:null"
+        "implicit:Y:D:null|typed:Y:d:null|nullableTyped:Y:d:null|explicitNull:Y:D:null|count:Y:D:7|label:Y:D:ok|listed:Y:D:null"
     );
 }
 

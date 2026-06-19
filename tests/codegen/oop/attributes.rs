@@ -2071,36 +2071,43 @@ class ReflectPropertyDefaultTarget {
 }
 $implicit = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "implicit");
 echo $implicit->getName() . ":";
+echo $implicit->isDefault() ? "Y:" : "N:";
 echo $implicit->hasDefaultValue() ? "D:" : "d:";
 echo $implicit->getDefaultValue() === null ? "null" : $implicit->getDefaultValue();
 echo "|";
 $typed = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "typed");
 echo $typed->getName() . ":";
+echo $typed->isDefault() ? "Y:" : "N:";
 echo $typed->hasDefaultValue() ? "D:" : "d:";
 echo $typed->getDefaultValue() === null ? "null" : $typed->getDefaultValue();
 echo "|";
 $nullableTyped = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "nullableTyped");
 echo $nullableTyped->getName() . ":";
+echo $nullableTyped->isDefault() ? "Y:" : "N:";
 echo $nullableTyped->hasDefaultValue() ? "D:" : "d:";
 echo $nullableTyped->getDefaultValue() === null ? "null" : $nullableTyped->getDefaultValue();
 echo "|";
 $explicitNull = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "explicitNull");
 echo $explicitNull->getName() . ":";
+echo $explicitNull->isDefault() ? "Y:" : "N:";
 echo $explicitNull->hasDefaultValue() ? "D:" : "d:";
 echo $explicitNull->getDefaultValue() === null ? "null" : $explicitNull->getDefaultValue();
 echo "|";
 $count = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "count");
 echo $count->getName() . ":";
+echo $count->isDefault() ? "Y:" : "N:";
 echo $count->hasDefaultValue() ? "D:" : "d:";
 echo $count->getDefaultValue() === null ? "null" : $count->getDefaultValue();
 echo "|";
 $label = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "label");
 echo $label->getName() . ":";
+echo $label->isDefault() ? "Y:" : "N:";
 echo $label->hasDefaultValue() ? "D:" : "d:";
 echo $label->getDefaultValue() === null ? "null" : $label->getDefaultValue();
 echo "|";
 $listed = (new ReflectionClass(ReflectPropertyDefaultTarget::class))->getProperty("implicit");
 echo "listed:";
+echo $listed->isDefault() ? "Y:" : "N:";
 echo $listed->hasDefaultValue() ? "D:" : "d:";
 echo $listed->getDefaultValue() === null ? "null" : "bad";
 "#,
@@ -2112,7 +2119,7 @@ echo $listed->getDefaultValue() === null ? "null" : "bad";
     );
     assert_eq!(
         out.stdout,
-        "implicit:D:null|typed:d:null|nullableTyped:d:null|explicitNull:D:null|count:D:7|label:D:ok|listed:D:null"
+        "implicit:Y:D:null|typed:Y:d:null|nullableTyped:Y:d:null|explicitNull:Y:D:null|count:Y:D:7|label:Y:D:ok|listed:Y:D:null"
     );
 }
 

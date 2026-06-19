@@ -367,6 +367,9 @@ impl FakeOps {
                 Self::object_property(&properties, "__has_default_value")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "isdefault") if args.is_empty() => {
+                self.bool_value(Self::object_property(&properties, "__has_default_value").is_some())
+            }
             (FakeValue::Object(properties), "allowsnull") if args.is_empty() => {
                 Self::object_property(&properties, "__allows_null")
                     .map_or_else(|| self.bool_value(false), Ok)

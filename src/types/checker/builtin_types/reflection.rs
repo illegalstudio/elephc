@@ -1387,6 +1387,30 @@ fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> Cl
     }
 }
 
+/// Returns a public Reflection boolean method that always reports one literal value.
+fn builtin_reflection_constant_bool_method(method_name: &str, value: bool) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![Stmt::new(
+            StmtKind::Return(if value { true_bool() } else { false_bool() }),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a `ReflectionMethod` predicate derived from its case-insensitive method name.
 fn builtin_reflection_method_name_predicate_method(
     method_name: &str,
@@ -1708,6 +1732,7 @@ fn add_reflection_member_flag_methods(
             "hasDefaultValue",
             "__has_default_value",
         ));
+        methods.push(builtin_reflection_constant_bool_method("isDefault", true));
         methods.push(builtin_reflection_class_mixed_method(
             "getDefaultValue",
             "__default_value",
@@ -2311,7 +2336,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionProperty" {
-                for method_name in ["isfinal", "isabstract", "isreadonly"] {
+                for method_name in ["isfinal", "isabstract", "isreadonly", "isdefault"] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }

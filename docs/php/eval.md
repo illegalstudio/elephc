@@ -240,10 +240,11 @@ parameters after method execution, write back mutated `&...$items` elements
 when the variadic container itself is not rebound, and are reported through
 `ReflectionParameter::isPassedByReference()`.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
-`isFinal()`, `isAbstract()`, `isReadOnly()`, and `getModifiers()` report eval
-property metadata with PHP-compatible `ReflectionProperty::IS_*` constants for
-the bitmask. `ReflectionProperty::hasType()` and `getType()` expose retained
-property type metadata through `ReflectionNamedType`, `ReflectionUnionType`, and
+`isFinal()`, `isAbstract()`, `isReadOnly()`, `isDefault()`, and
+`getModifiers()` report eval property metadata with PHP-compatible
+`ReflectionProperty::IS_*` constants for the bitmask.
+`ReflectionProperty::hasType()` and `getType()` expose retained property type
+metadata through `ReflectionNamedType`, `ReflectionUnionType`, and
 `ReflectionIntersectionType` where eval has retained a supported declared type.
 `ReflectionProperty::hasDefaultValue()` and `getDefaultValue()` expose
 materialized property default metadata, including PHP's implicit `null` default
