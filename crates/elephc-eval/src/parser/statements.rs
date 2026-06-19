@@ -20,6 +20,18 @@ use crate::eval_ir::{
 };
 use crate::lexer::TokenKind;
 
+/// Parsed method parameters plus constructor-promotion side products.
+pub(super) struct ParsedMethodParams {
+    params: Vec<String>,
+    parameter_attributes: Vec<Vec<EvalAttribute>>,
+    parameter_types: Vec<Option<EvalParameterType>>,
+    parameter_defaults: Vec<Option<EvalExpr>>,
+    parameter_is_by_ref: Vec<bool>,
+    parameter_is_variadic: Vec<bool>,
+    promoted_properties: Vec<EvalClassProperty>,
+    promoted_assignments: Vec<EvalStmt>,
+}
+
 impl Parser {
     /// Parses one source statement, expanding `unset($a, $b)` to one statement per variable.
     pub(super) fn parse_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
@@ -488,7 +500,7 @@ impl Parser {
                     visibility.unwrap_or(EvalVisibility::Public),
                     is_final,
                 )?
-                    .with_attributes(attributes),
+                .with_attributes(attributes),
             );
             return Ok(());
         }
@@ -497,15 +509,14 @@ impl Parser {
             if is_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            methods.push(
-                self.parse_class_method_decl(
-                    visibility.unwrap_or(EvalVisibility::Public),
-                    is_static,
-                    is_abstract,
-                    is_final,
-                )?
-                .with_attributes(attributes),
-            );
+            let (method, promoted_properties) = self.parse_class_method_decl(
+                visibility.unwrap_or(EvalVisibility::Public),
+                is_static,
+                is_abstract,
+                is_final,
+            )?;
+            properties.extend(promoted_properties);
+            methods.push(method.with_attributes(attributes));
             return Ok(());
         }
 
@@ -743,14 +754,14 @@ impl Parser {
         }
     }
 
-    /// Parses `function name($param, ...) { ... }` or an abstract method signature.
+    /// Parses one class/trait/enum method and returns constructor-promoted properties.
     pub(super) fn parse_class_method_decl(
         &mut self,
         visibility: EvalVisibility,
         is_static: bool,
         is_abstract: bool,
         is_final: bool,
-    ) -> Result<EvalClassMethod, EvalParseError> {
+    ) -> Result<(EvalClassMethod, Vec<EvalClassProperty>), EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -758,34 +769,47 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let (
+        let ParsedMethodParams {
             params,
             parameter_attributes,
             parameter_types,
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
-        ) = self.parse_method_params()?;
+            promoted_properties,
+            promoted_assignments,
+        } = self.parse_method_params(&name)?;
+        if !promoted_properties.is_empty() && (is_abstract || is_static) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
         let body = if is_abstract {
             self.expect_semicolon()?;
             Vec::new()
         } else {
-            self.parse_block()?
+            let body = self.parse_block()?;
+            if promoted_assignments.is_empty() {
+                body
+            } else {
+                promoted_assignments.into_iter().chain(body).collect()
+            }
         };
-        Ok(EvalClassMethod::with_visibility_and_modifiers(
-            name,
-            visibility,
-            is_static,
-            is_abstract,
-            is_final,
-            params,
-            body,
-        )
-        .with_parameter_types(parameter_types)
-        .with_parameter_attributes(parameter_attributes)
-        .with_parameter_defaults(parameter_defaults)
-        .with_parameter_by_ref_flags(parameter_is_by_ref)
-        .with_parameter_variadic_flags(parameter_is_variadic))
+        Ok((
+            EvalClassMethod::with_visibility_and_modifiers(
+                name,
+                visibility,
+                is_static,
+                is_abstract,
+                is_final,
+                params,
+                body,
+            )
+            .with_parameter_types(parameter_types)
+            .with_parameter_attributes(parameter_attributes)
+            .with_parameter_defaults(parameter_defaults)
+            .with_parameter_by_ref_flags(parameter_is_by_ref)
+            .with_parameter_variadic_flags(parameter_is_variadic),
+            promoted_properties,
+        ))
     }
 
     /// Parses one public property declaration with an optional initializer.
@@ -1017,7 +1041,7 @@ impl Parser {
                     visibility.unwrap_or(EvalVisibility::Public),
                     is_final,
                 )?
-                    .with_attributes(attributes),
+                .with_attributes(attributes),
             );
             return Ok(());
         }
@@ -1025,15 +1049,14 @@ impl Parser {
             if is_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            methods.push(
-                self.parse_class_method_decl(
-                    visibility.unwrap_or(EvalVisibility::Public),
-                    is_static,
-                    is_abstract,
-                    is_final,
-                )?
-                .with_attributes(attributes),
-            );
+            let (method, promoted_properties) = self.parse_class_method_decl(
+                visibility.unwrap_or(EvalVisibility::Public),
+                is_static,
+                is_abstract,
+                is_final,
+            )?;
+            properties.extend(promoted_properties);
+            methods.push(method.with_attributes(attributes));
             return Ok(());
         }
         let visibility = visibility.unwrap_or(EvalVisibility::Public);
@@ -1132,20 +1155,21 @@ impl Parser {
                     visibility.unwrap_or(EvalVisibility::Public),
                     is_final,
                 )?
-                    .with_attributes(attributes),
+                .with_attributes(attributes),
             );
             return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
-            methods.push(
-                self.parse_class_method_decl(
-                    visibility.unwrap_or(EvalVisibility::Public),
-                    is_static,
-                    false,
-                    is_final,
-                )?
-                .with_attributes(attributes),
-            );
+            let (method, promoted_properties) = self.parse_class_method_decl(
+                visibility.unwrap_or(EvalVisibility::Public),
+                is_static,
+                false,
+                is_final,
+            )?;
+            if !promoted_properties.is_empty() {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            methods.push(method.with_attributes(attributes));
             return Ok(());
         }
         Err(EvalParseError::UnsupportedConstruct)
@@ -1303,14 +1327,19 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let (
+        let ParsedMethodParams {
             params,
             parameter_attributes,
             parameter_types,
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
-        ) = self.parse_method_params()?;
+            promoted_properties,
+            promoted_assignments,
+        } = self.parse_method_params(&name)?;
+        if !promoted_properties.is_empty() || !promoted_assignments.is_empty() {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)
             .with_static(is_static)
@@ -1718,44 +1747,62 @@ impl Parser {
         Ok(params)
     }
 
-    /// Parses a method parameter list and records type/default metadata.
+    /// Parses a method parameter list and records metadata plus promotion side effects.
     pub(super) fn parse_method_params(
         &mut self,
-    ) -> Result<
-        (
-            Vec<String>,
-            Vec<Vec<EvalAttribute>>,
-            Vec<Option<EvalParameterType>>,
-            Vec<Option<EvalExpr>>,
-            Vec<bool>,
-            Vec<bool>,
-        ),
-        EvalParseError,
-    > {
+        method_name: &str,
+    ) -> Result<ParsedMethodParams, EvalParseError> {
         let mut params = Vec::new();
         let mut parameter_attributes = Vec::new();
         let mut parameter_types = Vec::new();
         let mut parameter_defaults = Vec::new();
         let mut parameter_is_by_ref = Vec::new();
         let mut parameter_is_variadic = Vec::new();
+        let mut promoted_properties = Vec::new();
+        let mut promoted_assignments = Vec::new();
         if self.consume(TokenKind::RParen) {
-            return Ok((
+            return Ok(ParsedMethodParams {
                 params,
                 parameter_attributes,
                 parameter_types,
                 parameter_defaults,
                 parameter_is_by_ref,
                 parameter_is_variadic,
-            ));
+                promoted_properties,
+                promoted_assignments,
+            });
         }
         loop {
             let attributes = self.parse_attribute_groups()?;
+            let promotion = self.parse_promoted_parameter_modifiers()?;
+            if promotion.is_some() && !method_name.eq_ignore_ascii_case("__construct") {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             let param_type = self.parse_optional_parameter_type()?;
             let is_by_ref = self.consume(TokenKind::Ampersand);
             let is_variadic = self.consume(TokenKind::Ellipsis);
             let TokenKind::DollarIdent(name) = self.current() else {
                 return Err(EvalParseError::ExpectedVariable);
             };
+            if promotion.is_some() && (is_by_ref || is_variadic) {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            if let Some((visibility, is_readonly)) = promotion {
+                promoted_properties.push(
+                    EvalClassProperty::with_visibility_static_final_and_readonly(
+                        name.clone(),
+                        visibility,
+                        false,
+                        false,
+                        is_readonly,
+                        None,
+                    )
+                    .with_type(param_type.clone())
+                    .with_promoted()
+                    .with_attributes(attributes.clone()),
+                );
+                promoted_assignments.push(promoted_property_assignment(name));
+            }
             params.push(name.clone());
             parameter_attributes.push(attributes);
             parameter_types.push(param_type);
@@ -1786,14 +1833,70 @@ impl Parser {
             }
         }
         self.expect(TokenKind::RParen)?;
-        Ok((
+        Ok(ParsedMethodParams {
             params,
             parameter_attributes,
             parameter_types,
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
-        ))
+            promoted_properties,
+            promoted_assignments,
+        })
+    }
+
+    /// Parses visibility and readonly modifiers on a promoted constructor parameter.
+    fn parse_promoted_parameter_modifiers(
+        &mut self,
+    ) -> Result<Option<(EvalVisibility, bool)>, EvalParseError> {
+        let mut visibility = None;
+        let mut is_readonly = false;
+        let mut saw_modifier = false;
+        loop {
+            match self.current() {
+                TokenKind::Ident(name) if ident_eq(name, "public") => {
+                    if visibility.is_some() {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    saw_modifier = true;
+                    visibility = Some(EvalVisibility::Public);
+                    self.advance();
+                }
+                TokenKind::Ident(name) if ident_eq(name, "protected") => {
+                    if visibility.is_some() {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    saw_modifier = true;
+                    visibility = Some(EvalVisibility::Protected);
+                    self.advance();
+                }
+                TokenKind::Ident(name) if ident_eq(name, "private") => {
+                    if visibility.is_some() {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    saw_modifier = true;
+                    visibility = Some(EvalVisibility::Private);
+                    self.advance();
+                }
+                TokenKind::Ident(name) if ident_eq(name, "readonly") => {
+                    if is_readonly {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    saw_modifier = true;
+                    is_readonly = true;
+                    self.advance();
+                }
+                _ => break,
+            }
+        }
+        if saw_modifier {
+            Ok(Some((
+                visibility.unwrap_or(EvalVisibility::Public),
+                is_readonly,
+            )))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Consumes a supported method parameter type and returns retained metadata.
@@ -2347,4 +2450,13 @@ fn property_hook_get_method(property_name: &str) -> String {
 /// Returns the synthetic set-hook method name for one property.
 fn property_hook_set_method(property_name: &str) -> String {
     format!("__propset_{property_name}")
+}
+
+/// Builds the implicit `$this->name = $name` assignment for a promoted parameter.
+fn promoted_property_assignment(name: &str) -> EvalStmt {
+    EvalStmt::PropertySet {
+        object: EvalExpr::LoadVar("this".to_string()),
+        property: name.to_string(),
+        value: EvalExpr::LoadVar(name.to_string()),
+    }
 }

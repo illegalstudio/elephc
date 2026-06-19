@@ -28,7 +28,11 @@ fn parse_fragment_accepts_static_class_members() {
                 EvalVisibility::Public,
                 true,
                 Some(EvalExpr::Const(EvalConst::Int(1))),
-            )],
+            )
+            .with_type(Some(EvalParameterType::new(
+                vec![EvalParameterTypeVariant::Int],
+                false,
+            )))],
             vec![EvalClassMethod::with_visibility_and_modifiers(
                 "read",
                 EvalVisibility::Public,

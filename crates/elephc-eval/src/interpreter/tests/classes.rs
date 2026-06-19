@@ -10,6 +10,52 @@
 use super::super::*;
 use super::support::*;
 
+/// Verifies promoted constructor properties initialize before the constructor body runs.
+#[test]
+fn execute_program_initializes_constructor_promoted_properties() {
+    let program = parse_fragment(
+        br#"class EvalPromotedUser {
+    public function __construct(public int $id, private string $name = "Ada") {
+        $this->id = $this->id + 1;
+    }
+    public function label() { return $this->id . ":" . $this->name; }
+}
+$user = new EvalPromotedUser(6);
+echo $user->id; echo ":";
+return $user->label();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "7:");
+    assert_eq!(values.get(result), FakeValue::String("7:Ada".to_string()));
+}
+
+/// Verifies promoted readonly properties keep the normal constructor-only write rule.
+#[test]
+fn execute_program_rejects_promoted_readonly_property_write_after_constructor() {
+    let program = parse_fragment(
+        br#"class EvalPromotedReadonlyBox {
+    public function __construct(public readonly int $id) {}
+    public function replace($id) { $this->id = $id; }
+}
+$box = new EvalPromotedReadonlyBox(7);
+echo $box->id;
+$box->replace(8);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("promoted readonly property write should fail outside constructor");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies readonly eval properties can be initialized inside their constructor.
 #[test]
 fn execute_program_initializes_readonly_property_in_constructor() {

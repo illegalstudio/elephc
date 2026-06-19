@@ -129,12 +129,15 @@ fn parse_fragment_accepts_class_member_attribute_metadata() {
                     EvalClassConstant::new("SEED", EvalExpr::Const(EvalConst::Int(1)))
                         .with_attributes(vec![EvalAttribute::new("ConstMark", Some(Vec::new()))])
                 ],
-                vec![EvalClassProperty::new("value", None).with_attributes(vec![
-                    EvalAttribute::new(
+                vec![EvalClassProperty::new("value", None)
+                    .with_type(Some(EvalParameterType::new(
+                        vec![EvalParameterTypeVariant::Int],
+                        false
+                    )))
+                    .with_attributes(vec![EvalAttribute::new(
                         "PropMark",
                         Some(vec![EvalAttributeArg::String("p".to_string())])
-                    )
-                ])],
+                    )])],
                 vec![EvalClassMethod::new(
                     "read",
                     Vec::new(),
@@ -181,6 +184,10 @@ enum DynEvalMemberEnum {
                 Vec::new(),
                 Vec::new(),
                 vec![EvalInterfaceProperty::new("value", true, false)
+                    .with_type(Some(EvalParameterType::new(
+                        vec![EvalParameterTypeVariant::String],
+                        false
+                    )))
                     .with_attributes(vec![EvalAttribute::new("IfaceProp", Some(Vec::new()))])],
                 vec![EvalInterfaceMethod::new("read", Vec::new())
                     .with_attributes(vec![EvalAttribute::new("IfaceMethod", Some(Vec::new()))])],
@@ -188,6 +195,10 @@ enum DynEvalMemberEnum {
             EvalStmt::TraitDecl(EvalTrait::new(
                 "DynEvalMemberTrait",
                 vec![EvalClassProperty::new("seed", None)
+                    .with_type(Some(EvalParameterType::new(
+                        vec![EvalParameterTypeVariant::Int],
+                        false
+                    )))
                     .with_attributes(vec![EvalAttribute::new("TraitProp", Some(Vec::new()))])],
                 vec![EvalClassMethod::new(
                     "add",
@@ -257,8 +268,12 @@ fn parse_fragment_accepts_interface_property_hook_contracts() {
                 Vec::new(),
                 Vec::new(),
                 vec![
-                    EvalInterfaceProperty::new("value", true, true),
-                    EvalInterfaceProperty::new("id", true, false),
+                    EvalInterfaceProperty::new("value", true, true).with_type(Some(
+                        EvalParameterType::new(vec![EvalParameterTypeVariant::String], false)
+                    )),
+                    EvalInterfaceProperty::new("id", true, false).with_type(Some(
+                        EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false)
+                    )),
                 ],
                 Vec::new(),
             )
@@ -277,10 +292,14 @@ fn parse_fragment_accepts_public_class_members() {
         program.statements(),
         &[EvalStmt::ClassDecl(EvalClass::new(
             "DynEvalSupported",
-            vec![EvalClassProperty::new(
-                "x",
-                Some(EvalExpr::Const(EvalConst::Int(1)))
-            )],
+            vec![
+                EvalClassProperty::new("x", Some(EvalExpr::Const(EvalConst::Int(1)))).with_type(
+                    Some(EvalParameterType::new(
+                        vec![EvalParameterTypeVariant::Int],
+                        false
+                    ))
+                )
+            ],
             vec![EvalClassMethod::new(
                 "read",
                 Vec::new(),
@@ -292,6 +311,98 @@ fn parse_fragment_accepts_public_class_members() {
         ))]
     );
 }
+
+/// Verifies constructor-promoted properties lower to property metadata and assignments.
+#[test]
+fn parse_fragment_accepts_constructor_promoted_properties() {
+    let program = parse_fragment(
+        br#"class DynEvalPromoted {
+    public function __construct(public int $id, private readonly ?string $name = null) {}
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::new(
+            "DynEvalPromoted",
+            vec![
+                EvalClassProperty::with_visibility_static_final_and_readonly(
+                    "id",
+                    EvalVisibility::Public,
+                    false,
+                    false,
+                    false,
+                    None,
+                )
+                .with_type(Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::Int],
+                    false
+                )))
+                .with_promoted(),
+                EvalClassProperty::with_visibility_static_final_and_readonly(
+                    "name",
+                    EvalVisibility::Private,
+                    false,
+                    false,
+                    true,
+                    None,
+                )
+                .with_type(Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::String],
+                    true
+                )))
+                .with_promoted(),
+            ],
+            vec![EvalClassMethod::new(
+                "__construct",
+                vec!["id".to_string(), "name".to_string()],
+                vec![
+                    EvalStmt::PropertySet {
+                        object: EvalExpr::LoadVar("this".to_string()),
+                        property: "id".to_string(),
+                        value: EvalExpr::LoadVar("id".to_string()),
+                    },
+                    EvalStmt::PropertySet {
+                        object: EvalExpr::LoadVar("this".to_string()),
+                        property: "name".to_string(),
+                        value: EvalExpr::LoadVar("name".to_string()),
+                    },
+                ],
+            )
+            .with_parameter_types(vec![
+                Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::Int],
+                    false
+                )),
+                Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::String],
+                    true
+                )),
+            ])
+            .with_parameter_defaults(vec![None, Some(EvalExpr::Const(EvalConst::Null))])]
+        ))]
+    );
+}
+
+/// Verifies eval rejects promoted parameter forms that the eval runtime cannot model yet.
+#[test]
+fn parse_fragment_rejects_unsupported_constructor_promotion_forms() {
+    parse_fragment(b"class DynEvalPromotedMethod { public function run(public int $id) {} }")
+        .expect_err("promotion is only valid on constructors");
+    parse_fragment(b"class DynEvalPromotedRef { public function __construct(public &$id) {} }")
+        .expect_err("promoted by-reference parameters need property alias storage");
+    parse_fragment(
+        b"class DynEvalPromotedVariadic { public function __construct(public ...$ids) {} }",
+    )
+    .expect_err("promoted variadic parameters need variadic property semantics");
+    parse_fragment(
+        b"interface DynEvalPromotedIface { public function __construct(public int $id); }",
+    )
+    .expect_err("interface signatures cannot promote properties");
+    parse_fragment(b"enum DynEvalPromotedEnum { public function __construct(public int $id) {} }")
+        .expect_err("enum methods cannot promote properties");
+}
+
 /// Verifies private and protected class members lower with explicit visibility metadata.
 #[test]
 fn parse_fragment_accepts_private_and_protected_class_members() {
@@ -307,7 +418,11 @@ fn parse_fragment_accepts_private_and_protected_class_members() {
                 "secret",
                 EvalVisibility::Private,
                 Some(EvalExpr::Const(EvalConst::Int(3)))
-            )],
+            )
+            .with_type(Some(EvalParameterType::new(
+                vec![EvalParameterTypeVariant::Int],
+                false
+            )))],
             vec![EvalClassMethod::with_visibility_and_modifiers(
                 "reveal",
                 EvalVisibility::Protected,
@@ -339,7 +454,11 @@ fn parse_fragment_accepts_readonly_class_property() {
                 false,
                 true,
                 None
-            )],
+            )
+            .with_type(Some(EvalParameterType::new(
+                vec![EvalParameterTypeVariant::Int],
+                false
+            )))],
             Vec::new()
         ))]
     );
@@ -368,7 +487,11 @@ fn parse_fragment_accepts_readonly_class_modifier() {
                     false,
                     true,
                     None
-                ),
+                )
+                .with_type(Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::Int],
+                    false
+                ))),
                 EvalClassProperty::with_visibility_static_and_readonly(
                     "count",
                     EvalVisibility::Public,
@@ -376,6 +499,10 @@ fn parse_fragment_accepts_readonly_class_modifier() {
                     false,
                     Some(EvalExpr::Const(EvalConst::Int(0)))
                 )
+                .with_type(Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::Int],
+                    false
+                )))
             ],
             Vec::new()
         ))]
@@ -405,6 +532,10 @@ fn parse_fragment_accepts_concrete_class_property_hooks() {
                 false,
                 None
             )
+            .with_type(Some(EvalParameterType::new(
+                vec![EvalParameterTypeVariant::Int],
+                false
+            )))
             .with_hooks(true, true)],
             vec![
                 EvalClassMethod::new(
@@ -446,6 +577,10 @@ fn parse_fragment_accepts_abstract_class_property_hook_contracts() {
                 false,
                 None
             )
+            .with_type(Some(EvalParameterType::new(
+                vec![EvalParameterTypeVariant::Int],
+                false
+            )))
             .with_abstract_hook_contract(true, true)],
             Vec::new(),
         ))]
@@ -472,6 +607,10 @@ fn parse_fragment_accepts_trait_abstract_property_hook_contracts() {
                 false,
                 None
             )
+            .with_type(Some(EvalParameterType::new(
+                vec![EvalParameterTypeVariant::String],
+                false
+            )))
             .with_abstract_hook_contract(true, false)],
             Vec::new(),
         ))]
@@ -538,14 +677,16 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
             false,
             None,
             Vec::new(),
-            vec![EvalClassProperty::with_visibility_static_final_and_readonly(
-                "value",
-                EvalVisibility::Public,
-                false,
-                true,
-                false,
-                Some(EvalExpr::Const(EvalConst::Int(42))),
-            )],
+            vec![
+                EvalClassProperty::with_visibility_static_final_and_readonly(
+                    "value",
+                    EvalVisibility::Public,
+                    false,
+                    true,
+                    false,
+                    Some(EvalExpr::Const(EvalConst::Int(42))),
+                )
+            ],
             vec![
                 EvalClassMethod::with_modifiers(
                     "read",
@@ -734,10 +875,13 @@ class DynEvalUsesTrait {
         &[
             EvalStmt::TraitDecl(EvalTrait::new(
                 "DynEvalTrait",
-                vec![EvalClassProperty::new(
-                    "seed",
-                    Some(EvalExpr::Const(EvalConst::Int(2)))
-                )],
+                vec![
+                    EvalClassProperty::new("seed", Some(EvalExpr::Const(EvalConst::Int(2))))
+                        .with_type(Some(EvalParameterType::new(
+                            vec![EvalParameterTypeVariant::Int],
+                            false
+                        )))
+                ],
                 vec![EvalClassMethod::new(
                     "read",
                     vec!["value".to_string()],

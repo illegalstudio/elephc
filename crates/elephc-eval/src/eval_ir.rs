@@ -1367,6 +1367,12 @@ impl EvalClassProperty {
         self
     }
 
+    /// Returns a copy of this property marked as coming from constructor promotion.
+    pub const fn with_promoted(mut self) -> Self {
+        self.is_promoted = true;
+        self
+    }
+
     /// Returns the PHP-visible property name without `$`.
     pub fn name(&self) -> &str {
         &self.name

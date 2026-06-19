@@ -1054,6 +1054,32 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionProperty reports eval constructor-promotion metadata.
+#[test]
+fn execute_program_reflection_property_reports_eval_promoted_metadata() {
+    let program = parse_fragment(
+        br#"class EvalReflectPromotedTarget {
+    public function __construct(public int $id, private string $name = "Ada") {}
+    public string $plain = "x";
+}
+$id = new ReflectionProperty("EvalReflectPromotedTarget", "id");
+$name = new ReflectionProperty("EvalReflectPromotedTarget", "name");
+$plain = new ReflectionProperty("EvalReflectPromotedTarget", "plain");
+echo $id->isPromoted() ? "I" : "i";
+echo $name->isPromoted() ? "N" : "n";
+echo $plain->isPromoted() ? "P" : "p";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "INp");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod constructor/destructor predicates for eval methods.
 #[test]
 fn execute_program_reflection_method_reports_constructor_and_destructor() {
