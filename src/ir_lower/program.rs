@@ -21,7 +21,7 @@ use crate::ir::{
 };
 use crate::ir_lower::{builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::types::{CheckResult, ClassInfo, InterfaceInfo, PhpType};
 
 /// Lowers an optimized typed AST program into a validated EIR module.
@@ -77,6 +77,7 @@ fn populate_metadata(module: &mut Module, program: &Program, check_result: &Chec
     module.declared_trait_methods = collect_declared_trait_methods(program);
     module.declared_trait_property_names = collect_declared_trait_property_names(program);
     module.declared_trait_constant_names = collect_declared_trait_constant_names(program);
+    module.declared_trait_constants = collect_declared_trait_constants(program);
     module.class_infos = check_result.classes.clone();
     module.interface_infos = check_result.interfaces.clone();
     module.enum_infos = check_result.enums.clone();
@@ -522,6 +523,33 @@ fn collect_declared_trait_constant_names(program: &Program) -> HashMap<String, V
             }
             StmtKind::NamespaceBlock { body, .. } => {
                 constants.extend(collect_declared_trait_constant_names(body));
+            }
+            _ => {}
+        }
+    }
+    constants
+}
+
+/// Collects direct PHP constant expressions declared by each trait.
+fn collect_declared_trait_constants(program: &Program) -> HashMap<String, HashMap<String, Expr>> {
+    let mut constants = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl {
+                name,
+                constants: trait_constants,
+                ..
+            } => {
+                constants.insert(
+                    name.clone(),
+                    trait_constants
+                        .iter()
+                        .map(|constant| (constant.name.clone(), constant.value.clone()))
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                constants.extend(collect_declared_trait_constants(body));
             }
             _ => {}
         }

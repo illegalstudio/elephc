@@ -565,6 +565,60 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass returns eval class-like constant values and enum cases.
+#[test]
+fn execute_program_reflects_eval_class_constant_values() {
+    let program = parse_fragment(
+        br#"class EvalReflectConstBase {
+    public const BASE = 1;
+}
+interface EvalReflectConstIface {
+    public const LIMIT = 2;
+}
+trait EvalReflectConstTrait {
+    public const TRAIT_VALUE = 3;
+}
+class EvalReflectConstChild extends EvalReflectConstBase implements EvalReflectConstIface {
+    private const SECRET = 9;
+    public const OWN = "own";
+    public const SUM = 5;
+}
+enum EvalReflectConstEnum {
+    case Ready;
+    public const LEVEL = 40;
+}
+$ref = new ReflectionClass("EvalReflectConstChild");
+$all = $ref->getConstants();
+echo $ref->getConstant("OWN"); echo ":";
+echo $ref->getConstant("BASE"); echo ":";
+echo $ref->getConstant("LIMIT"); echo ":";
+echo $ref->getConstant("SECRET"); echo ":";
+echo $ref->getConstant("SUM"); echo ":";
+echo $ref->getConstant("own") ? "bad" : "missing";
+echo ":"; echo count($all); echo ":"; echo $all["OWN"]; echo ":"; echo $all["BASE"]; echo ":"; echo $all["LIMIT"];
+$trait = new ReflectionClass("EvalReflectConstTrait");
+$traitAll = $trait->getConstants();
+echo ":"; echo $trait->getConstant("TRAIT_VALUE"); echo ":"; echo count($traitAll); echo ":"; echo $traitAll["TRAIT_VALUE"];
+$enum = new ReflectionClass("EvalReflectConstEnum");
+$case = $enum->getConstant("Ready");
+$enumAll = $enum->getConstants();
+echo ":"; echo $case->name;
+echo ":"; echo $enum->getConstant("LEVEL"); echo ":"; echo $enumAll["LEVEL"]; echo ":"; echo count($enumAll);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "own:1:2:9:5:missing:5:own:1:2:3:1:3:Ready:40:40:2"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod and ReflectionProperty expose eval member predicate metadata.
 #[test]
 fn execute_program_reflects_eval_member_predicates() {
@@ -622,7 +676,7 @@ return true;"#,
 #[test]
 fn execute_program_reflects_eval_method_parameters() {
     let program = parse_fragment(
-br##"class EvalReflectParamTarget {
+        br##"class EvalReflectParamTarget {
     public function run(int &$first, \App\Name|null $second = null, &...$rest) {}
 }
 $method = new ReflectionMethod("EvalReflectParamTarget", "run");

@@ -746,6 +746,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__constants",
+                Visibility::Private,
+                Some(mixed_type()),
+                empty_array(),
+            ),
+            builtin_property(
                 "__methods",
                 Visibility::Private,
                 Some(object_array_type("ReflectionMethod")),
@@ -802,6 +808,8 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_has_name_method("hasMethod", "__method_names", true),
             builtin_reflection_class_has_name_method("hasProperty", "__property_names", false),
             builtin_reflection_class_has_name_method("hasConstant", "__constant_names", false),
+            builtin_reflection_class_get_constant_method(),
+            builtin_reflection_class_mixed_method("getConstants", "__constants"),
             builtin_reflection_class_implements_interface_method(),
             builtin_reflection_class_array_method(
                 "getMethods",
@@ -954,6 +962,64 @@ fn builtin_reflection_class_has_name_method(
         variadic_type: None,
         return_type: Some(TypeExpr::Int),
         body: vec![Stmt::new(StmtKind::Return(Some(contains)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::getConstant()` backed by the private constant-value map.
+fn builtin_reflection_class_get_constant_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name_arg = Expr::new(ExprKind::Variable("name".to_string()), dummy_span);
+    let value = Expr::new(ExprKind::Variable("value".to_string()), dummy_span);
+    let value_read = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(reflection_this_property("__constants", dummy_span)),
+            index: Box::new(name_arg),
+        },
+        dummy_span,
+    );
+    let value_is_present = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(value.clone()),
+            op: BinOp::StrictNotEq,
+            right: Box::new(Expr::new(ExprKind::Null, dummy_span)),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "getConstant".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        body: vec![
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "value".to_string(),
+                    value: value_read,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: value_is_present,
+                    then_body: vec![Stmt::new(StmtKind::Return(Some(value)), dummy_span)],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(Expr::new(ExprKind::BoolLiteral(false), dummy_span))),
+                dummy_span,
+            ),
+        ],
         span: dummy_span,
         attributes: Vec::new(),
     }

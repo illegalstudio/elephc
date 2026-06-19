@@ -1322,6 +1322,57 @@ echo $backed->hasConstant("Ready") ? "Q" : "q";
     assert_eq!(out, "MPSx:ChTwDPAz:IJKLC:RUK:ELNvGFr:BNYQ");
 }
 
+/// Verifies that `ReflectionClass::getConstant()` and `getConstants()` expose
+/// class, parent, interface, trait, private, and enum-case constants.
+#[test]
+fn test_reflection_class_returns_constant_values() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectConstBase {
+    public const BASE = 1;
+}
+interface ReflectConstIface {
+    public const LIMIT = 2;
+}
+trait ReflectConstTrait {
+    public const TRAIT_VALUE = 3;
+}
+class ReflectConstChild extends ReflectConstBase implements ReflectConstIface {
+    private const SECRET = 9;
+    public const OWN = "own";
+    public const SUM = parent::BASE + 4;
+    public const NAME = self::class;
+}
+enum ReflectConstEnum {
+    case Ready;
+    public const LEVEL = 40;
+}
+$ref = new ReflectionClass(ReflectConstChild::class);
+$all = $ref->getConstants();
+echo $ref->getConstant("OWN") . ":";
+echo $ref->getConstant("BASE") . ":";
+echo $ref->getConstant("LIMIT") . ":";
+echo $ref->getConstant("SECRET") . ":";
+echo $ref->getConstant("SUM") . ":";
+echo $ref->getConstant("NAME") . ":";
+echo $ref->getConstant("own") ? "bad" : "missing";
+echo ":" . count($all) . ":" . $all["OWN"] . ":" . $all["BASE"] . ":" . $all["LIMIT"];
+$trait = new ReflectionClass(ReflectConstTrait::class);
+$traitAll = $trait->getConstants();
+echo ":" . $trait->getConstant("TRAIT_VALUE") . ":" . count($traitAll) . ":" . $traitAll["TRAIT_VALUE"];
+$enum = new ReflectionClass(ReflectConstEnum::class);
+$case = $enum->getConstant("Ready");
+$enumAll = $enum->getConstants();
+echo ":" . $case->name;
+echo ":" . $enum->getConstant("LEVEL") . ":" . $enumAll["LEVEL"] . ":" . count($enumAll);
+"#,
+    );
+    assert_eq!(
+        out,
+        "own:1:2:9:5:ReflectConstChild:missing:6:own:1:2:3:1:3:Ready:40:40:2"
+    );
+}
+
 /// Verifies that `ReflectionClass` reports implemented interface and used trait names.
 #[test]
 fn test_reflection_class_reports_relation_names() {
