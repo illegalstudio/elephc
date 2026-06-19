@@ -1073,6 +1073,9 @@ fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
             | "ptr_read_string"
             | "strpos"
             | "strrpos"
+            // `substr` persists its slice into an owned heap copy (see lower_substr), so its
+            // result is a fresh owning temporary like the allocating builtins above.
+            | "substr"
     )
 }
 

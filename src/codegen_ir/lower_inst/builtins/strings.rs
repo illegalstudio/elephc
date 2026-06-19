@@ -723,6 +723,12 @@ pub(super) fn lower_substr(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         Arch::AArch64 => lower_substr_aarch64(ctx, inst, &neg_done, &len_done)?,
         Arch::X86_64 => lower_substr_x86_64(ctx, inst, &neg_done, &len_done)?,
     }
+    // The arithmetic above leaves a borrowed slice that points INTO the source string's buffer
+    // (ptr in x1/rax, len in x2/rdx). Persist it to an owned heap copy so the result no longer
+    // aliases the source. Without this, `$s = substr($s, ...)` reassigning a string to a slice
+    // of itself corrupts `$s`: the store releases the old buffer the slice still points into.
+    // PHP's substr returns a fresh string value, so the copy also matches PHP semantics.
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     store_if_result(ctx, inst)
 }
 

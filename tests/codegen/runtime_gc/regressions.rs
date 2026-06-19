@@ -893,3 +893,29 @@ fn test_echo_owned_temp_array_balances_gc_stats() {
     );
     assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
 }
+
+/// Regression test for the substr self-reassign fix: `$s = substr($s, 0, $n)` now persists an
+/// owned copy instead of returning a slice into the source buffer, so reassigning a string to a
+/// substring of itself under loop churn neither corrupts the string nor leaks/double-frees. Each
+/// iteration allocates one persisted copy and frees the previous value, so allocs and frees stay
+/// balanced.
+#[test]
+fn test_substr_self_reassign_loop_balances_gc_stats() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$s = "aaaa.bbbb.cccc.dddd.eeee.ffff.gggg.hhhh";
+$count = 0;
+$p = strrpos($s, ".");
+while (false !== $p) {
+    $s = substr($s, 0, $p);
+    $count = $count + strlen($s);
+    $p = strrpos($s, ".");
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "133");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "substr self-reassign loop leaked or double-freed");
+}
