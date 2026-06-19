@@ -12,11 +12,16 @@
 //!   `__name`/`__attrs` slots instead of running their public empty bodies.
 
 use crate::codegen::platform::Arch;
-use crate::codegen::{abi, emit_box_current_value_as_mixed};
+use crate::codegen::{abi, emit_box_current_value_as_mixed, runtime_value_tag};
+use crate::codegen_ir::literal_defaults::{
+    emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
+    emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
+    emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
+};
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
-use crate::names::php_symbol_key;
-use crate::parser::ast::Visibility;
+use crate::names::{enum_case_symbol, php_symbol_key};
+use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Visibility};
 use crate::types::{AttrArgValue, FunctionSig, InterfaceInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
@@ -31,6 +36,7 @@ struct ReflectionOwnerMetadata {
     method_names: Vec<String>,
     property_names: Vec<String>,
     constant_names: Vec<String>,
+    constant_members: Vec<ReflectionConstantMember>,
     method_members: Vec<ReflectionListedMember>,
     property_members: Vec<ReflectionListedMember>,
     constructor_member: Option<ReflectionListedMember>,
@@ -68,6 +74,27 @@ struct ReflectionParameterMember {
     is_variadic: bool,
     is_passed_by_reference: bool,
     has_type: bool,
+}
+
+/// Metadata for one constant entry returned by `ReflectionClass::getConstants()`.
+#[derive(Clone)]
+struct ReflectionConstantMember {
+    name: String,
+    value: ReflectionConstantValue,
+}
+
+/// Compile-time value forms supported by Reflection constant metadata emission.
+#[derive(Clone)]
+enum ReflectionConstantValue {
+    Int(i64),
+    Bool(bool),
+    Float(f64),
+    Str(String),
+    Null,
+    EnumCase {
+        enum_name: String,
+        case_name: String,
+    },
 }
 
 /// Compile-time parameter selector from `ReflectionParameter::__construct()`.
@@ -168,6 +195,11 @@ fn emit_reflection_owner_object(
                 ctx,
                 "__constant_names",
                 &metadata.constant_names,
+            )?;
+            emit_reflection_constant_array_property_by_name(
+                ctx,
+                "__constants",
+                &metadata.constant_members,
             )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
@@ -284,6 +316,7 @@ fn reflection_class_metadata_for_name(
         let method_names = reflection_class_method_names(ctx, class_name);
         let property_names = reflection_class_property_names(ctx, class_name, info);
         let constant_names = reflection_class_constant_names(ctx, class_name, info);
+        let constant_members = reflection_class_constant_members(ctx, class_name, info)?;
         let method_members = reflection_class_method_members(info, &method_names);
         let property_members =
             reflection_class_property_members(ctx, class_name, info, &property_names);
@@ -299,6 +332,7 @@ fn reflection_class_metadata_for_name(
             method_names,
             property_names,
             constant_names,
+            constant_members,
             method_members,
             property_members,
             constructor_member,
@@ -325,6 +359,7 @@ fn reflection_class_metadata_for_name(
         let method_names = reflection_interface_method_names(ctx, interface_name);
         let property_names = reflection_interface_property_names(ctx, interface_name);
         let constant_names = reflection_interface_constant_names(ctx, interface_name);
+        let constant_members = reflection_interface_constant_members(ctx, interface_name)?;
         let method_members = ctx
             .module
             .interface_infos
@@ -342,6 +377,7 @@ fn reflection_class_metadata_for_name(
             method_names,
             property_names,
             constant_names,
+            constant_members,
             method_members,
             property_members,
             constructor_member,
@@ -369,6 +405,7 @@ fn reflection_class_metadata_for_name(
         let method_names = reflection_trait_method_names(ctx, trait_name);
         let property_names = reflection_trait_property_names(ctx, trait_name);
         let constant_names = reflection_trait_constant_names(ctx, trait_name);
+        let constant_members = reflection_trait_constant_members(ctx, trait_name)?;
         let method_members = ctx
             .module
             .declared_trait_methods
@@ -386,6 +423,7 @@ fn reflection_class_metadata_for_name(
             method_names,
             property_names,
             constant_names,
+            constant_members,
             method_members,
             property_members,
             constructor_member,
@@ -480,6 +518,7 @@ fn reflection_method_owner_metadata(
         method_names: Vec::new(),
         property_names: Vec::new(),
         constant_names: Vec::new(),
+        constant_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
         constructor_member: None,
@@ -522,6 +561,7 @@ fn reflection_property_metadata(
                 method_names: Vec::new(),
                 property_names: Vec::new(),
                 constant_names: Vec::new(),
+                constant_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
@@ -676,6 +716,7 @@ fn reflection_class_constant_metadata(
             method_names: Vec::new(),
             property_names: Vec::new(),
             constant_names: Vec::new(),
+            constant_members: Vec::new(),
             method_members: Vec::new(),
             property_members: Vec::new(),
             constructor_member: None,
@@ -715,6 +756,7 @@ fn reflection_class_constant_metadata(
                     method_names: Vec::new(),
                     property_names: Vec::new(),
                     constant_names: Vec::new(),
+                    constant_members: Vec::new(),
                     method_members: Vec::new(),
                     property_members: Vec::new(),
                     constructor_member: None,
@@ -761,6 +803,7 @@ fn reflection_enum_case_metadata(
                 method_names: Vec::new(),
                 property_names: Vec::new(),
                 constant_names: Vec::new(),
+                constant_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
@@ -961,6 +1004,107 @@ fn reflection_class_constant_names(
         }
     }
     names
+}
+
+/// Returns materializable class constant values for `ReflectionClass::getConstants()`.
+fn reflection_class_constant_members(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    _info: &crate::types::ClassInfo,
+) -> Result<Vec<ReflectionConstantMember>> {
+    let mut members = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(enum_info) = ctx.module.enum_infos.get(class_name) {
+        for case in &enum_info.cases {
+            push_unique_constant_member(
+                &case.name,
+                ReflectionConstantValue::EnumCase {
+                    enum_name: class_name.to_string(),
+                    case_name: case.name.clone(),
+                },
+                &mut members,
+                &mut seen,
+            );
+        }
+    }
+    let mut current = Some(class_name.to_string());
+    while let Some(current_name) = current {
+        let Some((resolved_name, current_info)) = resolve_reflection_class(ctx, &current_name)
+        else {
+            break;
+        };
+        for (constant_name, value_expr) in &current_info.constants {
+            if seen.contains(constant_name) {
+                continue;
+            }
+            let value =
+                reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
+            push_unique_constant_member(constant_name, value, &mut members, &mut seen);
+        }
+        for interface_name in &current_info.interfaces {
+            for member in reflection_interface_constant_members(ctx, interface_name)? {
+                push_unique_constant_member(&member.name, member.value, &mut members, &mut seen);
+            }
+        }
+        current = current_info.parent.clone();
+        if current.as_deref() == Some(resolved_name) {
+            break;
+        }
+    }
+    Ok(members)
+}
+
+/// Returns materializable interface constant values for ReflectionClass metadata.
+fn reflection_interface_constant_members(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+) -> Result<Vec<ReflectionConstantMember>> {
+    let mut members = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    collect_interface_constant_members(ctx, interface_name, &mut members, &mut seen)?;
+    Ok(members)
+}
+
+/// Recursively appends interface constants, preserving inherited-interface precedence.
+fn collect_interface_constant_members(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+    members: &mut Vec<ReflectionConstantMember>,
+    seen: &mut std::collections::HashSet<String>,
+) -> Result<()> {
+    let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
+        return Ok(());
+    };
+    for parent in &interface_info.parents {
+        collect_interface_constant_members(ctx, parent, members, seen)?;
+    }
+    for (constant_name, value_expr) in &interface_info.constants {
+        if seen.contains(constant_name) {
+            continue;
+        }
+        let value = reflection_constant_value(ctx, interface_name, None, value_expr, 0)?;
+        push_unique_constant_member(constant_name, value, members, seen);
+    }
+    Ok(())
+}
+
+/// Returns materializable direct trait constant values for ReflectionClass metadata.
+fn reflection_trait_constant_members(
+    ctx: &FunctionContext<'_>,
+    trait_name: &str,
+) -> Result<Vec<ReflectionConstantMember>> {
+    let mut members = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(constants) = ctx.module.declared_trait_constants.get(trait_name) {
+        for (constant_name, value_expr) in constants {
+            if seen.contains(constant_name) {
+                continue;
+            }
+            let value = reflection_constant_value(ctx, trait_name, None, value_expr, 0)?;
+            push_unique_constant_member(constant_name, value, &mut members, &mut seen);
+        }
+    }
+    Ok(members)
 }
 
 /// Returns true when a property should be visible for `ReflectionClass::hasProperty()`.
@@ -1422,6 +1566,237 @@ fn push_unique_constant_name(
     }
 }
 
+/// Appends one constant metadata member while preserving first-seen order.
+fn push_unique_constant_member(
+    constant_name: &str,
+    value: ReflectionConstantValue,
+    members: &mut Vec<ReflectionConstantMember>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if seen.insert(constant_name.to_string()) {
+        members.push(ReflectionConstantMember {
+            name: constant_name.to_string(),
+            value,
+        });
+    }
+}
+
+/// Evaluates one class/interface/trait constant expression for static Reflection metadata.
+fn reflection_constant_value(
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
+    expr: &Expr,
+    depth: usize,
+) -> Result<ReflectionConstantValue> {
+    if depth > 16 {
+        return Err(CodegenIrError::unsupported(
+            "deep recursive ReflectionClass constant metadata",
+        ));
+    }
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Ok(ReflectionConstantValue::Int(*value)),
+        ExprKind::BoolLiteral(value) => Ok(ReflectionConstantValue::Bool(*value)),
+        ExprKind::FloatLiteral(value) => Ok(ReflectionConstantValue::Float(*value)),
+        ExprKind::StringLiteral(value) => Ok(ReflectionConstantValue::Str(value.clone())),
+        ExprKind::Null => Ok(ReflectionConstantValue::Null),
+        ExprKind::Negate(inner) => {
+            match reflection_constant_value(ctx, current_class, current_info, inner, depth + 1)? {
+                ReflectionConstantValue::Int(value) => Ok(ReflectionConstantValue::Int(-value)),
+                ReflectionConstantValue::Float(value) => Ok(ReflectionConstantValue::Float(-value)),
+                other => Err(unsupported_reflection_constant_value(other)),
+            }
+        }
+        ExprKind::BinaryOp { left, op, right } => reflection_binary_constant_value(
+            ctx,
+            current_class,
+            current_info,
+            left,
+            op,
+            right,
+            depth + 1,
+        ),
+        ExprKind::ClassConstant { receiver } => {
+            let class_name =
+                reflection_static_receiver_name(current_class, current_info, receiver)?;
+            Ok(ReflectionConstantValue::Str(class_name))
+        }
+        ExprKind::ScopedConstantAccess { receiver, name } => reflection_scoped_constant_value(
+            ctx,
+            current_class,
+            current_info,
+            receiver,
+            name,
+            depth + 1,
+        ),
+        other => Err(CodegenIrError::unsupported(format!(
+            "ReflectionClass constant metadata expression {:?}",
+            other
+        ))),
+    }
+}
+
+/// Evaluates one supported binary operator in a static Reflection constant expression.
+fn reflection_binary_constant_value(
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    depth: usize,
+) -> Result<ReflectionConstantValue> {
+    let left = reflection_constant_value(ctx, current_class, current_info, left, depth)?;
+    let right = reflection_constant_value(ctx, current_class, current_info, right, depth)?;
+    match (left, op, right) {
+        (ReflectionConstantValue::Int(left), BinOp::Add, ReflectionConstantValue::Int(right)) => {
+            Ok(ReflectionConstantValue::Int(left + right))
+        }
+        (ReflectionConstantValue::Int(left), BinOp::Sub, ReflectionConstantValue::Int(right)) => {
+            Ok(ReflectionConstantValue::Int(left - right))
+        }
+        (ReflectionConstantValue::Int(left), BinOp::Mul, ReflectionConstantValue::Int(right)) => {
+            Ok(ReflectionConstantValue::Int(left * right))
+        }
+        (ReflectionConstantValue::Int(left), BinOp::Mod, ReflectionConstantValue::Int(right)) => {
+            Ok(ReflectionConstantValue::Int(left % right))
+        }
+        (ReflectionConstantValue::Int(left), BinOp::Pow, ReflectionConstantValue::Int(right))
+            if right >= 0 =>
+        {
+            Ok(ReflectionConstantValue::Int(left.pow(right as u32)))
+        }
+        (
+            ReflectionConstantValue::Str(left),
+            BinOp::Concat,
+            ReflectionConstantValue::Str(right),
+        ) => Ok(ReflectionConstantValue::Str(format!("{}{}", left, right))),
+        (left, _, right) => Err(CodegenIrError::unsupported(format!(
+            "ReflectionClass constant metadata binary value {:?} {:?}",
+            reflection_constant_value_kind(&left),
+            reflection_constant_value_kind(&right)
+        ))),
+    }
+}
+
+/// Resolves and evaluates one scoped class/interface/trait constant value.
+fn reflection_scoped_constant_value(
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
+    receiver: &StaticReceiver,
+    constant_name: &str,
+    depth: usize,
+) -> Result<ReflectionConstantValue> {
+    let class_name = reflection_static_receiver_name(current_class, current_info, receiver)?;
+    if let Some((resolved_name, info)) = resolve_reflection_class(ctx, &class_name) {
+        if let Some(value_expr) = info.constants.get(constant_name) {
+            return reflection_constant_value(ctx, resolved_name, Some(info), value_expr, depth);
+        }
+        for interface_name in &info.interfaces {
+            if let Some(value_expr) =
+                reflection_interface_constant_expr(ctx, interface_name, constant_name)
+            {
+                return reflection_constant_value(ctx, interface_name, None, &value_expr, depth);
+            }
+        }
+    }
+    if let Some(interface_name) = resolve_reflection_interface(ctx, &class_name) {
+        if let Some(value_expr) =
+            reflection_interface_constant_expr(ctx, interface_name, constant_name)
+        {
+            return reflection_constant_value(ctx, interface_name, None, &value_expr, depth);
+        }
+    }
+    if let Some(trait_name) = resolve_reflection_trait(ctx, &class_name) {
+        if let Some(value_expr) = ctx
+            .module
+            .declared_trait_constants
+            .get(trait_name)
+            .and_then(|constants| constants.get(constant_name))
+        {
+            return reflection_constant_value(ctx, trait_name, None, value_expr, depth);
+        }
+    }
+    if ctx
+        .module
+        .enum_infos
+        .get(&class_name)
+        .is_some_and(|info| info.cases.iter().any(|case| case.name == constant_name))
+    {
+        return Ok(ReflectionConstantValue::EnumCase {
+            enum_name: class_name,
+            case_name: constant_name.to_string(),
+        });
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "ReflectionClass constant metadata for {}::{}",
+        current_class, constant_name
+    )))
+}
+
+/// Returns an interface constant expression, including inherited parent interfaces.
+fn reflection_interface_constant_expr(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+    constant_name: &str,
+) -> Option<Expr> {
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = vec![interface_name.to_string()];
+    while let Some(name) = queue.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        if let Some(info) = ctx.module.interface_infos.get(&name) {
+            if let Some(value) = info.constants.get(constant_name) {
+                return Some(value.clone());
+            }
+            queue.extend(info.parents.iter().cloned());
+        }
+    }
+    None
+}
+
+/// Resolves a static receiver against the current reflected declaration.
+fn reflection_static_receiver_name(
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
+    receiver: &StaticReceiver,
+) -> Result<String> {
+    match receiver {
+        StaticReceiver::Named(name) => Ok(name.as_str().trim_start_matches('\\').to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static => Ok(current_class.to_string()),
+        StaticReceiver::Parent => current_info
+            .and_then(|info| info.parent.clone())
+            .ok_or_else(|| {
+                CodegenIrError::unsupported(format!(
+                    "ReflectionClass constant metadata parent receiver in {}",
+                    current_class
+                ))
+            }),
+    }
+}
+
+/// Returns a small label for unsupported constant-value diagnostics.
+fn reflection_constant_value_kind(value: &ReflectionConstantValue) -> &'static str {
+    match value {
+        ReflectionConstantValue::Int(_) => "int",
+        ReflectionConstantValue::Bool(_) => "bool",
+        ReflectionConstantValue::Float(_) => "float",
+        ReflectionConstantValue::Str(_) => "string",
+        ReflectionConstantValue::Null => "null",
+        ReflectionConstantValue::EnumCase { .. } => "enum-case",
+    }
+}
+
+/// Reports an unsupported unary constant value while avoiding large debug output.
+fn unsupported_reflection_constant_value(value: ReflectionConstantValue) -> CodegenIrError {
+    CodegenIrError::unsupported(format!(
+        "ReflectionClass constant metadata unary value {}",
+        reflection_constant_value_kind(&value)
+    ))
+}
+
 /// Looks up class-constant metadata by PHP-style class name and case-sensitive constant name.
 fn resolve_reflection_class_constant<'a>(
     ctx: &'a FunctionContext<'_>,
@@ -1461,6 +1836,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         method_names: Vec::new(),
         property_names: Vec::new(),
         constant_names: Vec::new(),
+        constant_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
         constructor_member: None,
@@ -1705,6 +2081,39 @@ fn emit_reflection_string_array_property_by_name(
     Ok(())
 }
 
+/// Replaces a ReflectionClass private slot with an associative constant-value array.
+fn emit_reflection_constant_array_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    property_name: &str,
+    members: &[ReflectionConstantMember],
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    emit_reflection_constant_array(ctx, members)?;
+    let assoc_type = PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Mixed),
+    };
+    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    Ok(())
+}
+
 /// Replaces a ReflectionClass private array slot with ReflectionMethod/Property objects.
 fn emit_reflection_member_array_property_by_name(
     ctx: &mut FunctionContext<'_>,
@@ -1882,6 +2291,82 @@ fn emit_reflection_parameter_array(
     }
 
     Ok(())
+}
+
+/// Allocates and populates the associative ReflectionClass constant map.
+fn emit_reflection_constant_array(
+    ctx: &mut FunctionContext<'_>,
+    members: &[ReflectionConstantMember],
+) -> Result<()> {
+    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    for member in members {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_reflection_constant_value_as_mixed(ctx, &member.value);
+        emit_reflection_constant_hash_insert(ctx, &member.name);
+    }
+    Ok(())
+}
+
+/// Materializes one Reflection constant value as a boxed Mixed cell.
+fn emit_reflection_constant_value_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    value: &ReflectionConstantValue,
+) {
+    match value {
+        ReflectionConstantValue::Int(value) => emit_boxed_int_literal_to_result(ctx, *value),
+        ReflectionConstantValue::Bool(value) => emit_boxed_bool_literal_to_result(ctx, *value),
+        ReflectionConstantValue::Float(value) => emit_boxed_float_literal_to_result(ctx, *value),
+        ReflectionConstantValue::Str(value) => {
+            emit_boxed_string_literal_default_to_result(ctx, value)
+        }
+        ReflectionConstantValue::Null => emit_boxed_null_literal_to_result(ctx),
+        ReflectionConstantValue::EnumCase {
+            enum_name,
+            case_name,
+        } => {
+            let case_label = enum_case_symbol(enum_name, case_name);
+            abi::emit_load_symbol_to_reg(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                &case_label,
+                0,
+            );
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(enum_name.clone()));
+        }
+    }
+}
+
+/// Inserts the current boxed Mixed constant value into the stacked associative array.
+fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
+    let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x5",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "r9",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+    }
 }
 
 /// Allocates and populates one ReflectionMethod/ReflectionProperty object.
@@ -2067,32 +2552,32 @@ fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String])
 
 /// Appends ReflectionClass metadata names to the current ARM64 result array.
 fn emit_reflection_string_array_fill_aarch64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("str x0, [sp, #-16]!"); // park the metadata-name array while appending strings
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the metadata-name array while appending strings
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("ldr x0, [sp]"); // reload the metadata-name array for this append
+        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "x1", &label);
         abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("str x0, [sp]"); // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("ldr x0, [sp], #16"); // restore the final metadata-name array as the result
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final metadata-name array as the result
 }
 
 /// Appends ReflectionClass metadata names to the current x86_64 result array.
 fn emit_reflection_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("push rax"); // park the metadata-name array while appending strings
-    ctx.emitter.instruction("sub rsp, 8"); // keep stack alignment stable across append helper calls
+    ctx.emitter.instruction("push rax");                                        // park the metadata-name array while appending strings
+    ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across append helper calls
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]"); // reload the metadata-name array for this append
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "rsi", &label);
         abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax"); // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("add rsp, 8"); // drop the temporary alignment slot
-    ctx.emitter.instruction("pop rax"); // restore the final metadata-name array as the result
+    ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
+    ctx.emitter.instruction("pop rax");                                         // restore the final metadata-name array as the result
 }
 
 /// Stores ReflectionMethod/ReflectionProperty boolean predicate slots when supported.

@@ -6144,6 +6144,59 @@ echo $backed->hasConstant("Ready") ? "Q" : "q";');
     assert_eq!(out.stdout, "MPSx:ChTwDPAz:IJKLC:RUK:ELNvGFr:BYQ");
 }
 
+/// Verifies eval ReflectionClass returns constant values and enum cases through the bridge.
+#[test]
+fn test_eval_reflection_class_constant_values() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectConstBase {
+    public const BASE = 1;
+}
+interface EvalReflectConstIface {
+    public const LIMIT = 2;
+}
+trait EvalReflectConstTrait {
+    public const TRAIT_VALUE = 3;
+}
+class EvalReflectConstChild extends EvalReflectConstBase implements EvalReflectConstIface {
+    private const SECRET = 9;
+    public const OWN = "own";
+    public const SUM = 5;
+}
+enum EvalReflectConstEnum {
+    case Ready;
+    public const LEVEL = 40;
+}
+$ref = new ReflectionClass("EvalReflectConstChild");
+$all = $ref->getConstants();
+echo $ref->getConstant("OWN") . ":";
+echo $ref->getConstant("BASE") . ":";
+echo $ref->getConstant("LIMIT") . ":";
+echo $ref->getConstant("SECRET") . ":";
+echo $ref->getConstant("SUM") . ":";
+echo $ref->getConstant("own") ? "bad" : "missing";
+echo ":" . count($all) . ":" . $all["OWN"] . ":" . $all["BASE"] . ":" . $all["LIMIT"];
+$trait = new ReflectionClass("EvalReflectConstTrait");
+$traitAll = $trait->getConstants();
+echo ":" . $trait->getConstant("TRAIT_VALUE") . ":" . count($traitAll) . ":" . $traitAll["TRAIT_VALUE"];
+$enum = new ReflectionClass("EvalReflectConstEnum");
+$case = $enum->getConstant("Ready");
+$enumAll = $enum->getConstants();
+echo ":" . $case->name;
+echo ":" . $enum->getConstant("LEVEL") . ":" . $enumAll["LEVEL"] . ":" . count($enumAll);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "own:1:2:9:5:missing:5:own:1:2:3:1:3:Ready:40:40:2"
+    );
+}
+
 /// Verifies eval ReflectionMethod and ReflectionProperty expose member predicates through the bridge.
 #[test]
 fn test_eval_reflection_member_predicates() {

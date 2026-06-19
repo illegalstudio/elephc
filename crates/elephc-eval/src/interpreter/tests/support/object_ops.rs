@@ -185,6 +185,17 @@ impl FakeOps {
             (FakeValue::Object(properties), "hasconstant") if args.len() == 1 => {
                 self.object_string_array_contains(&properties, "__constant_names", args[0], false)
             }
+            (FakeValue::Object(properties), "getconstant") if args.len() == 1 => {
+                let Some(constants) = Self::object_property(&properties, "__constants") else {
+                    return self.bool_value(false);
+                };
+                let exists = self.runtime_array_key_exists(args[0], constants)?;
+                if matches!(self.get(exists), FakeValue::Bool(true)) {
+                    self.runtime_array_get(constants, args[0])
+                } else {
+                    self.bool_value(false)
+                }
+            }
             (FakeValue::Object(properties), "implementsinterface") if args.len() == 1 => {
                 let direct = self.object_string_array_contains(
                     &properties,
@@ -228,6 +239,10 @@ impl FakeOps {
             (FakeValue::Object(properties), "getproperties") if args.is_empty() => {
                 Self::object_property(&properties, "__properties")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
+            (FakeValue::Object(properties), "getconstants") if args.is_empty() => {
+                Self::object_property(&properties, "__constants")
+                    .map_or_else(|| self.runtime_assoc_new(0), Ok)
             }
             (FakeValue::Object(properties), "getarguments") if args.is_empty() => {
                 Self::object_property(&properties, "__args")
@@ -416,6 +431,8 @@ impl FakeOps {
             let namespace_name = self.string(namespace_name)?;
             let short_name = self.string(short_name)?;
             let in_namespace = self.bool_value(has_namespace)?;
+            let constant_names = self.runtime_array_new(0)?;
+            let constants = self.runtime_assoc_new(0)?;
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__is_abstract".to_string(), is_abstract));
             properties.push(("__is_interface".to_string(), is_interface));
@@ -431,6 +448,8 @@ impl FakeOps {
             properties.push(("__trait_names".to_string(), trait_names));
             properties.push(("__method_names".to_string(), method_names));
             properties.push(("__property_names".to_string(), property_names));
+            properties.push(("__constant_names".to_string(), constant_names));
+            properties.push(("__constants".to_string(), constants));
             properties.push(("__methods".to_string(), method_objects));
             properties.push(("__parent_class".to_string(), parent_class));
             properties.push(("__properties".to_string(), property_objects));
@@ -654,8 +673,8 @@ fn fake_runtime_exception_like_class(class_name: &str) -> bool {
         "Error",
         "ValueError",
     ]
-        .iter()
-        .any(|known| class_name.eq_ignore_ascii_case(known))
+    .iter()
+    .any(|known| class_name.eq_ignore_ascii_case(known))
 }
 
 /// Splits one PHP class-like name into namespace and short-name parts.

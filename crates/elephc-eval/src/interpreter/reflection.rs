@@ -174,6 +174,90 @@ pub(in crate::interpreter) fn eval_reflection_class_has_constant_result(
         .map(Some)
 }
 
+/// Handles eval-backed `ReflectionClass::getConstant()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_get_constant_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getConstant") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
+    let constant_name = eval_reflection_string_arg(args[0], values)?;
+    if let Some(value) = eval_reflection_constant_value(&reflected_name, &constant_name, context) {
+        return Ok(Some(value));
+    }
+    values.bool_value(false).map(Some)
+}
+
+/// Handles eval-backed `ReflectionClass::getConstants()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_get_constants_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getConstants") {
+        return Ok(None);
+    }
+    if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let names = eval_reflection_constant_names(&reflected_name, context);
+    let mut result = values.assoc_new(names.len())?;
+    for name in names {
+        let Some(value) = eval_reflection_constant_value(&reflected_name, &name, context) else {
+            continue;
+        };
+        let key = values.string(&name)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(Some(result))
+}
+
+/// Returns the constant names visible through eval-backed `ReflectionClass`.
+fn eval_reflection_constant_names(
+    reflected_name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<String> {
+    if context.has_interface(reflected_name) {
+        context.interface_constant_names(reflected_name)
+    } else if context.has_trait(reflected_name) {
+        context.trait_constant_names(reflected_name)
+    } else {
+        context.class_constant_names(reflected_name)
+    }
+}
+
+/// Returns a materialized eval constant value for Reflection without visibility checks.
+fn eval_reflection_constant_value(
+    reflected_name: &str,
+    constant_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<RuntimeCellHandle> {
+    if let Some(case) = context.enum_case(reflected_name, constant_name) {
+        return Some(case);
+    }
+    let (declaring_class, constant) = context.class_constant(reflected_name, constant_name)?;
+    context.class_constant_cell(&declaring_class, constant.name())
+}
+
 /// Builds an eval-backed `ReflectionClass` object when the reflected class-like exists in eval.
 fn eval_reflection_class_new(
     evaluated_args: Vec<EvaluatedCallArg>,
