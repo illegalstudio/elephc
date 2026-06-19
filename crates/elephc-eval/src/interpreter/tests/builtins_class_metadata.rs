@@ -748,6 +748,11 @@ foreach ($params as $param) {
     } else {
         echo ":null";
     }
+    echo $param->isDefaultValueAvailable() ? ":D" : ":d";
+    if ($param->isDefaultValueAvailable()) {
+        echo "=";
+        echo $param->getDefaultValue() === null ? "null" : $param->getDefaultValue();
+    }
     echo "|";
 }
 return true;"##,
@@ -760,7 +765,7 @@ return true;"##,
 
     assert_eq!(
         values.output,
-        "3/1:first#0rvRT:int!B|second#1OvbT:App\\Name?C|rest#2OVRt:null|"
+        "3/1:first#0rvRT:int!B:d|second#1OvbT:App\\Name?C:D=null|rest#2OVRt:null:d|"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

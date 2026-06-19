@@ -567,6 +567,18 @@ fn builtin_reflection_parameter() -> FlattenedClass {
             ),
             builtin_property("__has_type", Visibility::Private, Some(TypeExpr::Bool), bool_lit(false)),
             builtin_property("__type", Visibility::Private, Some(mixed_type()), null_lit()),
+            builtin_property(
+                "__has_default_value",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+            builtin_property(
+                "__default_value",
+                Visibility::Private,
+                Some(mixed_type()),
+                null_lit(),
+            ),
         ],
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![
@@ -584,10 +596,66 @@ fn builtin_reflection_parameter() -> FlattenedClass {
             ),
             builtin_reflection_slot_getter("hasType", "__has_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("getType", "__type", mixed_type()),
+            builtin_reflection_slot_getter(
+                "isDefaultValueAvailable",
+                "__has_default_value",
+                TypeExpr::Bool,
+            ),
+            builtin_reflection_parameter_get_default_value_method(),
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionParameter::getDefaultValue()` over the retained default slot.
+fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "getDefaultValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(reflection_this_property(
+                            "__has_default_value",
+                            dummy_span,
+                        ))),
+                        dummy_span,
+                    ),
+                    then_body: vec![throw_new_reflection_exception(
+                        string_lit(
+                            "Internal error: Failed to retrieve the default value",
+                            dummy_span,
+                        ),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(reflection_this_property(
+                    "__default_value",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
     }
 }
 
@@ -1957,13 +2025,21 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getPosition")) {
                     sig.return_type = PhpType::Int;
                 }
-                for method_name in ["isoptional", "isvariadic", "ispassedbyreference", "hastype"] {
+                for method_name in [
+                    "isoptional",
+                    "isvariadic",
+                    "ispassedbyreference",
+                    "hastype",
+                    "isdefaultvalueavailable",
+                ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }
                 }
-                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getType")) {
-                    sig.return_type = PhpType::Mixed;
+                for method_name in ["getType", "getDefaultValue"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Mixed;
+                    }
                 }
             }
             if class_name == "ReflectionNamedType" {

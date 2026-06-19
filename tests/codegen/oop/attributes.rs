@@ -1970,6 +1970,39 @@ if ($directType instanceof ReflectionNamedType) {
     );
 }
 
+/// Verifies that `ReflectionParameter` exposes supported scalar/null defaults.
+#[test]
+fn test_reflection_parameter_exposes_default_values() {
+    let out = compile_and_run_capture(
+        r##"<?php
+function reflect_default_function($required, int $id = 7, ?string $name = null, string $label = "ok") {}
+$params = (new ReflectionFunction("reflect_default_function"))->getParameters();
+echo $params[0]->isDefaultValueAvailable() ? "D" : "d";
+try {
+    $params[0]->getDefaultValue();
+} catch (ReflectionException $e) {
+    echo ":E";
+}
+echo "|";
+echo $params[1]->isDefaultValueAvailable() ? "D:" : "d:";
+echo $params[1]->getDefaultValue();
+echo "|";
+echo $params[2]->isDefaultValueAvailable() ? "D:" : "d:";
+echo $params[2]->getDefaultValue() === null ? "null" : "value";
+echo "|";
+$direct = new ReflectionParameter("reflect_default_function", "label");
+echo $direct->isDefaultValueAvailable() ? "D:" : "d:";
+echo $direct->getDefaultValue();
+"##,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "d:E|D:7|D:null|D:ok");
+}
+
 /// Verifies direct `new ReflectionParameter()` construction for statically known
 /// class and interface method targets.
 #[test]

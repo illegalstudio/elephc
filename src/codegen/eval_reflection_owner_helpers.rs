@@ -86,6 +86,10 @@ struct ReflectionOwnerLayout {
     has_type_hi: Option<usize>,
     parameter_type_lo: Option<usize>,
     parameter_type_hi: Option<usize>,
+    has_default_value_lo: Option<usize>,
+    has_default_value_hi: Option<usize>,
+    default_value_lo: Option<usize>,
+    default_value_hi: Option<usize>,
     allows_null_lo: Option<usize>,
     allows_null_hi: Option<usize>,
     is_builtin_lo: Option<usize>,
@@ -211,6 +215,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_passed_by_reference_lo = reflection_property_offset(info, "__is_passed_by_reference");
     let has_type_lo = reflection_property_offset(info, "__has_type");
     let parameter_type_lo = reflection_property_offset(info, "__type");
+    let has_default_value_lo = reflection_property_offset(info, "__has_default_value");
+    let default_value_lo = reflection_property_offset(info, "__default_value");
     let allows_null_lo = reflection_property_offset(info, "__allows_null");
     let is_builtin_lo = reflection_property_offset(info, "__is_builtin")
         .or_else(|| reflection_property_offset(info, "__builtin"));
@@ -279,6 +285,10 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         has_type_hi: has_type_lo.map(|offset| offset + 8),
         parameter_type_lo,
         parameter_type_hi: parameter_type_lo.map(|offset| offset + 8),
+        has_default_value_lo,
+        has_default_value_hi: has_default_value_lo.map(|offset| offset + 8),
+        default_value_lo,
+        default_value_hi: default_value_lo.map(|offset| offset + 8),
         allows_null_lo,
         allows_null_hi: allows_null_lo.map(|offset| offset + 8),
         is_builtin_lo,
@@ -585,6 +595,7 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_required_parameter_count_property_aarch64(emitter, layout);
     emit_set_owner_parameter_property_aarch64(emitter, layout);
     emit_set_owner_parameter_type_property_aarch64(emitter, layout, fail_label);
+    emit_set_owner_parameter_default_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_named_type_flags_property_aarch64(emitter, layout);
     emit_set_owner_metadata_arrays_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_parent_class_property_aarch64(emitter, layout, fail_label);
@@ -612,6 +623,7 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_required_parameter_count_property_x86_64(emitter, layout);
     emit_set_owner_parameter_property_x86_64(emitter, layout);
     emit_set_owner_parameter_type_property_x86_64(emitter, layout, fail_label);
+    emit_set_owner_parameter_default_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_named_type_flags_property_x86_64(emitter, layout);
     emit_set_owner_metadata_arrays_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_parent_class_property_x86_64(emitter, layout, fail_label);
@@ -1159,6 +1171,8 @@ fn emit_set_owner_parameter_property_aarch64(
         Some(is_passed_by_reference_hi),
         Some(has_type_lo),
         Some(has_type_hi),
+        Some(has_default_value_lo),
+        Some(has_default_value_hi),
     ) = (
         layout.position_lo,
         layout.position_hi,
@@ -1170,6 +1184,8 @@ fn emit_set_owner_parameter_property_aarch64(
         layout.is_passed_by_reference_hi,
         layout.has_type_lo,
         layout.has_type_hi,
+        layout.has_default_value_lo,
+        layout.has_default_value_hi,
     )
     else {
         return;
@@ -1194,6 +1210,10 @@ fn emit_set_owner_parameter_property_aarch64(
     emitter.instruction("and x10, x10, #1");                                    // extract the typed-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", has_type_lo);
     abi::emit_store_zero_to_address(emitter, "x9", has_type_hi);
+    emitter.instruction("lsr x10, x11, #4");                                    // move the default-value bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the default-value flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", has_default_value_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", has_default_value_hi);
 }
 
 /// Stores incoming ARM64 ReflectionParameter type metadata.
@@ -1214,6 +1234,26 @@ fn emit_set_owner_parameter_type_property_aarch64(
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionParameter object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", type_lo);
     abi::emit_store_zero_to_address(emitter, "x9", type_hi);
+}
+
+/// Stores incoming ARM64 ReflectionParameter default-value metadata.
+fn emit_set_owner_parameter_default_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(default_lo), Some(default_hi)) = (layout.default_value_lo, layout.default_value_hi)
+    else {
+        return;
+    };
+    emitter.instruction("ldr x0, [sp, #128]");                                  // reload the boxed ReflectionParameter default value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null default metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed default value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed default value for ReflectionParameter storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed default value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionParameter object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", default_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", default_hi);
 }
 
 /// Stores incoming ARM64 ReflectionNamedType predicate flags.
@@ -1262,6 +1302,8 @@ fn emit_set_owner_parameter_property_x86_64(
         Some(is_passed_by_reference_hi),
         Some(has_type_lo),
         Some(has_type_hi),
+        Some(has_default_value_lo),
+        Some(has_default_value_hi),
     ) = (
         layout.position_lo,
         layout.position_hi,
@@ -1273,6 +1315,8 @@ fn emit_set_owner_parameter_property_x86_64(
         layout.is_passed_by_reference_hi,
         layout.has_type_lo,
         layout.has_type_hi,
+        layout.has_default_value_lo,
+        layout.has_default_value_hi,
     )
     else {
         return;
@@ -1301,6 +1345,11 @@ fn emit_set_owner_parameter_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the typed-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", has_type_lo);
     abi::emit_store_zero_to_address(emitter, "r10", has_type_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the default-value bit
+    emitter.instruction("shr rax, 4");                                          // move the default-value bit into position
+    emitter.instruction("and rax, 1");                                          // extract the default-value flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", has_default_value_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", has_default_value_hi);
 }
 
 /// Stores incoming x86_64 ReflectionParameter type metadata.
@@ -1322,6 +1371,27 @@ fn emit_set_owner_parameter_type_property_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionParameter object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", type_lo);
     abi::emit_store_zero_to_address(emitter, "r10", type_hi);
+}
+
+/// Stores incoming x86_64 ReflectionParameter default-value metadata.
+fn emit_set_owner_parameter_default_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(default_lo), Some(default_hi)) = (layout.default_value_lo, layout.default_value_hi)
+    else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp - 136]");                      // reload the boxed ReflectionParameter default value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed default value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null default metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed default value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed default value for ReflectionParameter storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed default value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionParameter object pointer
+    abi::emit_store_to_address(emitter, "rdi", "r10", default_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", default_hi);
 }
 
 /// Stores incoming x86_64 ReflectionNamedType predicate flags.

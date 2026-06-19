@@ -662,7 +662,7 @@ fn eval_method_numeric_coercible_value(
 }
 
 /// Materializes a supported eval method parameter default expression.
-fn eval_method_parameter_default(
+pub(in crate::interpreter) fn eval_method_parameter_default(
     default: &EvalExpr,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

@@ -29,6 +29,7 @@ const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
+const EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE: u64 = 16;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_ALLOWS_NULL: u64 = 1;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN: u64 = 2;
 
@@ -65,6 +66,7 @@ struct EvalReflectionParameterMetadata {
     is_passed_by_reference: bool,
     has_type: bool,
     type_metadata: Option<EvalReflectionNamedTypeMetadata>,
+    default_value: Option<EvalExpr>,
 }
 
 /// Eval metadata needed to materialize one `ReflectionNamedType` object.
@@ -671,7 +673,7 @@ fn eval_reflection_owner_object(
             values,
         )?
     } else if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-        eval_reflection_parameter_object_array_result(parameter_metadata, values)?
+        eval_reflection_parameter_object_array_result(parameter_metadata, context, values)?
     } else {
         values.array_new(0)?
     };
@@ -765,11 +767,12 @@ fn eval_reflection_string_array_result(
 /// Builds an indexed array of populated ReflectionParameter objects.
 fn eval_reflection_parameter_object_array_result(
     parameters: &[EvalReflectionParameterMetadata],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut result = values.array_new(parameters.len())?;
     for parameter in parameters {
-        let parameter_object = eval_reflection_parameter_object_result(parameter, values)?;
+        let parameter_object = eval_reflection_parameter_object_result(parameter, context, values)?;
         let key = values.int(parameter.position as i64)?;
         result = values.array_set(result, key, parameter_object)?;
     }
@@ -779,6 +782,7 @@ fn eval_reflection_parameter_object_array_result(
 /// Materializes one ReflectionParameter object through the shared reflection helper.
 fn eval_reflection_parameter_object_result(
     parameter: &EvalReflectionParameterMetadata,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let attrs = values.array_new(0)?;
@@ -787,10 +791,13 @@ fn eval_reflection_parameter_object_result(
     let method_names = values.array_new(0)?;
     let property_names = values.array_new(0)?;
     let method_objects = values.array_new(0)?;
-    let property_objects = values.array_new(0)?;
     let parent_class = values.bool_value(false)?;
     let type_value = match parameter.type_metadata.as_ref() {
         Some(type_metadata) => eval_reflection_named_type_object_result(type_metadata, values)?,
+        None => values.null()?,
+    };
+    let default_value = match parameter.default_value.as_ref() {
+        Some(default) => eval_method_parameter_default(default, context, values)?,
         None => values.null()?,
     };
     let flags = eval_reflection_parameter_flags(parameter);
@@ -803,7 +810,7 @@ fn eval_reflection_parameter_object_result(
         method_names,
         property_names,
         type_value,
-        property_objects,
+        default_value,
         parent_class,
         flags,
         parameter.position as u64,
@@ -815,7 +822,7 @@ fn eval_reflection_parameter_object_result(
     values.release(property_names)?;
     values.release(method_objects)?;
     values.release(type_value)?;
-    values.release(property_objects)?;
+    values.release(default_value)?;
     values.release(parent_class)?;
     Ok(object)
 }
@@ -1310,6 +1317,7 @@ fn eval_reflection_parameters_from_names_and_type_flags(
                 .and_then(Option::as_ref)
                 .and_then(eval_reflection_named_type_metadata)
                 .filter(|_| has_type_flags.get(position).copied().unwrap_or(false)),
+            default_value: defaults.get(position).and_then(Clone::clone),
         })
         .collect()
 }
@@ -1407,6 +1415,9 @@ fn eval_reflection_parameter_flags(parameter: &EvalReflectionParameterMetadata) 
     }
     if parameter.has_type {
         flags |= EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE;
+    }
+    if parameter.default_value.is_some() {
+        flags |= EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE;
     }
     flags
 }
