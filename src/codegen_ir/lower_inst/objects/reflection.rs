@@ -22,7 +22,7 @@ use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
 use crate::names::{enum_case_symbol, php_symbol_key};
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
-use crate::types::{AttrArgValue, FunctionSig, InterfaceInfo, PhpType};
+use crate::types::{AttrArgValue, EnumCaseInfo, EnumCaseValue, FunctionSig, InterfaceInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
 
@@ -43,6 +43,8 @@ struct ReflectionOwnerMetadata {
     constructor_member: Option<ReflectionListedMember>,
     parent_class_name: Option<String>,
     constant_value: Option<ReflectionConstantValue>,
+    backing_value: Option<ReflectionConstantValue>,
+    is_enum_case: bool,
     parameter_members: Vec<ReflectionParameterMember>,
     required_parameter_count: i64,
     is_final: bool,
@@ -74,6 +76,7 @@ struct ReflectionListedMember {
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
     constant_value: Option<ReflectionConstantValue>,
+    is_enum_case: bool,
     flags: ReflectionMemberFlags,
     required_parameter_count: i64,
     parameters: Vec<ReflectionParameterMember>,
@@ -341,12 +344,30 @@ fn emit_reflection_owner_object(
             metadata.required_parameter_count,
         )?;
     }
-    if class_name == "ReflectionClassConstant" {
+    if matches!(
+        class_name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
         if let Some(value) = &metadata.constant_value {
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             emit_reflection_constant_value_as_mixed(ctx, value);
             emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__value")?;
         }
+    }
+    if class_name == "ReflectionEnumBackedCase" {
+        if let Some(value) = &metadata.backing_value {
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            emit_reflection_constant_value_as_mixed(ctx, value);
+            emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__backing_value")?;
+        }
+    }
+    if class_name == "ReflectionClassConstant" {
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__is_enum_case",
+            metadata.is_enum_case,
+        )?;
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
     }
     if class_name == "ReflectionParameter" {
@@ -448,6 +469,8 @@ fn reflection_class_metadata_for_name(
             constructor_member,
             parent_class_name: reflection_parent_class_name(ctx, info),
             constant_value: None,
+            backing_value: None,
+            is_enum_case: false,
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: info.is_final,
@@ -497,6 +520,8 @@ fn reflection_class_metadata_for_name(
             constructor_member,
             parent_class_name: None,
             constant_value: None,
+            backing_value: None,
+            is_enum_case: false,
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: false,
@@ -547,6 +572,8 @@ fn reflection_class_metadata_for_name(
             constructor_member,
             parent_class_name: None,
             constant_value: None,
+            backing_value: None,
+            is_enum_case: false,
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: false,
@@ -674,6 +701,8 @@ fn reflection_method_owner_metadata(
         constructor_member: None,
         parent_class_name: member.declaring_class_name,
         constant_value: member.constant_value,
+        backing_value: None,
+        is_enum_case: member.is_enum_case,
         parameter_members: member.parameters,
         required_parameter_count: member.required_parameter_count,
         is_final: false,
@@ -723,6 +752,8 @@ fn reflection_property_metadata(
                 constructor_member: None,
                 parent_class_name: declaring_class_name,
                 constant_value: None,
+                backing_value: None,
+                is_enum_case: false,
                 parameter_members: Vec::new(),
                 required_parameter_count: 0,
                 is_final: false,
@@ -893,6 +924,8 @@ fn reflection_class_constant_metadata(
                 enum_name: enum_name.to_string(),
                 case_name: constant_name.clone(),
             }),
+            backing_value: None,
+            is_enum_case: true,
             parameter_members: Vec::new(),
             required_parameter_count: 0,
             is_final: false,
@@ -942,7 +975,12 @@ fn reflection_enum_case_metadata(
                 property_members: Vec::new(),
                 constructor_member: None,
                 parent_class_name: Some(enum_name.to_string()),
-                constant_value: None,
+                constant_value: Some(ReflectionConstantValue::EnumCase {
+                    enum_name: enum_name.to_string(),
+                    case_name: case_name.clone(),
+                }),
+                backing_value: reflection_enum_case_backing_value(case),
+                is_enum_case: true,
                 parameter_members: Vec::new(),
                 required_parameter_count: 0,
                 is_final: false,
@@ -983,6 +1021,8 @@ fn reflection_class_constant_owner_metadata(
         constructor_member: None,
         parent_class_name: Some(metadata.declaring_class_name),
         constant_value: Some(metadata.value),
+        backing_value: None,
+        is_enum_case: false,
         parameter_members: Vec::new(),
         required_parameter_count: 0,
         is_final,
@@ -1427,6 +1467,7 @@ fn reflection_class_constant_reflection_members(
                 },
                 Visibility::Public,
                 false,
+                true,
                 &mut members,
                 &mut seen,
             );
@@ -1464,6 +1505,7 @@ fn reflection_class_constant_reflection_members(
                     .cloned()
                     .unwrap_or(Visibility::Public),
                 current_info.final_constants.contains(constant_name),
+                false,
                 &mut members,
                 &mut seen,
             );
@@ -1519,6 +1561,7 @@ fn collect_interface_constant_reflection_members(
             value,
             Visibility::Public,
             is_final,
+            false,
             members,
             seen,
         );
@@ -1552,6 +1595,7 @@ fn reflection_trait_constant_reflection_members(
                 .cloned()
                 .unwrap_or(Visibility::Public),
             final_constants.is_some_and(|constants| constants.contains(constant_name)),
+            false,
             &mut members,
             &mut seen,
         );
@@ -1568,6 +1612,7 @@ fn push_unique_constant_reflection_member(
     value: ReflectionConstantValue,
     visibility: Visibility,
     is_final: bool,
+    is_enum_case: bool,
     members: &mut Vec<ReflectionListedMember>,
     seen: &mut std::collections::HashSet<String>,
 ) {
@@ -1580,6 +1625,7 @@ fn push_unique_constant_reflection_member(
         attr_names,
         attr_args,
         constant_value: Some(value),
+        is_enum_case,
         flags: reflection_member_flags(false, &visibility, is_final, false, false),
         required_parameter_count: 0,
         parameters: Vec::new(),
@@ -1773,6 +1819,7 @@ fn reflection_class_method_member(
         attr_names,
         attr_args,
         constant_value: None,
+        is_enum_case: false,
         flags,
         required_parameter_count,
         parameters,
@@ -1832,6 +1879,7 @@ fn reflection_interface_method_member(
         attr_names: Vec::new(),
         attr_args: Vec::new(),
         constant_value: None,
+        is_enum_case: false,
         flags,
         required_parameter_count,
         parameters,
@@ -1880,6 +1928,7 @@ fn reflection_trait_method_member(
         attr_names: Vec::new(),
         attr_args: Vec::new(),
         constant_value: None,
+        is_enum_case: false,
         flags,
         required_parameter_count,
         parameters: reflection_parameter_members_with_declaring_class(
@@ -1935,6 +1984,7 @@ fn reflection_class_property_member(
             .cloned()
             .unwrap_or_default(),
         constant_value: None,
+        is_enum_case: false,
         flags,
         required_parameter_count: 0,
         parameters: Vec::new(),
@@ -1955,6 +2005,7 @@ fn default_method_members(
             attr_names: Vec::new(),
             attr_args: Vec::new(),
             constant_value: None,
+            is_enum_case: false,
             flags: reflection_member_flags(false, &Visibility::Public, false, is_interface, false),
             required_parameter_count: 0,
             parameters: Vec::new(),
@@ -1976,6 +2027,7 @@ fn default_property_members(
             attr_names: Vec::new(),
             attr_args: Vec::new(),
             constant_value: None,
+            is_enum_case: false,
             flags: reflection_member_flags(false, &Visibility::Public, false, is_interface, false),
             required_parameter_count: 0,
             parameters: Vec::new(),
@@ -2603,6 +2655,14 @@ fn resolve_reflection_enum_case<'a>(
         })
 }
 
+/// Returns a static Reflection value for a backed enum case, when present.
+fn reflection_enum_case_backing_value(case: &EnumCaseInfo) -> Option<ReflectionConstantValue> {
+    match case.value.as_ref()? {
+        EnumCaseValue::Int(value) => Some(ReflectionConstantValue::Int(*value)),
+        EnumCaseValue::Str(value) => Some(ReflectionConstantValue::Str(value.clone())),
+    }
+}
+
 /// Returns empty Reflection metadata for unsupported dynamic constructor operands.
 fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
     ReflectionOwnerMetadata {
@@ -2621,6 +2681,8 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         constructor_member: None,
         parent_class_name: None,
         constant_value: None,
+        backing_value: None,
+        is_enum_case: false,
         parameter_members: Vec::new(),
         required_parameter_count: 0,
         is_final: false,
@@ -3251,6 +3313,12 @@ fn emit_reflection_member_object(
             emit_reflection_constant_value_as_mixed(ctx, value);
             emit_reflection_owner_mixed_property_from_result(ctx, member_class_name, "__value")?;
         }
+        emit_reflection_owner_bool_property(
+            ctx,
+            member_class_name,
+            "__is_enum_case",
+            member.is_enum_case,
+        )?;
         emit_reflection_owner_int_property(
             ctx,
             member_class_name,

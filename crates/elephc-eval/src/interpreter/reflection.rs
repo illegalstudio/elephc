@@ -26,6 +26,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
+const EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE: u64 = 128;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -398,6 +399,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
         flags,
         member.required_parameter_count as u64,
         None,
+        None,
         context,
         values,
     )
@@ -438,12 +440,15 @@ fn eval_reflection_class_constant_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (declaring_class_name, attributes, visibility, is_final) =
+    let (declaring_class_name, attributes, visibility, is_final, is_enum_case) =
         eval_reflection_class_constant_metadata(reflected_name, constant_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
     let constant_value = eval_reflection_constant_value(reflected_name, constant_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
-    let flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
+    let mut flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
+    if is_enum_case {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE;
+    }
     let modifiers = eval_reflection_class_constant_modifiers(visibility, is_final);
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
@@ -458,6 +463,7 @@ fn eval_reflection_class_constant_object_result(
         flags,
         modifiers,
         Some(constant_value),
+        None,
         context,
         values,
     )
@@ -526,6 +532,7 @@ fn eval_reflection_class_new(
         metadata.flags,
         metadata.modifiers,
         None,
+        None,
         context,
         values,
     )
@@ -568,6 +575,7 @@ fn eval_reflection_method_new(
         &method.parameters,
         flags,
         method.required_parameter_count as u64,
+        None,
         None,
         context,
         values,
@@ -612,6 +620,7 @@ fn eval_reflection_property_new(
         flags,
         0,
         None,
+        None,
         context,
         values,
     )
@@ -633,12 +642,15 @@ fn eval_reflection_class_constant_new(
         return Ok(None);
     }
     let constant_name = eval_reflection_string_arg(args[1], values)?;
-    let (declaring_class_name, attributes, visibility, is_final) =
+    let (declaring_class_name, attributes, visibility, is_final, is_enum_case) =
         eval_reflection_class_constant_metadata(&class_name, &constant_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
     let constant_value = eval_reflection_constant_value(&class_name, &constant_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
-    let flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
+    let mut flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
+    if is_enum_case {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE;
+    }
     let modifiers = eval_reflection_class_constant_modifiers(visibility, is_final);
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
@@ -653,6 +665,7 @@ fn eval_reflection_class_constant_new(
         flags,
         modifiers,
         Some(constant_value),
+        None,
         context,
         values,
     )
@@ -683,6 +696,18 @@ fn eval_reflection_enum_case_new(
     }
     let case_name = eval_reflection_string_arg(args[1], values)?;
     let declaring_class_name = enum_decl.name().to_string();
+    let case_value = context
+        .enum_case(&declaring_class_name, &case_name)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let backing_value = if owner_kind == EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE {
+        Some(
+            context
+                .enum_case_value(&declaring_class_name, &case_name)
+                .ok_or(EvalStatus::RuntimeFatal)?,
+        )
+    } else {
+        None
+    };
     let attributes = enum_decl
         .case(&case_name)
         .map(|case| case.attributes().to_vec())
@@ -699,7 +724,8 @@ fn eval_reflection_enum_case_new(
         &[],
         0,
         0,
-        None,
+        Some(case_value),
+        backing_value,
         context,
         values,
     )
@@ -720,6 +746,7 @@ fn eval_reflection_owner_object(
     flags: u64,
     modifiers: u64,
     constant_value: Option<RuntimeCellHandle>,
+    backing_value: Option<RuntimeCellHandle>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -736,6 +763,7 @@ fn eval_reflection_owner_object(
         flags,
         modifiers,
         constant_value,
+        backing_value,
         true,
         context,
         values,
@@ -756,6 +784,7 @@ fn eval_reflection_owner_object_with_members(
     flags: u64,
     modifiers: u64,
     constant_value: Option<RuntimeCellHandle>,
+    backing_value: Option<RuntimeCellHandle>,
     include_class_members: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -800,6 +829,10 @@ fn eval_reflection_owner_object_with_members(
         Some(value) => (value, false),
         None => (values.null()?, true),
     };
+    let (backing_value_cell, release_backing_value) = match backing_value {
+        Some(value) => (value, false),
+        None => (values.null()?, true),
+    };
     let object = values.reflection_owner_new(
         owner_kind,
         reflected_name,
@@ -814,6 +847,7 @@ fn eval_reflection_owner_object_with_members(
         flags,
         modifiers,
         constant_value_cell,
+        backing_value_cell,
     )?;
     if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
         let identity = values.object_identity(object)?;
@@ -829,6 +863,9 @@ fn eval_reflection_owner_object_with_members(
     values.release(parent_class)?;
     if release_constant_value {
         values.release(constant_value_cell)?;
+    }
+    if release_backing_value {
+        values.release(backing_value_cell)?;
     }
     Ok(object)
 }
@@ -882,6 +919,7 @@ fn eval_reflection_full_class_object_result(
         metadata.flags,
         metadata.modifiers,
         None,
+        None,
         context,
         values,
     )
@@ -908,6 +946,7 @@ fn eval_reflection_shallow_class_object_result(
         &[],
         metadata.flags,
         metadata.modifiers,
+        None,
         None,
         false,
         context,
@@ -974,6 +1013,7 @@ fn eval_reflection_parameter_object_result(
         None => values.null()?,
     };
     let constant_value = values.null()?;
+    let backing_value = values.null()?;
     let flags = eval_reflection_parameter_flags(parameter);
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_PARAMETER,
@@ -989,6 +1029,7 @@ fn eval_reflection_parameter_object_result(
         flags,
         parameter.position as u64,
         constant_value,
+        backing_value,
     )?;
     values.release(attrs)?;
     values.release(declaring_function)?;
@@ -1000,6 +1041,7 @@ fn eval_reflection_parameter_object_result(
     values.release(default_value)?;
     values.release(parent_class)?;
     values.release(constant_value)?;
+    values.release(backing_value)?;
     Ok(object)
 }
 
@@ -1021,6 +1063,7 @@ fn eval_reflection_declaring_function_object_result(
         &[],
         metadata.flags,
         metadata.required_parameter_count as u64,
+        None,
         None,
         context,
         values,
@@ -1059,6 +1102,7 @@ fn eval_reflection_named_type_object_result(
     let property_objects = values.array_new(0)?;
     let parent_class = values.bool_value(false)?;
     let constant_value = values.null()?;
+    let backing_value = values.null()?;
     let flags = eval_reflection_named_type_flags(type_metadata);
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_NAMED_TYPE,
@@ -1074,6 +1118,7 @@ fn eval_reflection_named_type_object_result(
         flags,
         0,
         constant_value,
+        backing_value,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -1084,6 +1129,7 @@ fn eval_reflection_named_type_object_result(
     values.release(property_objects)?;
     values.release(parent_class)?;
     values.release(constant_value)?;
+    values.release(backing_value)?;
     Ok(object)
 }
 
@@ -1101,6 +1147,7 @@ fn eval_reflection_union_type_object_result(
     let property_objects = values.array_new(0)?;
     let parent_class = values.bool_value(false)?;
     let constant_value = values.null()?;
+    let backing_value = values.null()?;
     let flags = eval_reflection_union_type_flags(type_metadata);
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_UNION_TYPE,
@@ -1116,6 +1163,7 @@ fn eval_reflection_union_type_object_result(
         flags,
         0,
         constant_value,
+        backing_value,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -1126,6 +1174,7 @@ fn eval_reflection_union_type_object_result(
     values.release(property_objects)?;
     values.release(parent_class)?;
     values.release(constant_value)?;
+    values.release(backing_value)?;
     Ok(object)
 }
 
@@ -1143,6 +1192,7 @@ fn eval_reflection_intersection_type_object_result(
     let property_objects = values.array_new(0)?;
     let parent_class = values.bool_value(false)?;
     let constant_value = values.null()?;
+    let backing_value = values.null()?;
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_INTERSECTION_TYPE,
         "",
@@ -1157,6 +1207,7 @@ fn eval_reflection_intersection_type_object_result(
         0,
         0,
         constant_value,
+        backing_value,
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -1167,6 +1218,7 @@ fn eval_reflection_intersection_type_object_result(
     values.release(property_objects)?;
     values.release(parent_class)?;
     values.release(constant_value)?;
+    values.release(backing_value)?;
     Ok(object)
 }
 
@@ -1218,6 +1270,7 @@ fn eval_reflection_member_object_array_result(
             &member.parameters,
             flags,
             member.required_parameter_count as u64,
+            None,
             None,
             context,
             values,
@@ -1387,12 +1440,12 @@ fn eval_reflection_class_constant_modifiers(visibility: EvalVisibility, is_final
     modifiers
 }
 
-/// Returns declaring class, attributes, visibility, and finality for an eval class constant or enum case.
+/// Returns declaring class, attributes, visibility, finality, and enum-case kind.
 fn eval_reflection_class_constant_metadata(
     class_name: &str,
     constant_name: &str,
     context: &ElephcEvalContext,
-) -> Option<(String, Vec<EvalAttribute>, EvalVisibility, bool)> {
+) -> Option<(String, Vec<EvalAttribute>, EvalVisibility, bool, bool)> {
     if let Some(enum_decl) = context.enum_decl(class_name) {
         if let Some(case) = enum_decl.case(constant_name) {
             return Some((
@@ -1400,6 +1453,7 @@ fn eval_reflection_class_constant_metadata(
                 case.attributes().to_vec(),
                 EvalVisibility::Public,
                 false,
+                true,
             ));
         }
     }
@@ -1410,6 +1464,7 @@ fn eval_reflection_class_constant_metadata(
                 constant.attributes().to_vec(),
                 constant.visibility(),
                 constant.is_final(),
+                false,
             )
         },
     )

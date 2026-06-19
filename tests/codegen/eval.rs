@@ -6675,16 +6675,21 @@ enum EvalCaseReflectTarget: string {
 }
 $constAttrs = (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getAttributes();
 echo count($constAttrs) . ":" . (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getName() . ":";
+echo (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->isEnumCase() ? "enum" : "plain"; echo ":";
 echo $constAttrs[0]->getName() . ":" . $constAttrs[0]->getArguments()[0] . ":";
 echo $constAttrs[0]->newInstance()->label() . ":";
 $caseAttrs = (new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->getAttributes();
 echo count($caseAttrs) . ":" . (new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->getName() . ":";
+echo (new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->isEnumCase() ? "enum" : "plain"; echo ":";
 echo $caseAttrs[0]->getName() . ":" . $caseAttrs[0]->getArguments()[0] . ":";
 $unitAttrs = (new ReflectionEnumUnitCase("EvalCaseReflectTarget", "Ready"))->getAttributes();
 echo (new ReflectionEnumUnitCase("EvalCaseReflectTarget", "Ready"))->getName() . ":";
+echo ((new ReflectionEnumUnitCase("EvalCaseReflectTarget", "Ready"))->getValue() === EvalCaseReflectTarget::Ready) ? "unit" : "bad"; echo ":";
 echo $unitAttrs[0]->newInstance()->label() . ":";
 $backedAttrs = (new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getAttributes();
 echo (new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getName() . ":";
+echo ((new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getValue() === EvalCaseReflectTarget::Ready) ? "backed" : "bad"; echo ":";
+echo (new ReflectionEnumBackedCase("EvalCaseReflectTarget", "Ready"))->getBackingValue() . ":";
 echo $backedAttrs[0]->newInstance()->label();');
 "#,
     );
@@ -6695,7 +6700,7 @@ echo $backedAttrs[0]->newInstance()->label();');
     );
     assert_eq!(
         out.stdout,
-        "1:ANSWER:EvalConstMarker:const:const:1:Ready:EvalConstMarker:case:Ready:case:Ready:case"
+        "1:ANSWER:plain:EvalConstMarker:const:const:1:Ready:enum:EvalConstMarker:case:Ready:unit:case:Ready:backed:ready:case"
     );
 }
 

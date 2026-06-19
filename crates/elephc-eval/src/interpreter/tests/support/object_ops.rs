@@ -16,6 +16,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
+const EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE: u64 = 128;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -172,6 +173,14 @@ impl FakeOps {
             }
             (FakeValue::Object(properties), "getvalue") if args.is_empty() => {
                 Self::object_property(&properties, "__value").map_or_else(|| self.null(), Ok)
+            }
+            (FakeValue::Object(properties), "getbackingvalue") if args.is_empty() => {
+                Self::object_property(&properties, "__backing_value")
+                    .map_or_else(|| self.null(), Ok)
+            }
+            (FakeValue::Object(properties), "isenumcase") if args.is_empty() => {
+                Self::object_property(&properties, "__is_enum_case")
+                    .map_or_else(|| self.bool_value(false), Ok)
             }
             (FakeValue::Object(properties), "isstatic") if args.is_empty() => {
                 Self::object_property(&properties, "__is_static")
@@ -458,6 +467,7 @@ impl FakeOps {
         flags: u64,
         modifiers: u64,
         constant_value: RuntimeCellHandle,
+        backing_value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let class_name = match owner_kind {
             EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
@@ -562,12 +572,24 @@ impl FakeOps {
                 self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED) != 0)?;
             let is_private = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE) != 0)?;
             let is_final = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL) != 0)?;
+            let is_enum_case =
+                self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE) != 0)?;
             properties.push(("__is_public".to_string(), is_public));
             properties.push(("__is_protected".to_string(), is_protected));
             properties.push(("__is_private".to_string(), is_private));
             properties.push(("__is_final".to_string(), is_final));
+            properties.push(("__is_enum_case".to_string(), is_enum_case));
             properties.push(("__modifiers".to_string(), modifiers_cell));
             properties.push(("__value".to_string(), constant_value));
+        }
+        if matches!(
+            owner_kind,
+            EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+        ) {
+            properties.push(("__value".to_string(), constant_value));
+        }
+        if owner_kind == EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE {
+            properties.push(("__backing_value".to_string(), backing_value));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_PARAMETER {
             let position = self.int(modifiers as i64)?;
