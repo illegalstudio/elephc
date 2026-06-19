@@ -879,6 +879,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 false_bool(),
             ),
             builtin_property(
+                "__is_anonymous",
+                Visibility::Private,
+                Some(bool_type()),
+                false_bool(),
+            ),
+            builtin_property(
                 "__is_instantiable",
                 Visibility::Private,
                 Some(bool_type()),
@@ -990,7 +996,7 @@ fn builtin_reflection_class() -> FlattenedClass {
         methods: vec![
             builtin_reflection_owner_constructor_method(vec![(
                 "class_name",
-                Some(TypeExpr::Str),
+                Some(mixed_type()),
                 None,
                 false,
             )]),
@@ -1014,6 +1020,7 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_bool_method("isTrait", "__is_trait"),
             builtin_reflection_class_bool_method("isEnum", "__is_enum"),
             builtin_reflection_class_bool_method("isReadOnly", "__is_readonly"),
+            builtin_reflection_class_bool_method("isAnonymous", "__is_anonymous"),
             builtin_reflection_class_bool_method("isInstantiable", "__is_instantiable"),
             builtin_reflection_class_int_method("getModifiers", "__modifiers"),
             builtin_reflection_class_has_name_method("hasMethod", "__method_names", true),
@@ -2550,6 +2557,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "istrait",
                     "isenum",
                     "isreadonly",
+                    "isanonymous",
                     "isinstantiable",
                     "hasmethod",
                     "hasproperty",

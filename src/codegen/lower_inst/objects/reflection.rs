@@ -60,6 +60,7 @@ struct ReflectionOwnerMetadata {
     is_trait: bool,
     is_enum: bool,
     is_readonly: bool,
+    is_anonymous: bool,
     is_instantiable: bool,
     modifiers: i64,
     member_flags: ReflectionMemberFlags,
@@ -345,6 +346,7 @@ fn emit_reflection_owner_object(
         emit_reflection_bool_property(ctx, "__is_trait", metadata.is_trait)?;
         emit_reflection_bool_property(ctx, "__is_enum", metadata.is_enum)?;
         emit_reflection_bool_property(ctx, "__is_readonly", metadata.is_readonly)?;
+        emit_reflection_bool_property(ctx, "__is_anonymous", metadata.is_anonymous)?;
         emit_reflection_bool_property(ctx, "__is_instantiable", metadata.is_instantiable)?;
         emit_reflection_int_property_by_name(ctx, "__modifiers", metadata.modifiers)?;
     }
@@ -550,6 +552,7 @@ fn reflection_class_metadata_for_name(
             is_trait: false,
             is_enum,
             is_readonly: info.is_readonly_class && !is_enum,
+            is_anonymous: is_reflection_anonymous_class_name(class_name),
             is_instantiable,
             modifiers: reflection_class_modifiers(
                 info.is_final,
@@ -605,6 +608,7 @@ fn reflection_class_metadata_for_name(
             is_trait: false,
             is_enum: false,
             is_readonly: false,
+            is_anonymous: false,
             is_instantiable: false,
             modifiers: 0,
             member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
@@ -661,6 +665,7 @@ fn reflection_class_metadata_for_name(
             is_trait: true,
             is_enum: false,
             is_readonly: false,
+            is_anonymous: false,
             is_instantiable: false,
             modifiers: 0,
             member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
@@ -796,6 +801,7 @@ fn reflection_method_owner_metadata(
         is_trait: false,
         is_enum: false,
         is_readonly: false,
+        is_anonymous: false,
         is_instantiable: false,
         modifiers: reflection_method_modifiers_from_flags(member.flags),
         member_flags: member.flags,
@@ -849,6 +855,7 @@ fn reflection_property_metadata(
                 is_trait: false,
                 is_enum: false,
                 is_readonly: false,
+                is_anonymous: false,
                 is_instantiable: false,
                 modifiers: reflection_property_modifiers_for_info(info, &property_name)?,
                 member_flags: reflection_property_member_flags(info, &property_name)?,
@@ -1028,6 +1035,7 @@ fn reflection_class_constant_metadata(
             is_trait: false,
             is_enum: false,
             is_readonly: false,
+            is_anonymous: false,
             is_instantiable: false,
             modifiers: reflection_class_constant_modifiers(&Visibility::Public, false),
             member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
@@ -1089,6 +1097,7 @@ fn reflection_enum_case_metadata(
                 is_trait: false,
                 is_enum: false,
                 is_readonly: false,
+                is_anonymous: false,
                 is_instantiable: false,
                 modifiers: 0,
                 member_flags: ReflectionMemberFlags::default(),
@@ -1135,6 +1144,7 @@ fn reflection_class_constant_owner_metadata(
         is_trait: false,
         is_enum: false,
         is_readonly: false,
+        is_anonymous: false,
         is_instantiable: false,
         modifiers,
         member_flags,
@@ -1280,6 +1290,13 @@ fn resolve_reflection_class<'a>(
         .iter()
         .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
         .map(|(name, info)| (name.as_str(), info))
+}
+
+/// Returns true when a class name uses the parser's anonymous-class synthetic prefix.
+fn is_reflection_anonymous_class_name(class_name: &str) -> bool {
+    class_name
+        .trim_start_matches('\\')
+        .starts_with("class@anonymous#")
 }
 
 /// Looks up interface metadata by PHP-style case-insensitive name.
@@ -2923,6 +2940,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         is_trait: false,
         is_enum: false,
         is_readonly: false,
+        is_anonymous: false,
         is_instantiable: false,
         modifiers: 0,
         member_flags: ReflectionMemberFlags::default(),

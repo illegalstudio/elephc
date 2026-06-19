@@ -583,6 +583,30 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::isAnonymous reports false for eval-declared named class-like symbols.
+#[test]
+fn execute_program_reflection_class_reports_named_classes_not_anonymous() {
+    let program = parse_fragment(
+        br#"class EvalNamedAnonymousReflect {}
+interface EvalNamedAnonymousIface {}
+trait EvalNamedAnonymousTrait {}
+enum EvalNamedAnonymousEnum { case Ready; }
+echo (new ReflectionClass("EvalNamedAnonymousReflect"))->isAnonymous() ? "C" : "c";
+echo (new ReflectionClass("EvalNamedAnonymousIface"))->isAnonymous() ? "I" : "i";
+echo (new ReflectionClass("EvalNamedAnonymousTrait"))->isAnonymous() ? "T" : "t";
+echo (new ReflectionClass("EvalNamedAnonymousEnum"))->isAnonymous() ? "E" : "e";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "cite");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::getConstructor exposes eval constructor metadata.
 #[test]
 fn execute_program_reflection_class_get_constructor() {

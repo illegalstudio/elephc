@@ -579,7 +579,22 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<String, CompileError> {
         let arg_ty = self.infer_type(arg, env)?;
-        if !matches!(arg_ty, PhpType::Str) {
+        if let PhpType::Object(class_name) = arg_ty.codegen_repr() {
+            if reflection_type == "ReflectionClass"
+                && !class_name.is_empty()
+                && self.classes.contains_key(class_name.as_str())
+            {
+                return Ok(class_name);
+            }
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{}::__construct() first argument must be a string class name",
+                    reflection_type
+                ),
+            ));
+        }
+        if !matches!(arg_ty.codegen_repr(), PhpType::Str) {
             return Err(CompileError::new(
                 arg.span,
                 &format!(
