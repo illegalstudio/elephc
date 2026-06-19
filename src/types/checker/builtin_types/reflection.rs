@@ -1040,10 +1040,21 @@ fn builtin_reflection_owner_class(
             Some(object_array_type("ReflectionParameter")),
             empty_array(),
         ));
+        properties.push(builtin_property(
+            "__required_parameter_count",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
         methods.push(builtin_reflection_class_array_method(
             "getParameters",
             "__parameters",
             object_array_type("ReflectionParameter"),
+        ));
+        methods.push(builtin_reflection_method_parameter_count_method());
+        methods.push(builtin_reflection_class_int_method(
+            "getNumberOfRequiredParameters",
+            "__required_parameter_count",
         ));
     }
     properties.push(builtin_property(
@@ -1065,6 +1076,41 @@ fn builtin_reflection_owner_class(
         attributes: Vec::new(),
         constants: Vec::new(),
         used_traits: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionMethod::getNumberOfParameters()` over the retained parameter array.
+fn builtin_reflection_method_parameter_count_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "getNumberOfParameters".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Int),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::unqualified("count"),
+                    args: vec![Expr::new(
+                        ExprKind::PropertyAccess {
+                            object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                            property: "__parameters".to_string(),
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
     }
 }
 
@@ -1282,6 +1328,11 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     sig.return_type = PhpType::Array(Box::new(PhpType::Object(
                         "ReflectionParameter".to_string(),
                     )));
+                }
+                for method_name in ["getNumberOfParameters", "getNumberOfRequiredParameters"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Int;
+                    }
                 }
             }
             if class_name == "ReflectionParameter" {

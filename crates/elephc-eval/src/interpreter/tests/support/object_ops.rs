@@ -198,6 +198,19 @@ impl FakeOps {
                 Self::object_property(&properties, "__parameters")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
             }
+            (FakeValue::Object(properties), "getnumberofparameters") if args.is_empty() => {
+                match Self::object_property(&properties, "__parameters") {
+                    Some(parameters) => {
+                        let len = self.array_len(parameters)?;
+                        self.int(len as i64)
+                    }
+                    None => self.int(0),
+                }
+            }
+            (FakeValue::Object(properties), "getnumberofrequiredparameters") if args.is_empty() => {
+                Self::object_property(&properties, "__required_parameter_count")
+                    .map_or_else(|| self.int(0), Ok)
+            }
             (FakeValue::Object(properties), "getposition") if args.is_empty() => {
                 Self::object_property(&properties, "__position").map_or_else(|| self.int(0), Ok)
             }
@@ -399,6 +412,7 @@ impl FakeOps {
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__is_abstract".to_string(), is_abstract));
             properties.push(("__parameters".to_string(), method_objects));
+            properties.push(("__required_parameter_count".to_string(), modifiers_cell));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_PARAMETER {
             let position = self.int(modifiers as i64)?;

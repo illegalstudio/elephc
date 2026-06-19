@@ -1596,8 +1596,10 @@ fn test_reflection_method_get_parameters_returns_parameter_metadata() {
 class ReflectParamTarget {
     public function run(int $id, &$name, string $mode = "x", ...$rest) {}
 }
-$params = (new ReflectionMethod(ReflectParamTarget::class, "run"))->getParameters();
-echo count($params) . ":";
+$method = new ReflectionMethod(ReflectParamTarget::class, "run");
+echo $method->getNumberOfParameters() . "/";
+echo $method->getNumberOfRequiredParameters() . ":";
+$params = $method->getParameters();
 foreach ($params as $param) {
     echo $param->getName() . "#" . $param->getPosition();
     echo ($param->hasType() ? "T" : "t");
@@ -1613,7 +1615,10 @@ foreach ($params as $param) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "4:id#0TRbv|name#1tRBv|mode#2TObv|rest#3tObV|");
+    assert_eq!(
+        out.stdout,
+        "4/2:id#0TRbv|name#1tRBv|mode#2TObv|rest#3tObV|"
+    );
 }
 
 /// Verifies that ReflectionMethod objects returned from `ReflectionClass::getMethods()`
@@ -1629,7 +1634,8 @@ $methods = (new ReflectionClass(ReflectListedParamTarget::class))->getMethods();
 foreach ($methods as $method) {
     if ($method->getName() === "listed") {
         $params = $method->getParameters();
-        echo count($params) . ":";
+        echo $method->getNumberOfParameters() . "/";
+        echo $method->getNumberOfRequiredParameters() . ":";
         echo $params[0]->getName() . ($params[0]->hasType() ? "T" : "t");
         echo ":";
         echo $params[1]->getName() . ($params[1]->isOptional() ? "O" : "R");
@@ -1642,7 +1648,7 @@ foreach ($methods as $method) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:firstT:secondO");
+    assert_eq!(out.stdout, "2/1:firstT:secondO");
 }
 
 /// Verifies that `ReflectionClass::getConstructor()` returns a ReflectionMethod
@@ -1652,20 +1658,22 @@ fn test_reflection_class_get_constructor_returns_method_or_null() {
     let out = compile_and_run(
         r#"<?php
 class ReflectCtorBase {
-    public function __construct() {}
+    public function __construct($required, $optional = 2) {}
 }
 class ReflectCtorChild extends ReflectCtorBase {}
 class ReflectCtorPlain {}
 interface ReflectCtorInterface {
-    public function __construct();
+    public function __construct($required);
 }
 trait ReflectCtorTrait {
-    public function __construct() {}
+    public function __construct($required, $optional = null, ...$rest) {}
 }
 
 $base = (new ReflectionClass(ReflectCtorBase::class))->getConstructor();
 if ($base instanceof ReflectionMethod) {
     echo $base->getName();
+    echo "/" . $base->getNumberOfParameters();
+    echo "/" . $base->getNumberOfRequiredParameters();
 } else {
     echo "null";
 }
@@ -1674,6 +1682,8 @@ echo ":";
 $child = (new ReflectionClass(ReflectCtorChild::class))->getConstructor();
 if ($child instanceof ReflectionMethod) {
     echo $child->getName();
+    echo "/" . $child->getNumberOfParameters();
+    echo "/" . $child->getNumberOfRequiredParameters();
 } else {
     echo "null";
 }
@@ -1690,6 +1700,8 @@ echo ":";
 $interface = (new ReflectionClass(ReflectCtorInterface::class))->getConstructor();
 if ($interface instanceof ReflectionMethod) {
     echo $interface->getName();
+    echo "/" . $interface->getNumberOfParameters();
+    echo "/" . $interface->getNumberOfRequiredParameters();
 } else {
     echo "null";
 }
@@ -1698,6 +1710,8 @@ echo ":";
 $trait = (new ReflectionClass(ReflectCtorTrait::class))->getConstructor();
 if ($trait instanceof ReflectionMethod) {
     echo $trait->getName();
+    echo "/" . $trait->getNumberOfParameters();
+    echo "/" . $trait->getNumberOfRequiredParameters();
 } else {
     echo "null";
 }
@@ -1705,7 +1719,7 @@ if ($trait instanceof ReflectionMethod) {
     );
     assert_eq!(
         out,
-        "__construct:__construct:null:__construct:__construct"
+        "__construct/2/1:__construct/2/1:null:__construct/1/1:__construct/0/0"
     );
 }
 

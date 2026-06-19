@@ -495,8 +495,10 @@ fn execute_program_reflects_eval_method_parameters() {
 br##"class EvalReflectParamTarget {
     public function run(int &$first, \App\Name|null $second = null, &...$rest) {}
 }
-$params = (new ReflectionMethod("EvalReflectParamTarget", "run"))->getParameters();
-echo count($params); echo ":";
+$method = new ReflectionMethod("EvalReflectParamTarget", "run");
+echo $method->getNumberOfParameters(); echo "/";
+echo $method->getNumberOfRequiredParameters(); echo ":";
+$params = $method->getParameters();
 foreach ($params as $param) {
     echo $param->getName(); echo "#"; echo $param->getPosition();
     echo $param->isOptional() ? "O" : "r";
@@ -513,7 +515,10 @@ return true;"##,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "3:first#0rvRT|second#1OvbT|rest#2OVRt|");
+    assert_eq!(
+        values.output,
+        "3/1:first#0rvRT|second#1OvbT|rest#2OVRt|"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
@@ -528,7 +533,9 @@ fn execute_program_reflection_class_lists_eval_method_parameters() {
 $methods = (new ReflectionClass("EvalReflectListedParamTarget"))->getMethods();
 foreach ($methods as $method) {
     $params = $method->getParameters();
-    echo $method->getName(); echo ":"; echo count($params);
+    echo $method->getName(); echo ":";
+    echo $method->getNumberOfParameters(); echo "/";
+    echo $method->getNumberOfRequiredParameters();
     if (count($params) > 0) {
         echo ":"; echo $params[0]->getName(); echo ":"; echo $params[0]->getPosition();
     }
@@ -542,7 +549,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "first:1:left:0|second:2:right:0|");
+    assert_eq!(values.output, "first:1/1:left:0|second:2/2:right:0|");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
