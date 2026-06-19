@@ -1014,6 +1014,42 @@ echo ReflectionClass::IS_READONLY;
     assert_eq!(out, "64:32:65536:65568:32:0:0:16:32:64:65536");
 }
 
+/// Verifies that `ReflectionProperty::IS_*` constants use PHP modifier values.
+#[test]
+fn test_reflection_property_modifier_constants_report_php_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo ReflectionProperty::IS_STATIC . ":";
+echo ReflectionProperty::IS_READONLY . ":";
+echo ReflectionProperty::IS_PUBLIC . ":";
+echo ReflectionProperty::IS_PROTECTED . ":";
+echo ReflectionProperty::IS_PRIVATE . ":";
+echo ReflectionProperty::IS_ABSTRACT . ":";
+echo ReflectionProperty::IS_PROTECTED_SET . ":";
+echo ReflectionProperty::IS_PRIVATE_SET . ":";
+echo ReflectionProperty::IS_VIRTUAL . ":";
+echo ReflectionProperty::IS_FINAL;
+"#,
+    );
+    assert_eq!(out, "16:128:1:2:4:64:2048:4096:512:32");
+}
+
+/// Verifies that property asymmetric visibility contributes PHP modifier bits.
+#[test]
+fn test_reflection_property_get_modifiers_reports_asymmetric_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectSetVisibility {
+    public private(set) int $privateSet = 1;
+    public protected(set) int $protectedSet = 2;
+}
+echo (new ReflectionProperty(ReflectSetVisibility::class, "privateSet"))->getModifiers() . ":";
+echo (new ReflectionProperty(ReflectSetVisibility::class, "protectedSet"))->getModifiers();
+"#,
+    );
+    assert_eq!(out, "4129:2049");
+}
+
 /// Verifies that `ReflectionClass::isReadOnly()` reports readonly class metadata.
 #[test]
 fn test_reflection_class_is_readonly_reports_class_metadata() {
@@ -1604,6 +1640,7 @@ echo $staticProp->isProtected() ? "P" : "p";
 echo $staticProp->isFinal() ? "F" : "f";
 echo $staticProp->isAbstract() ? "A" : "a";
 echo $staticProp->isReadOnly() ? "R" : "r";
+echo $staticProp->getModifiers();
 echo ":";
 $visibleProp = new ReflectionProperty(ReflectMemberChild::class, "visible");
 echo $visibleProp->isStatic() ? "S" : "s";
@@ -1612,28 +1649,37 @@ echo $visibleProp->isPublic() ? "U" : "u";
 echo $visibleProp->isFinal() ? "F" : "f";
 echo $visibleProp->isAbstract() ? "A" : "a";
 echo $visibleProp->isReadOnly() ? "R" : "r";
+echo $visibleProp->getModifiers();
 echo ":";
 $readonlyProp = new ReflectionProperty(ReflectMemberChild::class, "locked");
 echo $readonlyProp->isReadOnly() ? "R" : "r";
 echo $readonlyProp->isPublic() ? "U" : "u";
+echo $readonlyProp->getModifiers();
 echo ":";
 $sealedProp = new ReflectionProperty(ReflectMemberChild::class, "sealed");
 echo $sealedProp->isFinal() ? "F" : "f";
 echo $sealedProp->isPublic() ? "U" : "u";
+echo $sealedProp->getModifiers();
 echo ":";
 $staticFinalProp = new ReflectionProperty(ReflectMemberChild::class, "staticSeal");
 echo $staticFinalProp->isFinal() ? "F" : "f";
 echo $staticFinalProp->isStatic() ? "S" : "s";
+echo $staticFinalProp->getModifiers();
 echo ":";
 $abstractProp = new ReflectionProperty(ReflectAbstractProperty::class, "mustRead");
 echo $abstractProp->isAbstract() ? "A" : "a";
 echo $abstractProp->isFinal() ? "F" : "f";
+echo $abstractProp->getModifiers();
 echo ":";
 $classReadonlyProp = new ReflectionProperty(ReflectReadonlyClass::class, "classReadonly");
 echo $classReadonlyProp->isReadOnly() ? "C" : "c";
+echo $classReadonlyProp->getModifiers();
 "#,
     );
-    assert_eq!(out, "SPurfa:APs:FUs:SRpfar:sPufar:RU:FU:FS:Af:C");
+    assert_eq!(
+        out,
+        "SPurfa:APs:FUs:SRpfar20:sPufar2:RU2177:FU33:FS49:Af577:C2177"
+    );
 }
 
 /// Verifies member and enum-case reflectors expose their declaring class object.
@@ -1710,10 +1756,12 @@ foreach ($properties as $property) {
     if ($property->getName() === "visible") {
         echo "V" . count($property->getAttributes());
         echo $property->isProtected() ? "P" : "p";
+        echo "M" . $property->getModifiers();
     }
     if ($property->getName() === "token") {
         echo $property->isStatic() ? "T" : "t";
         echo $property->isPrivate() ? "R" : "r";
+        echo "M" . $property->getModifiers();
     }
 }
 "#,
@@ -1723,7 +1771,7 @@ foreach ($properties as $property) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:2:16:4:D20:F1M1SRM20:V1PTR");
+    assert_eq!(out.stdout, "2:2:16:4:D20:F1M1SRM20:V1PM2TRM20");
 }
 
 /// Verifies that `ReflectionClass::getMethod()` and `getProperty()` return

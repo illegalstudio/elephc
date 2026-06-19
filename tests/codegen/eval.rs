@@ -6333,6 +6333,7 @@ echo $staticProp->isProtected() ? "P" : "p";
 echo $staticProp->isFinal() ? "F" : "f";
 echo $staticProp->isAbstract() ? "A" : "a";
 echo $staticProp->isReadOnly() ? "R" : "r";
+echo $staticProp->getModifiers();
 echo ":";
 $visibleProp = new ReflectionProperty("EvalReflectMemberChild", "visible");
 echo $visibleProp->isStatic() ? "S" : "s";
@@ -6341,25 +6342,31 @@ echo $visibleProp->isPublic() ? "U" : "u";
 echo $visibleProp->isFinal() ? "F" : "f";
 echo $visibleProp->isAbstract() ? "A" : "a";
 echo $visibleProp->isReadOnly() ? "R" : "r";
+echo $visibleProp->getModifiers();
 echo ":";
 $readonlyProp = new ReflectionProperty("EvalReflectMemberChild", "locked");
 echo $readonlyProp->isReadOnly() ? "R" : "r";
 echo $readonlyProp->isPublic() ? "U" : "u";
+echo $readonlyProp->getModifiers();
 echo ":";
 $sealedProp = new ReflectionProperty("EvalReflectMemberChild", "sealed");
 echo $sealedProp->isFinal() ? "F" : "f";
 echo $sealedProp->isPublic() ? "U" : "u";
+echo $sealedProp->getModifiers();
 echo ":";
 $staticFinalProp = new ReflectionProperty("EvalReflectMemberChild", "staticSeal");
 echo $staticFinalProp->isFinal() ? "F" : "f";
 echo $staticFinalProp->isStatic() ? "S" : "s";
+echo $staticFinalProp->getModifiers();
 echo ":";
 $abstractProp = new ReflectionProperty("EvalReflectAbstractProperty", "mustRead");
 echo $abstractProp->isAbstract() ? "A" : "a";
 echo $abstractProp->isFinal() ? "F" : "f";
+echo $abstractProp->getModifiers();
 echo ":";
 $classReadonlyProp = new ReflectionProperty("EvalReflectReadonlyClass", "classReadonly");
-echo $classReadonlyProp->isReadOnly() ? "C" : "c";');
+echo $classReadonlyProp->isReadOnly() ? "C" : "c";
+echo $classReadonlyProp->getModifiers();');
 "#,
     );
     assert!(
@@ -6367,7 +6374,10 @@ echo $classReadonlyProp->isReadOnly() ? "C" : "c";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "SPurfa:APs:FUs:SRpfar:sPufar:RU:FU:FS:Af:C");
+    assert_eq!(
+        out.stdout,
+        "SPurfa:APs:FUs:SRpfar20:sPufar2:RU2177:FU33:FS49:Af577:C2177"
+    );
 }
 
 /// Verifies eval-declared final properties cannot be redeclared by subclasses.
@@ -6467,10 +6477,12 @@ foreach ($properties as $property) {
     if ($property->getName() === "visible") {
         echo "V" . count($property->getAttributes());
         echo $property->isProtected() ? "P" : "p";
+        echo "M" . $property->getModifiers();
     }
     if ($property->getName() === "token") {
         echo $property->isStatic() ? "T" : "t";
         echo $property->isPrivate() ? "R" : "r";
+        echo "M" . $property->getModifiers();
     }
 }');
 "#,
@@ -6480,7 +6492,7 @@ foreach ($properties as $property) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:2:16:4:D20:F1M1SRM20:V1PTR");
+    assert_eq!(out.stdout, "2:2:16:4:D20:F1M1SRM20:V1PM2TRM20");
 }
 
 /// Verifies eval ReflectionClass getMethod/getProperty return single member objects.

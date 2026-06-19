@@ -1878,6 +1878,20 @@ fn eval_builtin_reflection_class_constant(
             "IS_ABSTRACT" => Some(64),
             _ => None,
         }
+    } else if class_name.eq_ignore_ascii_case("ReflectionProperty") {
+        match constant_name {
+            "IS_STATIC" => Some(16),
+            "IS_READONLY" => Some(128),
+            "IS_PUBLIC" => Some(1),
+            "IS_PROTECTED" => Some(2),
+            "IS_PRIVATE" => Some(4),
+            "IS_ABSTRACT" => Some(64),
+            "IS_PROTECTED_SET" => Some(2048),
+            "IS_PRIVATE_SET" => Some(4096),
+            "IS_VIRTUAL" => Some(512),
+            "IS_FINAL" => Some(32),
+            _ => None,
+        }
     } else if class_name.eq_ignore_ascii_case("ReflectionClassConstant") {
         match constant_name {
             "IS_PUBLIC" => Some(1),

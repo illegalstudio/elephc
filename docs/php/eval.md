@@ -236,7 +236,9 @@ parameters after method execution, write back mutated `&...$items` elements
 when the variadic container itself is not rebound, and are reported through
 `ReflectionParameter::isPassedByReference()`.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
-`isFinal()`, `isAbstract()`, and `isReadOnly()` report eval property metadata.
+`isFinal()`, `isAbstract()`, `isReadOnly()`, and `getModifiers()` report eval
+property metadata with PHP-compatible `ReflectionProperty::IS_*` constants for
+the bitmask.
 `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant

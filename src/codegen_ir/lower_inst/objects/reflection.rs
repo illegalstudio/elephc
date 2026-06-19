@@ -20,7 +20,9 @@ use crate::codegen_ir::literal_defaults::{
 };
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
-use crate::names::{enum_case_symbol, php_symbol_key};
+use crate::names::{
+    enum_case_symbol, php_symbol_key, property_hook_get_method, property_hook_set_method,
+};
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{AttrArgValue, EnumCaseInfo, EnumCaseValue, FunctionSig, InterfaceInfo, PhpType};
 
@@ -78,6 +80,7 @@ struct ReflectionListedMember {
     constant_value: Option<ReflectionConstantValue>,
     is_enum_case: bool,
     flags: ReflectionMemberFlags,
+    modifiers: i64,
     required_parameter_count: i64,
     parameters: Vec<ReflectionParameterMember>,
 }
@@ -373,6 +376,9 @@ fn emit_reflection_owner_object(
     if class_name == "ReflectionMethod" {
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
     }
+    if class_name == "ReflectionProperty" {
+        emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
+    }
     if class_name == "ReflectionParameter" {
         if let Some(parameter) = metadata.parameter_members.first() {
             emit_reflection_parameter_properties(ctx, parameter)?;
@@ -534,7 +540,7 @@ fn reflection_class_metadata_for_name(
             is_enum: false,
             is_readonly: false,
             is_instantiable: false,
-            modifiers: reflection_class_constant_modifiers(&Visibility::Public, false),
+            modifiers: 0,
             member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
         });
     }
@@ -586,7 +592,7 @@ fn reflection_class_metadata_for_name(
             is_enum: false,
             is_readonly: false,
             is_instantiable: false,
-            modifiers: reflection_class_constant_modifiers(&Visibility::Public, false),
+            modifiers: 0,
             member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false),
         });
     }
@@ -766,7 +772,7 @@ fn reflection_property_metadata(
                 is_enum: false,
                 is_readonly: false,
                 is_instantiable: false,
-                modifiers: 0,
+                modifiers: reflection_property_modifiers_for_info(info, &property_name)?,
                 member_flags: reflection_property_member_flags(info, &property_name)?,
             })
         })
@@ -1630,6 +1636,7 @@ fn push_unique_constant_reflection_member(
         constant_value: Some(value),
         is_enum_case,
         flags: reflection_member_flags(false, &visibility, is_final, false, false),
+        modifiers: reflection_class_constant_modifiers(&visibility, is_final),
         required_parameter_count: 0,
         parameters: Vec::new(),
     });
@@ -1824,6 +1831,7 @@ fn reflection_class_method_member(
         constant_value: None,
         is_enum_case: false,
         flags,
+        modifiers: reflection_method_modifiers_from_flags(flags),
         required_parameter_count,
         parameters,
     })
@@ -1884,6 +1892,7 @@ fn reflection_interface_method_member(
         constant_value: None,
         is_enum_case: false,
         flags,
+        modifiers: reflection_method_modifiers_from_flags(flags),
         required_parameter_count,
         parameters,
     })
@@ -1933,6 +1942,7 @@ fn reflection_trait_method_member(
         constant_value: None,
         is_enum_case: false,
         flags,
+        modifiers: reflection_method_modifiers_from_flags(flags),
         required_parameter_count,
         parameters: reflection_parameter_members_with_declaring_class(
             &info.signature,
@@ -1989,6 +1999,8 @@ fn reflection_class_property_member(
         constant_value: None,
         is_enum_case: false,
         flags,
+        modifiers: reflection_property_modifiers_for_info(info, property_name)
+            .unwrap_or_else(|| reflection_property_modifiers_from_flags(flags)),
         required_parameter_count: 0,
         parameters: Vec::new(),
     })
@@ -2010,6 +2022,13 @@ fn default_method_members(
             constant_value: None,
             is_enum_case: false,
             flags: reflection_member_flags(false, &Visibility::Public, false, is_interface, false),
+            modifiers: reflection_method_modifiers_from_flags(reflection_member_flags(
+                false,
+                &Visibility::Public,
+                false,
+                is_interface,
+                false,
+            )),
             required_parameter_count: 0,
             parameters: Vec::new(),
         })
@@ -2032,6 +2051,15 @@ fn default_property_members(
             constant_value: None,
             is_enum_case: false,
             flags: reflection_member_flags(false, &Visibility::Public, false, is_interface, false),
+            modifiers: reflection_property_modifiers(
+                &Visibility::Public,
+                false,
+                false,
+                is_interface,
+                false,
+                is_interface,
+                None,
+            ),
             required_parameter_count: 0,
             parameters: Vec::new(),
         })
@@ -3313,7 +3341,15 @@ fn emit_reflection_member_object(
             ctx,
             member_class_name,
             "__modifiers",
-            reflection_method_modifiers_from_flags(member.flags),
+            member.modifiers,
+        )?;
+    }
+    if member_class_name == "ReflectionProperty" {
+        emit_reflection_owner_int_property(
+            ctx,
+            member_class_name,
+            "__modifiers",
+            member.modifiers,
         )?;
     }
     if member_class_name == "ReflectionClassConstant" {
@@ -3332,7 +3368,7 @@ fn emit_reflection_member_object(
             ctx,
             member_class_name,
             "__modifiers",
-            reflection_class_constant_modifiers_from_flags(member.flags),
+            member.modifiers,
         )?;
     }
     emit_reflection_member_flag_properties(ctx, member_class_name, member.flags)?;
@@ -4061,8 +4097,105 @@ fn reflection_class_constant_modifiers(visibility: &Visibility, is_final: bool) 
     modifiers
 }
 
-/// Computes the class-constant modifier bitmask from populated Reflection member flags.
-fn reflection_class_constant_modifiers_from_flags(flags: ReflectionMemberFlags) -> i64 {
+/// Computes PHP's `ReflectionProperty::getModifiers()` bitmask from class metadata.
+fn reflection_property_modifiers_for_info(
+    info: &crate::types::ClassInfo,
+    property_name: &str,
+) -> Option<i64> {
+    if info
+        .properties
+        .iter()
+        .any(|(name, _)| name == property_name)
+    {
+        let visibility = info
+            .property_visibilities
+            .get(property_name)
+            .unwrap_or(&Visibility::Public);
+        return Some(reflection_property_modifiers(
+            visibility,
+            false,
+            info.final_properties.contains(property_name),
+            info.abstract_properties.contains(property_name),
+            info.readonly_properties.contains(property_name),
+            reflection_property_is_virtual(info, property_name),
+            info.property_set_visibilities.get(property_name),
+        ));
+    }
+    if info
+        .static_properties
+        .iter()
+        .any(|(name, _)| name == property_name)
+    {
+        let visibility = info
+            .static_property_visibilities
+            .get(property_name)
+            .unwrap_or(&Visibility::Public);
+        return Some(reflection_property_modifiers(
+            visibility,
+            true,
+            info.final_static_properties.contains(property_name),
+            false,
+            false,
+            false,
+            None,
+        ));
+    }
+    None
+}
+
+/// Returns whether a property is virtual because it has or requires hooks.
+fn reflection_property_is_virtual(info: &crate::types::ClassInfo, property_name: &str) -> bool {
+    let get_method = php_symbol_key(&property_hook_get_method(property_name));
+    let set_method = php_symbol_key(&property_hook_set_method(property_name));
+    info.abstract_property_hooks.contains_key(property_name)
+        || info.methods.contains_key(&get_method)
+        || info.methods.contains_key(&set_method)
+}
+
+/// Computes PHP's `ReflectionProperty::getModifiers()` bitmask.
+fn reflection_property_modifiers(
+    visibility: &Visibility,
+    is_static: bool,
+    is_final: bool,
+    is_abstract: bool,
+    is_readonly: bool,
+    is_virtual: bool,
+    set_visibility: Option<&Visibility>,
+) -> i64 {
+    let mut modifiers = match visibility {
+        Visibility::Public => 1,
+        Visibility::Protected => 2,
+        Visibility::Private => 4,
+    };
+    if is_static {
+        modifiers |= 16;
+    }
+    if is_final {
+        modifiers |= 32;
+    }
+    if is_abstract {
+        modifiers |= 64;
+    }
+    if is_readonly {
+        modifiers |= 128;
+    }
+    if is_virtual {
+        modifiers |= 512;
+    }
+    match set_visibility {
+        Some(Visibility::Private) => modifiers |= 32 | 4096,
+        Some(Visibility::Protected) => modifiers |= 2048,
+        Some(Visibility::Public) | None => {
+            if is_readonly && visibility == &Visibility::Public {
+                modifiers |= 2048;
+            }
+        }
+    }
+    modifiers
+}
+
+/// Computes PHP's `ReflectionProperty::getModifiers()` bitmask from predicate flags.
+fn reflection_property_modifiers_from_flags(flags: ReflectionMemberFlags) -> i64 {
     let visibility = if flags.is_private {
         Visibility::Private
     } else if flags.is_protected {
@@ -4070,7 +4203,15 @@ fn reflection_class_constant_modifiers_from_flags(flags: ReflectionMemberFlags) 
     } else {
         Visibility::Public
     };
-    reflection_class_constant_modifiers(&visibility, flags.is_final)
+    reflection_property_modifiers(
+        &visibility,
+        flags.is_static,
+        flags.is_final,
+        flags.is_abstract,
+        flags.is_readonly,
+        false,
+        None,
+    )
 }
 
 /// Computes PHP's `ReflectionMethod::getModifiers()` bitmask from method flags.

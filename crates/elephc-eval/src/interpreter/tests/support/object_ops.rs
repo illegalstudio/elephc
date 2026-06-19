@@ -545,6 +545,7 @@ impl FakeOps {
                 properties.push(("__is_final".to_string(), is_final));
                 properties.push(("__is_abstract".to_string(), is_abstract));
                 properties.push(("__is_readonly".to_string(), is_readonly));
+                properties.push(("__modifiers".to_string(), modifiers_cell));
             }
         }
         if matches!(

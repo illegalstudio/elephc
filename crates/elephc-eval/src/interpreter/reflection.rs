@@ -57,6 +57,7 @@ struct EvalReflectionMemberMetadata {
     is_final: bool,
     is_abstract: bool,
     is_readonly: bool,
+    modifiers: u64,
     required_parameter_count: usize,
     parameters: Vec<EvalReflectionParameterMetadata>,
 }
@@ -637,7 +638,7 @@ fn eval_reflection_property_new(
         property.declaring_class_name.as_deref(),
         &[],
         flags,
-        0,
+        property.modifiers,
         0,
         None,
         None,
@@ -1291,13 +1292,13 @@ fn eval_reflection_member_object_array_result(
             member.is_abstract,
             member.is_readonly,
         );
+        let owner_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+            member.required_parameter_count as u64
+        } else {
+            member.modifiers
+        };
         let method_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-            eval_reflection_method_modifiers(
-                member.visibility,
-                member.is_static,
-                member.is_final,
-                member.is_abstract,
-            )
+            member.modifiers
         } else {
             0
         };
@@ -1312,7 +1313,7 @@ fn eval_reflection_member_object_array_result(
             member.declaring_class_name.as_deref(),
             &member.parameters,
             flags,
-            member.required_parameter_count as u64,
+            owner_modifiers,
             method_modifiers,
             None,
             None,
@@ -1508,6 +1509,49 @@ fn eval_reflection_method_modifiers(
     modifiers
 }
 
+/// Computes PHP's `ReflectionProperty::getModifiers()` bitmask for eval metadata.
+fn eval_reflection_property_modifiers(
+    visibility: EvalVisibility,
+    is_static: bool,
+    is_final: bool,
+    is_abstract: bool,
+    is_readonly: bool,
+    is_virtual: bool,
+) -> u64 {
+    let mut modifiers = match visibility {
+        EvalVisibility::Public => 1,
+        EvalVisibility::Protected => 2,
+        EvalVisibility::Private => 4,
+    };
+    if is_static {
+        modifiers |= 16;
+    }
+    if is_final {
+        modifiers |= 32;
+    }
+    if is_abstract {
+        modifiers |= 64;
+    }
+    if is_readonly {
+        modifiers |= 128;
+    }
+    if is_virtual {
+        modifiers |= 512;
+    }
+    if is_readonly && visibility == EvalVisibility::Public {
+        modifiers |= 2048;
+    }
+    modifiers
+}
+
+/// Returns whether an eval property is virtual because it has or requires hooks.
+fn eval_reflection_property_is_virtual(property: &EvalClassProperty) -> bool {
+    property.has_get_hook()
+        || property.has_set_hook()
+        || property.requires_get_hook()
+        || property.requires_set_hook()
+}
+
 /// Computes PHP's `ReflectionMethod::getModifiers()` bitmask from eval member flags.
 fn eval_reflection_method_modifiers_from_flags(flags: u64) -> u64 {
     let mut modifiers = 0;
@@ -1685,6 +1729,12 @@ fn eval_reflection_method_metadata(
                     is_final: method.is_final(),
                     is_abstract: method.is_abstract(),
                     is_readonly: false,
+                    modifiers: eval_reflection_method_modifiers(
+                        method.visibility(),
+                        method.is_static(),
+                        method.is_final(),
+                        method.is_abstract(),
+                    ),
                     required_parameter_count,
                     parameters,
                 }
@@ -1733,6 +1783,12 @@ fn eval_reflection_method_metadata(
                     is_final: false,
                     is_abstract: true,
                     is_readonly: false,
+                    modifiers: eval_reflection_method_modifiers(
+                        EvalVisibility::Public,
+                        method.is_static(),
+                        false,
+                        true,
+                    ),
                     required_parameter_count,
                     parameters,
                 }
@@ -1781,6 +1837,12 @@ fn eval_reflection_method_metadata(
                     is_final: method.is_final(),
                     is_abstract: method.is_abstract(),
                     is_readonly: false,
+                    modifiers: eval_reflection_method_modifiers(
+                        method.visibility(),
+                        method.is_static(),
+                        method.is_final(),
+                        method.is_abstract(),
+                    ),
                     required_parameter_count,
                     parameters,
                 }
@@ -1804,6 +1866,14 @@ fn eval_reflection_property_metadata(
                 is_final: property.is_final(),
                 is_abstract: property.is_abstract(),
                 is_readonly: property.is_readonly(),
+                modifiers: eval_reflection_property_modifiers(
+                    property.visibility(),
+                    property.is_static(),
+                    property.is_final(),
+                    property.is_abstract(),
+                    property.is_readonly(),
+                    eval_reflection_property_is_virtual(&property),
+                ),
                 required_parameter_count: 0,
                 parameters: Vec::new(),
             },
@@ -1822,6 +1892,14 @@ fn eval_reflection_property_metadata(
                 is_final: false,
                 is_abstract: true,
                 is_readonly: false,
+                modifiers: eval_reflection_property_modifiers(
+                    EvalVisibility::Public,
+                    false,
+                    false,
+                    true,
+                    false,
+                    true,
+                ),
                 required_parameter_count: 0,
                 parameters: Vec::new(),
             });
@@ -1839,6 +1917,14 @@ fn eval_reflection_property_metadata(
                 is_final: property.is_final(),
                 is_abstract: property.is_abstract(),
                 is_readonly: property.is_readonly(),
+                modifiers: eval_reflection_property_modifiers(
+                    property.visibility(),
+                    property.is_static(),
+                    property.is_final(),
+                    property.is_abstract(),
+                    property.is_readonly(),
+                    eval_reflection_property_is_virtual(property),
+                ),
                 required_parameter_count: 0,
                 parameters: Vec::new(),
             })

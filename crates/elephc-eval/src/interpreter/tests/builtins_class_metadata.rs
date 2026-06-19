@@ -422,6 +422,16 @@ echo ReflectionClass::IS_READONLY; echo ":";
 echo ReflectionMethod::IS_STATIC; echo ":";
 echo ReflectionMethod::IS_PRIVATE; echo ":";
 echo ReflectionMethod::IS_ABSTRACT; echo ":";
+echo ReflectionProperty::IS_STATIC; echo ":";
+echo ReflectionProperty::IS_READONLY; echo ":";
+echo ReflectionProperty::IS_PUBLIC; echo ":";
+echo ReflectionProperty::IS_PROTECTED; echo ":";
+echo ReflectionProperty::IS_PRIVATE; echo ":";
+echo ReflectionProperty::IS_ABSTRACT; echo ":";
+echo ReflectionProperty::IS_PROTECTED_SET; echo ":";
+echo ReflectionProperty::IS_PRIVATE_SET; echo ":";
+echo ReflectionProperty::IS_VIRTUAL; echo ":";
+echo ReflectionProperty::IS_FINAL; echo ":";
 echo ReflectionClassConstant::IS_PUBLIC; echo ":";
 echo ReflectionClassConstant::IS_PROTECTED; echo ":";
 echo ReflectionClassConstant::IS_PRIVATE; echo ":";
@@ -434,7 +444,10 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "32:64:65536:16:4:64:1:2:4:32");
+    assert_eq!(
+        values.output,
+        "32:64:65536:16:4:64:16:128:1:2:4:64:2048:4096:512:32:1:2:4:32"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
@@ -744,6 +757,7 @@ echo $staticProp->isProtected() ? "P" : "p";
 echo $staticProp->isFinal() ? "F" : "f";
 echo $staticProp->isAbstract() ? "A" : "a";
 echo $staticProp->isReadOnly() ? "R" : "r";
+echo $staticProp->getModifiers();
 echo ":";
 $visibleProp = new ReflectionProperty("EvalReflectMemberChild", "visible");
 echo $visibleProp->isStatic() ? "S" : "s";
@@ -752,25 +766,31 @@ echo $visibleProp->isPublic() ? "U" : "u";
 echo $visibleProp->isFinal() ? "F" : "f";
 echo $visibleProp->isAbstract() ? "A" : "a";
 echo $visibleProp->isReadOnly() ? "R" : "r";
+echo $visibleProp->getModifiers();
 echo ":";
 $readonlyProp = new ReflectionProperty("EvalReflectMemberChild", "locked");
 echo $readonlyProp->isReadOnly() ? "R" : "r";
 echo $readonlyProp->isPublic() ? "U" : "u";
+echo $readonlyProp->getModifiers();
 echo ":";
 $sealedProp = new ReflectionProperty("EvalReflectMemberChild", "sealed");
 echo $sealedProp->isFinal() ? "F" : "f";
 echo $sealedProp->isPublic() ? "U" : "u";
+echo $sealedProp->getModifiers();
 echo ":";
 $staticFinalProp = new ReflectionProperty("EvalReflectMemberChild", "staticSeal");
 echo $staticFinalProp->isFinal() ? "F" : "f";
 echo $staticFinalProp->isStatic() ? "S" : "s";
+echo $staticFinalProp->getModifiers();
 echo ":";
 $abstractProp = new ReflectionProperty("EvalReflectAbstractProperty", "mustRead");
 echo $abstractProp->isAbstract() ? "A" : "a";
 echo $abstractProp->isFinal() ? "F" : "f";
+echo $abstractProp->getModifiers();
 echo ":";
 $classReadonlyProp = new ReflectionProperty("EvalReflectReadonlyClass", "classReadonly");
 echo $classReadonlyProp->isReadOnly() ? "C" : "c";
+echo $classReadonlyProp->getModifiers();
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -779,7 +799,10 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "SPurfa:APs:FUs:SRpfar:sPufar:RU:FU:FS:Af:C");
+    assert_eq!(
+        values.output,
+        "SPurfa:APs:FUs:SRpfar20:sPufar2:RU2177:FU33:FS49:Af577:C2177"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
@@ -993,10 +1016,12 @@ foreach ($properties as $property) {
     if ($property->getName() === "visible") {
         echo "V"; echo count($property->getAttributes());
         echo $property->isProtected() ? "P" : "p";
+        echo "M"; echo $property->getModifiers();
     }
     if ($property->getName() === "token") {
         echo $property->isStatic() ? "T" : "t";
         echo $property->isPrivate() ? "R" : "r";
+        echo "M"; echo $property->getModifiers();
     }
 }
 return true;"#,
@@ -1007,7 +1032,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "2:2:16:4:D20:F1M1SRM20:V1PTR");
+    assert_eq!(values.output, "2:2:16:4:D20:F1M1SRM20:V1PM2TRM20");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

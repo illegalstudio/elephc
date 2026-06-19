@@ -1487,6 +1487,20 @@ fn reflection_owner_constants(class_name: &str) -> Vec<ClassConst> {
             builtin_class_const("IS_ABSTRACT", 64),
         ];
     }
+    if class_name == "ReflectionProperty" {
+        return vec![
+            builtin_class_const("IS_STATIC", 16),
+            builtin_class_const("IS_READONLY", 128),
+            builtin_class_const("IS_PUBLIC", 1),
+            builtin_class_const("IS_PROTECTED", 2),
+            builtin_class_const("IS_PRIVATE", 4),
+            builtin_class_const("IS_ABSTRACT", 64),
+            builtin_class_const("IS_PROTECTED_SET", 2048),
+            builtin_class_const("IS_PRIVATE_SET", 4096),
+            builtin_class_const("IS_VIRTUAL", 512),
+            builtin_class_const("IS_FINAL", 32),
+        ];
+    }
     if class_name == "ReflectionClassConstant" {
         return vec![
             builtin_class_const("IS_PUBLIC", 1),
@@ -1584,6 +1598,16 @@ fn add_reflection_member_flag_methods(
         ));
     }
     if class_name == "ReflectionProperty" {
+        properties.push(builtin_property(
+            "__modifiers",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        methods.push(builtin_reflection_class_int_method(
+            "getModifiers",
+            "__modifiers",
+        ));
         for (property, method) in [("__is_final", "isFinal"), ("__is_abstract", "isAbstract")] {
             properties.push(builtin_property(
                 property,
@@ -2186,6 +2210,16 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }
+                }
+            }
+            if class_name == "ReflectionProperty" {
+                for method_name in ["isfinal", "isabstract", "isreadonly"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
+                    sig.return_type = PhpType::Int;
                 }
             }
             if class_name == "ReflectionMethod" {
