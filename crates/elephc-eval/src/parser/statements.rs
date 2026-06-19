@@ -753,7 +753,8 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let (params, parameter_has_types, parameter_defaults) = self.parse_method_params()?;
+        let (params, parameter_has_types, parameter_defaults, parameter_is_variadic) =
+            self.parse_method_params()?;
         let body = if is_abstract {
             self.expect_semicolon()?;
             Vec::new()
@@ -770,7 +771,8 @@ impl Parser {
             body,
         )
         .with_parameter_type_flags(parameter_has_types)
-        .with_parameter_defaults(parameter_defaults))
+        .with_parameter_defaults(parameter_defaults)
+        .with_parameter_variadic_flags(parameter_is_variadic))
     }
 
     /// Parses one public property declaration with an optional initializer.
@@ -1238,11 +1240,13 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let (params, parameter_has_types, parameter_defaults) = self.parse_method_params()?;
+        let (params, parameter_has_types, parameter_defaults, parameter_is_variadic) =
+            self.parse_method_params()?;
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)
             .with_parameter_type_flags(parameter_has_types)
-            .with_parameter_defaults(parameter_defaults))
+            .with_parameter_defaults(parameter_defaults)
+            .with_parameter_variadic_flags(parameter_is_variadic))
     }
 
     /// Parses one interface property hook contract.
@@ -1656,22 +1660,33 @@ impl Parser {
     /// Parses a method parameter list and records type/default metadata.
     pub(super) fn parse_method_params(
         &mut self,
-    ) -> Result<(Vec<String>, Vec<bool>, Vec<Option<EvalExpr>>), EvalParseError> {
+    ) -> Result<(Vec<String>, Vec<bool>, Vec<Option<EvalExpr>>, Vec<bool>), EvalParseError> {
         let mut params = Vec::new();
         let mut parameter_has_types = Vec::new();
         let mut parameter_defaults = Vec::new();
+        let mut parameter_is_variadic = Vec::new();
         if self.consume(TokenKind::RParen) {
-            return Ok((params, parameter_has_types, parameter_defaults));
+            return Ok((
+                params,
+                parameter_has_types,
+                parameter_defaults,
+                parameter_is_variadic,
+            ));
         }
         loop {
             let has_type = self.parse_optional_parameter_type()?;
+            let is_variadic = self.consume(TokenKind::Ellipsis);
             let TokenKind::DollarIdent(name) = self.current() else {
                 return Err(EvalParseError::ExpectedVariable);
             };
             params.push(name.clone());
             parameter_has_types.push(has_type);
+            parameter_is_variadic.push(is_variadic);
             self.advance();
             let default = if self.consume(TokenKind::Equal) {
+                if is_variadic {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
                 let default = self.parse_expr()?;
                 if !method_parameter_default_is_supported(&default) {
                     return Err(EvalParseError::UnsupportedConstruct);
@@ -1684,17 +1699,28 @@ impl Parser {
             if !self.consume(TokenKind::Comma) {
                 break;
             }
+            if is_variadic {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             if matches!(self.current(), TokenKind::RParen) {
                 return Err(EvalParseError::ExpectedVariable);
             }
         }
         self.expect(TokenKind::RParen)?;
-        Ok((params, parameter_has_types, parameter_defaults))
+        Ok((
+            params,
+            parameter_has_types,
+            parameter_defaults,
+            parameter_is_variadic,
+        ))
     }
 
     /// Consumes a supported method parameter type and reports whether one existed.
     fn parse_optional_parameter_type(&mut self) -> Result<bool, EvalParseError> {
-        if matches!(self.current(), TokenKind::DollarIdent(_)) {
+        if matches!(
+            self.current(),
+            TokenKind::DollarIdent(_) | TokenKind::Ellipsis
+        ) {
             return Ok(false);
         }
         let nullable_shorthand = self.consume(TokenKind::Question);

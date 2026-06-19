@@ -727,6 +727,28 @@ class EvalVisibleChild extends EvalVisibleBase {
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
+
+/// Verifies eval rejects parent method overrides that require more arguments.
+#[test]
+fn execute_program_rejects_method_override_with_narrower_arity() {
+    let program = parse_fragment(
+        br#"class EvalArityBase {
+    public function read($value = "base") { return $value; }
+}
+class EvalArityChild extends EvalArityBase {
+    public function read($value) { return $value; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("narrower method override arity should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval rejects classes missing methods required by eval interfaces.
 #[test]
 fn execute_program_rejects_missing_dynamic_interface_method() {
@@ -742,6 +764,53 @@ class EvalMissingRead implements EvalNeedsRead {}"#,
 
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("missing interface method should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies variadic eval methods can satisfy fixed-arity interface contracts.
+#[test]
+fn execute_program_accepts_variadic_method_for_fixed_interface_contract() {
+    let program = parse_fragment(
+        br#"interface EvalFixedReadable {
+    function read($left, $right);
+}
+class EvalVariadicReadable implements EvalFixedReadable {
+    public function read($left, ...$tail) {
+        return $left . $tail[0];
+    }
+}
+$box = new EvalVariadicReadable();
+return $box->read("A", "B");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("AB".to_string()));
+}
+
+/// Verifies non-variadic eval methods cannot satisfy variadic interface contracts.
+#[test]
+fn execute_program_rejects_non_variadic_method_for_variadic_interface_contract() {
+    let program = parse_fragment(
+        br#"interface EvalVariadicReadable {
+    function read($left, ...$tail);
+}
+class EvalFixedReadable implements EvalVariadicReadable {
+    public function read($left, $tail = null) {
+        return $left;
+    }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("non-variadic implementation should not satisfy variadic contract");
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }

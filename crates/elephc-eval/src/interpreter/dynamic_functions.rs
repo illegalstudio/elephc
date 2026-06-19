@@ -149,22 +149,62 @@ pub(in crate::interpreter) fn bind_evaluated_function_args(
 pub(in crate::interpreter) fn bind_evaluated_method_args(
     params: &[String],
     parameter_defaults: &[Option<EvalExpr>],
+    parameter_is_variadic: &[bool],
     evaluated_args: Vec<EvaluatedCallArg>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let mut bound_args = vec![None; params.len()];
+    let variadic_index = parameter_is_variadic.iter().position(|is_variadic| *is_variadic);
+    let required_count =
+        method_required_param_count(params.len(), parameter_defaults, parameter_is_variadic);
     let mut next_positional = 0;
+    let mut next_variadic_index = 0_i64;
+    let mut variadic_named_args = std::collections::HashSet::new();
+
+    if let Some(index) = variadic_index {
+        let array = if evaluated_args_contain_named_variadic_values(
+            params,
+            variadic_index,
+            &evaluated_args,
+        ) {
+            values.assoc_new(evaluated_args.len())?
+        } else {
+            values.array_new(evaluated_args.len())?
+        };
+        bound_args[index] = Some(array);
+    }
 
     for arg in evaluated_args {
         if let Some(name) = arg.name {
-            bind_dynamic_named_arg(params, &mut bound_args, &name, arg.value)?;
+            bind_dynamic_named_method_arg(
+                params,
+                variadic_index,
+                &mut bound_args,
+                &name,
+                arg.value,
+                &mut variadic_named_args,
+                values,
+            )?;
         } else {
-            bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, arg.value)?;
+            bind_dynamic_positional_method_arg(
+                &mut bound_args,
+                variadic_index,
+                &mut next_positional,
+                &mut next_variadic_index,
+                arg.value,
+                values,
+            )?;
         }
     }
 
     for (position, value) in bound_args.iter_mut().enumerate() {
+        if Some(position) == variadic_index {
+            continue;
+        }
         if value.is_none() {
+            if position < required_count {
+                return Err(EvalStatus::RuntimeFatal);
+            }
             let Some(Some(default)) = parameter_defaults.get(position) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
@@ -176,6 +216,106 @@ pub(in crate::interpreter) fn bind_evaluated_method_args(
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Returns the minimum argument count for a PHP method signature.
+fn method_required_param_count(
+    param_count: usize,
+    defaults: &[Option<EvalExpr>],
+    variadics: &[bool],
+) -> usize {
+    let fixed_count = variadics
+        .iter()
+        .position(|is_variadic| *is_variadic)
+        .unwrap_or(param_count);
+    (0..fixed_count)
+        .rfind(|position| !defaults.get(*position).is_some_and(Option::is_some))
+        .map_or(0, |position| position + 1)
+}
+
+/// Returns true when evaluated args contain named values captured by a variadic parameter.
+fn evaluated_args_contain_named_variadic_values(
+    params: &[String],
+    variadic_index: Option<usize>,
+    evaluated_args: &[EvaluatedCallArg],
+) -> bool {
+    let Some(variadic_index) = variadic_index else {
+        return false;
+    };
+    evaluated_args.iter().any(|arg| {
+        arg.name.as_ref().is_some_and(|name| {
+            regular_method_param_index(params, Some(variadic_index), name).is_none()
+        })
+    })
+}
+
+/// Binds one positional method argument to a fixed parameter or variadic array.
+fn bind_dynamic_positional_method_arg(
+    bound_args: &mut [Option<RuntimeCellHandle>],
+    variadic_index: Option<usize>,
+    next_positional: &mut usize,
+    next_variadic_index: &mut i64,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if variadic_index.is_some_and(|index| *next_positional >= index) {
+        let key = values.int(*next_variadic_index)?;
+        *next_variadic_index = next_variadic_index
+            .checked_add(1)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        return bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, values);
+    }
+    bind_dynamic_positional_arg(bound_args, next_positional, value)
+}
+
+/// Binds one named method argument to a fixed parameter or variadic array.
+fn bind_dynamic_named_method_arg(
+    params: &[String],
+    variadic_index: Option<usize>,
+    bound_args: &mut [Option<RuntimeCellHandle>],
+    name: &str,
+    value: RuntimeCellHandle,
+    variadic_named_args: &mut std::collections::HashSet<String>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if let Some(param_index) = regular_method_param_index(params, variadic_index, name) {
+        if bound_args[param_index].is_some() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        bound_args[param_index] = Some(value);
+        return Ok(());
+    }
+    if variadic_index.is_none() || !variadic_named_args.insert(name.to_string()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let key = values.string(name)?;
+    bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, values)
+}
+
+/// Returns the matching non-variadic parameter index for one PHP named argument.
+fn regular_method_param_index(
+    params: &[String],
+    variadic_index: Option<usize>,
+    name: &str,
+) -> Option<usize> {
+    params
+        .iter()
+        .enumerate()
+        .position(|(index, param)| Some(index) != variadic_index && param == name)
+}
+
+/// Appends one value into the method variadic array.
+fn bind_dynamic_variadic_arg(
+    bound_args: &mut [Option<RuntimeCellHandle>],
+    variadic_index: Option<usize>,
+    key: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
+    let array = bound_args[index].ok_or(EvalStatus::RuntimeFatal)?;
+    bound_args[index] = Some(values.array_set(array, key, value)?);
+    Ok(())
 }
 
 /// Materializes a supported eval method parameter default expression.

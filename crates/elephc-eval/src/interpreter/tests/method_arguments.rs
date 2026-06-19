@@ -72,6 +72,80 @@ return EvalDefaultMethodBox::join();"#,
     assert_eq!(values.get(result), FakeValue::String("G-H".to_string()));
 }
 
+/// Verifies eval-declared methods bind positional and named values into variadic arrays.
+#[test]
+fn execute_program_binds_eval_method_variadic_args() {
+    let program = parse_fragment(
+        br#"class EvalVariadicMethodBox {
+    public function __construct(...$parts) {
+        $this->label = $parts[0] . $parts["right"];
+    }
+    public function read($head, ...$tail) {
+        echo count($tail); echo ":";
+        return $this->label . ":" . $head . ":" . $tail[0] . ":" . $tail["named"] . ":" . $tail["tail"];
+    }
+    public static function join(...$items) {
+        return $items[0] . $items[1];
+    }
+}
+$box = new EvalVariadicMethodBox("A", right: "B");
+echo $box->read("C", "D", named: "E", tail: "F"); echo ":";
+return EvalVariadicMethodBox::join("G", "H");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "3:AB:C:D:E:F:");
+    assert_eq!(values.get(result), FakeValue::String("GH".to_string()));
+}
+
+/// Verifies eval-declared variadic methods reject duplicate named variadic keys.
+#[test]
+fn execute_program_rejects_duplicate_eval_method_variadic_named_arg() {
+    let program = parse_fragment(
+        br#"class EvalDuplicateVariadicBox {
+    public function read(...$tail) {
+        return count($tail);
+    }
+}
+$box = new EvalDuplicateVariadicBox();
+return $box->read(name: "A", name: "B");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("duplicate named variadic argument should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies defaults before required eval method parameters do not make earlier slots optional.
+#[test]
+fn execute_program_rejects_eval_method_default_before_required_omission() {
+    let program = parse_fragment(
+        br#"class EvalRequiredAfterDefaultBox {
+    public function read($left = "A", $right) {
+        return $left . $right;
+    }
+}
+$box = new EvalRequiredAfterDefaultBox();
+return $box->read(right: "B");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("default before required parameter should remain required");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval-declared methods reject unknown named arguments.
 #[test]
 fn execute_program_rejects_unknown_eval_method_named_arg() {
