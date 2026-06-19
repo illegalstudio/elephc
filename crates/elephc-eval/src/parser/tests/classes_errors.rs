@@ -585,6 +585,22 @@ fn parse_fragment_accepts_typed_method_parameter_metadata() {
         ]
     );
     assert_eq!(method.parameter_has_types(), &[true, true, true, true]);
+    assert!(method.parameter_types().iter().all(Option::is_some));
+    let id_type = method.parameter_types()[0].as_ref().expect("id type");
+    assert_eq!(id_type.variants(), &[EvalParameterTypeVariant::Int]);
+    assert!(!id_type.allows_null());
+    let name_type = method.parameter_types()[1].as_ref().expect("name type");
+    assert_eq!(
+        name_type.variants(),
+        &[EvalParameterTypeVariant::Class("App\\Name".to_string())]
+    );
+    assert!(name_type.allows_null());
+    let label_type = method.parameter_types()[2].as_ref().expect("label type");
+    assert_eq!(
+        label_type.variants(),
+        &[EvalParameterTypeVariant::String]
+    );
+    assert!(label_type.allows_null());
     assert!(matches!(
         method.parameter_defaults(),
         [

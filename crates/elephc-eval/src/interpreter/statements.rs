@@ -2264,9 +2264,11 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = bind_evaluated_method_args(
         method.params(),
+        method.parameter_types(),
         method.parameter_defaults(),
         method.parameter_is_variadic(),
         evaluated_args,
+        context,
         values,
     )?;
     let mut method_scope = ElephcEvalScope::new();
@@ -2314,9 +2316,11 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = bind_evaluated_method_args(
         method.params(),
+        method.parameter_types(),
         method.parameter_defaults(),
         method.parameter_is_variadic(),
         evaluated_args,
+        context,
         values,
     )?;
     let mut method_scope = ElephcEvalScope::new();

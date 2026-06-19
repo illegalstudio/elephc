@@ -176,6 +176,48 @@ impl EvalFunction {
     }
 }
 
+/// One supported eval method parameter type atom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvalParameterTypeVariant {
+    Array,
+    Bool,
+    Callable,
+    Class(String),
+    Float,
+    Int,
+    Iterable,
+    Mixed,
+    Object,
+    String,
+}
+
+/// Type metadata retained for one eval method parameter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvalParameterType {
+    variants: Vec<EvalParameterTypeVariant>,
+    allows_null: bool,
+}
+
+impl EvalParameterType {
+    /// Creates one eval method parameter type from union variants and nullability.
+    pub fn new(variants: Vec<EvalParameterTypeVariant>, allows_null: bool) -> Self {
+        Self {
+            variants,
+            allows_null,
+        }
+    }
+
+    /// Returns the non-null type atoms in source order.
+    pub fn variants(&self) -> &[EvalParameterTypeVariant] {
+        &self.variants
+    }
+
+    /// Returns whether the type explicitly accepts PHP null.
+    pub const fn allows_null(&self) -> bool {
+        self.allows_null
+    }
+}
+
 /// Literal attribute argument metadata retained by eval declarations.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalAttributeArg {
@@ -528,6 +570,7 @@ pub struct EvalInterfaceMethod {
     attributes: Vec<EvalAttribute>,
     params: Vec<String>,
     parameter_has_types: Vec<bool>,
+    parameter_types: Vec<Option<EvalParameterType>>,
     parameter_defaults: Vec<Option<EvalExpr>>,
     parameter_is_variadic: Vec<bool>,
 }
@@ -536,6 +579,7 @@ impl EvalInterfaceMethod {
     /// Creates one dynamic eval interface method signature.
     pub fn new(name: impl Into<String>, params: Vec<String>) -> Self {
         let parameter_has_types = vec![false; params.len()];
+        let parameter_types = vec![None; params.len()];
         let parameter_defaults = vec![None; params.len()];
         let parameter_is_variadic = vec![false; params.len()];
         Self {
@@ -543,6 +587,7 @@ impl EvalInterfaceMethod {
             attributes: Vec::new(),
             params,
             parameter_has_types,
+            parameter_types,
             parameter_defaults,
             parameter_is_variadic,
         }
@@ -557,6 +602,13 @@ impl EvalInterfaceMethod {
     /// Returns a copy of this interface method with parameter type-presence flags.
     pub fn with_parameter_type_flags(mut self, parameter_has_types: Vec<bool>) -> Self {
         self.parameter_has_types = parameter_has_types;
+        self
+    }
+
+    /// Returns a copy of this interface method with source-order parameter type metadata.
+    pub fn with_parameter_types(mut self, parameter_types: Vec<Option<EvalParameterType>>) -> Self {
+        self.parameter_has_types = parameter_types.iter().map(Option::is_some).collect();
+        self.parameter_types = parameter_types;
         self
     }
 
@@ -590,6 +642,11 @@ impl EvalInterfaceMethod {
     /// Returns source-order flags for whether each parameter declared a type.
     pub fn parameter_has_types(&self) -> &[bool] {
         &self.parameter_has_types
+    }
+
+    /// Returns source-order parameter type metadata.
+    pub fn parameter_types(&self) -> &[Option<EvalParameterType>] {
+        &self.parameter_types
     }
 
     /// Returns default expressions declared for each source-order parameter.
@@ -1253,6 +1310,7 @@ pub struct EvalClassMethod {
     is_final: bool,
     params: Vec<String>,
     parameter_has_types: Vec<bool>,
+    parameter_types: Vec<Option<EvalParameterType>>,
     parameter_defaults: Vec<Option<EvalExpr>>,
     parameter_is_variadic: Vec<bool>,
     body: Vec<EvalStmt>,
@@ -1294,6 +1352,7 @@ impl EvalClassMethod {
         body: Vec<EvalStmt>,
     ) -> Self {
         let parameter_has_types = vec![false; params.len()];
+        let parameter_types = vec![None; params.len()];
         let parameter_defaults = vec![None; params.len()];
         let parameter_is_variadic = vec![false; params.len()];
         Self {
@@ -1305,6 +1364,7 @@ impl EvalClassMethod {
             is_final,
             params,
             parameter_has_types,
+            parameter_types,
             parameter_defaults,
             parameter_is_variadic,
             body,
@@ -1325,6 +1385,13 @@ impl EvalClassMethod {
     /// Returns a copy of this method with source-order parameter type-presence flags.
     pub fn with_parameter_type_flags(mut self, parameter_has_types: Vec<bool>) -> Self {
         self.parameter_has_types = parameter_has_types;
+        self
+    }
+
+    /// Returns a copy of this method with source-order parameter type metadata.
+    pub fn with_parameter_types(mut self, parameter_types: Vec<Option<EvalParameterType>>) -> Self {
+        self.parameter_has_types = parameter_types.iter().map(Option::is_some).collect();
+        self.parameter_types = parameter_types;
         self
     }
 
@@ -1387,6 +1454,11 @@ impl EvalClassMethod {
     /// Returns source-order flags for whether each parameter declared a type.
     pub fn parameter_has_types(&self) -> &[bool] {
         &self.parameter_has_types
+    }
+
+    /// Returns source-order parameter type metadata.
+    pub fn parameter_types(&self) -> &[Option<EvalParameterType>] {
+        &self.parameter_types
     }
 
     /// Returns default expressions declared for each source-order parameter.

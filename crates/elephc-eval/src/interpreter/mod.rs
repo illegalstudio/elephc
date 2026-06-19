@@ -34,8 +34,9 @@ use crate::eval_ir::{
     EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch,
     EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
     EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalFunction, EvalInterface, EvalInterfaceMethod,
-    EvalInterfaceProperty, EvalMagicConst, EvalMatchArm, EvalProgram, EvalStmt, EvalSwitchCase,
-    EvalTrait, EvalTraitAdaptation, EvalUnaryOp, EvalVisibility,
+    EvalInterfaceProperty, EvalMagicConst, EvalMatchArm, EvalParameterType,
+    EvalParameterTypeVariant, EvalProgram, EvalStmt, EvalSwitchCase, EvalTrait,
+    EvalTraitAdaptation, EvalUnaryOp, EvalVisibility,
 };
 use crate::json_validate::{self, JsonParseError, JsonParseErrorKind, JsonValue};
 use crate::parser::parse_fragment;

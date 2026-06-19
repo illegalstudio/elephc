@@ -174,6 +174,10 @@ visible member metadata, including supported member attributes and predicate
 flags. `ReflectionClass::newInstance()` constructs eval-declared reflected
 classes and forwards constructor arguments through eval's positional, named, and
 unpacking-aware call binding.
+Eval-declared method parameter type hints are checked when the method is
+entered. Supported checks include scalar hints with PHP-style weak scalar
+coercion, `array`, `object`, `iterable`, `mixed`, nullable/union forms, and
+eval/runtime class or interface names.
 `ReflectionMethod::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
 `isFinal()`, and `isAbstract()` report eval method metadata.
 `ReflectionMethod::getParameters()` returns `ReflectionParameter` objects for
@@ -351,10 +355,9 @@ Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Method/Parameter/Property/attribute slice, richer
 ReflectionParameter metadata for by-reference eval-declared parameters,
-enforcement of eval-declared method parameter type hints, broader default-value
-expression support beyond scalar literals, and broader generated/AOT method
-bridge signatures beyond the current public non-by-reference fixed scalar/Mixed
-slice.
+broader default-value expression support beyond scalar literals, and broader
+generated/AOT method bridge signatures beyond the current public
+non-by-reference fixed scalar/Mixed slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

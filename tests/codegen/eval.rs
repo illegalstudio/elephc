@@ -5364,6 +5364,32 @@ echo EvalVariadicMethodBox::join("G", "H");');
     assert_eq!(out.stdout, "3:AB:C:D:E:F:GH");
 }
 
+/// Verifies eval-declared method parameter type hints are enforced through the bridge.
+#[test]
+fn test_eval_declared_method_parameter_type_hints() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalTypedReadable {}
+class EvalTypedDep implements EvalTypedReadable {}
+class EvalTypedMethodBox {
+    public function read(EvalTypedReadable $dep, int ...$items) {
+        echo get_class($dep) . ":";
+        return $items[0] + $items[1];
+    }
+}
+$dep = new EvalTypedDep();
+$box = new EvalTypedMethodBox();
+echo $box->read($dep, "3", 4);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "EvalTypedDep:7");
+}
+
 /// Verifies eval dynamic static callables dispatch eval-declared static methods.
 #[test]
 fn test_eval_declared_static_method_dynamic_callables() {

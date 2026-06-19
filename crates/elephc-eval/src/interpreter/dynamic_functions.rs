@@ -148,9 +148,11 @@ pub(in crate::interpreter) fn bind_evaluated_function_args(
 /// Binds evaluated method arguments and fills omitted parameters from defaults.
 pub(in crate::interpreter) fn bind_evaluated_method_args(
     params: &[String],
+    parameter_types: &[Option<EvalParameterType>],
     parameter_defaults: &[Option<EvalExpr>],
     parameter_is_variadic: &[bool],
     evaluated_args: Vec<EvaluatedCallArg>,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let mut bound_args = vec![None; params.len()];
@@ -178,20 +180,24 @@ pub(in crate::interpreter) fn bind_evaluated_method_args(
         if let Some(name) = arg.name {
             bind_dynamic_named_method_arg(
                 params,
+                parameter_types,
                 variadic_index,
                 &mut bound_args,
                 &name,
                 arg.value,
                 &mut variadic_named_args,
+                context,
                 values,
             )?;
         } else {
             bind_dynamic_positional_method_arg(
                 &mut bound_args,
+                parameter_types,
                 variadic_index,
                 &mut next_positional,
                 &mut next_variadic_index,
                 arg.value,
+                context,
                 values,
             )?;
         }
@@ -209,6 +215,10 @@ pub(in crate::interpreter) fn bind_evaluated_method_args(
                 return Err(EvalStatus::RuntimeFatal);
             };
             *value = Some(eval_method_parameter_default(default, values)?);
+        }
+        if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
+            let typed = eval_method_parameter_value(param_type, value.unwrap(), context, values)?;
+            *value = Some(typed);
         }
     }
 
@@ -252,10 +262,12 @@ fn evaluated_args_contain_named_variadic_values(
 /// Binds one positional method argument to a fixed parameter or variadic array.
 fn bind_dynamic_positional_method_arg(
     bound_args: &mut [Option<RuntimeCellHandle>],
+    parameter_types: &[Option<EvalParameterType>],
     variadic_index: Option<usize>,
     next_positional: &mut usize,
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if variadic_index.is_some_and(|index| *next_positional >= index) {
@@ -263,6 +275,13 @@ fn bind_dynamic_positional_method_arg(
         *next_variadic_index = next_variadic_index
             .checked_add(1)
             .ok_or(EvalStatus::RuntimeFatal)?;
+        let value = eval_variadic_method_parameter_value(
+            parameter_types,
+            variadic_index,
+            value,
+            context,
+            values,
+        )?;
         return bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, values);
     }
     bind_dynamic_positional_arg(bound_args, next_positional, value)
@@ -271,11 +290,13 @@ fn bind_dynamic_positional_method_arg(
 /// Binds one named method argument to a fixed parameter or variadic array.
 fn bind_dynamic_named_method_arg(
     params: &[String],
+    parameter_types: &[Option<EvalParameterType>],
     variadic_index: Option<usize>,
     bound_args: &mut [Option<RuntimeCellHandle>],
     name: &str,
     value: RuntimeCellHandle,
     variadic_named_args: &mut std::collections::HashSet<String>,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let Some(param_index) = regular_method_param_index(params, variadic_index, name) {
@@ -289,7 +310,30 @@ fn bind_dynamic_named_method_arg(
         return Err(EvalStatus::RuntimeFatal);
     }
     let key = values.string(name)?;
+    let value = eval_variadic_method_parameter_value(
+        parameter_types,
+        variadic_index,
+        value,
+        context,
+        values,
+    )?;
     bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, values)
+}
+
+/// Applies a variadic parameter type to one captured argument value.
+fn eval_variadic_method_parameter_value(
+    parameter_types: &[Option<EvalParameterType>],
+    variadic_index: Option<usize>,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(param_type) =
+        variadic_index.and_then(|index| parameter_types.get(index).and_then(Option::as_ref))
+    else {
+        return Ok(value);
+    };
+    eval_method_parameter_value(param_type, value, context, values)
 }
 
 /// Returns the matching non-variadic parameter index for one PHP named argument.
@@ -316,6 +360,168 @@ fn bind_dynamic_variadic_arg(
     let array = bound_args[index].ok_or(EvalStatus::RuntimeFatal)?;
     bound_args[index] = Some(values.array_set(array, key, value)?);
     Ok(())
+}
+
+/// Applies one eval method parameter type to a bound runtime value.
+fn eval_method_parameter_value(
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if eval_method_parameter_type_accepts_exact(param_type, value, context, values)? {
+        return Ok(value);
+    }
+    for variant in param_type.variants() {
+        if let Some(coerced) = eval_method_parameter_scalar_coercion(variant, value, values)? {
+            return Ok(coerced);
+        }
+    }
+    Err(EvalStatus::RuntimeFatal)
+}
+
+/// Returns whether a value satisfies one eval parameter type without scalar coercion.
+fn eval_method_parameter_type_accepts_exact(
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    if tag == EVAL_TAG_NULL && param_type.allows_null() {
+        return Ok(true);
+    }
+    for variant in param_type.variants() {
+        if eval_method_parameter_variant_accepts_exact(variant, value, tag, context, values)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Returns whether a value exactly satisfies one non-null eval parameter type atom.
+fn eval_method_parameter_variant_accepts_exact(
+    variant: &EvalParameterTypeVariant,
+    value: RuntimeCellHandle,
+    tag: u64,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    match variant {
+        EvalParameterTypeVariant::Array => Ok(matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)),
+        EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
+        EvalParameterTypeVariant::Callable => Ok(matches!(
+            tag,
+            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT
+        )),
+        EvalParameterTypeVariant::Class(class_name) => {
+            eval_method_parameter_class_accepts(value, tag, class_name, context, values)
+        }
+        EvalParameterTypeVariant::Float => Ok(tag == EVAL_TAG_FLOAT),
+        EvalParameterTypeVariant::Int => Ok(tag == EVAL_TAG_INT),
+        EvalParameterTypeVariant::Iterable => {
+            if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+                return Ok(true);
+            }
+            if eval_method_parameter_class_accepts(value, tag, "Traversable", context, values)? {
+                return Ok(true);
+            }
+            eval_method_parameter_class_accepts(value, tag, "Iterator", context, values)
+        }
+        EvalParameterTypeVariant::Mixed => Ok(true),
+        EvalParameterTypeVariant::Object => Ok(tag == EVAL_TAG_OBJECT),
+        EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
+    }
+}
+
+/// Returns whether an object value satisfies one class/interface parameter target.
+fn eval_method_parameter_class_accepts(
+    value: RuntimeCellHandle,
+    tag: u64,
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if tag != EVAL_TAG_OBJECT {
+        return Ok(false);
+    }
+    let target = eval_method_parameter_runtime_class_name(class_name, context)?;
+    let identity = values.object_identity(value)?;
+    if let Some(class) = context.dynamic_object_class(identity) {
+        return Ok(context.class_is_a(class.name(), &target, false));
+    }
+    values.object_is_a(value, &target, false)
+}
+
+/// Resolves late-bound class keywords inside eval method parameter type checks.
+fn eval_method_parameter_runtime_class_name(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<String, EvalStatus> {
+    match class_name.to_ascii_lowercase().as_str() {
+        "self" | "static" => context
+            .current_class_scope()
+            .map(str::to_string)
+            .ok_or(EvalStatus::RuntimeFatal),
+        "parent" => {
+            let current = context
+                .current_class_scope()
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            context
+                .class(current)
+                .and_then(EvalClass::parent)
+                .map(str::to_string)
+                .ok_or(EvalStatus::RuntimeFatal)
+        }
+        _ => Ok(context
+            .resolve_class_name(class_name)
+            .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string())),
+    }
+}
+
+/// Applies PHP weak-mode scalar coercion for supported scalar parameter types.
+fn eval_method_parameter_scalar_coercion(
+    variant: &EvalParameterTypeVariant,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    match variant {
+        EvalParameterTypeVariant::Bool if eval_method_scalar_coercible_tag(tag) => {
+            values.cast_bool(value).map(Some)
+        }
+        EvalParameterTypeVariant::Float if eval_method_numeric_coercible_value(value, tag, values)? => {
+            values.cast_float(value).map(Some)
+        }
+        EvalParameterTypeVariant::Int if eval_method_numeric_coercible_value(value, tag, values)? => {
+            values.cast_int(value).map(Some)
+        }
+        EvalParameterTypeVariant::String if eval_method_scalar_coercible_tag(tag) => {
+            values.cast_string(value).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Returns whether a runtime tag can be weakly coerced to string/bool parameters.
+fn eval_method_scalar_coercible_tag(tag: u64) -> bool {
+    matches!(
+        tag,
+        EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_STRING | EVAL_TAG_BOOL
+    )
+}
+
+/// Returns whether a runtime value can be weakly coerced to a numeric parameter.
+fn eval_method_numeric_coercible_value(
+    value: RuntimeCellHandle,
+    tag: u64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    match tag {
+        EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL => Ok(true),
+        EVAL_TAG_STRING => Ok(eval_is_numeric_string(&values.string_bytes(value)?)),
+        _ => Ok(false),
+    }
 }
 
 /// Materializes a supported eval method parameter default expression.

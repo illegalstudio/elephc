@@ -14,8 +14,9 @@ use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalAttribute, EvalAttributeArg, EvalCatch, EvalClass, EvalClassConstant, EvalClassMethod,
     EvalClassProperty, EvalConst, EvalEnum, EvalEnumBackingType, EvalEnumCase, EvalExpr,
-    EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalStmt, EvalSwitchCase, EvalTrait,
-    EvalTraitAdaptation, EvalUnaryOp, EvalVisibility,
+    EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType,
+    EvalParameterTypeVariant, EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation,
+    EvalUnaryOp, EvalVisibility,
 };
 use crate::lexer::TokenKind;
 
@@ -753,7 +754,7 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let (params, parameter_has_types, parameter_defaults, parameter_is_variadic) =
+        let (params, parameter_types, parameter_defaults, parameter_is_variadic) =
             self.parse_method_params()?;
         let body = if is_abstract {
             self.expect_semicolon()?;
@@ -770,7 +771,7 @@ impl Parser {
             params,
             body,
         )
-        .with_parameter_type_flags(parameter_has_types)
+        .with_parameter_types(parameter_types)
         .with_parameter_defaults(parameter_defaults)
         .with_parameter_variadic_flags(parameter_is_variadic))
     }
@@ -1240,11 +1241,11 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let (params, parameter_has_types, parameter_defaults, parameter_is_variadic) =
+        let (params, parameter_types, parameter_defaults, parameter_is_variadic) =
             self.parse_method_params()?;
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)
-            .with_parameter_type_flags(parameter_has_types)
+            .with_parameter_types(parameter_types)
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_variadic_flags(parameter_is_variadic))
     }
@@ -1660,27 +1661,35 @@ impl Parser {
     /// Parses a method parameter list and records type/default metadata.
     pub(super) fn parse_method_params(
         &mut self,
-    ) -> Result<(Vec<String>, Vec<bool>, Vec<Option<EvalExpr>>, Vec<bool>), EvalParseError> {
+    ) -> Result<
+        (
+            Vec<String>,
+            Vec<Option<EvalParameterType>>,
+            Vec<Option<EvalExpr>>,
+            Vec<bool>,
+        ),
+        EvalParseError,
+    > {
         let mut params = Vec::new();
-        let mut parameter_has_types = Vec::new();
+        let mut parameter_types = Vec::new();
         let mut parameter_defaults = Vec::new();
         let mut parameter_is_variadic = Vec::new();
         if self.consume(TokenKind::RParen) {
             return Ok((
                 params,
-                parameter_has_types,
+                parameter_types,
                 parameter_defaults,
                 parameter_is_variadic,
             ));
         }
         loop {
-            let has_type = self.parse_optional_parameter_type()?;
+            let param_type = self.parse_optional_parameter_type()?;
             let is_variadic = self.consume(TokenKind::Ellipsis);
             let TokenKind::DollarIdent(name) = self.current() else {
                 return Err(EvalParseError::ExpectedVariable);
             };
             params.push(name.clone());
-            parameter_has_types.push(has_type);
+            parameter_types.push(param_type);
             parameter_is_variadic.push(is_variadic);
             self.advance();
             let default = if self.consume(TokenKind::Equal) {
@@ -1709,43 +1718,88 @@ impl Parser {
         self.expect(TokenKind::RParen)?;
         Ok((
             params,
-            parameter_has_types,
+            parameter_types,
             parameter_defaults,
             parameter_is_variadic,
         ))
     }
 
-    /// Consumes a supported method parameter type and reports whether one existed.
-    fn parse_optional_parameter_type(&mut self) -> Result<bool, EvalParseError> {
+    /// Consumes a supported method parameter type and returns retained metadata.
+    fn parse_optional_parameter_type(
+        &mut self,
+    ) -> Result<Option<EvalParameterType>, EvalParseError> {
         if matches!(
             self.current(),
             TokenKind::DollarIdent(_) | TokenKind::Ellipsis
         ) {
-            return Ok(false);
+            return Ok(None);
         }
         let nullable_shorthand = self.consume(TokenKind::Question);
         if nullable_shorthand && matches!(self.current(), TokenKind::DollarIdent(_)) {
             return Err(EvalParseError::UnexpectedToken);
         }
-        self.parse_parameter_type_name()?;
+        let first = self.parse_parameter_type_name()?;
+        let mut variants = Vec::new();
+        let mut allows_null = nullable_shorthand || matches!(first, None);
+        if let Some(first) = first {
+            variants.push(first);
+        }
         if nullable_shorthand && matches!(self.current(), TokenKind::Pipe) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         while self.consume(TokenKind::Pipe) {
-            self.parse_parameter_type_name()?;
+            match self.parse_parameter_type_name()? {
+                Some(variant) => variants.push(variant),
+                None => allows_null = true,
+            }
         }
-        Ok(true)
+        Ok(Some(EvalParameterType::new(variants, allows_null)))
     }
 
     /// Consumes one simple qualified method parameter type name.
-    fn parse_parameter_type_name(&mut self) -> Result<(), EvalParseError> {
+    fn parse_parameter_type_name(
+        &mut self,
+    ) -> Result<Option<EvalParameterTypeVariant>, EvalParseError> {
         match self.current() {
             TokenKind::Ident(_) | TokenKind::Backslash => {
-                let _ = self.parse_qualified_name()?;
-                Ok(())
+                let name = self.parse_qualified_name()?;
+                self.parameter_type_from_name(name)
             }
             _ => Err(EvalParseError::UnexpectedToken),
         }
+    }
+
+    /// Converts one parsed PHP parameter type name to retained eval metadata.
+    fn parameter_type_from_name(
+        &self,
+        name: ParsedQualifiedName,
+    ) -> Result<Option<EvalParameterTypeVariant>, EvalParseError> {
+        if !name.absolute {
+            let lower = name.name.to_ascii_lowercase();
+            let builtin = match lower.as_str() {
+                "array" => Some(EvalParameterTypeVariant::Array),
+                "bool" => Some(EvalParameterTypeVariant::Bool),
+                "callable" => Some(EvalParameterTypeVariant::Callable),
+                "float" => Some(EvalParameterTypeVariant::Float),
+                "int" => Some(EvalParameterTypeVariant::Int),
+                "iterable" => Some(EvalParameterTypeVariant::Iterable),
+                "mixed" => Some(EvalParameterTypeVariant::Mixed),
+                "null" => return Ok(None),
+                "object" => Some(EvalParameterTypeVariant::Object),
+                "string" => Some(EvalParameterTypeVariant::String),
+                "void" | "never" => return Err(EvalParseError::UnsupportedConstruct),
+                "self" | "parent" | "static" => {
+                    Some(EvalParameterTypeVariant::Class(lower.to_string()))
+                }
+                _ => None,
+            };
+            if let Some(builtin) = builtin {
+                return Ok(Some(builtin));
+            }
+        }
+        Ok(Some(EvalParameterTypeVariant::Class(
+            self.resolve_class_name(name),
+        )))
     }
 
     /// Parses the optional first clause of a `for` loop.
