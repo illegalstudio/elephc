@@ -1270,6 +1270,59 @@ pub(super) fn lower_dynamic_object_new_mixed(
     Ok(())
 }
 
+/// Lowers dynamic allocation that intentionally skips PHP constructor dispatch.
+pub(super) fn lower_dynamic_object_new_without_constructor_mixed(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let class_name_value = expect_operand(inst, 0)?;
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(
+            "dynamic_object_new_without_constructor_mixed expects only a class operand",
+        ));
+    }
+    let result = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module(
+            "dynamic_object_new_without_constructor_mixed missing result value",
+        )
+    })?;
+    let done_label = ctx.next_label("dynamic_new_no_ctor_mixed_done");
+    let non_string_label = ctx.next_label("dynamic_new_no_ctor_mixed_non_string");
+    if !emit_generic_dynamic_new_class_string(ctx, class_name_value, &non_string_label)? {
+        emit_dynamic_new_invalid_class_name_fatal(ctx);
+        return Ok(());
+    }
+    abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+
+    let fallback_label = ctx.next_label("dynamic_new_no_ctor_mixed_fallback");
+    let candidates = dynamic_new_without_constructor_mixed_candidates(ctx, inst)?;
+    let case_labels = candidates
+        .iter()
+        .map(|candidate| {
+            let label = ctx.next_label("dynamic_new_no_ctor_mixed_case");
+            emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, &candidate.class_name, &label);
+            label
+        })
+        .collect::<Vec<_>>();
+    abi::emit_jump(ctx.emitter, &fallback_label);
+
+    for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
+        ctx.emitter.label(label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        emit_dynamic_new_without_constructor_mixed_candidate(ctx, candidate, result)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&fallback_label);
+    emit_dynamic_new_class_not_found_fatal(ctx);
+
+    ctx.emitter.label(&non_string_label);
+    emit_dynamic_new_invalid_class_name_fatal(ctx);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Materializes the dynamic class name as a string result pair, branching for non-string Mixed.
 fn emit_generic_dynamic_new_class_string(
     ctx: &mut FunctionContext<'_>,
@@ -1320,6 +1373,27 @@ fn dynamic_new_mixed_candidates(
         }
         if let Some(candidate) =
             dynamic_new_candidate(ctx, class_name, class_info, arg_count, inst)?
+        {
+            candidates.push(candidate);
+        }
+    }
+    Ok(candidates)
+}
+
+/// Returns AOT candidates that can be allocated without constructor dispatch.
+fn dynamic_new_without_constructor_mixed_candidates(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<Vec<DynamicNewCandidate>> {
+    let mut candidates = Vec::new();
+    let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    for (class_name, class_info) in sorted_classes {
+        if !is_dynamic_new_mixed_aot_candidate(class_name) {
+            continue;
+        }
+        if let Some(candidate) =
+            dynamic_new_without_constructor_candidate(ctx, class_name, class_info, inst)?
         {
             candidates.push(candidate);
         }
@@ -1536,6 +1610,32 @@ fn emit_dynamic_new_mixed_candidate(
             constructor_args,
             dummy_receiver_operand,
         )?;
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(candidate.class_name.clone()));
+    ctx.store_result_value(result)
+}
+
+/// Allocates one constructorless dynamic-new candidate and boxes it as Mixed.
+fn emit_dynamic_new_without_constructor_mixed_candidate(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &DynamicNewCandidate,
+    result: ValueId,
+) -> Result<()> {
+    emit_object_allocation(
+        ctx,
+        candidate.class_id,
+        candidate.property_count,
+        candidate.allow_dynamic_properties,
+        &candidate.uninitialized_marker_offsets,
+    )?;
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    let object_base_reg = abi::secondary_scratch_reg(ctx.emitter);
+    for default in &candidate.property_defaults {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, object_base_reg, 0);
+        emit_property_default(ctx, object_base_reg, default)?;
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -1788,6 +1888,37 @@ fn dynamic_new_candidate(
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
         property_defaults,
         constructor_impl,
+    }))
+}
+
+/// Builds a dynamic-new candidate that deliberately omits constructor invocation.
+fn dynamic_new_without_constructor_candidate(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    class_info: &ClassInfo,
+    inst: &Instruction,
+) -> Result<Option<DynamicNewCandidate>> {
+    if class_info.is_abstract || ctx.module.enum_infos.contains_key(class_name) {
+        return Ok(None);
+    }
+    if class_name != "stdClass" && known_dynamic_new_builtin_class_names().contains(&class_name) {
+        return Ok(None);
+    }
+    if class_name == "SplFixedArray" || is_spl_doubly_linked_list_family(class_name) {
+        return Ok(None);
+    }
+    if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
+        return Ok(None);
+    }
+    let property_defaults = collect_property_defaults(class_info, inst)?;
+    Ok(Some(DynamicNewCandidate {
+        class_name: class_name.to_string(),
+        class_id: class_info.class_id,
+        property_count: class_info.properties.len(),
+        allow_dynamic_properties: class_info.allow_dynamic_properties,
+        uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
+        property_defaults,
+        constructor_impl: None,
     }))
 }
 

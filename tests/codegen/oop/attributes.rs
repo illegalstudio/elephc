@@ -2763,6 +2763,37 @@ echo $second->label();
     assert_eq!(out, "AB:CD");
 }
 
+/// Verifies that `ReflectionClass::newInstanceWithoutConstructor()` allocates
+/// reflected classes while preserving property defaults and skipping `__construct()`.
+#[test]
+fn test_reflection_class_new_instance_without_constructor_skips_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectNoCtorTarget {
+    public string $label = "default";
+    private string $secret = "hidden";
+    public function __construct() {
+        $this->label = "ctor";
+    }
+    public function label(): string {
+        return $this->label;
+    }
+    public function secret(): string {
+        return $this->secret;
+    }
+}
+$ref = new ReflectionClass(ReflectNoCtorTarget::class);
+$without = $ref->newInstanceWithoutConstructor();
+echo $without->label() . ":" . $without->secret() . ":";
+$with = new ReflectNoCtorTarget();
+echo $with->label() . ":";
+$inline = (new ReflectionClass("reflectnoctortarget"))->newInstanceWithoutConstructor();
+echo $inline->label();
+"#,
+    );
+    assert_eq!(out, "default:hidden:ctor:default");
+}
+
 /// Verifies inline `ReflectionClass::newInstance()` forwards named constructor
 /// arguments through the reflected constructor signature.
 #[test]

@@ -967,7 +967,10 @@ fn referenced_dynamic_object_new_class_names(module: &Module) -> HashSet<String>
         .chain(module.runtime_callable_invokers.iter())
     {
         for inst in &function.instructions {
-            if matches!(inst.op, Op::DynamicObjectNewMixed) {
+            if matches!(
+                inst.op,
+                Op::DynamicObjectNewMixed | Op::DynamicObjectNewWithoutConstructorMixed
+            ) {
                 names.extend(
                     module
                         .class_infos

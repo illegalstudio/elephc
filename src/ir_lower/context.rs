@@ -886,6 +886,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ObjectCloneShallow
                     | Op::DynamicObjectNew
                     | Op::DynamicObjectNewMixed
+                    | Op::DynamicObjectNewWithoutConstructorMixed
                     | Op::ClosureNew
                     | Op::FirstClassCallableNew
                     | Op::CallableArrayNew

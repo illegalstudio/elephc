@@ -207,6 +207,7 @@ fn expr_statement_result_can_own_storage(
                 | Op::ObjectNew
                 | Op::DynamicObjectNew
                 | Op::DynamicObjectNewMixed
+                | Op::DynamicObjectNewWithoutConstructorMixed
                 | Op::ClosureNew
                 | Op::FirstClassCallableNew
                 | Op::CallableArrayNew
