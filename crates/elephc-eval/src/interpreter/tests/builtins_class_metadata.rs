@@ -375,6 +375,39 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::isInstance reports eval object class/interface metadata.
+#[test]
+fn execute_program_reflection_class_is_instance_predicate() {
+    let program = parse_fragment(
+        br#"interface EvalInstanceIface {}
+class EvalInstanceBase {}
+class EvalInstanceChild extends EvalInstanceBase implements EvalInstanceIface {}
+trait EvalInstanceTrait {}
+enum EvalInstanceEnum implements EvalInstanceIface { case Ready; }
+$base = new ReflectionClass("EvalInstanceBase");
+$child = new ReflectionClass("EvalInstanceChild");
+$iface = new ReflectionClass("EvalInstanceIface");
+$trait = new ReflectionClass("EvalInstanceTrait");
+$enum = new ReflectionClass("EvalInstanceEnum");
+$childObj = new EvalInstanceChild();
+echo $base->isInstance($childObj) ? "B" : "b";
+echo $child->isInstance(new EvalInstanceBase()) ? "C" : "c";
+echo $iface->isInstance($childObj) ? "I" : "i";
+echo $trait->isInstance($childObj) ? "T" : "t";
+echo $enum->isInstance(EvalInstanceEnum::Ready) ? "E" : "e";
+echo $iface->isInstance(EvalInstanceEnum::Ready) ? "N" : "n";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "BcItEN");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes eval class-like final and abstract flags.
 #[test]
 fn execute_program_reflects_eval_class_modifier_flags() {
