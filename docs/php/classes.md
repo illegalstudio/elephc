@@ -567,8 +567,8 @@ class Node {
 
 trait Fluent {
     // In a trait, `static` resolves to the class that uses the trait.
-    public function copy(): static {
-        return clone $this;
+    public function self(): static {
+        return $this;
     }
 }
 ```
