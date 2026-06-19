@@ -437,9 +437,14 @@ fn eval_reflection_class_constant_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (declaring_class_name, attributes) =
+    let (declaring_class_name, attributes, is_final) =
         eval_reflection_class_constant_metadata(reflected_name, constant_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
+    let flags = if is_final {
+        EVAL_REFLECTION_CLASS_FLAG_FINAL
+    } else {
+        0
+    };
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
         constant_name,
@@ -450,7 +455,7 @@ fn eval_reflection_class_constant_object_result(
         &[],
         Some(&declaring_class_name),
         &[],
-        0,
+        flags,
         0,
         context,
         values,
@@ -624,9 +629,14 @@ fn eval_reflection_class_constant_new(
         return Ok(None);
     }
     let constant_name = eval_reflection_string_arg(args[1], values)?;
-    let (declaring_class_name, attributes) =
+    let (declaring_class_name, attributes, is_final) =
         eval_reflection_class_constant_metadata(&class_name, &constant_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
+    let flags = if is_final {
+        EVAL_REFLECTION_CLASS_FLAG_FINAL
+    } else {
+        0
+    };
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
         &constant_name,
@@ -637,7 +647,7 @@ fn eval_reflection_class_constant_new(
         &[],
         Some(&declaring_class_name),
         &[],
-        0,
+        flags,
         0,
         context,
         values,
@@ -1332,20 +1342,26 @@ fn eval_reflection_class_modifiers(
     modifiers
 }
 
-/// Returns declaring class and attributes attached to an eval class constant or enum case.
+/// Returns declaring class, attributes, and finality for an eval class constant or enum case.
 fn eval_reflection_class_constant_metadata(
     class_name: &str,
     constant_name: &str,
     context: &ElephcEvalContext,
-) -> Option<(String, Vec<EvalAttribute>)> {
+) -> Option<(String, Vec<EvalAttribute>, bool)> {
     if let Some(enum_decl) = context.enum_decl(class_name) {
         if let Some(case) = enum_decl.case(constant_name) {
-            return Some((enum_decl.name().to_string(), case.attributes().to_vec()));
+            return Some((enum_decl.name().to_string(), case.attributes().to_vec(), false));
         }
     }
-    context
-        .class_constant(class_name, constant_name)
-        .map(|(declaring_class, constant)| (declaring_class, constant.attributes().to_vec()))
+    context.class_constant(class_name, constant_name).map(
+        |(declaring_class, constant)| {
+            (
+                declaring_class,
+                constant.attributes().to_vec(),
+                constant.is_final(),
+            )
+        },
+    )
 }
 
 /// Returns true when a name resolves to an eval-declared class-like symbol.

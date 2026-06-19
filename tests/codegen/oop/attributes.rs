@@ -2359,26 +2359,33 @@ class Marker {
 }
 class ConstTarget {
     #[Marker("const")]
-    public const ANSWER = 42;
+    final public const ANSWER = 42;
 }
 enum CaseTarget: string {
     #[Marker("case")]
     case Ready = "ready";
+    final public const LEVEL = 7;
 }
 $const = new ReflectionClassConstant(ConstTarget::class, "ANSWER");
 $constAttrs = $const->getAttributes();
 echo $const->getName() . "/";
+echo ($const->isFinal() ? "final" : "open") . "/";
 echo count($constAttrs) . "/";
 echo $constAttrs[0]->getName() . "/";
 echo $constAttrs[0]->getArguments()[0] . "/";
 echo $constAttrs[0]->newInstance()->label() . "\n";
+$listed = (new ReflectionClass(ConstTarget::class))->getReflectionConstants()[0];
+echo ($listed->isFinal() ? "listed-final" : "listed-open") . "\n";
 $case = new ReflectionClassConstant(CaseTarget::class, "Ready");
 $caseAttrs = $case->getAttributes();
 echo $case->getName() . "/";
+echo ($case->isFinal() ? "final" : "open") . "/";
 echo count($caseAttrs) . "/";
 echo $caseAttrs[0]->getName() . "/";
 echo $caseAttrs[0]->getArguments()[0] . "/";
 echo $caseAttrs[0]->newInstance()->label() . "\n";
+$level = new ReflectionClassConstant(CaseTarget::class, "LEVEL");
+echo ($level->isFinal() ? "level-final" : "level-open") . "\n";
 $unit = new ReflectionEnumUnitCase(CaseTarget::class, "Ready");
 $unitAttrs = $unit->getAttributes();
 echo $unit->getName() . "/";
@@ -2391,7 +2398,7 @@ echo $backedAttrs[0]->newInstance()->label();
     );
     assert_eq!(
         out,
-        "ANSWER/1/Marker/const/const\nReady/1/Marker/case/case\nReady/case\nReady/case"
+        "ANSWER/final/1/Marker/const/const\nlisted-final\nReady/open/1/Marker/case/case\nlevel-final\nReady/case\nReady/case"
     );
 }
 

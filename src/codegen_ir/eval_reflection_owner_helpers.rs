@@ -759,6 +759,7 @@ fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &Reflecti
         layout.in_namespace_hi,
     )
     else {
+        emit_set_owner_low_bit_final_property_aarch64(emitter, layout);
         return;
     };
     let scan_loop_label = "__elephc_eval_reflection_owner_name_scan_loop";
@@ -1118,6 +1119,21 @@ fn emit_set_owner_member_flags_property_aarch64(
     abi::emit_store_zero_to_address(emitter, "x9", is_abstract_hi);
 }
 
+/// Stores incoming bit-zero finality for ARM64 owners without full member flags.
+fn emit_set_owner_low_bit_final_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let (Some(is_final_lo), Some(is_final_hi)) = (layout.is_final_lo, layout.is_final_hi) else {
+        return;
+    };
+    emitter.instruction("ldr x11, [sp, #48]");                                  // reload Reflection owner predicate flags
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
+    emitter.instruction("and x10, x11, #1");                                    // extract bit-zero finality as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_final_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_final_hi);
+}
+
 /// Stores incoming x86_64 ReflectionMethod/ReflectionProperty boolean flags.
 fn emit_set_owner_member_flags_property_x86_64(
     emitter: &mut Emitter,
@@ -1143,6 +1159,7 @@ fn emit_set_owner_member_flags_property_x86_64(
         layout.is_private_hi,
     )
     else {
+        emit_set_owner_low_bit_final_property_x86_64(emitter, layout);
         return;
     };
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload Reflection member predicate flags
@@ -1193,6 +1210,22 @@ fn emit_set_owner_member_flags_property_x86_64(
     emitter.instruction("and rax, 1");                                          // extract the abstract-method flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_abstract_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_abstract_hi);
+}
+
+/// Stores incoming bit-zero finality for x86_64 owners without full member flags.
+fn emit_set_owner_low_bit_final_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let (Some(is_final_lo), Some(is_final_hi)) = (layout.is_final_lo, layout.is_final_hi) else {
+        return;
+    };
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload Reflection owner predicate flags
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting bit-zero finality
+    emitter.instruction("and rax, 1");                                          // extract bit-zero finality as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_final_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_final_hi);
 }
 
 /// Stores incoming ARM64 ReflectionMethod required-parameter count.

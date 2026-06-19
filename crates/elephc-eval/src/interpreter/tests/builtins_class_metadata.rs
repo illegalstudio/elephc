@@ -1084,7 +1084,7 @@ fn execute_program_reflects_eval_constant_and_enum_case_attributes() {
 }
 class EvalConstReflectTarget {
     #[EvalConstMarker("const")]
-    public const ANSWER = 42;
+    final public const ANSWER = 42;
 }
 enum EvalCaseReflectTarget: string {
     #[EvalConstMarker("case")]
@@ -1092,6 +1092,7 @@ enum EvalCaseReflectTarget: string {
 }
 $const_attrs = (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getAttributes();
 echo count($const_attrs); echo ":"; echo (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->getName(); echo ":";
+echo (new ReflectionClassConstant("EvalConstReflectTarget", "ANSWER"))->isFinal() ? "F" : "f"; echo ":";
 echo $const_attrs[0]->getName(); echo ":"; echo $const_attrs[0]->getArguments()[0]; echo ":";
 echo $const_attrs[0]->newInstance()->label(); echo ":";
 $case_attrs = (new ReflectionClassConstant("EvalCaseReflectTarget", "Ready"))->getAttributes();
@@ -1113,7 +1114,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "1:ANSWER:EvalConstMarker:const:const:1:Ready:EvalConstMarker:case:Ready:case:Ready:case"
+        "1:ANSWER:F:EvalConstMarker:const:const:1:Ready:EvalConstMarker:case:Ready:case:Ready:case"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

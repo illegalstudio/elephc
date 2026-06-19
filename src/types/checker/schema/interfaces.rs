@@ -318,6 +318,7 @@ pub(crate) fn build_interface_info_recursive(
     }
 
     let mut iface_constants: HashMap<String, crate::parser::ast::Expr> = HashMap::new();
+    let mut final_constants = HashSet::new();
     for parent_name in &interface.extends {
         if let Some(parent_info) = checker.interfaces.get(parent_name) {
             for (k, v) in &parent_info.constants {
@@ -325,10 +326,30 @@ pub(crate) fn build_interface_info_recursive(
                     .entry(k.clone())
                     .or_insert_with(|| v.clone());
             }
+            final_constants.extend(parent_info.final_constants.iter().cloned());
         }
     }
     for c in &interface.constants {
+        for parent_name in &interface.extends {
+            let Some(parent_info) = checker.interfaces.get(parent_name) else {
+                continue;
+            };
+            if parent_info.final_constants.contains(&c.name) {
+                return Err(CompileError::new(
+                    c.span,
+                    &format!(
+                        "{}::{} cannot override final interface constant",
+                        interface.name, c.name
+                    ),
+                ));
+            }
+        }
         iface_constants.insert(c.name.clone(), c.value.clone());
+        if c.is_final {
+            final_constants.insert(c.name.clone());
+        } else {
+            final_constants.remove(&c.name);
+        }
     }
     checker.interfaces.insert(
         interface.name.clone(),
@@ -345,6 +366,7 @@ pub(crate) fn build_interface_info_recursive(
             static_method_declaring_interfaces,
             static_method_order,
             constants: iface_constants,
+            final_constants,
         },
     );
     *next_interface_id += 1;

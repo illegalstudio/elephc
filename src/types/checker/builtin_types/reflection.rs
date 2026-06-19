@@ -1555,6 +1555,18 @@ fn add_reflection_member_flag_methods(
             "__is_readonly",
         ));
     }
+    if class_name == "ReflectionClassConstant" {
+        properties.push(builtin_property(
+            "__is_final",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isFinal",
+            "__is_final",
+        ));
+    }
     if class_name == "ReflectionMethod" {
         for (property, method) in [("__is_final", "isFinal"), ("__is_abstract", "isAbstract")] {
             properties.push(builtin_property(

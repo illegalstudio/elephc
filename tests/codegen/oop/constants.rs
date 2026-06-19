@@ -161,6 +161,76 @@ echo $b->get();
     assert_eq!(out, "100");
 }
 
+/// Verifies final class constants cannot be redeclared by subclasses.
+#[test]
+fn test_final_class_constant_override_fails() {
+    let err = compile_expect_type_error(
+        r#"<?php
+class Base {
+    final public const LIMIT = 1;
+}
+class Child extends Base {
+    public const LIMIT = 2;
+}
+"#,
+    );
+    assert!(err.contains("cannot override final constant"), "{err}");
+}
+
+/// Verifies final interface constants cannot be redeclared by child interfaces or implementors.
+#[test]
+fn test_final_interface_constant_override_fails() {
+    let err = compile_expect_type_error(
+        r#"<?php
+interface Limits {
+    final public const MAX = 100;
+}
+class Bound implements Limits {
+    public const MAX = 200;
+}
+"#,
+    );
+    assert!(
+        err.contains("cannot override final interface constant"),
+        "{err}"
+    );
+}
+
+/// Verifies child interfaces cannot redeclare final parent interface constants.
+#[test]
+fn test_final_parent_interface_constant_override_fails() {
+    let err = compile_expect_type_error(
+        r#"<?php
+interface Limits {
+    final public const MAX = 100;
+}
+interface ChildLimits extends Limits {
+    public const MAX = 200;
+}
+"#,
+    );
+    assert!(
+        err.contains("cannot override final interface constant"),
+        "{err}"
+    );
+}
+
+/// Verifies private class constants cannot be final.
+#[test]
+fn test_final_private_class_constant_fails() {
+    let err = compile_expect_type_error(
+        r#"<?php
+class Hidden {
+    final private const SECRET = 1;
+}
+"#,
+    );
+    assert!(
+        err.contains("Private constant Hidden::SECRET cannot be final"),
+        "{err}"
+    );
+}
+
 /// Verifies class constant with attribute compiles.
 #[test]
 fn test_class_constant_with_attribute_compiles() {

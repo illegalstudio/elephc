@@ -80,6 +80,45 @@ fn execute_program_rejects_duplicate_eval_class_constant() {
         .expect_err("duplicate class constant should fail");
 }
 
+/// Verifies final eval class constants are readable and reject child redeclarations.
+#[test]
+fn execute_program_rejects_overriding_final_eval_class_constant() {
+    let program = parse_fragment(
+        br#"class EvalFinalConstBase {
+    final public const SEED = 1;
+}
+class EvalFinalConstChild extends EvalFinalConstBase {
+    public const SEED = 2;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("overriding final class constant should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies private eval constants cannot be declared final.
+#[test]
+fn execute_program_rejects_final_private_eval_class_constant() {
+    let program = parse_fragment(
+        br#"class EvalFinalPrivateConst {
+    final private const SEED = 1;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("final private class constant should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies class-name literals resolve class-like receiver spelling.
 #[test]
 fn execute_program_reads_eval_class_name_literals() {
@@ -137,6 +176,44 @@ return EvalConstIfaceImpl::BASE + EvalConstIfaceImpl::LOCAL;"#,
 
     assert_eq!(values.output, "2:2:3:");
     assert_eq!(values.get(result), FakeValue::Int(5));
+}
+
+/// Verifies final eval interface constants cannot be redeclared by children or implementors.
+#[test]
+fn execute_program_rejects_overriding_final_eval_interface_constant() {
+    let program = parse_fragment(
+        br#"interface EvalFinalConstIface {
+    final public const SEED = 1;
+}
+interface EvalFinalConstChildIface extends EvalFinalConstIface {
+    public const SEED = 2;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("overriding final interface constant should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let program = parse_fragment(
+        br#"interface EvalFinalImplConstIface {
+    final public const SEED = 1;
+}
+class EvalFinalImplConstBox implements EvalFinalImplConstIface {
+    public const SEED = 2;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("class overriding final interface constant should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
 /// Verifies trait constants are readable directly and from classes using the trait.

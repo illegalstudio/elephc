@@ -69,6 +69,7 @@ pub(crate) fn build_class_info_recursive(
     properties::apply_properties(&mut state, &class, checker)?;
     methods::apply_methods(&mut state, &class, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
+    validate_final_constant_constraints(&class, parent_info.as_ref(), &state, checker)?;
     interfaces::validate_interface_contracts(
         &mut state,
         &class,
@@ -183,6 +184,50 @@ fn validate_parent_constraints(
             crate::span::Span::dummy(),
             &format!("{}: {} extends {}", relation, class.name, parent_name),
         ));
+    }
+    Ok(())
+}
+
+/// Validates PHP final class-constant inheritance constraints for one class.
+fn validate_final_constant_constraints(
+    class: &FlattenedClass,
+    parent_info: Option<&ClassInfo>,
+    state: &ClassBuildState,
+    checker: &Checker,
+) -> Result<(), CompileError> {
+    for constant in &class.constants {
+        if constant.is_final && constant.visibility == crate::parser::ast::Visibility::Private {
+            return Err(CompileError::new(
+                constant.span,
+                &format!(
+                    "Private constant {}::{} cannot be final",
+                    class.name, constant.name
+                ),
+            ));
+        }
+        if parent_info.is_some_and(|parent| parent.final_constants.contains(&constant.name)) {
+            return Err(CompileError::new(
+                constant.span,
+                &format!(
+                    "{}::{} cannot override final constant",
+                    class.name, constant.name
+                ),
+            ));
+        }
+        for interface_name in &state.interfaces {
+            let Some(interface_info) = checker.interfaces.get(interface_name) else {
+                continue;
+            };
+            if interface_info.final_constants.contains(&constant.name) {
+                return Err(CompileError::new(
+                    constant.span,
+                    &format!(
+                        "{}::{} cannot override final interface constant",
+                        class.name, constant.name
+                    ),
+                ));
+            }
+        }
     }
     Ok(())
 }

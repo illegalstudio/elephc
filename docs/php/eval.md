@@ -49,8 +49,8 @@ such a local alias removes the alias without unsetting the global value.
 | Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, and `continue` are supported. |
 | Exceptions | `throw`, `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
 | Functions | Eval fragments can declare functions. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
-| Classes | Eval fragments can declare classes with properties, concrete property get/set hooks, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations, interface implementations, static members, class constants, and class-level attributes. Duplicate eval class-like names are rejected. |
-| Enums | Eval fragments can declare pure and `int` / `string` backed enums with cases, constants, methods, interface implementations, `::cases()`, `::from()`, `::tryFrom()`, `->name`, and backed `->value`. |
+| Classes | Eval fragments can declare classes with properties, concrete property get/set hooks, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations, interface implementations, static members, class/interface/trait constants including `final` constants, and class-level attributes. Duplicate eval class-like names are rejected. |
+| Enums | Eval fragments can declare pure and `int` / `string` backed enums with cases, constants including `final` constants, methods, interface implementations, `::cases()`, `::from()`, `::tryFrom()`, `->name`, and backed `->value`. |
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
 
@@ -135,10 +135,11 @@ Eval-declared classes support inheritance, public/protected/private properties
 and methods, concrete property `get` / `set` hooks, interface property hook
 contract checks, abstract property hook contracts, property-level `readonly`,
 `readonly class`, `__construct()`, abstract classes and methods, final classes,
-methods, and properties, trait composition with `insteadof` conflict resolution and `as`
-aliases/visibility adaptations, interface implementation checks, static
-properties, static methods, static interface method contracts, class constants, interface constants, trait
-constants, class-level attributes, and `ClassName::class` literals. Member
+methods, and properties, trait composition with `insteadof` conflict resolution
+and `as` aliases/visibility adaptations, interface implementation checks,
+static properties, static methods, static interface method contracts, class,
+interface, trait, and enum constants including `final` constants, class-level
+attributes, and `ClassName::class` literals. Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,
 interfaces, traits, and enums are visible through `class_attribute_names()`,
@@ -180,9 +181,9 @@ method and property membership for eval classes, interfaces, traits, and enums;
 method lookup is case-insensitive, while property lookup is case-sensitive.
 `ReflectionClass::hasConstant()`, `getConstant()`, `getConstants()`,
 `getReflectionConstant()`, and `getReflectionConstants()` expose eval-visible
-class constants, interface constants, trait constants, and enum cases.
-Constant lookup is case-sensitive; single-value lookups return `false` when no
-constant or case is visible.
+class constants, interface constants, trait constants, enum constants, and enum
+cases. Constant lookup is case-sensitive; single-value lookups return `false`
+when no constant or case is visible.
 `ReflectionClass::getMethods()` and `ReflectionClass::getProperties()` return
 materialized `ReflectionMethod` and `ReflectionProperty` objects for the same
 visible member metadata, including supported member attributes and predicate
@@ -241,7 +242,8 @@ when the variadic container itself is not rebound, and are reported through
 and enum-case attributes through the same materialized `ReflectionAttribute`
 shape; their `getName()` methods return the reflected constant or case name,
 and `getDeclaringClass()` returns the declaring class or enum as a
-`ReflectionClass`.
+`ReflectionClass`. `ReflectionClassConstant::isFinal()` reports final
+class/interface/trait/enum constants and returns `false` for enum cases.
 Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the

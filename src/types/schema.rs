@@ -134,6 +134,8 @@ pub struct InterfaceInfo {
     pub static_method_order: Vec<String>,
     /// Interface constants (PHP 5.0+). Inherited from parent interfaces.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// Interface constants declared with PHP 8.1+ `final`, including inherited parents.
+    pub final_constants: HashSet<String>,
 }
 
 /// Class metadata for resolved declarations. Tracks inheritance, properties,
@@ -153,6 +155,8 @@ pub struct ClassInfo {
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// Class constants declared with PHP 8.1+ `final`, keyed by constant name.
+    pub final_constants: HashSet<String>,
     /// Names of PHP 8 attributes attached to this class declaration, in
     /// source order. Name resolution stores canonical class-like text without
     /// a synthetic leading backslash, matching `ReflectionAttribute::getName()`.

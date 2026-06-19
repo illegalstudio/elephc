@@ -14,7 +14,7 @@ use super::support::*;
 fn parse_fragment_accepts_class_constant_declarations() {
     let program = parse_fragment(
         br#"class EvalConstBox {
-    public const SEED = 2;
+    final public const SEED = 2;
     protected const LABEL = "box";
 }"#,
     )
@@ -30,7 +30,12 @@ fn parse_fragment_accepts_class_constant_declarations() {
                 Vec::new(),
                 Vec::new(),
                 vec![
-                    EvalClassConstant::new("SEED", EvalExpr::Const(EvalConst::Int(2))),
+                    EvalClassConstant::with_visibility_and_final(
+                        "SEED",
+                        EvalVisibility::Public,
+                        true,
+                        EvalExpr::Const(EvalConst::Int(2)),
+                    ),
                     EvalClassConstant::with_visibility(
                         "LABEL",
                         EvalVisibility::Protected,
@@ -102,7 +107,7 @@ fn parse_fragment_accepts_class_name_fetches() {
 fn parse_fragment_accepts_interface_constant_declarations() {
     let program = parse_fragment(
         br#"interface EvalConstIface {
-    public const SEED = 4;
+    final public const SEED = 4;
     function read();
 }"#,
     )
@@ -112,8 +117,10 @@ fn parse_fragment_accepts_interface_constant_declarations() {
         &[EvalStmt::InterfaceDecl(EvalInterface::with_constants(
             "EvalConstIface",
             Vec::new(),
-            vec![EvalClassConstant::new(
+            vec![EvalClassConstant::with_visibility_and_final(
                 "SEED",
+                EvalVisibility::Public,
+                true,
                 EvalExpr::Const(EvalConst::Int(4)),
             )],
             vec![EvalInterfaceMethod::new("read", Vec::new())],
@@ -126,7 +133,7 @@ fn parse_fragment_accepts_interface_constant_declarations() {
 fn parse_fragment_accepts_trait_constant_declarations() {
     let program = parse_fragment(
         br#"trait EvalConstTrait {
-    public const SEED = 6;
+    final public const SEED = 6;
     public function read() { return self::SEED; }
 }"#,
     )
@@ -135,8 +142,10 @@ fn parse_fragment_accepts_trait_constant_declarations() {
         program.statements(),
         &[EvalStmt::TraitDecl(EvalTrait::with_constants(
             "EvalConstTrait",
-            vec![EvalClassConstant::new(
+            vec![EvalClassConstant::with_visibility_and_final(
                 "SEED",
+                EvalVisibility::Public,
+                true,
                 EvalExpr::Const(EvalConst::Int(6)),
             )],
             Vec::new(),

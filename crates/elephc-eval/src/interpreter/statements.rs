@@ -645,6 +645,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
         }
     }
     validate_eval_declared_constants(interface.constants())?;
+    validate_interface_constant_parent_redeclarations(interface, context)?;
     if context.define_interface(interface.clone()) {
         initialize_eval_declared_constants(
             interface.name(),
@@ -789,6 +790,9 @@ fn append_eval_trait_constants(
 ) -> Result<(), EvalStatus> {
     for constant in trait_decl.constants() {
         if class_constant_names.contains(constant.name()) {
+            if constant.is_final() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
             continue;
         }
         if !trait_constant_names.insert(constant.name().to_string()) {
@@ -976,6 +980,9 @@ fn validate_eval_class_modifiers(
         return Err(EvalStatus::RuntimeFatal);
     }
     validate_eval_declared_constants(class.constants())?;
+    for constant in class.constants() {
+        validate_constant_parent_redeclaration(class, constant, context)?;
+    }
     validate_eval_declared_properties(class)?;
     for property in class.properties() {
         validate_property_parent_redeclaration(class, property, context)?;
@@ -1060,6 +1067,51 @@ fn validate_eval_declared_constants(constants: &[EvalClassConstant]) -> Result<(
     for constant in constants {
         if !names.insert(constant.name().to_string()) {
             return Err(EvalStatus::RuntimeFatal);
+        }
+        if constant.is_final() && constant.visibility() == EvalVisibility::Private {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
+/// Validates interface constants against inherited parent-interface constants.
+fn validate_interface_constant_parent_redeclarations(
+    interface: &EvalInterface,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    for constant in interface.constants() {
+        for parent in interface.parents() {
+            if let Some((_, parent_constant)) = context.interface_constant(parent, constant.name()) {
+                if parent_constant.is_final() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates one constant declaration against inherited eval constant metadata.
+fn validate_constant_parent_redeclaration(
+    class: &EvalClass,
+    constant: &EvalClassConstant,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    if let Some(parent) = class.parent() {
+        if let Some((_, parent_constant)) = context.class_constant(parent, constant.name()) {
+            if parent_constant.visibility() != EvalVisibility::Private && parent_constant.is_final()
+            {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        }
+    }
+    for interface in class.interfaces() {
+        if let Some((_, interface_constant)) = context.interface_constant(interface, constant.name())
+        {
+            if interface_constant.is_final() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
         }
     }
     Ok(())

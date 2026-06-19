@@ -33,7 +33,7 @@ fn parse_fragment_accepts_backed_enum_members() {
     let program = parse_fragment(
         br#"enum EvalColor: string implements EvalLabel {
     case Red = "r";
-    public const PREFIX = "color";
+    final public const PREFIX = "color";
     public function label() { return self::PREFIX . ":" . $this->name; }
 }"#,
     )
@@ -48,8 +48,10 @@ fn parse_fragment_accepts_backed_enum_members() {
                 "Red",
                 Some(EvalExpr::Const(EvalConst::String("r".to_string()))),
             )],
-            vec![EvalClassConstant::new(
+            vec![EvalClassConstant::with_visibility_and_final(
                 "PREFIX",
+                EvalVisibility::Public,
+                true,
                 EvalExpr::Const(EvalConst::String("color".to_string())),
             )],
             vec![EvalClassMethod::new(

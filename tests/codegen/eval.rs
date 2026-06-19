@@ -5619,6 +5619,41 @@ echo EvalConstChild::hidden();');
     assert_eq!(out.stdout, "2:7:9:2:5");
 }
 
+/// Verifies eval-declared final class constants cannot be redeclared.
+#[test]
+fn test_eval_declared_final_class_constant_override_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalFinalConstBase {
+    final public const SEED = 1;
+}
+class EvalFinalConstChild extends EvalFinalConstBase {
+    public const SEED = 2;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval-declared final private class constants are rejected.
+#[test]
+fn test_eval_declared_final_private_class_constant_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalFinalPrivateConst {
+    final private const SEED = 1;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval class-name literals work for class-like receivers.
 #[test]
 fn test_eval_declared_class_name_literals() {
@@ -6213,17 +6248,18 @@ eval('class EvalReflectConstMarker {
 }
 class EvalReflectConstObjectTarget {
     #[EvalReflectConstMarker("const")]
-    public const ANSWER = 42;
+    final public const ANSWER = 42;
 }
 enum EvalReflectConstObjectEnum {
     #[EvalReflectConstMarker("case")]
     case Ready;
-    public const LEVEL = 7;
+    final public const LEVEL = 7;
 }
 $ref = new ReflectionClass("EvalReflectConstObjectTarget");
 $single = $ref->getReflectionConstant("ANSWER");
 $all = $ref->getReflectionConstants();
 echo $single->getName() . ":";
+echo ($single->isFinal() ? "F" : "f") . ":";
 echo count($all) . ":" . $all[0]->getName() . ":";
 echo $single->getAttributes()[0]->newInstance()->label() . ":";
 echo $ref->getReflectionConstant("answer") ? "bad" : "missing";
@@ -6233,7 +6269,8 @@ $case = $enum->getReflectionConstant("Ready");
 $level = $enum->getReflectionConstant("LEVEL");
 echo ":" . count($enumAll) . ":" . $enumAll[0]->getName() . ":" . $enumAll[1]->getName();
 echo ":" . $case->getAttributes()[0]->newInstance()->label() . ":";
-echo count($level->getAttributes());');
+echo count($level->getAttributes()) . ":";
+echo $level->isFinal() ? "F" : "f";');
 "#,
     );
     assert!(
@@ -6243,7 +6280,7 @@ echo count($level->getAttributes());');
     );
     assert_eq!(
         out.stdout,
-        "ANSWER:1:ANSWER:const:missing:2:Ready:LEVEL:case:0"
+        "ANSWER:F:1:ANSWER:const:missing:2:Ready:LEVEL:case:0:F"
     );
 }
 

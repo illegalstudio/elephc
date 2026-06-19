@@ -142,6 +142,12 @@ impl ClassBuildState {
                     ))
                 })
                 .collect::<Result<HashMap<_, _>, CompileError>>()?,
+            final_constants: class
+                .constants
+                .iter()
+                .filter(|constant| constant.is_final)
+                .map(|constant| constant.name.clone())
+                .collect(),
             attribute_names: collect_attribute_names(&class.attributes),
             attribute_args,
             method_attribute_names: self.method_attribute_names,

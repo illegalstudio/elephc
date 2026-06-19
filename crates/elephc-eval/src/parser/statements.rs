@@ -480,11 +480,14 @@ impl Parser {
         }
 
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
-            if is_static || is_abstract || is_final || is_readonly {
+            if is_static || is_abstract || is_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             constants.push(
-                self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?
+                self.parse_class_const_decl(
+                    visibility.unwrap_or(EvalVisibility::Public),
+                    is_final,
+                )?
                     .with_attributes(attributes),
             );
             return Ok(());
@@ -535,6 +538,7 @@ impl Parser {
     pub(super) fn parse_class_const_decl(
         &mut self,
         visibility: EvalVisibility,
+        is_final: bool,
     ) -> Result<EvalClassConstant, EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
@@ -545,7 +549,9 @@ impl Parser {
         self.expect(TokenKind::Equal)?;
         let value = self.parse_expr()?;
         self.expect_semicolon()?;
-        Ok(EvalClassConstant::with_visibility(name, visibility, value))
+        Ok(EvalClassConstant::with_visibility_and_final(
+            name, visibility, is_final, value,
+        ))
     }
 
     /// Parses `use TraitName, OtherTrait;` or an adaptation block inside an eval class body.
@@ -1001,11 +1007,14 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
-            if is_static || is_abstract || is_final || is_readonly {
+            if is_static || is_abstract || is_readonly {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             constants.push(
-                self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?
+                self.parse_class_const_decl(
+                    visibility.unwrap_or(EvalVisibility::Public),
+                    is_final,
+                )?
                     .with_attributes(attributes),
             );
             return Ok(());
@@ -1113,11 +1122,14 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
-            if is_static || is_final {
+            if is_static {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             constants.push(
-                self.parse_class_const_decl(visibility.unwrap_or(EvalVisibility::Public))?
+                self.parse_class_const_decl(
+                    visibility.unwrap_or(EvalVisibility::Public),
+                    is_final,
+                )?
                     .with_attributes(attributes),
             );
             return Ok(());
@@ -1216,6 +1228,7 @@ impl Parser {
     ) -> Result<(), EvalParseError> {
         let attributes = self.parse_optional_member_attributes()?;
         let mut is_static = false;
+        let mut is_final = false;
         let mut saw_public = false;
         loop {
             match self.current() {
@@ -1233,6 +1246,13 @@ impl Parser {
                     is_static = true;
                     self.advance();
                 }
+                TokenKind::Ident(name) if ident_eq(name, "final") => {
+                    if is_final {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    is_final = true;
+                    self.advance();
+                }
                 TokenKind::Ident(name) if is_unsupported_class_member_modifier(name) => {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
@@ -1244,19 +1264,22 @@ impl Parser {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             constants.push(
-                self.parse_class_const_decl(EvalVisibility::Public)?
+                self.parse_class_const_decl(EvalVisibility::Public, is_final)?
                     .with_attributes(attributes),
             );
             return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
+            if is_final {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             methods.push(
                 self.parse_interface_method_decl_after_function_keyword(is_static)?
                     .with_attributes(attributes),
             );
             return Ok(());
         }
-        if is_static {
+        if is_static || is_final {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         properties.push(

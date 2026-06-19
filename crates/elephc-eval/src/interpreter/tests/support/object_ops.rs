@@ -552,6 +552,9 @@ impl FakeOps {
             properties.push(("__parameters".to_string(), method_objects));
             properties.push(("__required_parameter_count".to_string(), modifiers_cell));
         }
+        if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
+            properties.push(("__is_final".to_string(), is_final));
+        }
         if owner_kind == EVAL_REFLECTION_OWNER_PARAMETER {
             let position = self.int(modifiers as i64)?;
             let is_optional =

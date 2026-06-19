@@ -1088,6 +1088,7 @@ pub struct EvalClassConstant {
     name: String,
     attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
+    is_final: bool,
     value: EvalExpr,
 }
 
@@ -1103,10 +1104,21 @@ impl EvalClassConstant {
         visibility: EvalVisibility,
         value: EvalExpr,
     ) -> Self {
+        Self::with_visibility_and_final(name, visibility, false, value)
+    }
+
+    /// Creates an eval class constant with explicit PHP visibility and finality.
+    pub fn with_visibility_and_final(
+        name: impl Into<String>,
+        visibility: EvalVisibility,
+        is_final: bool,
+        value: EvalExpr,
+    ) -> Self {
         Self {
             name: name.into(),
             attributes: Vec::new(),
             visibility,
+            is_final,
             value,
         }
     }
@@ -1130,6 +1142,11 @@ impl EvalClassConstant {
     /// Returns the PHP visibility declared for this constant.
     pub const fn visibility(&self) -> EvalVisibility {
         self.visibility
+    }
+
+    /// Returns whether this class constant was declared `final`.
+    pub const fn is_final(&self) -> bool {
+        self.is_final
     }
 
     /// Returns the constant initializer expression.
