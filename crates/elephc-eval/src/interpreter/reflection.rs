@@ -25,6 +25,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
 const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -54,6 +55,7 @@ struct EvalReflectionMemberMetadata {
     is_static: bool,
     is_final: bool,
     is_abstract: bool,
+    is_readonly: bool,
     required_parameter_count: usize,
     parameters: Vec<EvalReflectionParameterMetadata>,
 }
@@ -381,6 +383,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
         member.is_static,
         member.is_final,
         member.is_abstract,
+        member.is_readonly,
     );
     eval_reflection_owner_object(
         owner_kind,
@@ -544,6 +547,7 @@ fn eval_reflection_method_new(
         method.is_static,
         method.is_final,
         method.is_abstract,
+        false,
     );
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_METHOD,
@@ -580,7 +584,13 @@ fn eval_reflection_property_new(
     let property_name = eval_reflection_string_arg(args[1], values)?;
     let property = eval_reflection_property_metadata(&class_name, &property_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
-    let flags = eval_reflection_member_flags(property.visibility, property.is_static, false, false);
+    let flags = eval_reflection_member_flags(
+        property.visibility,
+        property.is_static,
+        false,
+        false,
+        property.is_readonly,
+    );
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_PROPERTY,
         &property_name,
@@ -1153,6 +1163,7 @@ fn eval_reflection_member_object_array_result(
             member.is_static,
             member.is_final,
             member.is_abstract,
+            member.is_readonly,
         );
         let member_object = eval_reflection_owner_object(
             owner_kind,
@@ -1432,6 +1443,7 @@ fn eval_reflection_method_metadata(
                     method.is_static(),
                     method.is_final(),
                     method.is_abstract(),
+                    false,
                 );
                 let declaring_function = EvalReflectionDeclaringFunctionMetadata {
                     name: method.name().to_string(),
@@ -1458,6 +1470,7 @@ fn eval_reflection_method_metadata(
                     is_static: method.is_static(),
                     is_final: method.is_final(),
                     is_abstract: method.is_abstract(),
+                    is_readonly: false,
                     required_parameter_count,
                     parameters,
                 }
@@ -1478,6 +1491,7 @@ fn eval_reflection_method_metadata(
                     method.is_static(),
                     false,
                     true,
+                    false,
                 );
                 let declaring_function = EvalReflectionDeclaringFunctionMetadata {
                     name: method.name().to_string(),
@@ -1504,6 +1518,7 @@ fn eval_reflection_method_metadata(
                     is_static: method.is_static(),
                     is_final: false,
                     is_abstract: true,
+                    is_readonly: false,
                     required_parameter_count,
                     parameters,
                 }
@@ -1524,6 +1539,7 @@ fn eval_reflection_method_metadata(
                     method.is_static(),
                     method.is_final(),
                     method.is_abstract(),
+                    false,
                 );
                 let declaring_function = EvalReflectionDeclaringFunctionMetadata {
                     name: method.name().to_string(),
@@ -1550,6 +1566,7 @@ fn eval_reflection_method_metadata(
                     is_static: method.is_static(),
                     is_final: method.is_final(),
                     is_abstract: method.is_abstract(),
+                    is_readonly: false,
                     required_parameter_count,
                     parameters,
                 }
@@ -1564,18 +1581,19 @@ fn eval_reflection_property_metadata(
     context: &ElephcEvalContext,
 ) -> Option<EvalReflectionMemberMetadata> {
     if context.has_class(class_name) || context.has_enum(class_name) {
-        return context
-            .class_property(class_name, property_name)
-            .map(|(declaring_class, property)| EvalReflectionMemberMetadata {
+        return context.class_property(class_name, property_name).map(
+            |(declaring_class, property)| EvalReflectionMemberMetadata {
                 declaring_class_name: Some(declaring_class),
                 attributes: property.attributes().to_vec(),
                 visibility: property.visibility(),
                 is_static: property.is_static(),
                 is_final: false,
                 is_abstract: property.is_abstract(),
+                is_readonly: property.is_readonly(),
                 required_parameter_count: 0,
                 parameters: Vec::new(),
-            });
+            },
+        );
     }
     if context.has_interface(class_name) {
         return context
@@ -1589,6 +1607,7 @@ fn eval_reflection_property_metadata(
                 is_static: false,
                 is_final: false,
                 is_abstract: true,
+                is_readonly: false,
                 required_parameter_count: 0,
                 parameters: Vec::new(),
             });
@@ -1605,6 +1624,7 @@ fn eval_reflection_property_metadata(
                 is_static: property.is_static(),
                 is_final: false,
                 is_abstract: property.is_abstract(),
+                is_readonly: property.is_readonly(),
                 required_parameter_count: 0,
                 parameters: Vec::new(),
             })
@@ -1756,6 +1776,7 @@ fn eval_reflection_member_flags(
     is_static: bool,
     is_final: bool,
     is_abstract: bool,
+    is_readonly: bool,
 ) -> u64 {
     let mut flags = 0;
     if is_static {
@@ -1771,6 +1792,9 @@ fn eval_reflection_member_flags(
     }
     if is_abstract {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT;
+    }
+    if is_readonly {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_READONLY;
     }
     flags
 }

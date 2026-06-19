@@ -178,6 +178,7 @@ struct ReflectionMemberFlags {
     is_private: bool,
     is_final: bool,
     is_abstract: bool,
+    is_readonly: bool,
 }
 
 /// Returns true for reflection owner classes that need metadata-aware construction.
@@ -1469,6 +1470,7 @@ fn reflection_method_member_flags(
             visibility,
             info.final_methods.contains(method_key),
             !info.method_impl_classes.contains_key(method_key),
+            false,
         ));
     }
     if info.static_methods.contains_key(method_key) {
@@ -1481,6 +1483,7 @@ fn reflection_method_member_flags(
             visibility,
             info.final_static_methods.contains(method_key),
             !info.static_method_impl_classes.contains_key(method_key),
+            false,
         ));
     }
     None
@@ -1500,7 +1503,13 @@ fn reflection_property_member_flags(
             .property_visibilities
             .get(property_name)
             .unwrap_or(&Visibility::Public);
-        return Some(reflection_member_flags(false, visibility, false, false));
+        return Some(reflection_member_flags(
+            false,
+            visibility,
+            false,
+            false,
+            info.readonly_properties.contains(property_name),
+        ));
     }
     if info
         .static_properties
@@ -1511,7 +1520,7 @@ fn reflection_property_member_flags(
             .static_property_visibilities
             .get(property_name)
             .unwrap_or(&Visibility::Public);
-        return Some(reflection_member_flags(true, visibility, false, false));
+        return Some(reflection_member_flags(true, visibility, false, false, false));
     }
     None
 }
@@ -1607,7 +1616,7 @@ fn reflection_interface_method_member(
         .cloned()
         .unwrap_or_else(|| interface_name.to_string());
     let required_parameter_count = reflection_required_parameter_count(sig);
-    let flags = reflection_member_flags(is_static, &Visibility::Public, false, true);
+    let flags = reflection_member_flags(is_static, &Visibility::Public, false, true, false);
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: method_key.clone(),
         declaring_class_name: Some(declaring_class_name.clone()),
@@ -1657,6 +1666,7 @@ fn reflection_trait_method_member(
         &info.visibility,
         info.is_final,
         info.is_abstract,
+        false,
     );
     let required_parameter_count = reflection_required_parameter_count(&info.signature);
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
@@ -1706,7 +1716,7 @@ fn reflection_class_property_member(
 ) -> Option<ReflectionListedMember> {
     let flags = reflection_property_member_flags(info, property_name).or_else(|| {
         (is_reflection_enum(ctx, class_name) && property_name == "name").then_some(
-            reflection_member_flags(false, &Visibility::Public, false, false),
+            reflection_member_flags(false, &Visibility::Public, false, false, true),
         )
     })?;
     Some(ReflectionListedMember {
@@ -1745,7 +1755,7 @@ fn default_method_members(
             declaring_class_name: Some(declaring_class_name.to_string()),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
-            flags: reflection_member_flags(false, &Visibility::Public, false, is_interface),
+            flags: reflection_member_flags(false, &Visibility::Public, false, is_interface, false),
             required_parameter_count: 0,
             parameters: Vec::new(),
         })
@@ -1765,7 +1775,7 @@ fn default_property_members(
             declaring_class_name: Some(declaring_class_name.to_string()),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
-            flags: reflection_member_flags(false, &Visibility::Public, false, is_interface),
+            flags: reflection_member_flags(false, &Visibility::Public, false, is_interface, false),
             required_parameter_count: 0,
             parameters: Vec::new(),
         })
@@ -1996,6 +2006,7 @@ fn reflection_member_flags(
     visibility: &Visibility,
     is_final: bool,
     is_abstract: bool,
+    is_readonly: bool,
 ) -> ReflectionMemberFlags {
     ReflectionMemberFlags {
         is_static,
@@ -2004,6 +2015,7 @@ fn reflection_member_flags(
         is_private: visibility == &Visibility::Private,
         is_final,
         is_abstract,
+        is_readonly,
     }
 }
 
@@ -3610,6 +3622,12 @@ fn emit_reflection_member_flag_properties(
                 flags.is_protected,
             )?;
             emit_reflection_owner_bool_property(ctx, class_name, "__is_private", flags.is_private)?;
+            emit_reflection_owner_bool_property(
+                ctx,
+                class_name,
+                "__is_readonly",
+                flags.is_readonly,
+            )?;
         }
         _ => {}
     }
