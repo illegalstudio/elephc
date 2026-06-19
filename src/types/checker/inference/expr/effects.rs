@@ -219,9 +219,11 @@ impl Checker {
                 // an undeclared property routed to `__isset`/`__unset`, which must
                 // not be inferred as a bare property access here. The call's own
                 // inference handles the operands (with magic routing).
-                let is_lazy_construct = builtin_name.eq_ignore_ascii_case("isset")
-                    || builtin_name.eq_ignore_ascii_case("unset");
-                if !is_lazy_construct {
+                if builtin_name.eq_ignore_ascii_case("isset") {
+                    for arg in &expanded_args {
+                        self.infer_isset_arg_assignment_effects(arg, env)?;
+                    }
+                } else if !builtin_name.eq_ignore_ascii_case("unset") {
                     for (idx, arg) in expanded_args.iter().enumerate() {
                         if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
                             continue;
@@ -356,6 +358,39 @@ impl Checker {
                 Ok(ty)
             }
             _ => self.infer_type(expr, env),
+        }
+    }
+
+    /// Infers effects for one `isset()` operand without treating object properties as reads.
+    fn infer_isset_arg_assignment_effects(
+        &mut self,
+        arg: &Expr,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        match &arg.kind {
+            ExprKind::PropertyAccess { object, .. }
+            | ExprKind::NullsafePropertyAccess { object, .. } => {
+                self.infer_type_with_assignment_effects(object, env)?;
+                Ok(())
+            }
+            ExprKind::DynamicPropertyAccess { object, property }
+            | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+                self.infer_type_with_assignment_effects(object, env)?;
+                self.infer_type_with_assignment_effects(property, env)?;
+                Ok(())
+            }
+            ExprKind::ArrayAccess { array, index } => {
+                self.infer_type_with_assignment_effects(array, env)?;
+                self.infer_type_with_assignment_effects(index, env)?;
+                Ok(())
+            }
+            ExprKind::NamedArg { value, .. } => {
+                self.infer_isset_arg_assignment_effects(value, env)
+            }
+            _ => {
+                self.infer_type_with_assignment_effects(arg, env)?;
+                Ok(())
+            }
         }
     }
 

@@ -114,10 +114,10 @@ impl Checker {
 
     /// Returns the class whose `magic` method (`__isset` or `__unset`) should
     /// handle `isset($obj->prop)` / `unset($obj->prop)`: that is, when `$obj` is
-    /// an object whose class declares `magic` and `prop` is not a declared
-    /// property. Infers (and type-checks) the receiver object as a side effect,
+    /// an object whose class declares `magic` and `prop` is not normally
+    /// accessible. Infers (and type-checks) the receiver object as a side effect,
     /// so callers can skip inferring the bare property access — which would
-    /// otherwise reject the undeclared property before the magic call is reached.
+    /// otherwise reject the property before the magic call is reached.
     pub(crate) fn isset_unset_property_magic_class(
         &mut self,
         arg: &Expr,
@@ -136,7 +136,16 @@ impl Checker {
         let Some(class_info) = self.classes.get(&normalized) else {
             return Ok(None);
         };
-        if class_info.properties.iter().any(|(name, _)| name == property) {
+        if let Some(visibility) = class_info.property_visibilities.get(property) {
+            let declaring_class = class_info
+                .property_declaring_classes
+                .get(property)
+                .map(String::as_str)
+                .unwrap_or(normalized.as_str());
+            if self.can_access_member(declaring_class, visibility) {
+                return Ok(None);
+            }
+        } else if class_info.visible_property(property).is_some() {
             return Ok(None);
         }
         Ok(class_info.methods.contains_key(magic).then_some(normalized))
