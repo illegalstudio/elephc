@@ -544,13 +544,13 @@ impl ElephcEvalContext {
         self.eval_reflection_attributes.get(&identity)
     }
 
-    /// Records eval-declared class metadata for one synthetic ReflectionClass object.
+    /// Records reflected class metadata for one synthetic ReflectionClass object.
     pub fn register_eval_reflection_class(&mut self, identity: u64, class_name: &str) {
         self.eval_reflection_classes
-            .insert(identity, normalize_class_name(class_name));
+            .insert(identity, class_name.trim_start_matches('\\').to_string());
     }
 
-    /// Returns the reflected eval class name attached to a synthetic ReflectionClass.
+    /// Returns the reflected class name attached to a synthetic ReflectionClass.
     pub fn eval_reflection_class_name(&self, identity: u64) -> Option<&str> {
         self.eval_reflection_classes
             .get(&identity)

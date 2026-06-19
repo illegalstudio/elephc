@@ -195,6 +195,9 @@ relations; trait targets return `false`.
 `ReflectionClass::hasMethod()` and `ReflectionClass::hasProperty()` report
 method and property membership for eval classes, interfaces, traits, and enums;
 method lookup is case-insensitive, while property lookup is case-sensitive.
+For generated/AOT classes, `ReflectionClass::hasProperty()` can also probe
+emitted property metadata without requiring the full property list to be
+materialized on the `ReflectionClass` object.
 `ReflectionClass::hasConstant()`, `getConstant()`, `getConstants()`,
 `getDefaultProperties()`, `getReflectionConstant()`, and
 `getReflectionConstants()` expose eval-visible class constants, interface
@@ -204,7 +207,10 @@ lookups return `false` when no constant or case is visible.
 `ReflectionClass::getMethods()` and `ReflectionClass::getProperties()` return
 materialized `ReflectionMethod` and `ReflectionProperty` objects for the same
 visible member metadata, including supported member attributes and predicate
-flags. `ReflectionMethod::getDeclaringClass()` and
+flags. For generated/AOT classes, `ReflectionClass::getProperty()` can
+materialize a single `ReflectionProperty` from emitted predicate metadata, while
+full AOT `getProperties()` enumeration still depends on the property arrays
+materialized on the `ReflectionClass` object. `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the eval class-like symbol that declares the reflected
 member. `ReflectionClass::getConstructor()` returns a materialized

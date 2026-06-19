@@ -6597,7 +6597,21 @@ echo $child->isPromoted() ? "C" : "c";
 $plain = new ReflectionProperty("EvalAotPromotedPlain", "id");
 echo $plain->isPromoted() ? "P" : "p";
 $static = new ReflectionProperty("EvalAotPromotedPlain", "count");
-echo $static->isPromoted() ? "S" : "s";');
+echo $static->isPromoted() ? "S" : "s";
+$class = new ReflectionClass("EvalAotPromotedBase");
+echo $class->hasProperty("id") ? "H" : "h";
+echo $class->hasProperty("missing") ? "M" : "m";
+$listed = $class->getProperty("id");
+echo $listed->isPromoted() ? "G" : "g";
+echo $listed->getDeclaringClass()->getName();
+$rootClass = new ReflectionClass("\EvalAotPromotedBase");
+echo $rootClass->hasProperty("name") ? "N" : "n";
+try {
+    $class->getProperty("missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo ":" . $e->getMessage();
+}');
 "#,
     );
     assert!(
@@ -6605,7 +6619,10 @@ echo $static->isPromoted() ? "S" : "s";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "IINCps");
+    assert_eq!(
+        out.stdout,
+        "IINCpsHmGEvalAotPromotedBaseN:Property EvalAotPromotedBase::$missing does not exist"
+    );
 }
 
 /// Verifies eval ReflectionMethod constructor/destructor predicates through the bridge.
