@@ -8837,6 +8837,12 @@ fn lower_new_object(
     )
 }
 
+/// Metadata operand source for direct `ReflectionParameter` constructor lowering.
+enum ReflectionParameterConstructorOperand {
+    Expr(Expr),
+    ClassName { name: String, span: Span },
+}
+
 /// Lowers validated `ReflectionParameter` constructor arguments into metadata operands.
 ///
 /// Method targets lower as `[class, method, parameter]`; function targets lower
@@ -8849,16 +8855,38 @@ fn lower_reflection_parameter_constructor_operands(
     Some(
         arg_exprs
             .iter()
-            .map(|arg| lower_expr(ctx, arg).value)
+            .map(|arg| lower_reflection_parameter_constructor_operand(ctx, arg))
             .collect(),
     )
+}
+
+/// Lowers one direct `ReflectionParameter` metadata operand.
+fn lower_reflection_parameter_constructor_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    operand: &ReflectionParameterConstructorOperand,
+) -> ValueId {
+    match operand {
+        ReflectionParameterConstructorOperand::Expr(expr) => lower_expr(ctx, expr).value,
+        ReflectionParameterConstructorOperand::ClassName { name, span } => {
+            let data = ctx.intern_class_name(name);
+            ctx.emit_value(
+                Op::ConstClassName,
+                Vec::new(),
+                Some(Immediate::Data(data)),
+                PhpType::Str,
+                Op::ConstClassName.default_effects(),
+                Some(*span),
+            )
+            .value
+        }
+    }
 }
 
 /// Returns metadata operand expressions from a normalized static `ReflectionParameter` call.
 fn reflection_parameter_constructor_arg_exprs(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
-) -> Option<Vec<Expr>> {
+) -> Option<Vec<ReflectionParameterConstructorOperand>> {
     let args = expand_static_call_spread_args(args);
     if args.iter().any(is_spread_arg) {
         return None;
@@ -8895,10 +8923,47 @@ fn reflection_parameter_constructor_arg_exprs(
     };
     match &target.kind {
         ExprKind::ArrayLiteral(items) if items.len() == 2 => {
-            Some(vec![items[0].clone(), items[1].clone(), parameter])
+            let owner = reflection_parameter_method_owner_operand(ctx, &items[0])?;
+            Some(vec![
+                owner,
+                ReflectionParameterConstructorOperand::Expr(items[1].clone()),
+                ReflectionParameterConstructorOperand::Expr(parameter),
+            ])
         }
-        ExprKind::StringLiteral(_) => Some(vec![target, parameter]),
+        ExprKind::StringLiteral(_) => Some(vec![
+            ReflectionParameterConstructorOperand::Expr(target),
+            ReflectionParameterConstructorOperand::Expr(parameter),
+        ]),
         _ => None,
+    }
+}
+
+/// Returns the static class-name operand for a ReflectionParameter method target.
+fn reflection_parameter_method_owner_operand(
+    ctx: &LoweringContext<'_, '_>,
+    owner: &Expr,
+) -> Option<ReflectionParameterConstructorOperand> {
+    match &owner.kind {
+        ExprKind::Variable(name) => {
+            let PhpType::Object(class_name) = ctx.local_type(name).codegen_repr() else {
+                return None;
+            };
+            if class_name.is_empty() {
+                return None;
+            }
+            Some(ReflectionParameterConstructorOperand::ClassName {
+                name: class_name,
+                span: owner.span,
+            })
+        }
+        ExprKind::This => ctx
+            .current_class
+            .clone()
+            .map(|name| ReflectionParameterConstructorOperand::ClassName {
+                name,
+                span: owner.span,
+            }),
+        _ => Some(ReflectionParameterConstructorOperand::Expr(owner.clone())),
     }
 }
 
