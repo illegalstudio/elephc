@@ -20,6 +20,7 @@ mod get_resource_id;
 mod get_resource_type;
 mod gettype;
 mod is_a;
+mod is_array;
 mod is_bool;
 mod is_callable;
 mod is_finite;
@@ -30,6 +31,7 @@ mod is_iterable;
 mod is_nan;
 mod is_null;
 mod is_numeric;
+mod is_object;
 mod is_resource;
 mod is_string;
 mod settype;
@@ -64,14 +66,16 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     match name {
+        "is_array" => is_array::emit(name, args, emitter, ctx, data),
         "is_bool" => is_bool::emit(name, args, emitter, ctx, data),
         "is_callable" => is_callable::emit(name, args, emitter, ctx, data),
         "boolval" => boolval::emit(name, args, emitter, ctx, data),
         "is_null" => is_null::emit(name, args, emitter, ctx, data),
         "floatval" => floatval::emit(name, args, emitter, ctx, data),
-        "is_float" => is_float::emit(name, args, emitter, ctx, data),
-        "is_int" => is_int::emit(name, args, emitter, ctx, data),
+        "is_float" | "is_double" | "is_real" => is_float::emit(name, args, emitter, ctx, data),
+        "is_int" | "is_integer" | "is_long" => is_int::emit(name, args, emitter, ctx, data),
         "is_iterable" => is_iterable::emit(name, args, emitter, ctx, data),
+        "is_object" => is_object::emit(name, args, emitter, ctx, data),
         "is_string" => is_string::emit(name, args, emitter, ctx, data),
         "is_numeric" => is_numeric::emit(name, args, emitter, ctx, data),
         "is_nan" => is_nan::emit(name, args, emitter, ctx, data),

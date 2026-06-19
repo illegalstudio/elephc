@@ -3542,10 +3542,13 @@ fn resolve_static_string_callable(
     if let Some(function_name) = lookup_folded_name(ctx.extern_functions.keys(), callback) {
         return Some(StaticCallableBinding::ExternFunction(function_name));
     }
+    if let Some(function_name) = canonical_builtin_function_name(callback) {
+        return Some(StaticCallableBinding::Builtin(function_name));
+    }
     if let Some(function_name) = lookup_folded_name(ctx.functions.keys(), callback) {
         return Some(StaticCallableBinding::UserFunction(function_name));
     }
-    canonical_builtin_function_name(callback).map(StaticCallableBinding::Builtin)
+    None
 }
 
 /// Appends captured closure values after caller-visible operands for hidden ABI params.

@@ -1432,17 +1432,6 @@ fn first_class_callable_descriptor(
     if let Some((receiver_label, method_name)) = target.rsplit_once("::") {
         return first_class_static_method_descriptor(ctx, receiver_label, method_name);
     }
-    if let Some(callee) = ctx.callable_function_by_name(target) {
-        return Some(FirstClassCallableDescriptor {
-            entry_label: function_symbol(&callee.name),
-            kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
-            sig: Some(function_signature_from_eir(callee)),
-            invocation: callable_descriptor::CallableDescriptorInvocation::named(
-                callable_descriptor::CallableDescriptorShape::Function,
-                callee.name.clone(),
-            ),
-        });
-    }
     if ctx.has_extern_function(target) {
         return Some(FirstClassCallableDescriptor {
             entry_label: ctx.emitter.target.extern_symbol(target),
@@ -1456,6 +1445,17 @@ fn first_class_callable_descriptor(
     }
     if let Some(descriptor) = first_class_builtin_descriptor(ctx, target) {
         return Some(descriptor);
+    }
+    if let Some(callee) = ctx.callable_function_by_name(target) {
+        return Some(FirstClassCallableDescriptor {
+            entry_label: function_symbol(&callee.name),
+            kind: callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+            sig: Some(function_signature_from_eir(callee)),
+            invocation: callable_descriptor::CallableDescriptorInvocation::named(
+                callable_descriptor::CallableDescriptorShape::Function,
+                callee.name.clone(),
+            ),
+        });
     }
     None
 }
