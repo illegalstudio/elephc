@@ -528,17 +528,20 @@ pub struct EvalInterfaceMethod {
     attributes: Vec<EvalAttribute>,
     params: Vec<String>,
     parameter_has_types: Vec<bool>,
+    parameter_defaults: Vec<Option<EvalExpr>>,
 }
 
 impl EvalInterfaceMethod {
     /// Creates one dynamic eval interface method signature.
     pub fn new(name: impl Into<String>, params: Vec<String>) -> Self {
         let parameter_has_types = vec![false; params.len()];
+        let parameter_defaults = vec![None; params.len()];
         Self {
             name: name.into(),
             attributes: Vec::new(),
             params,
             parameter_has_types,
+            parameter_defaults,
         }
     }
 
@@ -551,6 +554,12 @@ impl EvalInterfaceMethod {
     /// Returns a copy of this interface method with parameter type-presence flags.
     pub fn with_parameter_type_flags(mut self, parameter_has_types: Vec<bool>) -> Self {
         self.parameter_has_types = parameter_has_types;
+        self
+    }
+
+    /// Returns a copy of this interface method with source-order default expressions.
+    pub fn with_parameter_defaults(mut self, parameter_defaults: Vec<Option<EvalExpr>>) -> Self {
+        self.parameter_defaults = parameter_defaults;
         self
     }
 
@@ -572,6 +581,11 @@ impl EvalInterfaceMethod {
     /// Returns source-order flags for whether each parameter declared a type.
     pub fn parameter_has_types(&self) -> &[bool] {
         &self.parameter_has_types
+    }
+
+    /// Returns default expressions declared for each source-order parameter.
+    pub fn parameter_defaults(&self) -> &[Option<EvalExpr>] {
+        &self.parameter_defaults
     }
 }
 
@@ -1225,6 +1239,7 @@ pub struct EvalClassMethod {
     is_final: bool,
     params: Vec<String>,
     parameter_has_types: Vec<bool>,
+    parameter_defaults: Vec<Option<EvalExpr>>,
     body: Vec<EvalStmt>,
 }
 
@@ -1264,6 +1279,7 @@ impl EvalClassMethod {
         body: Vec<EvalStmt>,
     ) -> Self {
         let parameter_has_types = vec![false; params.len()];
+        let parameter_defaults = vec![None; params.len()];
         Self {
             name: name.into(),
             attributes: Vec::new(),
@@ -1273,6 +1289,7 @@ impl EvalClassMethod {
             is_final,
             params,
             parameter_has_types,
+            parameter_defaults,
             body,
         }
     }
@@ -1291,6 +1308,12 @@ impl EvalClassMethod {
     /// Returns a copy of this method with source-order parameter type-presence flags.
     pub fn with_parameter_type_flags(mut self, parameter_has_types: Vec<bool>) -> Self {
         self.parameter_has_types = parameter_has_types;
+        self
+    }
+
+    /// Returns a copy of this method with source-order default expressions.
+    pub fn with_parameter_defaults(mut self, parameter_defaults: Vec<Option<EvalExpr>>) -> Self {
+        self.parameter_defaults = parameter_defaults;
         self
     }
 
@@ -1341,6 +1364,11 @@ impl EvalClassMethod {
     /// Returns source-order flags for whether each parameter declared a type.
     pub fn parameter_has_types(&self) -> &[bool] {
         &self.parameter_has_types
+    }
+
+    /// Returns default expressions declared for each source-order parameter.
+    pub fn parameter_defaults(&self) -> &[Option<EvalExpr>] {
+        &self.parameter_defaults
     }
 
     /// Returns the dynamic EvalIR statements that form the method body.

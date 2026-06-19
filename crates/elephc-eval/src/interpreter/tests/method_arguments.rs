@@ -42,6 +42,36 @@ return EvalNamedMethodBox::join(right: "H", left: "G");"#,
     assert_eq!(values.get(result), FakeValue::String("G-H".to_string()));
 }
 
+/// Verifies eval-declared methods use default values for omitted arguments.
+#[test]
+fn execute_program_binds_eval_method_default_args() {
+    let program = parse_fragment(
+        br#"class EvalDefaultMethodBox {
+    public function __construct($left = "A", $right = "B") {
+        $this->label = $left . $right;
+    }
+    public function read($left, $right = "D") {
+        return $this->label . ":" . $left . ":" . $right;
+    }
+    public static function join($left = "G", $right = "H") {
+        return $left . "-" . $right;
+    }
+}
+$box = new EvalDefaultMethodBox();
+echo $box->read("C"); echo ":";
+echo $box->read(right: "F", left: "E"); echo ":";
+return EvalDefaultMethodBox::join();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "AB:C:D:AB:E:F:");
+    assert_eq!(values.get(result), FakeValue::String("G-H".to_string()));
+}
+
 /// Verifies eval-declared methods reject unknown named arguments.
 #[test]
 fn execute_program_rejects_unknown_eval_method_named_arg() {

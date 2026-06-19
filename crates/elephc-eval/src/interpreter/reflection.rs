@@ -608,6 +608,7 @@ fn eval_reflection_method_metadata(
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
                     method.params(),
                     method.parameter_has_types(),
+                    method.parameter_defaults(),
                 ),
             });
     }
@@ -625,6 +626,7 @@ fn eval_reflection_method_metadata(
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
                     method.params(),
                     method.parameter_has_types(),
+                    method.parameter_defaults(),
                 ),
             });
     }
@@ -642,6 +644,7 @@ fn eval_reflection_method_metadata(
                 parameters: eval_reflection_parameters_from_names_and_type_flags(
                     method.params(),
                     method.parameter_has_types(),
+                    method.parameter_defaults(),
                 ),
             })
     })
@@ -699,6 +702,7 @@ fn eval_reflection_property_metadata(
 fn eval_reflection_parameters_from_names_and_type_flags(
     names: &[String],
     has_type_flags: &[bool],
+    defaults: &[Option<EvalExpr>],
 ) -> Vec<EvalReflectionParameterMetadata> {
     names
         .iter()
@@ -706,7 +710,7 @@ fn eval_reflection_parameters_from_names_and_type_flags(
         .map(|(position, name)| EvalReflectionParameterMetadata {
             name: name.clone(),
             position,
-            is_optional: false,
+            is_optional: defaults.get(position).is_some_and(Option::is_some),
             is_variadic: false,
             is_passed_by_reference: false,
             has_type: has_type_flags.get(position).copied().unwrap_or(false),

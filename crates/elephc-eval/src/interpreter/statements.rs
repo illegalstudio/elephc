@@ -2178,7 +2178,12 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = bind_evaluated_function_args(method.params(), evaluated_args)?;
+    let evaluated_args = bind_evaluated_method_args(
+        method.params(),
+        method.parameter_defaults(),
+        evaluated_args,
+        values,
+    )?;
     let mut method_scope = ElephcEvalScope::new();
     method_scope.set("this", object, ScopeCellOwnership::Borrowed);
     for (name, value) in method.params().iter().zip(evaluated_args) {
@@ -2222,7 +2227,12 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = bind_evaluated_function_args(method.params(), evaluated_args)?;
+    let evaluated_args = bind_evaluated_method_args(
+        method.params(),
+        method.parameter_defaults(),
+        evaluated_args,
+        values,
+    )?;
     let mut method_scope = ElephcEvalScope::new();
     for (name, value) in method.params().iter().zip(evaluated_args) {
         method_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);

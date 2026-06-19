@@ -5874,7 +5874,7 @@ fn test_eval_reflection_method_lists_parameters() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalReflectParamTarget {
-    public function run(int $first, \App\Name|null $second) {}
+    public function run(int $first, \App\Name|null $second = null) {}
 }
 $params = (new ReflectionMethod("EvalReflectParamTarget", "run"))->getParameters();
 echo count($params) . ":";
@@ -5893,7 +5893,7 @@ foreach ($params as $param) {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:first@0rvbT|second@1rvbT|");
+    assert_eq!(out.stdout, "2:first@0rvbT|second@1OvbT|");
 }
 
 /// Verifies eval ReflectionClass::newInstance constructs eval-declared classes.

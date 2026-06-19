@@ -492,8 +492,8 @@ return true;"#,
 #[test]
 fn execute_program_reflects_eval_method_parameters() {
     let program = parse_fragment(
-        br##"class EvalReflectParamTarget {
-    public function run(int $first, \App\Name|null $second) {}
+br##"class EvalReflectParamTarget {
+    public function run(int $first, \App\Name|null $second = null) {}
 }
 $params = (new ReflectionMethod("EvalReflectParamTarget", "run"))->getParameters();
 echo count($params); echo ":";
@@ -513,7 +513,7 @@ return true;"##,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "2:first#0rvbT|second#1rvbT|");
+    assert_eq!(values.output, "2:first#0rvbT|second#1OvbT|");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

@@ -753,7 +753,7 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let (params, parameter_has_types) = self.parse_method_params()?;
+        let (params, parameter_has_types, parameter_defaults) = self.parse_method_params()?;
         let body = if is_abstract {
             self.expect_semicolon()?;
             Vec::new()
@@ -769,7 +769,8 @@ impl Parser {
             params,
             body,
         )
-        .with_parameter_type_flags(parameter_has_types))
+        .with_parameter_type_flags(parameter_has_types)
+        .with_parameter_defaults(parameter_defaults))
     }
 
     /// Parses one public property declaration with an optional initializer.
@@ -1237,9 +1238,11 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let (params, parameter_has_types) = self.parse_method_params()?;
+        let (params, parameter_has_types, parameter_defaults) = self.parse_method_params()?;
         self.expect_semicolon()?;
-        Ok(EvalInterfaceMethod::new(name, params).with_parameter_type_flags(parameter_has_types))
+        Ok(EvalInterfaceMethod::new(name, params)
+            .with_parameter_type_flags(parameter_has_types)
+            .with_parameter_defaults(parameter_defaults))
     }
 
     /// Parses one interface property hook contract.
@@ -1650,14 +1653,15 @@ impl Parser {
         Ok(params)
     }
 
-    /// Parses a method parameter list and records whether each parameter declared a type.
+    /// Parses a method parameter list and records type/default metadata.
     pub(super) fn parse_method_params(
         &mut self,
-    ) -> Result<(Vec<String>, Vec<bool>), EvalParseError> {
+    ) -> Result<(Vec<String>, Vec<bool>, Vec<Option<EvalExpr>>), EvalParseError> {
         let mut params = Vec::new();
         let mut parameter_has_types = Vec::new();
+        let mut parameter_defaults = Vec::new();
         if self.consume(TokenKind::RParen) {
-            return Ok((params, parameter_has_types));
+            return Ok((params, parameter_has_types, parameter_defaults));
         }
         loop {
             let has_type = self.parse_optional_parameter_type()?;
@@ -1667,6 +1671,16 @@ impl Parser {
             params.push(name.clone());
             parameter_has_types.push(has_type);
             self.advance();
+            let default = if self.consume(TokenKind::Equal) {
+                let default = self.parse_expr()?;
+                if !method_parameter_default_is_supported(&default) {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                Some(default)
+            } else {
+                None
+            };
+            parameter_defaults.push(default);
             if !self.consume(TokenKind::Comma) {
                 break;
             }
@@ -1675,7 +1689,7 @@ impl Parser {
             }
         }
         self.expect(TokenKind::RParen)?;
-        Ok((params, parameter_has_types))
+        Ok((params, parameter_has_types, parameter_defaults))
     }
 
     /// Consumes a supported method parameter type and reports whether one existed.
@@ -2061,6 +2075,21 @@ impl Parser {
         }
         self.expect(TokenKind::RBrace)?;
         Ok(statements)
+    }
+}
+
+/// Returns whether an eval method parameter default can be materialized safely.
+fn method_parameter_default_is_supported(default: &EvalExpr) -> bool {
+    match default {
+        EvalExpr::Const(_) => true,
+        EvalExpr::Unary {
+            op: EvalUnaryOp::Plus | EvalUnaryOp::Negate,
+            expr,
+        } => matches!(
+            expr.as_ref(),
+            EvalExpr::Const(EvalConst::Int(_) | EvalConst::Float(_))
+        ),
+        _ => false,
     }
 }
 
